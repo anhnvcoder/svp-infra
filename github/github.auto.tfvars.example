@@ -1,0 +1,9 @@
+# Copy to github.auto.tfvars (ignored by git) and fill in. Never commit the real values: the repository is public.
+# Each value is the Client ID on the App's settings page (https://github.com/settings/apps/<app>, General), the same
+# value the promote environment holds today (Settings, Environments, promote, Environment variables).
+
+# GitHub App svp-gitops-promoter: variable SVP_GITOPS_APP_CLIENT_ID of environment promote of svp-backend.
+svp_gitops_app_client_id = "Iv23liEXAMPLE0000000"
+
+# GitHub App svp-web-promoter: variable SVP_WEB_APP_CLIENT_ID of environment promote of svp-frontend.
+svp_web_app_client_id = "Iv23liEXAMPLE0000001"

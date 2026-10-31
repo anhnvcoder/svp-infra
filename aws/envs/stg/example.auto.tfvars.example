@@ -1,0 +1,14 @@
+# Copy to stg.auto.tfvars (ignored by git) and fill in. Never commit the real values: the repository is public.
+# The account id is not here: export TF_VAR_account_id after checking the account (README.md, step 1).
+
+# Output zone_id of aws/bootstrap (AWS_PROFILE=anhnv-sso terraform -chdir=../../bootstrap output -raw zone_id).
+hosted_zone_id = "Z0123456789ABCDEFGHIJ"
+
+# Web name of stg, inside the lab zone aws.<domain>; the API is api.<this name>.
+domain = "stg.aws.svp.example"
+
+# Let's Encrypt account of cert-manager.
+acme_email = "you@svp.example"
+
+# Address of the machine that runs kubectl, as a /32 (curl -s https://checkip.amazonaws.com).
+eks_public_access_cidrs = ["192.0.2.10/32"]

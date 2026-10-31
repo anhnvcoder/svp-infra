@@ -1,0 +1,6 @@
+# Shape of aws/backend.hcl, the partial backend configuration shared by every root of the repository (not this
+# directory). It is written from the bootstrap output, never by hand:
+#   AWS_PROFILE=anhnv-sso terraform -chdir=../../bootstrap output -raw backend_hcl > ../../backend.hcl
+# and read with: AWS_PROFILE=anhnv-sso terraform init -backend-config=../../backend.hcl
+bucket = "svp-tfstate-0123abcd"
+region = "ap-southeast-1"

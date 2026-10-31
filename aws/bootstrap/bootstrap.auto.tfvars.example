@@ -1,0 +1,5 @@
+# Copy to bootstrap.auto.tfvars (ignored by git) and fill in. Never commit the real values: the repository is public.
+# The account id is not here: export TF_VAR_account_id after checking the account (README.md, step 1).
+budget_emails    = ["you@svp.example"]
+budget_limit_usd = 20
+zone_name        = "aws.svp.example"
