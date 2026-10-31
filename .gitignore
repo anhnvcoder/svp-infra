@@ -1,0 +1,36 @@
+# Terraform working directories: providers, downloaded modules, tflint plugins (make check writes them per directory).
+.terraform/
+# A module's lock file is not committed: the root that calls it pins the providers. A root's lock file is.
+aws/modules/**/.terraform.lock.hcl
+
+# State and plans: they hold resource ids, account ids and secrets in clear.
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+crash.log
+crash.*.log
+
+# Personal and per-account values (account id, emails, IP ranges, domain names, bucket names): the repository is
+# public. Each has a committed *.example beside it.
+*.auto.tfvars
+*.auto.tfvars.json
+terraform.tfvars
+terraform.tfvars.json
+backend.hcl
+
+# Override files, such as the local_override.tf of the first apply of aws/bootstrap.
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# CLI configuration with credentials.
+.terraformrc
+terraform.rc
+
+# Measurements of the session scripts.
+.session/
+
+.env
+.DS_Store
