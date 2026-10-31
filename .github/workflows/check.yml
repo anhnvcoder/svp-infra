@@ -1,0 +1,59 @@
+# Static checks of every pull request and of every push to main: make check (terraform fmt and validate, tflint, trivy,
+# shellcheck, and the self-test of the session scripts with fake aws, kubectl and terraform; the runner's bash, git and
+# jq are all it needs). Job infra-ok is the only check the ruleset of main requires, so jobs can be added or renamed without
+# touching the ruleset.
+#
+# The repository is public and a pull request from a fork runs this workflow with the fork's code, so:
+# - no AWS credential of any kind, no OIDC (no id-token permission), no secret, no environment: make check never reaches
+#   an account (init runs with -backend=false; nothing calls plan, apply or the AWS CLI);
+# - no pull_request_target and no workflow_run: a pull request never runs with a write token;
+# - the only job that runs code of the repository has contents: read and nothing else;
+# - every action is GitHub's own and pinned to a full commit SHA; terraform, tflint, trivy and shellcheck run from
+#   images pinned by digest in the Makefile, so no third-party action is trusted;
+# - checkout never leaves the token in .git/config (persist-credentials: false).
+name: check
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  # No paths filter: a required check whose workflow does not run is never reported and leaves the pull request waiting.
+
+permissions: {}
+
+concurrency:
+  group: check-${{ github.ref }}
+  # A new push to a pull request makes its previous run useless; a run on main is never cancelled.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: make check
+        env:
+          # Read-only token of the run, so that tflint --init downloads its AWS ruleset from GitHub under the token's
+          # rate limit instead of the anonymous one shared by the runner's address. The Makefile passes it to the tflint
+          # container alone.
+          GITHUB_TOKEN: ${{ github.token }}
+        run: make check
+
+  # The required check: green only when every job above succeeded (a skipped or cancelled job is a failure).
+  infra-ok:
+    if: always()
+    needs: [check]
+    runs-on: ubuntu-24.04
+    permissions: {}
+    steps:
+      - name: All checks passed
+        env:
+          RESULT: ${{ needs.check.result }}
+        run: |
+          echo "check: $RESULT"
+          [ "$RESULT" = success ]

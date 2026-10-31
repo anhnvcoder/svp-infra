@@ -1,0 +1,62 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": [
+    "Dependency updates through the Mend Renovate GitHub App: Terraform providers (constraints and the lock files of the roots), registry modules, the AWS ruleset of .tflint.hcl, the images pinned in the Makefile and the actions of .github/workflows/.",
+    "Every update is a pull request someone reads and merges by hand: no automerge. A provider or module update changes what the next apply does, so read its changelog first (a major of terraform-aws-modules/eks has breaking changes). A release is proposed only once it is 3 days old, because a hijacked release is usually pulled within hours (trivy, March 2026); vulnerability alerts skip that wait and the schedule."
+  ],
+  "extends": ["config:recommended", "helpers:pinGitHubActionDigests"],
+  "timezone": "Asia/Ho_Chi_Minh",
+  "schedule": ["* 0-8 * * 6"],
+  "minimumReleaseAge": "3 days",
+  "dependencyDashboard": true,
+  "automerge": false,
+  "labels": ["dependencies"],
+  "semanticCommits": "enabled",
+  "semanticCommitType": "chore",
+  "semanticCommitScope": "deps",
+  "vulnerabilityAlerts": {
+    "description": "Opened at once, outside the schedule and without minimumReleaseAge. Needs the repository's Dependency graph and Dependabot alerts.",
+    "labels": ["dependencies", "security"],
+    "semanticCommitType": "fix"
+  },
+  "customManagers": [
+    {
+      "description": "Images pinned as <image>:<tag>@sha256:<digest> with a '# renovate: datasource=docker depName=<image>' line right above (TERRAFORM_IMAGE, TFLINT_IMAGE, TRIVY_IMAGE, SHELLCHECK_IMAGE of the Makefile).",
+      "customType": "regex",
+      "managerFilePatterns": ["/^Makefile$/"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>docker) depName=(?<depName>\\S+)[ \\t]*\\n[A-Za-z_][A-Za-z0-9_]*[ \\t]*:?=[ \\t]*[^\\s:@\"']+:(?<currentValue>[^\\s@\"']+)@(?<currentDigest>sha256:[0-9a-f]{64})[ \\t]*\\n"
+      ]
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "chore(deps) for every update; vulnerabilityAlerts above turns a vulnerability fix into fix(deps).",
+      "matchPackageNames": ["*"],
+      "semanticCommitType": "chore"
+    },
+    {
+      "description": "GitHub Actions, pinned to a full commit SHA with the version in a comment: one pull request for non-major updates.",
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["minor", "patch", "digest", "pinDigest"],
+      "groupName": "github actions"
+    },
+    {
+      "description": "The images of the checks (Makefile): one pull request for non-major updates. TRIVY_IMAGE is also pinned in the code repository's Makefile: keep the two in step.",
+      "matchFileNames": ["Makefile"],
+      "matchUpdateTypes": ["minor", "patch", "digest"],
+      "groupName": "check images"
+    },
+    {
+      "description": "The Terraform of the dev machine runs plan and apply: a new TERRAFORM_IMAGE must stay inside required_version of every root, and the Homebrew Terraform follows it.",
+      "matchDepNames": ["hashicorp/terraform"],
+      "prBodyNotes": ["Upgrade the Terraform of the dev machine to the same version before the next plan, and check required_version of every root still allows it."]
+    },
+    {
+      "description": "A provider update rewrites the lock files of the roots: make check in CI uses them read-only, so a lock file without the hashes of linux_amd64 fails there (fix with make lock DIRS=<root>).",
+      "matchManagers": ["terraform"],
+      "matchDepTypes": ["provider", "required_provider"],
+      "prBodyNotes": ["Run make lock DIRS=<root> for each changed root if CI reports missing hashes, and read the provider changelog before the next apply."]
+    }
+  ]
+}
