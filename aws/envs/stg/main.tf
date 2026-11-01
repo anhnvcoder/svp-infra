@@ -70,6 +70,8 @@ module "media" {
   source = "../../modules/media"
 
   name_prefix          = local.name
+  account_id           = var.account_id
+  region               = var.region
   cors_allowed_origins = ["https://${var.domain}"]
   force_destroy        = var.media_force_destroy
   price_class          = var.media_price_class

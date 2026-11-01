@@ -6,8 +6,11 @@ UP-4…UP-6, WEB-10 của repo code.
 
 ## Bucket
 
-- Tên `<name_prefix>-uploads-<8 hex>`, `<name_prefix>-media-<8 hex>`, hậu tố ngẫu nhiên chung cho hai bucket: không ghép từ account ID, bucket
-  sót của buổi trước không trùng tên (script quét tìm theo tag `Project=svp` của root).
+- Tên `<name_prefix>-uploads-<account_id>-<region>`, `<name_prefix>-media-<account_id>-<region>` (quy ước của bucket do AWS tạo như CDK,
+  Control Tower): duy nhất toàn cầu không cần phần ngẫu nhiên, biết lúc `plan`, nhìn tên là biết account và region. Account ID không phải bí
+  mật theo AWS; tên bucket `uploads` nằm trong mọi URL form upload presigned trình duyệt thấy. Root truyền `account_id`, `region` của nó, nên
+  file commit không chứa account thật. Bucket sót của một `destroy` dở trùng tên với lần `apply` sau: script quét sót (`aws/scripts/sweep.sh`) liệt kê
+  nó theo tiền tố tên `svp-`, người học xoá trước khi `apply` theo runbook của buổi.
 - Chặn public (cả bốn cờ), `BucketOwnerEnforced` (không ACL), SSE-S3, không versioning (object `media` ghi một lần dưới đường version mới,
   `uploads` bị xoá khi hết cần; giữ version chỉ giữ byte đã xoá). Policy của cả hai bucket từ chối request không TLS bằng statement `Deny`
   `s3:*` như mẫu của AWS: action S3 thêm sau này cũng bị từ chối qua HTTP. Wildcard ở `Deny` chỉ mở rộng thứ bị cấm, không cấp quyền nào (các
@@ -71,7 +74,9 @@ Root của env gắn mỗi JSON vào role của Pod Identity association `svp/vi
 
 | Biến | Kiểu | Mặc định | stg (7a) | prd (7b) | Ý nghĩa |
 | --- | --- | --- | --- | --- | --- |
-| `name_prefix` | string | — | `svp-stg` | `svp-prd` | Đầu tên bucket, OAC, response headers policy (2–40 ký tự) |
+| `name_prefix` | string | — | `svp-stg` | `svp-prd` | Đầu tên bucket, OAC, response headers policy (2–27 ký tự: tên bucket `uploads` tối đa 63) |
+| `account_id` | string | — | `var.account_id` của root | `var.account_id` của root | Account của bucket (12 số), phần của tên bucket |
+| `region` | string | — | `var.region` của root | `var.region` của root | Region của bucket (tối đa 14 ký tự), phần của tên bucket |
 | `cors_allowed_origins` | list(string) | — | `["https://<domain của stg>"]` | `["https://<domain của prd>"]` | Origin của web cho CORS hai bucket và CloudFront |
 | `force_destroy` | bool | **không có** | `true` | `false` | Destroy xoá mọi object rồi xoá bucket |
 | `price_class` | string | `PriceClass_200` | `PriceClass_200` | `PriceClass_200` | Nhóm edge của CloudFront |

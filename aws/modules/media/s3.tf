@@ -2,14 +2,14 @@
 # media/<video_id>/<version>/..., so the object keys, the IAM policies and the media URLs are the same on every
 # object store of the platform.
 
-resource "random_id" "suffix" {
-  byte_length = 4
-}
-
+# Bucket names are global. <name>-<account>-<region>, the convention of AWS's own buckets, is unique without a random
+# part and tells the account and region at a glance. AWS does not treat an account id as a secret, and the uploads
+# bucket name shows in every presigned upload form a browser gets; the account still comes in only at run time.
 locals {
+  bucket_suffix = "${var.account_id}-${var.region}"
   buckets = {
-    uploads = "${var.name_prefix}-uploads-${random_id.suffix.hex}"
-    media   = "${var.name_prefix}-media-${random_id.suffix.hex}"
+    uploads = "${var.name_prefix}-uploads-${local.bucket_suffix}"
+    media   = "${var.name_prefix}-media-${local.bucket_suffix}"
   }
 }
 
