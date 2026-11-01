@@ -21,10 +21,9 @@ quyết định chung của lab nằm ở `docs/` của repo code (bản clone `
 
 ## Quy ước
 
-- **Ngôn ngữ viết:** file `.md` viết tiếng Việt; mọi thứ trong code (comment, `description` của biến và output, message của
-  `validation`, script, `*.example`) viết tiếng Anh. Comment nói lý do ngay tại chỗ, không nhắc ADR.
-- **Không nhãn tiến độ:** code và tài liệu hiện trạng (README, `AGENTS.md`, `docs/`, comment, tên job và bước của workflow) không
-  mang nhãn "giai đoạn N", "phần M"; nói thứ đó làm gì. Lịch sử nằm ở git log và ADR.
+Quy ước chung (ngôn ngữ, tài liệu timeless, ADR, comment, Git, repo public, phụ thuộc): [`CONTRIBUTING.md` của `anhnvcoder/.github`](https://github.com/anhnvcoder/.github/blob/main/CONTRIBUTING.md); dưới đây chỉ luật riêng của repo này.
+
+- **Ngôn ngữ viết:** file `.md` viết tiếng Việt.
 - **Repo public, không commit:** state (`*.tfstate*`), plan (`*.tfplan`), `backend.hcl`, `*.auto.tfvars` hay `terraform.tfvars` (chứa
   account ID, IP, email, tên miền thật), override (`*_override.tf`), `.terraform/`, `.session/`. Ví dụ và test dùng `000000000000`,
   `svp.example`, `<domain>`. Tên bucket theo `<tên>-<account>-<region>`, tính từ `var.account_id` lúc chạy, nên account thật vẫn không
@@ -38,5 +37,4 @@ quyết định chung của lab nằm ở `docs/` của repo code (bản clone `
   module registry vào `.trivyignore.yaml`. Sửa được thì sửa.
 - **Docker** chỉ qua `Makefile` (`env -u DOCKER_DEFAULT_PLATFORM docker run …`, image ghim digest có dòng `# renovate:` ngay trên).
 - **Card chạy song song** kiểm bằng `make check DIRS=<thư mục của mình>`: mỗi lượt chỉ ghi dưới thư mục đó, không có cache dùng chung.
-- **Git:** conventional commits, mô tả tiếng Việt. Mọi thay đổi vào `main` qua PR có `infra-ok` xanh (từ khi bật ruleset); không force
-  push, hoàn tác bằng PR revert.
+- **Git:** mọi thay đổi vào `main` qua PR có `infra-ok` xanh (từ khi bật ruleset).
