@@ -4,12 +4,13 @@ Tạo những thứ sống lâu hơn mọi buổi AWS và không thuộc env nà
 
 | Tài nguyên | Vì sao | Chi phí |
 | --- | --- | --- |
-| Bucket state `svp-tfstate-<8 hex ngẫu nhiên>` | state của mọi root, mỗi root một key (`aws/bootstrap/terraform.tfstate`, `aws/stg/terraform.tfstate`, …), khoá bằng lock file native của backend S3 (`use_lockfile`, không DynamoDB); versioning, SSE-S3, chặn public, `BucketOwnerEnforced`, policy từ chối request không TLS, `prevent_destroy` | < $0,01/tháng (vài file state; ước lượng) |
+| Bucket state `svp-tfstate-<account>-<region>` | state của mọi root, mỗi root một key (`aws/bootstrap/terraform.tfstate`, `aws/stg/terraform.tfstate`, …), khoá bằng lock file native của backend S3 (`use_lockfile`, không DynamoDB); versioning, SSE-S3, chặn public, `BucketOwnerEnforced`, policy từ chối request không TLS, `prevent_destroy` | < $0,01/tháng (vài file state; ước lượng) |
 | Budget tháng `svp-monthly` | email ở 50 %, 80 %, 100 % chi phí thực tế và 100 % dự báo; mặc định $20 (`budget_limit_usd`) | miễn phí ([AWS Budgets pricing](https://aws.amazon.com/aws-cost-management/aws-budgets/pricing/), đọc 2026-10-31) |
 | Hosted zone `aws.<domain>` | giữ giữa các buổi để bốn name server, uỷ quyền một lần, không đổi; ExternalDNS và cert-manager chỉ ghi zone này | $0,50/tháng ([Route 53 pricing](https://aws.amazon.com/route53/pricing/), đọc 2026-10-31) |
 
-Mọi tài nguyên mang tag `Project=svp`, `ManagedBy=terraform`, `Stack=bootstrap` (script quét sót của buổi bỏ qua `Stack=bootstrap`). Không
-tên nào ghép từ account ID; account chỉ vào qua `TF_VAR_account_id` (provider từ chối mọi account khác, `allowed_account_ids`).
+Mọi tài nguyên mang tag `Project=svp`, `ManagedBy=terraform`, `Stack=bootstrap` (script quét sót của buổi bỏ qua `Stack=bootstrap`). Tên
+bucket theo `<tên>-<account>-<region>` như bucket của AWS CDK, Control Tower: duy nhất toàn cầu không cần phần ngẫu nhiên. Account chỉ vào
+qua `TF_VAR_account_id` lúc chạy (provider từ chối mọi account khác, `allowed_account_ids`), nên không file commit nào chứa account thật.
 
 **Người học chạy mọi lệnh dưới đây** (AI không chạy lệnh nào chạm account). Làm vài ngày trước buổi AWS đầu, để uỷ quyền NS kịp lan
 truyền. Cần: Terraform 1.15 trên máy (`terraform version`), AWS CLI v2, `jq`, `dig`, đã `aws sso login --profile anhnv-sso`.
@@ -47,13 +48,13 @@ AWS_PROFILE=anhnv-sso terraform init
 AWS_PROFILE=anhnv-sso terraform plan -out=bootstrap.tfplan
 ```
 
-Đọc plan: `Plan: 9 to add, 0 to change, 0 to destroy` (`random_id`, bucket cùng 5 cấu hình của nó, budget, hosted zone). Dán dòng đó lại
+Đọc plan: `Plan: 8 to add, 0 to change, 0 to destroy` (bucket cùng 5 cấu hình của nó, budget, hosted zone). Dán dòng đó lại
 nếu muốn kiểm cùng. Rồi:
 
 ```sh
 AWS_PROFILE=anhnv-sso terraform apply bootstrap.tfplan
 AWS_PROFILE=anhnv-sso terraform output -raw backend_hcl > ../backend.hcl
-cat ../backend.hcl            # bucket = "svp-tfstate-…", region = "ap-southeast-1"
+cat ../backend.hcl            # bucket = "svp-tfstate-<account>-ap-southeast-1", region = "ap-southeast-1"
 ```
 
 `aws/backend.hcl` (git bỏ qua) là cấu hình backend chung mà mọi root đọc bằng `-backend-config`.
@@ -92,7 +93,7 @@ dig NS aws.<domain> +short          # resolver của máy: cũng đúng bốn na
 
 Mỗi buổi AWS bắt đầu bằng phép kiểm này (script buổi); sai thì không `apply`.
 
-## Xoá khi kết thúc giai đoạn 7–9
+## Xoá bootstrap (khi lab kết thúc)
 
 Chỉ khi không còn root nào dùng bucket và zone (mọi env đã `destroy`, script quét sót sạch):
 

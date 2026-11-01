@@ -8,10 +8,6 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 6.0"
     }
-    random = {
-      source  = "hashicorp/random"
-      version = "~> 3.9"
-    }
   }
 
   # The state of this root lives in the bucket it creates. The first apply runs on local state (a local_override.tf

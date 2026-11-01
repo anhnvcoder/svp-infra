@@ -109,5 +109,6 @@ không có direnv thì `export AWS_PROFILE=anhnv-sso` mỗi terminal.
 - **Không commit:** state (`*.tfstate*`), plan (`*.tfplan`), `backend.hcl`, `*.auto.tfvars`, `terraform.tfvars`, override
   (`*_override.tf`), `.terraform/`, thư mục số đo `.session/`. Giá trị cá nhân (account ID, IP được gọi API EKS, email, tên miền thật,
   tên bucket) chỉ qua `*.auto.tfvars` không commit hay `TF_VAR_*`; repo có file `*.example` với `svp.example`, `000000000000`.
-- Không tên tài nguyên nào ghép từ account ID: bucket ghép tiền tố cố định với hậu tố ngẫu nhiên.
+- Tên bucket theo `<tên>-<account>-<region>` (như bucket của AWS CDK, Control Tower): duy nhất toàn cầu không cần phần ngẫu nhiên.
+  Account thật vẫn không nằm trong file commit nào: tên tính từ `var.account_id` lúc chạy.
 - Nghi đã lộ khoá AWS hay giá trị cá nhân: mục "Giảm thiểu" của runbook `svp-infra-setup.md`.

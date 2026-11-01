@@ -106,7 +106,7 @@ case "$1 $2" in
   "rds describe-db-instances") echo '{"DBInstances":[]}' ;;
   "rds describe-db-snapshots") echo '{"DBSnapshots":[]}' ;;
   "rds describe-db-instance-automated-backups") echo '{"DBInstanceAutomatedBackups":[]}' ;;
-  "s3api list-buckets") echo '{"Buckets":[{"Name":"svp-tfstate-0123abcd"},{"Name":"someone-else"}]}' ;;
+  "s3api list-buckets") echo '{"Buckets":[{"Name":"svp-tfstate-000000000000-ap-southeast-1"},{"Name":"someone-else"}]}' ;;
   "s3api get-bucket-tagging") echo '{"TagSet":[{"Key":"Project","Value":"svp"},{"Key":"Stack","Value":"bootstrap"}]}' ;;
   "cloudfront list-distributions") echo '{"DistributionList":{"Items":[]}}' ;;
   "cloudfront list-origin-access-controls") echo '{"OriginAccessControlList":{"Items":[]}}' ;;
@@ -511,7 +511,7 @@ expect "measure.sh stops on another account before any other command" \
 unset SVP_SESSION_DIR
 : >"$log"
 expect "sweep.sh passes with the bootstrap's resources alone" bash "$here/sweep.sh" >"$work/sweep.out" 2>&1
-expect "sweep.sh prints the state bucket as kept" grep -q '^kept  svp-tfstate-0123abcd' "$work/sweep.out"
+expect "sweep.sh prints the state bucket as kept" grep -q '^kept  svp-tfstate-000000000000-ap-southeast-1' "$work/sweep.out"
 expect "sweep.sh prints the zone as kept" grep -q '^kept  hosted zone aws.svp.example' "$work/sweep.out"
 expect "sweep.sh needs no Terraform state" test -z "$(grep '^terraform ' "$log")"
 expect "sweep.sh only reads (describe, list, get)" \

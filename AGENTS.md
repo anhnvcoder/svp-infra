@@ -27,7 +27,8 @@ quyết định chung của lab nằm ở `docs/` của repo code (bản clone `
   mang nhãn "giai đoạn N", "phần M"; nói thứ đó làm gì. Lịch sử nằm ở git log và ADR.
 - **Repo public, không commit:** state (`*.tfstate*`), plan (`*.tfplan`), `backend.hcl`, `*.auto.tfvars` hay `terraform.tfvars` (chứa
   account ID, IP, email, tên miền thật), override (`*_override.tf`), `.terraform/`, `.session/`. Ví dụ và test dùng `000000000000`,
-  `svp.example`, `<domain>`; tên tài nguyên không ghép từ account ID.
+  `svp.example`, `<domain>`. Tên bucket theo `<tên>-<account>-<region>`, tính từ `var.account_id` lúc chạy, nên account thật vẫn không
+  nằm trong file commit nào.
 - **Root và module:** thư mục dưới `modules/` là module (không commit lock file), thư mục `*.tf` khác là root (commit
   `.terraform.lock.hcl` ba nền tảng bằng `make lock DIRS=<root>`). Provider ghim trong lock của root; module registry ghim version chính
   xác. Root đặt `default_tags` `Project=svp`, `ManagedBy=terraform`, `Stack=<tên>` và `allowed_account_ids = [var.account_id]`.

@@ -1,14 +1,12 @@
 # Remote state of every root of the repository: one key per root (aws/bootstrap/terraform.tfstate,
 # aws/stg/terraform.tfstate, ...), locked with the S3 backend's native lock file, so no DynamoDB table.
 
-# Bucket names are global: a fixed prefix plus a random suffix, never the account id, so no committed file and no
-# output names the account.
-resource "random_id" "state_suffix" {
-  byte_length = 4
-}
-
+# Bucket names are global. <name>-<account>-<region>, the convention of AWS's own buckets (the CDK bootstrap bucket,
+# the Control Tower log bucket), is unique without a random part and tells the account and region at a glance. AWS
+# does not treat an account id as a secret; it still enters the name only at run time, from var.account_id, so no
+# committed file holds the real account.
 resource "aws_s3_bucket" "state" {
-  bucket = "svp-tfstate-${random_id.state_suffix.hex}"
+  bucket = "svp-tfstate-${var.account_id}-${var.region}"
 
   # Losing this bucket loses the state of every root. Removing it on purpose: see aws/bootstrap/README.md.
   lifecycle {

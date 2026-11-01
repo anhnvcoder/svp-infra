@@ -1,11 +1,32 @@
 variable "name_prefix" {
-  description = "Fixed start of every name (svp-stg, svp-prd): buckets are <name_prefix>-uploads-<suffix> and <name_prefix>-media-<suffix>, the suffix random, so no name is built from the account id and a bucket left from an earlier session never collides."
+  description = "Fixed start of every name (svp-stg, svp-prd): buckets are <name_prefix>-uploads-<account_id>-<region> and <name_prefix>-media-<account_id>-<region>."
   type        = string
 
   validation {
-    # Bucket names: lowercase letters, digits and hyphens, at most 63 characters with "-uploads-" and 8 hex digits.
-    condition     = can(regex("^[a-z][a-z0-9-]{0,38}[a-z0-9]$", var.name_prefix)) && !strcontains(var.name_prefix, "--")
-    error_message = "name_prefix must be 2 to 40 lowercase letters, digits and single hyphens, starting with a letter and not ending with a hyphen."
+    # Bucket names: lowercase letters, digits and hyphens, at most 63 characters with "-uploads-", the 12 digits of the
+    # account, a hyphen and a region of up to 14 characters (ap-southeast-1).
+    condition     = can(regex("^[a-z][a-z0-9-]{0,25}[a-z0-9]$", var.name_prefix)) && !strcontains(var.name_prefix, "--")
+    error_message = "name_prefix must be 2 to 27 lowercase letters, digits and single hyphens, starting with a letter and not ending with a hyphen."
+  }
+}
+
+variable "account_id" {
+  description = "The AWS account of the buckets (12 digits), part of their names. The root passes its own account_id, which never goes into a committed file."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[0-9]{12}$", var.account_id))
+    error_message = "account_id must be the 12 digits of an AWS account id."
+  }
+}
+
+variable "region" {
+  description = "Region of the buckets, part of their names; the root passes the region of its provider."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[a-z]{2}(-[a-z]+)+-[0-9]$", var.region)) && length(var.region) <= 14
+    error_message = "region must be an AWS region name of at most 14 characters, e.g. ap-southeast-1."
   }
 }
 
