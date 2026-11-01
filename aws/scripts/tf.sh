@@ -3,14 +3,18 @@
 # apply and destroy in the session's timeline:
 #   init     terraform init with the shared backend configuration aws/backend.hcl
 #   plan     terraform plan -var-file=<env>.tfvars into <env>.tfplan, then show (below): the plan to be read before apply
-#   plan --destroy [--no-cluster]
+#   plan --destroy [--no-cluster|--leftovers]
 #            terraform plan -destroy -var-file=<env>.tfvars into <env>.destroy.tfplan, and its text into
 #            <session>/<env>-destroy-plan.txt, the plan to be read before destroy; refused until pre-destroy.sh has
 #            finished in this session (resources Kubernetes made would block it or stay billed), unless --no-cluster
 #            says that nothing ever ran on a cluster. --no-cluster is checked, not trusted: the session has no
 #            cluster-values.json and terraform state list of the root holds no EKS cluster (an apply that failed before
 #            EKS); otherwise it refuses. A new session directory alone (a terminal reopened with a fresh
-#            SVP_SESSION_DIR) has no cluster-values.json either, which is why the state is read too
+#            SVP_SESSION_DIR) has no cluster-values.json either, which is why the state is read too.
+#            --leftovers is the way out when the session's time is up and pre-destroy.sh is still red: accepted only
+#            when the timeline holds pre-destroy-start (pre-destroy.sh was tried in this session) and not
+#            pre-destroy-done, it records pre-destroy-skipped; what Kubernetes made may then be left in the account,
+#            and sweep.sh afterwards lists it
 #   show     terraform show -no-color of <env>.tfplan into <session>/<env>-plan.txt, the text to read before apply (the plan
 #            file is binary). It names the real domain and IPs, so it goes in the session directory, never in the repository
 #   apply    terraform apply of that plan file only (never a plan made on the fly), then the file is removed
@@ -18,7 +22,7 @@
 #            removed
 # TF_VAR_account_id is set from SVP_AWS_ACCOUNT_ID once the account is checked: the provider refuses any other.
 #
-# Usage: aws/scripts/tf.sh [--print] stg init|plan [--destroy [--no-cluster]]|show|apply|destroy
+# Usage: aws/scripts/tf.sh [--print] stg init|plan [--destroy [--no-cluster|--leftovers]]|show|apply|destroy
 set -euo pipefail
 
 # shellcheck source=aws/scripts/lib.sh
@@ -26,16 +30,20 @@ set -euo pipefail
 printing && shift
 env_arg "${1:-}"
 cmd=${2:-}
-usage="usage: $(basename "$0") [--print] stg init|plan [--destroy [--no-cluster]]|show|apply|destroy"
+usage="usage: $(basename "$0") [--print] stg init|plan [--destroy [--no-cluster|--leftovers]]|show|apply|destroy"
 destroy_plan=
 no_cluster=
-case "$cmd${3:+ $3}${4:+ $4}" in
+leftovers=
+case "$cmd${3:+ $3}${4:+ $4}${5:+ $5}" in
   init | plan | show | apply | destroy) ;;
   'plan --destroy') destroy_plan=1 ;;
   'plan --destroy --no-cluster') destroy_plan=1 no_cluster=1 ;;
+  'plan --destroy --leftovers') destroy_plan=1 leftovers=1 ;;
+  'plan --destroy --no-cluster --leftovers' | 'plan --destroy --leftovers --no-cluster')
+    fail "--no-cluster and --leftovers do not go together: --no-cluster when no EKS cluster was ever made, --leftovers when pre-destroy.sh ran on one and is still red at the end of the session" ;;
   *) fail "$usage" ;;
 esac
-[ $# -le 4 ] || fail "$usage"
+[ $# -le 5 ] || fail "$usage"
 
 session_dir
 plan_file=$env_name.tfplan
@@ -43,6 +51,9 @@ destroy_plan_file=$env_name.destroy.tfplan
 step "tf.sh: terraform $cmd${destroy_plan:+ -destroy} of aws/envs/$env_name"
 check_account
 export TF_VAR_account_id=${SVP_AWS_ACCOUNT_ID:-}
+
+# has_mark EVENT: the session's timeline holds EVENT.
+has_mark() { awk -F '\t' -v e="$1" '$3 == e { found = 1 } END { exit !found }' "$session/timeline.tsv" 2>/dev/null; }
 
 # write_plan_text PLAN_FILE TEXT_NAME: the text of PLAN_FILE into $session/TEXT_NAME (owner only), and its Plan: line.
 write_plan_text() {
@@ -96,9 +107,18 @@ case $cmd${destroy_plan:+ --destroy} in
       [ -z "$eks" ] ||
         fail "--no-cluster refused: the state holds EKS cluster $(oneline <<<"$eks"): run aws/scripts/pre-destroy.sh $env_name first (it needs only the cluster, not bootstrap-argocd.sh nor this session's files), then $(basename "$0") $env_name plan --destroy without --no-cluster"
       note "--no-cluster: no cluster-values.json and no EKS cluster in the state; pre-destroy.sh skipped, the sweep afterwards tells whether anything was left"
+    elif [ -n "$leftovers" ]; then
+      if ! printing; then
+        has_mark pre-destroy-start ||
+          fail "--leftovers refused: pre-destroy.sh $env_name never started in this session ($session): run it first, and --leftovers only if its step 2 or 3 is still red when the session's time is up"
+        ! has_mark pre-destroy-done ||
+          fail "--leftovers refused: pre-destroy.sh $env_name has finished in this session (pre-destroy-done): $(basename "$0") $env_name plan --destroy without --leftovers"
+      fi
+      note "--leftovers: pre-destroy.sh did not finish, so what Kubernetes made may be left: the Load Balancer and its target groups, the DNS records of ExternalDNS, the EBS volumes of PVCs. destroy may get stuck on them (stuck-destroy section of docs/runbooks/session-$env_name.md); aws/scripts/sweep.sh afterwards lists what to delete by hand"
+      mark pre-destroy-skipped
     elif ! printing; then
-      awk -F '\t' '$3 == "pre-destroy-done" { found = 1 } END { exit !found }' "$session/timeline.tsv" 2>/dev/null ||
-        fail "pre-destroy.sh $env_name has not finished in this session ($session): run it first (or --no-cluster when no EKS cluster was ever made: the session has no cluster-values.json and the state no cluster)"
+      has_mark pre-destroy-done ||
+        fail "pre-destroy.sh $env_name has not finished in this session ($session): run it first (or --no-cluster when no EKS cluster was ever made: the session has no cluster-values.json and the state no cluster; or --leftovers when the session's time is up and its step 2 or 3 is still red)"
     fi
     printing || [ -f "$root_dir/$env_name.auto.tfvars" ] ||
       fail "no aws/envs/$env_name/$env_name.auto.tfvars: copy example.auto.tfvars.example and fill in the personal values"

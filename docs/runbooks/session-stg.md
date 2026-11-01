@@ -73,7 +73,7 @@ export SVP_SESSION_DIR="$PWD/.session/$(date -u +%Y%m%dT%H%M%SZ)"             # 
 ```
 
 Không có `TF_VAR_account_id` trong `.envrc` thì gõ 12 số của account sandbox (đọc trên trang SSO) thay cho dòng `SVP_AWS_ACCOUNT_ID`:
-`export SVP_AWS_ACCOUNT_ID=<12 số>`; không ghi vào file nào.
+`export SVP_AWS_ACCOUNT_ID=<12 số>`; không ghi vào file commit nào (`.envrc`, git bỏ qua, được giữ `TF_VAR_account_id`).
 
 Mọi bước sau chạy trong **cùng terminal này** (cùng hai biến). Thư mục buổi chứa: `timeline.tsv` (mốc UTC: `session-start`,
 `apply-start`, `apply-end`, `argocd-healthy`, `smoke-ok`, `seed-ok`, `k6-<n>-start`/`-end`, `pre-destroy-*`, `destroy-start`,
@@ -235,8 +235,10 @@ bước 1, 4 và phần Application của bước 2 bỏ qua; các phép chờ c
 EBS) vẫn chạy, rồi ghi mốc `pre-destroy-done` như thường.
 
 Tìm: mỗi bước `ok`, cuối cùng `ok ready for: aws/scripts/tf.sh stg plan --destroy` và mốc `pre-destroy-done` (thiếu mốc này thì
-`tf.sh stg plan --destroy` từ chối). `FAIL` nêu thứ còn lại và lệnh xem; sửa rồi chạy lại script (mỗi bước tìm thứ còn lại). Hết giờ mà bước
-2 hay 3 vẫn đỏ: vẫn sang bước 9 và 10, rồi xoá tay phần `sweep.sh` liệt kê.
+`tf.sh stg plan --destroy` từ chối). Script ghi mốc `pre-destroy-start` ngay sau khi kiểm account, trước mọi bước khác. `FAIL` nêu thứ còn
+lại và lệnh xem; sửa rồi chạy lại script (mỗi bước tìm thứ còn lại). **Hết giờ của buổi mà bước 2 hay 3 vẫn đỏ sau khi đã chạy lại**
+(dòng `note` cuối sau `FAIL` nhắc lối này): sang bước 9 với `aws/scripts/tf.sh stg plan --destroy --leftovers`, rồi bước 10, rồi bước 11
+và xoá tay thứ `sweep.sh` liệt kê (mục **Lệnh xoá tay theo loại**).
 
 ### 9. Plan xoá
 
@@ -246,7 +248,7 @@ aws/scripts/tf.sh stg plan --destroy
 
 Như bước 4 cho apply: `terraform plan -destroy` ghi `aws/envs/stg/stg.destroy.tfplan` (nhị phân, git bỏ qua) và bản text của nó vào
 `$SVP_SESSION_DIR/stg-destroy-plan.txt`; `ok` cuối nêu đường dẫn file text. Từ chối khi thư mục buổi chưa có mốc `pre-destroy-done` (bước
-8). **Đọc file text đó trước bước 10**: chỉ tài nguyên của `aws/envs/stg`, `0 to add, 0 to change`; không có bucket `svp-tfstate`, không
+8; hay `--leftovers` dưới đây). **Đọc file text đó trước bước 10**: chỉ tài nguyên của `aws/envs/stg`, `0 to add, 0 to change`; không có bucket `svp-tfstate`, không
 có `aws_route53_zone` (của `aws/bootstrap`, root khác). Thấy thứ khác: dừng, dán plan cho AI.
 
 Apply đỏ trước khi tạo cluster EKS (chưa gì chạy trên cluster): bỏ bước 8, `aws/scripts/tf.sh stg plan --destroy --no-cluster`. Script tự
@@ -254,6 +256,19 @@ kiểm điều đó trước khi plan: thư mục buổi không có `cluster-val
 list` (script tự chạy) không có `aws_eks_cluster`; không thì từ chối (`FAIL --no-cluster refused: …`). State còn cluster (apply đỏ sau
 khi cluster đã có, hay terminal mở lại với thư mục buổi mới): chạy bước 8 trong thư mục buổi hiện tại (không cần bước 6), rồi lệnh ở đầu
 mục này, không `--no-cluster`.
+
+Hết giờ của buổi mà bước 8 vẫn đỏ ở bước 2 hay 3 của nó sau khi đã chạy lại: lối thoát có kiểm, để cluster không tính tiền tiếp.
+
+```sh
+aws/scripts/tf.sh stg plan --destroy --leftovers
+```
+
+Chỉ nhận khi `timeline.tsv` của buổi có mốc `pre-destroy-start` (bước 8 đã chạy trong thư mục buổi này) mà chưa có `pre-destroy-done`;
+thiếu `pre-destroy-start` thì từ chối và bảo chạy bước 8 trước, đã có `pre-destroy-done` thì từ chối (không cần cờ này), không đi cùng
+`--no-cluster`. Dòng `note --leftovers: …` nhắc thứ Kubernetes tạo có thể còn (Load Balancer và target group, bản ghi DNS của
+ExternalDNS, volume EBS của PVC), rồi ghi mốc `pre-destroy-skipped`. Tiếp: đọc file text như trên, bước 10 (có thể kẹt vì những thứ đó:
+mục **Destroy kẹt**, "destroy lại" cũng với `--leftovers`), rồi bước 11; thứ `sweep.sh` liệt kê xoá bằng lệnh ở mục **Lệnh xoá tay theo
+loại**, rồi chạy lại `sweep.sh` tới khi sạch.
 
 ### 10. Destroy
 
@@ -281,8 +296,8 @@ aws/bootstrap` (exit 0). Có dòng `FAIL <loại>: N left`: xoá tay bằng lệ
 
 ## Destroy kẹt
 
-"Destroy lại" ở bảng dưới là bước 9 rồi bước 10: `aws/scripts/tf.sh stg plan --destroy` (plan mới từ state hiện tại), đọc file text, rồi
-`aws/scripts/tf.sh stg destroy`.
+"Destroy lại" ở bảng dưới là bước 9 rồi bước 10: `aws/scripts/tf.sh stg plan --destroy` (plan mới từ state hiện tại; thêm `--leftovers`
+nếu bước 9 đã dùng nó), đọc file text, rồi `aws/scripts/tf.sh stg destroy`.
 
 | Triệu chứng | Nguyên nhân | Cách xử lý |
 | --- | --- | --- |

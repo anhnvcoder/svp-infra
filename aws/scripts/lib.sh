@@ -127,14 +127,15 @@ mark() {
 }
 
 # check_account: the account of profile anhnv-sso must be SVP_AWS_ACCOUNT_ID, which the learner exports in the
-# terminal of the session after reading it on the SSO page (never in a file: the repository is public). Every script
-# that reaches the account or the cluster runs it first, so a wrong profile stops before anything else; check-dns.sh
-# alone does not, as it only reads one output of the bootstrap's state and changes nothing.
+# terminal of the session after reading it on the SSO page (never in a committed file: the repository is public; the
+# .envrc git ignores may hold TF_VAR_account_id). Every script that reaches the account or the cluster runs it first,
+# so a wrong profile stops before anything else; check-dns.sh alone does not, as it only reads one output of the
+# bootstrap's state and changes nothing.
 check_account() {
   local id account arn
   if ! printing; then
     [[ ${SVP_AWS_ACCOUNT_ID:-} =~ ^[0-9]{12}$ ]] ||
-      fail "set SVP_AWS_ACCOUNT_ID to the 12 digits of the sandbox account, as the SSO page shows it (export SVP_AWS_ACCOUNT_ID=...; never in a file)"
+      fail "set SVP_AWS_ACCOUNT_ID to the 12 digits of the sandbox account, as the SSO page shows it (export SVP_AWS_ACCOUNT_ID=...; never in a committed file, the ignored .envrc may hold TF_VAR_account_id)"
   fi
   id=$(aws_ sts get-caller-identity --output json) ||
     fail "aws sts get-caller-identity with profile $profile (expired SSO session? AWS_PROFILE=$profile aws sso login)"

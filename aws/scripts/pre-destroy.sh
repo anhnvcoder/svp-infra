@@ -23,8 +23,9 @@
 # Needs no step but the apply that made the cluster: it writes the kubeconfig context itself and reads the lab zone's id
 # from the root's tfvars, not from the files of bootstrap-argocd.sh. So it also runs after an apply that failed once EKS
 # existed (its outputs were not stored, so bootstrap-argocd.sh cannot run), and from a new session directory.
-# Records pre-destroy-done in the timeline, which tf.sh <env> plan --destroy requires. Run it again after a failure: each
-# step finds what is left.
+# Records pre-destroy-start in the timeline once the account is checked, and pre-destroy-done at the end, which tf.sh
+# <env> plan --destroy requires. Run it again after a failure: each step finds what is left. When the session's time is
+# up and step 2 or 3 is still red, tf.sh <env> plan --destroy --leftovers (it needs pre-destroy-start) is the way out.
 #
 # Usage: aws/scripts/pre-destroy.sh [--print] stg
 set -euo pipefail
@@ -59,6 +60,7 @@ fi
 
 step "pre-destroy.sh: account and cluster $context"
 check_account
+mark pre-destroy-start
 aws_ eks update-kubeconfig --name "$cluster" --alias "$context" ||
   fail "aws eks update-kubeconfig for cluster $cluster (no such cluster in the account? then nothing ever ran on one: aws/scripts/tf.sh $env_name plan --destroy --no-cluster, which checks that the state holds none)"
 ok "context $context in the kubeconfig"
@@ -223,6 +225,14 @@ if [ -n "$argocd" ]; then
 fi
 mark pre-destroy-root
 
+# way_out STATUS: after a FAIL of step 2 or 3, the two ways on: fix and run again, or, out of time, destroy with what
+# is left.
+way_out() {
+  [ "$1" = 0 ] ||
+    printf 'note  %s\n' "fix what the FAIL above names, then aws/scripts/pre-destroy.sh $env_name again; once the session's time is up and step 2 or 3 is still red: aws/scripts/tf.sh $env_name plan --destroy --leftovers, then aws/scripts/tf.sh $env_name destroy, then aws/scripts/sweep.sh (docs/runbooks/session-$env_name.md, step 8)" >&2
+}
+trap 'way_out $?' EXIT
+
 step "pre-destroy.sh 2/4: workload Applications, then Gateway svp, while LBC, ExternalDNS and Envoy Gateway run"
 left_apps=
 if [ -n "$argocd" ]; then
@@ -279,6 +289,7 @@ if ! wait_until "no EBS volume of the EBS CSI driver is left" "$wave_limit" volu
 fi
 ok "no EBS volume of the EBS CSI driver"
 mark pre-destroy-volumes
+trap - EXIT
 
 step "pre-destroy.sh 4/4: svp-cluster and the platform Applications"
 left_apps=

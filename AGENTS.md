@@ -31,8 +31,9 @@ Quy ước chung (ngôn ngữ, tài liệu timeless, ADR, comment, Git, repo pub
 - **Root và module:** thư mục dưới `modules/` là module (không commit lock file), thư mục `*.tf` khác là root (commit
   `.terraform.lock.hcl` ba nền tảng bằng `make lock DIRS=<root>`). Provider ghim trong lock của root; module registry ghim version chính
   xác. Root đặt `default_tags` `Project=svp`, `ManagedBy=terraform`, `Stack=<tên>` và `allowed_account_ids = [var.account_id]`.
-- **Root `github/`** (cài đặt GitHub của năm repo, provider `integrations/github`): không provider AWS nên không `default_tags`,
-  `allowed_account_ids`; `plan`, `apply` cần token GitHub admin và đăng nhập AWS (state ở bucket của `aws/bootstrap`), chỉ người học chạy.
+- **Root `github/`** (cài đặt GitHub của các repo trong `local.repositories` của `github/repositories.tf`, provider
+  `integrations/github`): không provider AWS nên không `default_tags`, `allowed_account_ids`; `plan`, `apply` cần token GitHub admin và
+  đăng nhập AWS (state ở bucket của `aws/bootstrap`), chỉ người học chạy.
 - **Ngoại lệ trivy:** finding trong `.tf` của repo bỏ qua bằng `#trivy:ignore:<id>` ngay trên resource, lý do ở comment; finding trong
   module registry vào `.trivyignore.yaml`. Sửa được thì sửa.
 - **Docker** chỉ qua `Makefile` (`env -u DOCKER_DEFAULT_PLATFORM docker run …`, image ghim digest có dòng `# renovate:` ngay trên).
