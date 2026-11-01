@@ -45,7 +45,8 @@ Giá trị cá nhân (`stg.auto.tfvars` hay `TF_VAR_*`):
 ## Dùng root này
 
 **Người học chạy mọi lệnh dưới đây** (AI chỉ chạy `make check`, `make lock`). Cần `aws/bootstrap` đã apply và `aws/backend.hcl` đã có.
-Trình tự cả buổi (kiểm DNS, bootstrap Argo CD, đo, dọn trước destroy, quét) ở script buổi và runbook của `aws/scripts/`.
+Trình tự cả buổi (kiểm DNS, bootstrap Argo CD, đo, dọn trước destroy, quét) ở runbook
+[`docs/runbooks/session-stg.md`](../../../docs/runbooks/session-stg.md) và script buổi của `aws/scripts/`.
 
 ```sh
 cd infra/aws/envs/stg
