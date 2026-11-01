@@ -16,7 +16,8 @@
 #   - measure.sh checks the account first; a level that fails ends the ladder; a node lost makes the level interrupted
 #     (exit 3); a failed poll of the Job is waited past, not taken for its end; a Job never read again is a tooling
 #     error (exit 1), not a failed level, and is not deleted
-#   - tf.sh destroy refuses before pre-destroy; --no-cluster only with no cluster-values.json and no EKS cluster in the
+#   - tf.sh show refuses without a plan file and writes the plan as text in the session directory, as plan does;
+#     tf.sh destroy refuses before pre-destroy; --no-cluster only with no cluster-values.json and no EKS cluster in the
 #     state; sweep.sh reads only, works with no state, fails on a leftover volume or a secret scheduled for deletion,
 #     passes on the bootstrap's resources alone
 #
@@ -129,6 +130,9 @@ case "${args#-chdir=* }" in
     echo '{"name":"svp-stg","domain":"stg.aws.svp.example","hostedZoneId":"Z0FAKE","acmeEmail":"you@svp.example"}' ;;
   "output -raw rds_master_user_secret_arn") printf 'arn:aws:secretsmanager:ap-southeast-1:000000000000:secret:rds!db-fake' ;;
   # FAKE_TF_STATE: eks, a state with the cluster (and a data source of it); fail, no readable state; else, no cluster.
+  # show: the text of a plan file.
+  "show -no-color stg.tfplan") printf '%s\n' 'Terraform will perform the following actions:' '  # aws_vpc.this will be created' \
+    'Plan: 1 to add, 0 to change, 0 to destroy.' ;;
   "state list")
     case ${FAKE_TF_STATE:-} in
       eks) printf '%s\n' 'module.eks.module.eks.data.aws_eks_cluster.this[0]' 'module.eks.module.eks.aws_eks_cluster.this[0]' \
@@ -350,6 +354,22 @@ expect "tf.sh destroy --no-cluster refuses when the session has cluster-values.j
   sh -c '! bash "$1/tf.sh" stg destroy --no-cluster >"$2" 2>&1 && grep -q "cluster-values.json exists" "$2"' _ "$here" "$work/out"
 expect "tf.sh destroy --no-cluster refused: terraform destroy never ran" test -z "$(grep '^terraform .* destroy' "$log")"
 expect "tf.sh apply refuses without a plan file" sh -c '! bash "$1/tf.sh" stg apply >/dev/null 2>&1' _ "$here"
+expect "tf.sh show refuses without a plan file" sh -c '! bash "$1/tf.sh" stg show >/dev/null 2>&1' _ "$here"
+expect "tf.sh show wrote no plan text" test ! -e "$SVP_SESSION_DIR/stg-plan.txt"
+: >"$log"
+: >"$infra_root/aws/envs/stg/stg.tfplan"
+expect "tf.sh show runs" bash "$here/tf.sh" stg show >"$work/out" 2>&1
+expect "tf.sh show ran terraform show -no-color of the plan file" grep -q '^terraform -chdir=.*/aws/envs/stg show -no-color stg.tfplan$' "$log"
+expect "tf.sh show wrote the text to the session directory" grep -q '^Plan: 1 to add' "$SVP_SESSION_DIR/stg-plan.txt"
+expect "tf.sh show prints the file and its Plan: line" grep -qF "stg-plan.txt: Plan: 1 to add, 0 to change, 0 to destroy." "$work/out"
+expect "tf.sh show wrote nothing in the repository tree" test -z "$(find "$infra_root" -name '*-plan.txt' -not -path "$infra_root/.session/*")"
+rm -f "$SVP_SESSION_DIR/stg-plan.txt" "$infra_root/aws/envs/stg/stg.tfplan"
+expect "tf.sh plan runs" bash "$here/tf.sh" stg plan >"$work/out" 2>&1
+expect "tf.sh plan also wrote the plan text" grep -q '^Plan: 1 to add' "$SVP_SESSION_DIR/stg-plan.txt"
+expect "tf.sh plan says which text to read" grep -qF "read $SVP_SESSION_DIR/stg-plan.txt, then" "$work/out"
+rm -f "$SVP_SESSION_DIR/stg-plan.txt"
+expect "--print show: the command" sh -c 'bash "$1/tf.sh" --print stg show 2>&1 | grep -q "^+ AWS_PROFILE=anhnv-sso terraform -chdir=.* show -no-color stg.tfplan$"' _ "$here"
+expect "--print show wrote no plan text" test ! -e "$SVP_SESSION_DIR/stg-plan.txt"
 
 # --- bootstrap-argocd.sh -----------------------------------------------------------------------------------------
 new_session
