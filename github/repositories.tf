@@ -1,6 +1,6 @@
 ################################################################################
-# The six repositories of the account: the five of the lab and .github (default community health files of every
-# repository); repository settings, Actions permissions, Dependabot alerts.
+# The repositories of the account listed in local.repositories (the lab repositories and .github, the default community
+# health files of every repository); repository settings, Actions permissions, Dependabot alerts.
 # Every value is what the repository runs today (read with gh api GET); a change goes through a pull request here.
 ################################################################################
 
