@@ -1,7 +1,7 @@
 # `github/`: cài đặt GitHub của các repo của account
 
-Cài đặt GitHub mà lab trước đây bật tay theo runbook (`svp-gitops-setup.md`, `svp-frontend-setup.md`, `svp-infra-setup.md` của repo code) và
-ADR-0015 §11, ADR-0025, ADR-0033 nay là code: ruleset, quyền Actions, environment `promote` có lịch sử, review và khôi phục được. Root này
+Cài đặt GitHub mà ADR-0015 §11, ADR-0025, ADR-0033 quyết định, viết thành code: ruleset, quyền Actions, environment `promote` có lịch sử,
+review và khôi phục được. Root này
 quản mọi repo trong `local.repositories` của `repositories.tf` (repo của lab và `anhnvcoder/.github`, default community health files của
 account: `CONTRIBUTING.md`, `SECURITY.md`, mẫu PR) bằng provider `integrations/github` ghim `6.13.0` (chính xác,
 trong `versions.tf`; Renovate mở PR khi có bản mới). Mọi giá trị là hiện trạng đọc bằng `gh api` GET lúc đưa repo vào quản lý, không "sửa
@@ -20,7 +20,7 @@ Root này không có provider AWS: luật `default_tags`, `allowed_account_ids` 
 | `repositories.tf` | `github_actions_repository_permissions`: Actions bật, action được phép (của GitHub + danh sách pattern), ghim SHA bắt buộc; `prevent_destroy` (destroy đưa repo về cho mọi action) | mọi repo trong `local.repositories` |
 | `repositories.tf` | `github_workflow_repository_permissions`: `GITHUB_TOKEN` mặc định chỉ đọc, "create and approve pull requests" | mọi repo trong `local.repositories` |
 | `rulesets.tf` | `github_repository_ruleset`: `main` của `svp-backend`, `svp-frontend`; `main`, `owners`, `tags` của `svp-gitops`; check bắt buộc kèm `integration_id` 15368 (app GitHub Actions) | `svp-backend`, `svp-frontend`, `svp-gitops` |
-| `rulesets.tf` | `github_repository_ruleset.infra_main` (theo JSON của mục C1 runbook `svp-infra-setup.md`): Terraform tạo | `svp-infra` |
+| `rulesets.tf` | `github_repository_ruleset.infra_main`: Terraform tạo | `svp-infra` |
 | `environments.tf` | `github_repository_environment` `promote` (luật nhánh tuỳ chọn; `prevent_destroy`: xoá environment là xoá luôn secret khoá App), `github_repository_environment_deployment_policy` (chỉ `main`), biến `SVP_GITOPS_APP_CLIENT_ID` / `SVP_WEB_APP_CLIENT_ID` | `svp-backend`, `svp-frontend` |
 
 Giá trị của hai biến (client ID của hai GitHub App) vào qua `github.auto.tfvars` (git bỏ qua; dạng file ở `github.auto.tfvars.example`,
@@ -38,7 +38,7 @@ giá trị.
 | Package GHCR public | Không có resource cho visibility của package | runbook của repo code |
 | Environment `stg` của `svp-gitops` | Không ai bật tay: API deployments của `record-stg.sh` tự tạo khi ghi bản ghi stg, không luật nào; quản nó chỉ thêm đường để Terraform xoá hay tạo lại nó | `gh api repos/anhnvcoder/svp-gitops/environments` |
 | Nhánh mặc định (`github_branch_default`) | Push đầu đặt nó; mọi repo trong `local.repositories` đang là `main` | `gh api repos/anhnvcoder/<repo> -q .default_branch` |
-| `require_extra_approval_for_unattributed_changes` của luật `pull_request` | Provider không có trường này (không đọc, không gửi); GitHub đang để `true` ở mọi ruleset có luật này (mặc định, file JSON cũ cũng không đặt). Sau một `apply` sửa ruleset, đọc lại trường này | `gh api repos/anhnvcoder/<repo>/rulesets/<id> -q '.rules[] \| select(.type=="pull_request") \| .parameters'` |
+| `require_extra_approval_for_unattributed_changes` của luật `pull_request` | Provider không có trường này (không đọc, không gửi); GitHub đang để `true` ở mọi ruleset có luật này (mặc định). Sau một `apply` sửa ruleset, đọc lại trường này | `gh api repos/anhnvcoder/<repo>/rulesets/<id> -q '.rules[] \| select(.type=="pull_request") \| .parameters'` |
 | Dependabot security updates | Đang tắt ở mọi repo trong `local.repositories`, không ai bật; Renovate nâng dependency | `gh api repos/anhnvcoder/<repo> -q .security_and_analysis` |
 | Ruleset của `.github` | Repo không có workflow nên không có check nào để bắt; GitHub hiện không có ruleset nào ở repo này | `gh api repos/anhnvcoder/.github/rulesets` |
 
@@ -162,9 +162,6 @@ Bỏ một repo khỏi `local.repositories` hay một repo
 khỏi `local.promote_environments` thì `plan` dừng ở `prevent_destroy` (repo, quyền Actions, environment `promote`); muốn thôi quản một
 tài nguyên thì dùng khối `removed { from = …  lifecycle { destroy = false } }` (thiếu `destroy = false` thì Terraform xoá nó trên GitHub:
 `prevent_destroy` mất theo khối resource), đổi địa chỉ resource thì dùng khối `moved {}`.
-
-**File ruleset JSON trùng lặp:** `backend/.github/rulesets/`, `svp-gitops/.github/rulesets/` và `svp-frontend/.github/rulesets/` là bản
-trùng của `rulesets.tf`. Chúng được xoá và tài liệu trỏ về đây ở một thay đổi riêng; tới lúc đó nguồn đúng là `rulesets.tf`.
 
 **Provider mới** (PR của Renovate): đọc changelog, `make lock DIRS=github` nếu CI báo thiếu hash, rồi `plan` phải ra `No changes.` trước
 khi merge thay đổi nào khác.
