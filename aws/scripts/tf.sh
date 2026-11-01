@@ -2,7 +2,9 @@
 # Terraform of the root aws/envs/<env> for a session, with the account checked before each command and the times of
 # apply and destroy in the session's timeline:
 #   init     terraform init with the shared backend configuration aws/backend.hcl
-#   plan     terraform plan -var-file=<env>.tfvars into <env>.tfplan, to be read before apply
+#   plan     terraform plan -var-file=<env>.tfvars into <env>.tfplan, then show (below): the plan to be read before apply
+#   show     terraform show -no-color of <env>.tfplan into <session>/<env>-plan.txt, the text to read before apply (the plan
+#            file is binary). It names the real domain and IPs, so it goes in the session directory, never in the repository
 #   apply    terraform apply of that plan file only (never a plan made on the fly), then the file is removed
 #   destroy  terraform destroy -var-file=<env>.tfvars, asking for yes; refused until pre-destroy.sh has finished in
 #            this session (resources Kubernetes made would block it or stay billed), unless --no-cluster says that
@@ -12,7 +14,7 @@
 #            cluster-values.json either, which is why the state is read too
 # TF_VAR_account_id is set from SVP_AWS_ACCOUNT_ID once the account is checked: the provider refuses any other.
 #
-# Usage: aws/scripts/tf.sh [--print] stg init|plan|apply|destroy [--no-cluster]
+# Usage: aws/scripts/tf.sh [--print] stg init|plan|show|apply|destroy [--no-cluster]
 set -euo pipefail
 
 # shellcheck source=aws/scripts/lib.sh
@@ -22,18 +24,31 @@ env_arg "${1:-}"
 cmd=${2:-}
 no_cluster=
 case "$cmd ${3:-}" in
-  'init ' | 'plan ' | 'apply ') ;;
+  'init ' | 'plan ' | 'show ' | 'apply ') ;;
   'destroy ') ;;
   'destroy --no-cluster') no_cluster=1 ;;
-  *) fail "usage: $(basename "$0") [--print] stg init|plan|apply|destroy [--no-cluster]" ;;
+  *) fail "usage: $(basename "$0") [--print] stg init|plan|show|apply|destroy [--no-cluster]" ;;
 esac
-[ $# -le 3 ] || fail "usage: $(basename "$0") [--print] stg init|plan|apply|destroy [--no-cluster]"
+[ $# -le 3 ] || fail "usage: $(basename "$0") [--print] stg init|plan|show|apply|destroy [--no-cluster]"
 
 session_dir
 plan_file=$env_name.tfplan
 step "tf.sh: terraform $cmd of aws/envs/$env_name"
 check_account
 export TF_VAR_account_id=${SVP_AWS_ACCOUNT_ID:-}
+
+# write_plan_text: the text of the plan file into $session/<env>-plan.txt (owner only), and its Plan: line.
+write_plan_text() {
+  plan_text=$session/$env_name-plan.txt
+  if printing; then
+    tf_ "$root_dir" show -no-color "$plan_file"
+    return 0
+  fi
+  (umask 077 && tf_ "$root_dir" show -no-color "$plan_file" >"$plan_text") ||
+    fail "terraform show of aws/envs/$env_name/$plan_file"
+  summary=$(grep -E '^(Plan:|No changes\.)' "$plan_text" | head -n 1 || true)
+  ok "plan text in $plan_text${summary:+: $summary}"
+}
 
 case $cmd in
   init)
@@ -46,7 +61,13 @@ case $cmd in
     printing || [ -f "$root_dir/$env_name.auto.tfvars" ] ||
       fail "no aws/envs/$env_name/$env_name.auto.tfvars: copy example.auto.tfvars.example and fill in the personal values"
     tf_ "$root_dir" plan -input=false -var-file="$env_name.tfvars" -out="$plan_file" || fail "terraform plan of aws/envs/$env_name"
-    ok "plan written to aws/envs/$env_name/$plan_file: read it, then $(basename "$0") $env_name apply"
+    write_plan_text
+    ok "plan written to aws/envs/$env_name/$plan_file: read $plan_text, then $(basename "$0") $env_name apply"
+    ;;
+  show)
+    printing || [ -f "$root_dir/$plan_file" ] ||
+      fail "no aws/envs/$env_name/$plan_file: run $(basename "$0") $env_name plan first"
+    write_plan_text
     ;;
   apply)
     printing || [ -f "$root_dir/$plan_file" ] ||

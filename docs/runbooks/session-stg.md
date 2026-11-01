@@ -98,7 +98,7 @@ Rồi chạy tiếp từ bước sau mốc cuối (hay chạy lại bước đan
 | 1 | `aws/scripts/check-account.sh` | 2 phút | dòng `ok account …` (account, ARN) |
 | 2 | `aws/scripts/check-dns.sh` | 2 phút | ba dòng `ok` hay dòng `FAIL` |
 | 3 | `aws/scripts/tf.sh stg init` | 5 phút | dòng cuối |
-| 4 | `aws/scripts/tf.sh stg plan` | 5 phút | dòng `Plan: N to add, 0 to change, 0 to destroy` |
+| 4 | `aws/scripts/tf.sh stg plan` | 5 phút | dòng `Plan: N to add, 0 to change, 0 to destroy` và đường dẫn file text của plan |
 | 5 | `aws/scripts/tf.sh stg apply` | 35 phút | dòng `Apply complete! …` và hai dòng `mark` |
 | 6 | `aws/scripts/bootstrap-argocd.sh stg` | 45 phút | ~20 dòng cuối |
 | 7 | `aws/scripts/measure.sh stg` | tới mốc 3 giờ | `k6-levels.tsv`, dòng `ok highest level …` |
@@ -139,7 +139,9 @@ aws/scripts/tf.sh stg plan
 aws/scripts/tf.sh stg apply
 ```
 
-`plan` ghi `aws/envs/stg/stg.tfplan` (git bỏ qua). **Đọc plan trước khi apply**: lần đầu mỗi buổi chỉ `to add`, `0 to change, 0 to
+`plan` ghi `aws/envs/stg/stg.tfplan` (nhị phân, git bỏ qua) và ngay sau đó bản text của nó vào `$SVP_SESSION_DIR/stg-plan.txt` (thư mục buổi, git
+bỏ qua: plan có tên miền và IP thật nên không vào cây repo); `ok` cuối của `plan` nêu đường dẫn file text. Ghi lại bản text từ plan hiện có:
+`aws/scripts/tf.sh stg show`. **Đọc file text đó trước khi apply**: lần đầu mỗi buổi chỉ `to add`, `0 to change, 0 to
 destroy`; có `destroy` hay `change` là state còn tài nguyên của buổi trước (destroy dở): dừng, dán plan cho AI. `apply` chỉ nhận file plan
 đó (không plan lại tại chỗ), rồi xoá nó. Thời gian: EKS ~10–15 phút, RDS ~10 phút, CloudFront ~5 phút, song song. `apply` đỏ giữa chừng:
 đọc lỗi, `plan` lại, `apply` lại; muốn bỏ buổi thì sang bước 8 (không cần bước 6: `pre-destroy.sh` tự ghi context `svp-stg` và đọc
