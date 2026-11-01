@@ -1,15 +1,15 @@
 # Static checks of every pull request and of every push to main: make check (terraform fmt and validate, tflint, trivy,
-# shellcheck, and the self-test of the session scripts with fake aws, kubectl and terraform; the runner's bash, git and
-# jq are all it needs). Job infra-ok is the only check the ruleset of main requires, so jobs can be added or renamed without
-# touching the ruleset.
+# shellcheck, the security lint of the workflows with zizmor, and the self-test of the session scripts with fake aws,
+# kubectl and terraform; the runner's bash, git and jq are all it needs). Job infra-ok is the only check the ruleset of
+# main requires, so jobs can be added or renamed without touching the ruleset.
 #
 # The repository is public and a pull request from a fork runs this workflow with the fork's code, so:
 # - no AWS credential of any kind, no OIDC (no id-token permission), no secret, no environment: make check never reaches
 #   an account (init runs with -backend=false; nothing calls plan, apply or the AWS CLI);
 # - no pull_request_target and no workflow_run: a pull request never runs with a write token;
 # - the only job that runs code of the repository has contents: read and nothing else;
-# - every action is GitHub's own and pinned to a full commit SHA; terraform, tflint, trivy and shellcheck run from
-#   images pinned by digest in the Makefile, so no third-party action is trusted;
+# - every action of this workflow is GitHub's own and pinned to a full commit SHA; terraform, tflint, trivy, shellcheck
+#   and zizmor run from images pinned by digest in the Makefile, so no third-party action is trusted here;
 # - checkout never leaves the token in .git/config (persist-credentials: false).
 name: check
 
@@ -42,6 +42,10 @@ jobs:
           # rate limit instead of the anonymous one shared by the runner's address. The Makefile passes it to the tflint
           # container alone.
           GITHUB_TOKEN: ${{ github.token }}
+          # The same token for zizmor's online audits (impostor commits, actions with known vulnerabilities): the
+          # Makefile passes it to the zizmor container alone. Findings show as annotations of the pull request.
+          GH_TOKEN: ${{ github.token }}
+          ZIZMOR_FORMAT: github
         run: make check
 
   # The required check: green only when every job above succeeded (a skipped or cancelled job is a failure).
