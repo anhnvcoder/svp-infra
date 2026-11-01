@@ -10,7 +10,7 @@ variable "svp_gitops_app_client_id" {
 
   validation {
     condition     = trimspace(var.svp_gitops_app_client_id) != ""
-    error_message = "svp_gitops_app_client_id must not be empty: copy it from the App's settings page (General, Client ID)."
+    error_message = "svp_gitops_app_client_id must not be empty: write it from the variable on GitHub (gh api repos/anhnvcoder/svp-backend/environments/promote/variables/SVP_GITOPS_APP_CLIENT_ID --jq .value)."
   }
 }
 
@@ -21,6 +21,6 @@ variable "svp_web_app_client_id" {
 
   validation {
     condition     = trimspace(var.svp_web_app_client_id) != ""
-    error_message = "svp_web_app_client_id must not be empty: copy it from the App's settings page (General, Client ID)."
+    error_message = "svp_web_app_client_id must not be empty: write it from the variable on GitHub (gh api repos/anhnvcoder/svp-frontend/environments/promote/variables/SVP_WEB_APP_CLIENT_ID --jq .value)."
   }
 }

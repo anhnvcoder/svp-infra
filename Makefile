@@ -6,10 +6,11 @@
 # and jq, which the Mac and the CI runner both have. Docker runs with DOCKER_DEFAULT_PLATFORM unset: the shell of the
 # dev machine sets it to linux/amd64 for another project, which would run these images under emulation.
 #
-# Parallel runs: `make check DIRS=<dir>` writes only below <dir> (.terraform/ with providers, modules and the tflint
-# plugins, and the .terraform.lock.hcl of a module); trivy's cache stays inside its container, and session-test writes
-# only in a temporary directory of its own, which it removes. No plugin cache is shared between directories, so two runs
-# on two different directories never write the same file.
+# Parallel runs: `make check DIRS=<dir>` writes only below <dir> (.terraform/tflint.d with the tflint plugins, and the
+# .terraform.lock.hcl of a module); init and validate keep providers and modules in a temporary directory that nothing
+# else shares and the recipe removes, so a .terraform/ the learner made with a backend is never read or written; trivy's
+# cache stays inside its container, and session-test writes only in a temporary directory of its own, which it removes.
+# No plugin cache is shared between directories, so two runs on two different directories never write the same file.
 
 # renovate: datasource=docker depName=hashicorp/terraform
 TERRAFORM_IMAGE  := hashicorp/terraform:1.15.8@sha256:7ae513256f7ce67879e218ae8593d6fbe216ec9e123abe6c94e4e10704857963
@@ -32,7 +33,14 @@ DIRS ?=
 
 DOCKER := env -u DOCKER_DEFAULT_PLATFORM docker run --rm --user "$$(id -u):$$(id -g)" -e HOME=/tmp
 # HOME=/tmp: the container runs as the caller, who has no home directory in the image.
-TF = $(DOCKER) -e CHECKPOINT_DISABLE=1 -e TF_IN_AUTOMATION=1 -v "$(CURDIR):/src" -w "/src/$$d" $(TERRAFORM_IMAGE)
+TF_RUN = $(DOCKER) -e CHECKPOINT_DISABLE=1 -e TF_IN_AUTOMATION=1 -v "$(CURDIR):/src" -w "/src/$$d"
+TF = $(TF_RUN) $(TERRAFORM_IMAGE)
+# init, validate and providers lock keep their working data (providers, modules) in a temporary directory of the host,
+# $$data, through TF_DATA_DIR: <dir>/.terraform/terraform.tfstate of a root the learner initialised with its S3 backend
+# would otherwise make `init -backend=false` configure that backend and ask for AWS credentials.
+TF_DATA = $(TF_RUN) -e TF_DATA_DIR=/tfdata -v "$$data:/tfdata" $(TERRAFORM_IMAGE)
+# Starts each loop turn with an empty $$data; the trap removes the last one however the recipe ends.
+NEW_DATA = rm -rf "$$data"; data=$$(mktemp -d) || exit 1
 
 # Prints the directories to check, one per line, or stops with the first DIRS entry that is not a Terraform directory
 # of this repository. Recipes read the list with `dirs=$$($(LIST_DIRS)) || exit 1`.
@@ -70,15 +78,17 @@ fmt: ## terraform fmt, rewriting the files of the checked directories
 
 validate: ## terraform init -backend=false, then terraform validate, in each checked directory
 	@dirs=$$($(LIST_DIRS)) || exit 1; [ -n "$$dirs" ] || { echo "validate: no Terraform directory"; exit 0; }; \
+	data=; trap 'rm -rf "$$data"' EXIT; \
 	for d in $$dirs; do \
 	  echo "validate $$d"; \
+	  $(NEW_DATA); \
 	  if $(IS_MODULE); then lock=; \
 	  else \
 	    [ -f "$$d/.terraform.lock.hcl" ] || { echo "FAIL: $$d is a root without .terraform.lock.hcl (run make lock DIRS=$$d)" >&2; exit 1; }; \
 	    lock=-lockfile=readonly; \
 	  fi; \
-	  $(TF) init -backend=false -input=false -no-color $$lock >/dev/null || { echo "FAIL: terraform init $$d" >&2; exit 1; }; \
-	  $(TF) validate -no-color || { echo "FAIL: terraform validate $$d" >&2; exit 1; }; \
+	  $(TF_DATA) init -backend=false -input=false -no-color $$lock >/dev/null || { echo "FAIL: terraform init $$d" >&2; exit 1; }; \
+	  $(TF_DATA) validate -no-color || { echo "FAIL: terraform validate $$d" >&2; exit 1; }; \
 	done
 
 # The AWS ruleset is downloaded from GitHub into <dir>/.terraform/tflint.d/; CI passes its token in GITHUB_TOKEN against
@@ -98,7 +108,7 @@ tflint: ## tflint --init, then tflint, in each checked directory (.tflint.hcl)
 # applies), wherever the module is called from, so no exception has to repeat per root.
 # --skip-check-update keeps the checks built into the pinned image: the bundle trivy would fetch otherwise sits behind a
 # moving tag, so new rules could turn the required check red on unchanged code, or drop a rule without anyone noticing.
-# Modules downloaded by init (.terraform/modules) are scanned with the configuration that calls them.
+# Registry modules are downloaded by trivy itself and scanned with the configuration that calls them.
 trivy: ## trivy config on each checked directory (HIGH and CRITICAL fail)
 	@dirs=$$($(LIST_DIRS)) || exit 1; [ -n "$$dirs" ] || { echo "trivy: no Terraform directory"; exit 0; }; \
 	for d in $$dirs; do \
@@ -121,9 +131,11 @@ session-test: ## Self-test of the session scripts of aws/scripts with fake comma
 
 lock: ## Write the lock file of each root in DIRS (default: every root) with hashes for LOCK_PLATFORMS
 	@dirs=$$($(LIST_DIRS)) || exit 1; \
+	data=; trap 'rm -rf "$$data"' EXIT; \
 	for d in $$dirs; do \
 	  if $(IS_MODULE); then echo "lock: $$d is a module, its lock file is not committed; skipped"; continue; fi; \
 	  echo "lock $$d"; \
-	  $(TF) init -backend=false -input=false -no-color >/dev/null || { echo "FAIL: terraform init $$d" >&2; exit 1; }; \
-	  $(TF) providers lock -no-color $(addprefix -platform=,$(LOCK_PLATFORMS)) || { echo "FAIL: providers lock $$d" >&2; exit 1; }; \
+	  $(NEW_DATA); \
+	  $(TF_DATA) init -backend=false -input=false -no-color >/dev/null || { echo "FAIL: terraform init $$d" >&2; exit 1; }; \
+	  $(TF_DATA) providers lock -no-color $(addprefix -platform=,$(LOCK_PLATFORMS)) || { echo "FAIL: providers lock $$d" >&2; exit 1; }; \
 	done

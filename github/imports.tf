@@ -1,7 +1,8 @@
 ################################################################################
 # Adoption of what already exists on GitHub. The first plan reads each of these into state and must show no change of
 # setting; once applied, the blocks are no-ops and may stay (an import block whose resource is already in state does
-# nothing). Ruleset main of svp-infra has no block: it does not exist yet, the first apply creates it.
+# nothing). A repository added to local.repositories is adopted the same way by the next plan. Ruleset main of
+# svp-infra has no block: Terraform created it.
 ################################################################################
 
 import {

@@ -1,5 +1,6 @@
 ################################################################################
-# The five repositories of the lab: repository settings, Actions permissions, Dependabot alerts.
+# The six repositories of the account: the five of the lab and .github (default community health files of every
+# repository); repository settings, Actions permissions, Dependabot alerts.
 # Every value is what the repository runs today (read with gh api GET); a change goes through a pull request here.
 ################################################################################
 
@@ -87,6 +88,24 @@ locals {
       patterns_allowed                 = null
       can_approve_pull_request_reviews = false
     }
+    # Default community health files (CONTRIBUTING.md, SECURITY.md, pull request template) that GitHub applies to every
+    # repository of the account without its own copy; GitHub reads them only from a public repository named .github.
+    ".github" = {
+      description = "Quy ước chung và file cộng đồng mặc định cho mọi repo của anhnvcoder"
+      has_wiki    = false
+      # GitHub's defaults apart from the wiki: the repository holds no workflow and no dependency manifest.
+      allow_merge_commit               = true
+      allow_rebase_merge               = true
+      allow_auto_merge                 = false
+      squash_merge_commit_title        = "COMMIT_OR_PR_TITLE"
+      squash_merge_commit_message      = "COMMIT_MESSAGES"
+      delete_branch_on_merge           = false
+      vulnerability_alerts             = false
+      allowed_actions                  = "all"
+      sha_pinning_required             = false
+      patterns_allowed                 = null
+      can_approve_pull_request_reviews = false
+    }
   }
 }
 
@@ -147,8 +166,8 @@ resource "github_repository_vulnerability_alerts" "this" {
   enabled    = true
 }
 
-# The repositories with Dependabot alerts off (svp-labs, as GitHub left it: no dependency manifest yet) sit apart, so
-# the exception below cannot hide a repository of the resource above turning them off.
+# The repositories with Dependabot alerts off (svp-labs and .github, as GitHub left them: no dependency manifest) sit
+# apart, so the exception below cannot hide a repository of the resource above turning them off.
 #trivy:ignore:GIT-0003
 resource "github_repository_vulnerability_alerts" "off" {
   for_each = local.vulnerability_alerts_off
