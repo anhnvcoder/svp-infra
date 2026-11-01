@@ -12,15 +12,17 @@
 #   - pre-destroy.sh against a fake cluster: root first, workloads by wave, Gateway, PVCs, platform last; on a cluster
 #     without Argo CD, no Application call and still the waits; after an apply that failed once EKS existed (no
 #     cluster-values.json, EKS in the state), it writes the context itself, reads the zone id from the tfvars, and
-#     plan --destroy and destroy run after it; it stops before kubectl when the account has no such cluster
+#     plan --destroy and destroy run after it; it stops before kubectl when the account has no such cluster, and still
+#     marks pre-destroy-start; a FAIL of step 2 ends with the way out, --leftovers
 #   - measure.sh checks the account first; a level that fails ends the ladder; a node lost makes the level interrupted
 #     (exit 3); a failed poll of the Job is waited past, not taken for its end; a Job never read again is a tooling
 #     error (exit 1), not a failed level, and is not deleted
 #   - tf.sh show refuses without a plan file and writes the plan as text in the session directory, as plan does;
 #     tf.sh plan --destroy refuses before pre-destroy; --no-cluster only with no cluster-values.json and no EKS cluster
-#     in the state; it writes the destroy plan file and its text; tf.sh destroy refuses without that file and applies
-#     it, never terraform destroy; sweep.sh reads only, works with no state, fails on a leftover volume or a secret
-#     scheduled for deletion, passes on the bootstrap's resources alone
+#     in the state; --leftovers only after pre-destroy-start and before pre-destroy-done, never with --no-cluster, and
+#     it marks pre-destroy-skipped; it writes the destroy plan file and its text; tf.sh destroy refuses without that
+#     file and applies it, never terraform destroy; sweep.sh reads only, works with no state, fails on a leftover
+#     volume or a secret scheduled for deletion, passes on the bootstrap's resources alone
 #
 # Usage: aws/scripts/session-test.sh
 #
@@ -188,7 +190,8 @@ exec "$real_jq" "\$@"
 EOF
 
 # kubectl: a cluster in files of $FAKE_STATE (apps: "wave name", root, lb, pvcs: "namespace name", nodes); with
-# FAKE_NO_ARGOCD, a cluster where make eks-gitops-up stopped before Argo CD (no CRD of Argo CD, Gateway API or LBC).
+# FAKE_NO_ARGOCD, a cluster where make eks-gitops-up stopped before Argo CD (no CRD of Argo CD, Gateway API or LBC);
+# with FAKE_GATEWAY_CRD_DOWN, the read of the Gateway API CRD (step 2 of pre-destroy.sh) fails.
 cat >"$bin/kubectl" <<'EOF'
 #!/usr/bin/env bash
 echo "kubectl $*" >>"$FAKE_LOG"
@@ -200,6 +203,7 @@ case "$*" in
   "get crd applications.argoproj.io --ignore-not-found -o name")
     [ -n "${FAKE_NO_ARGOCD:-}" ] || echo customresourcedefinition.apiextensions.k8s.io/applications.argoproj.io ;;
   "get crd gateways.gateway.networking.k8s.io --ignore-not-found -o name")
+    [ -z "${FAKE_GATEWAY_CRD_DOWN:-}" ] || { echo "fake kubectl: connection refused" >&2; exit 1; }
     [ -n "${FAKE_NO_ARGOCD:-}" ] || echo customresourcedefinition.apiextensions.k8s.io/gateways.gateway.networking.k8s.io ;;
   "-n argocd get application svp-root --ignore-not-found -o name") [ ! -e "$s/root" ] || echo application.argoproj.io/svp-root ;;
   "-n argocd patch application "*) ;;
@@ -353,6 +357,13 @@ new_session
 bash "$here/check-account.sh" >/dev/null
 expect "tf.sh plan --destroy refuses before pre-destroy.sh" sh -c '! bash "$1/tf.sh" stg plan --destroy >/dev/null 2>&1' _ "$here"
 expect "tf.sh plan --destroy refused: terraform plan -destroy never ran" test -z "$(grep '^terraform .* plan -destroy' "$log")"
+expect "tf.sh plan --destroy --leftovers refuses without pre-destroy-start, and says to run pre-destroy.sh first" \
+  sh -c '! bash "$1/tf.sh" stg plan --destroy --leftovers >"$2" 2>&1 && grep -q "pre-destroy.sh stg never started in this session" "$2"' _ "$here" "$work/out"
+expect "tf.sh plan --destroy --leftovers and --no-cluster do not go together, in either order" \
+  sh -c '! bash "$1/tf.sh" stg plan --destroy --leftovers --no-cluster >"$2" 2>&1 && grep -q "do not go together" "$2" &&
+    ! bash "$1/tf.sh" stg plan --destroy --no-cluster --leftovers >"$2" 2>&1 && grep -q "do not go together" "$2"' _ "$here" "$work/out"
+expect "tf.sh plan --destroy --leftovers refused: no terraform plan -destroy, no pre-destroy-skipped" \
+  sh -c '[ -z "$(grep "^terraform .* plan -destroy" "$1")" ] && ! grep -q pre-destroy-skipped "$2/timeline.tsv"' _ "$log" "$SVP_SESSION_DIR"
 expect "tf.sh destroy refuses without the destroy plan file, and says to plan it" \
   sh -c '! bash "$1/tf.sh" stg destroy >"$2" 2>&1 && grep -q "run tf.sh stg plan --destroy" "$2"' _ "$here" "$work/out"
 expect "tf.sh destroy refused: no terraform apply, no destroy-start" \
@@ -402,6 +413,9 @@ expect "--print show wrote no plan text" test ! -e "$SVP_SESSION_DIR/stg-plan.tx
 bash "$here/tf.sh" --print stg plan --destroy >"$work/out" 2>&1 || bad "--print plan --destroy exits 0"
 expect "--print plan --destroy: plan -destroy into the destroy plan file, then its show" \
   sh -c 'grep -q "^+ AWS_PROFILE=anhnv-sso terraform -chdir=.* plan -destroy -input=false -var-file=stg.tfvars -out=stg.destroy.tfplan$" "$1" && grep -q "^+ AWS_PROFILE=anhnv-sso terraform -chdir=.* show -no-color stg.destroy.tfplan$" "$1"' _ "$work/out"
+bash "$here/tf.sh" --print stg plan --destroy --leftovers >"$work/out" 2>&1 || bad "--print plan --destroy --leftovers exits 0"
+expect "--print plan --destroy --leftovers: plan -destroy into the destroy plan file, and the mark pre-destroy-skipped" \
+  sh -c 'grep -q "^+ AWS_PROFILE=anhnv-sso terraform -chdir=.* plan -destroy -input=false -var-file=stg.tfvars -out=stg.destroy.tfplan$" "$1" && grep -qF "(timeline: pre-destroy-skipped)" "$1"' _ "$work/out"
 bash "$here/tf.sh" --print stg destroy >"$work/out" 2>&1 || bad "--print destroy exits 0"
 expect "--print destroy: apply of the destroy plan file, never terraform destroy" \
   sh -c 'grep -q "^+ AWS_PROFILE=anhnv-sso terraform -chdir=.* apply -input=false stg.destroy.tfplan$" "$1" && ! grep -q "^+ .*terraform -chdir=[^ ]* destroy" "$1"' _ "$work/out"
@@ -458,7 +472,12 @@ expect "pre-destroy.sh: PVCs before svp-cluster" before "$log" 'delete pvc --all
 expect "pre-destroy.sh: PVCs before every platform Application" before "$log" 'delete pvc --all' 'delete application (keda|kyverno|external-dns|aws-load-balancer-controller) '
 expect "pre-destroy.sh: the PVCs of both namespaces" test "$(grep -c 'delete pvc --all' "$log")" = 2
 expect "pre-destroy.sh leaves no Application" test -z "$(grep . "$state/apps")"
-expect "pre-destroy.sh marks pre-destroy-done" has_mark pre-destroy-done
+expect "pre-destroy.sh marks pre-destroy-start and pre-destroy-done" \
+  sh -c 'has_mark() { awk -F "\t" -v e="$2" "\$3 == e { f = 1 } END { exit !f }" "$1"; }; has_mark "$1" pre-destroy-start && has_mark "$1" pre-destroy-done' _ "$SVP_SESSION_DIR/timeline.tsv"
+expect "pre-destroy.sh: no way-out note when every step passes" sh -c '! grep -q -- "--leftovers" "$1"' _ "$work/pre.out"
+: >"$log"
+expect "tf.sh plan --destroy --leftovers refuses once pre-destroy-done is there, and says to go without it" \
+  sh -c '! bash "$1/tf.sh" stg plan --destroy --leftovers >"$2" 2>&1 && grep -q "plan --destroy without --leftovers" "$2" && [ -z "$(grep "^terraform .* plan -destroy" "$3")" ]' _ "$here" "$work/out" "$log"
 expect "tf.sh plan --destroy runs after pre-destroy.sh" bash "$here/tf.sh" stg plan --destroy >/dev/null
 : >"$log"
 expect "tf.sh destroy runs after it" bash "$here/tf.sh" stg destroy >"$work/out" 2>&1
@@ -503,6 +522,32 @@ mv "$infra_root/aws/envs/stg/stg.auto.tfvars" "$work/tfvars.aside"
 expect "pre-destroy.sh without stg.auto.tfvars stops before any command, and names the file" \
   sh -c '! bash "$1/pre-destroy.sh" stg >"$2" 2>&1 && grep -q "stg.auto.tfvars" "$2" && [ ! -s "$3" ]' _ "$here" "$work/out" "$log"
 mv "$work/tfvars.aside" "$infra_root/aws/envs/stg/stg.auto.tfvars"
+
+# Out of time with pre-destroy.sh still red: --leftovers once it has started in this session.
+new_session
+FAKE_NO_CLUSTER=1 bash "$here/pre-destroy.sh" stg >/dev/null 2>&1 && bad "pre-destroy.sh fails when the account has no such cluster"
+expect "pre-destroy.sh red at update-kubeconfig still marks pre-destroy-start, not pre-destroy-done" \
+  sh -c 'has_mark() { awk -F "\t" -v e="$2" "\$3 == e { f = 1 } END { exit !f }" "$1"; }; has_mark "$1" pre-destroy-start && ! has_mark "$1" pre-destroy-done' _ "$SVP_SESSION_DIR/timeline.tsv"
+: >"$log"
+expect "tf.sh plan --destroy --leftovers runs after pre-destroy-start without pre-destroy-done" \
+  bash "$here/tf.sh" stg plan --destroy --leftovers >"$work/out" 2>&1
+expect "tf.sh plan --destroy --leftovers says what may be left and that sweep.sh lists it" \
+  sh -c 'grep -q "^note  --leftovers: .*Load Balancer.*DNS records.*EBS volumes.*stuck-destroy.*sweep.sh" "$1"' _ "$work/out"
+expect "tf.sh plan --destroy --leftovers marks pre-destroy-skipped" has_mark pre-destroy-skipped
+expect "tf.sh plan --destroy --leftovers ran terraform plan -destroy into stg.destroy.tfplan" \
+  grep -q '^terraform -chdir=.*/aws/envs/stg plan -destroy -input=false -var-file=stg.tfvars -out=stg.destroy.tfplan$' "$log"
+expect "tf.sh plan --destroy --leftovers left the plan file and its text" \
+  sh -c '[ -f "$1/stg.destroy.tfplan" ] && grep -qx "Plan: 0 to add, 0 to change, 3 to destroy." "$2/stg-destroy-plan.txt"' _ "$infra_root/aws/envs/stg" "$SVP_SESSION_DIR"
+expect "tf.sh plan --destroy without --leftovers still refuses in that session" \
+  sh -c '! bash "$1/tf.sh" stg plan --destroy >/dev/null 2>&1' _ "$here"
+rm -f "$infra_root/aws/envs/stg/stg.destroy.tfplan"
+new_session
+FAKE_NO_ARGOCD=1 FAKE_GATEWAY_CRD_DOWN=1 bash "$here/pre-destroy.sh" stg >"$work/pre.out" 2>&1 &&
+  bad "pre-destroy.sh fails when step 2 cannot read the cluster"
+expect "pre-destroy.sh red at step 2: the FAIL, then a last line with run again and the way out --leftovers" \
+  sh -c 'grep -q "^FAIL  read the CRDs" "$1" && tail -n 1 "$1" | grep -q "^note  fix what the FAIL above names, then aws/scripts/pre-destroy.sh stg again; .*aws/scripts/tf.sh stg plan --destroy --leftovers"' _ "$work/pre.out"
+expect "pre-destroy.sh red at step 2 marks pre-destroy-start, not pre-destroy-done" \
+  sh -c 'has_mark() { awk -F "\t" -v e="$2" "\$3 == e { f = 1 } END { exit !f }" "$1"; }; has_mark "$1" pre-destroy-start && ! has_mark "$1" pre-destroy-done' _ "$SVP_SESSION_DIR/timeline.tsv"
 
 # --- measure.sh ---------------------------------------------------------------------------------------------------
 new_session

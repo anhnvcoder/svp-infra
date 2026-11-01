@@ -23,7 +23,7 @@ AWS_PROFILE=anhnv-sso aws sts get-caller-identity --region ap-southeast-1 --quer
 ```
 
 So `Account` với account sandbox trên trang SSO, `Arn` là role SSO của người học. Khác thì dừng. Đúng thì đặt biến cho mọi lệnh sau
-(trong cùng terminal; không ghi vào file nào):
+(trong cùng terminal; không ghi vào file commit nào, `.envrc` git bỏ qua thì được giữ biến này):
 
 ```sh
 export TF_VAR_account_id=<12 số của Account vừa đọc>

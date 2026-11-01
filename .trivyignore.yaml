@@ -3,7 +3,8 @@
 # A finding in this repository's own .tf files is ignored next to the resource, with a `#trivy:ignore:<id>` line and
 # the reason in a comment above it, so the exception moves with the code. This file holds only findings inside
 # modules downloaded from the registry, where no comment can go. trivy matches `paths` against the path it reports,
-# relative to the directory being checked; for a registry module that is
-# `<namespace>/<name>/<provider>/<file>` (trivy tự tải module, ví dụ `terraform-aws-modules/eks/aws/main.tf`). Each entry: id, paths (never an id for every
-# file), statement (the reason) and, while the choice is waiting on something, expired_at (yyyy-mm-dd).
+# relative to the directory being checked; for a registry module, which trivy downloads itself, that is
+# `<namespace>/<name>/<provider>/<file>` (for example `terraform-aws-modules/eks/aws/main.tf`). Each entry: id, paths
+# (never an id for every file), statement (the reason) and, while the choice is waiting on something, expired_at
+# (yyyy-mm-dd).
 misconfigurations: []
