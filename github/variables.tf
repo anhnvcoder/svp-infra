@@ -3,7 +3,7 @@
 ################################################################################
 
 variable "svp_gitops_app_client_id" {
-  description = "Client ID of the GitHub App svp-gitops-promoter, read by the promote jobs of svp-backend as variable SVP_GITOPS_APP_CLIENT_ID of environment promote."
+  description = "Client ID of the GitHub App svp-gitops-promoter, read by the promote jobs of svp-backend as variable SVP_GITOPS_APP_CLIENT_ID of environments promote and promote-prd."
   type        = string
   # Not a credential, but the repository commits no value of a personal App; sensitive keeps it out of plan output.
   sensitive = true
