@@ -98,8 +98,8 @@ Mỗi buổi AWS bắt đầu bằng phép kiểm này (script buổi); sai thì
 Chỉ khi không còn root nào dùng bucket và zone (mọi env đã `destroy`, script quét sót sạch):
 
 0. Root `github/` (cài đặt GitHub) giữ state ở bucket này và không bao giờ `destroy`: trước khi xoá bucket, chuyển state của nó sang
-   backend khác (`terraform init -migrate-state` với backend mới, như bước chuyển state ở trên). Bỏ qua bước này thì lần `plan` sau phải
-   import lại và ruleset `main` của `svp-infra` (không có khối `import`) hiện thành `1 to add` dù đã có trên GitHub.
+   backend khác (`terraform init -migrate-state` với backend mới, như bước chuyển state ở trên). Bỏ qua bước này thì state mới
+   rỗng: `plan` đòi tạo mọi tài nguyên đã có trên GitHub, phải nhận quản lại theo mục "Nhận quản repo đã có" của `github/README.md`.
 
 1. Xoá bốn bản ghi `NS` `aws` trong Cloudflare.
 2. Kiểm zone chỉ còn `NS`, `SOA` ở đỉnh (bản ghi sót của ExternalDNS hay `_acme-challenge` chặn việc xoá zone; xoá chúng trước):

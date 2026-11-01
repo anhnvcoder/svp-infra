@@ -1,6 +1,6 @@
 terraform {
-  # Matches the Terraform of the dev machine (Homebrew) and TERRAFORM_IMAGE of the Makefile. import blocks with
-  # for_each need 1.7 or later, the S3 backend's use_lockfile 1.10 or later.
+  # Matches the Terraform of the dev machine (Homebrew) and TERRAFORM_IMAGE of the Makefile. The S3 backend's
+  # use_lockfile needs 1.10 or later; import blocks, used briefly to adopt an existing repository, need 1.5 or later.
   required_version = "~> 1.15"
 
   required_providers {

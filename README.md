@@ -22,7 +22,7 @@ aws/
   modules/                    module nội bộ (network, eks, rds, media); lock file không commit
   envs/<env>/                 cấu hình gốc của mỗi env (stg ở 7a, prd ở 7b): một state key mỗi env
   scripts/                    script buổi AWS (kiểm account, DNS, bootstrap Argo CD, đo, pre-destroy, sweep)
-github/                       cài đặt GitHub của sáu repo (năm repo của lab và `.github`) (repo, quyền Actions, ruleset, environment promote); state trong bucket của aws/bootstrap
+github/                       cài đặt GitHub của các repo trong `local.repositories` (repo, quyền Actions, ruleset, environment promote); state trong bucket của aws/bootstrap
 docs/diagrams/                sơ đồ AWS svp-aws.drawio (trang stg, prd, flows), PDF, PNG nhúng ở docs của repo code; sinh từ spec
 .claude/skills/aws-drawio-diagram/   spec và checker của sơ đồ (luật vẽ ở SKILL.md)
 ```
