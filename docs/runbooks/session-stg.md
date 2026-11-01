@@ -30,6 +30,9 @@ aws/scripts/session.sh --print stg
 
 1. Hosted zone `aws.<domain>` của `aws/bootstrap` đã uỷ quyền và lan truyền ([`aws/bootstrap/README.md`](../../aws/bootstrap/README.md),
    bước 5). Bước tay này một lần mỗi account, không nằm trong buổi; `check-dns.sh` đỏ thì quay lại README đó, không bắt đầu buổi.
+   Account mới còn phải được AWS xác minh trước khi tạo tài nguyên CloudFront: chưa xác minh thì `apply` đỏ ở
+   `aws_cloudfront_distribution` với `AccessDenied: Your account must be verified before you can add new CloudFront resources`, khi EKS, RDS
+   đã chạy và tính tiền. Mở case AWS Support (Account and billing, kèm dòng lỗi và RequestID nếu có) và chờ xác nhận trước buổi đầu.
 2. Code đã merge: repo code ở `main` có mốc 1 (lối vào S3 `container`, Postgres ngoài, edge EKS, render theo nền tảng, target `eks-*`);
    `svp-gitops` ở `main` có lớp `platforms/eks`; repo này có `aws/envs/stg` và script buổi. Kiểm:
 
