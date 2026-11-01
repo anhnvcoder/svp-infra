@@ -78,7 +78,7 @@ Mọi bước sau chạy trong **cùng terminal này** (cùng hai biến). Thư 
 
 **Mở lại terminal giữa buổi** (terminal đóng, máy khởi động lại): đặt lại hai biến, với `SVP_SESSION_DIR` là **thư mục của buổi đang
 dở**, không phải thư mục mới. `measure.sh` đọc `cluster-values.json` của nó và tính mốc 3 giờ từ `session-start` của nó, `tf.sh stg
-destroy` đòi mốc `pre-destroy-done` trong `timeline.tsv` của nó.
+plan --destroy` đòi mốc `pre-destroy-done` trong `timeline.tsv` của nó.
 
 ```sh
 cd infra
@@ -103,8 +103,9 @@ Rồi chạy tiếp từ bước sau mốc cuối (hay chạy lại bước đan
 | 6 | `aws/scripts/bootstrap-argocd.sh stg` | 45 phút | ~20 dòng cuối |
 | 7 | `aws/scripts/measure.sh stg` | tới mốc 3 giờ | `k6-levels.tsv`, dòng `ok highest level …` |
 | 8 | `aws/scripts/pre-destroy.sh stg` | 30 phút | mọi dòng `ok`/`FAIL`/`note` |
-| 9 | `aws/scripts/tf.sh stg destroy` | 30 phút | dòng `Destroy complete! …` |
-| 10 | `aws/scripts/sweep.sh` | 5 phút | toàn bộ output |
+| 9 | `aws/scripts/tf.sh stg plan --destroy` | 5 phút | dòng `Plan: 0 to add, 0 to change, N to destroy` và đường dẫn file text của plan |
+| 10 | `aws/scripts/tf.sh stg destroy` | 30 phút | dòng `Apply complete! Resources: 0 added, 0 changed, N destroyed.` |
+| 11 | `aws/scripts/sweep.sh` | 5 phút | toàn bộ output |
 
 Dự trù: apply xong ~T+40 phút, mọi Application Healthy ~T+1 giờ 25, đo tới muộn nhất T+3 giờ, gỡ và quét xong trước T+4 giờ. Một bước đỏ:
 đọc dòng `FAIL`, sửa nguyên nhân, chạy lại **đúng bước đó** (mọi script chạy lại được). Không đi tiếp qua một bước đỏ, trừ bước 7 (đo): đo
@@ -146,7 +147,7 @@ destroy`; có `destroy` hay `change` là state còn tài nguyên của buổi tr
 đó (không plan lại tại chỗ), rồi xoá nó. Thời gian: EKS ~10–15 phút, RDS ~10 phút, CloudFront ~5 phút, song song. `apply` đỏ giữa chừng:
 đọc lỗi, `plan` lại, `apply` lại; muốn bỏ buổi thì sang bước 8 (không cần bước 6: `pre-destroy.sh` tự ghi context `svp-stg` và đọc
 `hosted_zone_id` từ `stg.auto.tfvars`, nên chạy được cả khi apply đỏ sau khi cluster EKS đã có, lúc output `cluster_values` chưa được
-lưu), hay bước 9 với `--no-cluster` khi apply đỏ trước khi tạo cluster EKS (điều kiện ở bước 9).
+lưu), hay bước 9 với `--no-cluster` (`plan --destroy --no-cluster`) khi apply đỏ trước khi tạo cluster EKS (điều kiện ở bước 9).
 
 ### 6. Cài GitOps lên EKS
 
@@ -215,7 +216,7 @@ Gỡ những gì Kubernetes tạo trong account mà Terraform không biết, **k
 apply đã tạo cluster: script tự chạy `aws eks update-kubeconfig --name svp-stg --alias svp-stg` và đọc id zone lab từ `hosted_zone_id`
 của `aws/envs/stg/stg.auto.tfvars` (giá trị mà output `cluster_values` đưa cho cluster), không đọc file nào của bước 6, nên chạy được cả
 khi bước 6 chưa chạy hay từ thư mục buổi mới. `FAIL aws eks update-kubeconfig …` là account không có cluster `svp-stg`: sang bước 9 với
-`--no-cluster`.
+`--no-cluster` (`plan --destroy --no-cluster`).
 
 1. Root `svp-root` (auto-sync prune + self-heal, không finalizer): xoá finalizer và `automated`, rồi xoá riêng nó (child ở yên); tắt
    auto-sync của mọi Application còn lại (để `svp-cluster` không dựng lại Gateway).
@@ -230,24 +231,38 @@ Cluster chưa có Argo CD (`make eks-gitops-up` dừng trước khi cài nó, d�
 bước 1, 4 và phần Application của bước 2 bỏ qua; các phép chờ của bước 2 và 3 (Service `LoadBalancer`, ELBv2, bản ghi DNS, PVC, volume
 EBS) vẫn chạy, rồi ghi mốc `pre-destroy-done` như thường.
 
-Tìm: mỗi bước `ok`, cuối cùng `ok ready for: aws/scripts/tf.sh stg destroy` và mốc `pre-destroy-done` (thiếu mốc này thì `tf.sh stg destroy`
-từ chối). `FAIL` nêu thứ còn lại và lệnh xem; sửa rồi chạy lại script (mỗi bước tìm thứ còn lại). Hết giờ mà bước 2 hay 3 vẫn đỏ: vẫn sang
-bước 9, rồi xoá tay phần `sweep.sh` liệt kê.
+Tìm: mỗi bước `ok`, cuối cùng `ok ready for: aws/scripts/tf.sh stg plan --destroy` và mốc `pre-destroy-done` (thiếu mốc này thì
+`tf.sh stg plan --destroy` từ chối). `FAIL` nêu thứ còn lại và lệnh xem; sửa rồi chạy lại script (mỗi bước tìm thứ còn lại). Hết giờ mà bước
+2 hay 3 vẫn đỏ: vẫn sang bước 9 và 10, rồi xoá tay phần `sweep.sh` liệt kê.
 
-### 9. Destroy
+### 9. Plan xoá
+
+```sh
+aws/scripts/tf.sh stg plan --destroy
+```
+
+Như bước 4 cho apply: `terraform plan -destroy` ghi `aws/envs/stg/stg.destroy.tfplan` (nhị phân, git bỏ qua) và bản text của nó vào
+`$SVP_SESSION_DIR/stg-destroy-plan.txt`; `ok` cuối nêu đường dẫn file text. Từ chối khi thư mục buổi chưa có mốc `pre-destroy-done` (bước
+8). **Đọc file text đó trước bước 10**: chỉ tài nguyên của `aws/envs/stg`, `0 to add, 0 to change`; không có bucket `svp-tfstate`, không
+có `aws_route53_zone` (của `aws/bootstrap`, root khác). Thấy thứ khác: dừng, dán plan cho AI.
+
+Apply đỏ trước khi tạo cluster EKS (chưa gì chạy trên cluster): bỏ bước 8, `aws/scripts/tf.sh stg plan --destroy --no-cluster`. Script tự
+kiểm điều đó trước khi plan: thư mục buổi không có `cluster-values.json` **và** `AWS_PROFILE=anhnv-sso terraform -chdir=aws/envs/stg state
+list` (script tự chạy) không có `aws_eks_cluster`; không thì từ chối (`FAIL --no-cluster refused: …`). State còn cluster (apply đỏ sau
+khi cluster đã có, hay terminal mở lại với thư mục buổi mới): chạy bước 8 trong thư mục buổi hiện tại (không cần bước 6), rồi lệnh ở đầu
+mục này, không `--no-cluster`.
+
+### 10. Destroy
 
 ```sh
 aws/scripts/tf.sh stg destroy
 ```
 
-Gõ `yes` khi Terraform hỏi (đọc trước: chỉ tài nguyên của `aws/envs/stg`). Kẹt: mục **Destroy kẹt** dưới đây, rồi chạy lại lệnh này.
-Apply đỏ trước khi tạo cluster EKS (chưa gì chạy trên cluster): bỏ bước 8, `aws/scripts/tf.sh stg destroy --no-cluster`. Script tự kiểm
-điều đó trước khi destroy: thư mục buổi không có `cluster-values.json` **và** `AWS_PROFILE=anhnv-sso terraform -chdir=aws/envs/stg state
-list` (script tự chạy) không có `aws_eks_cluster`; không thì từ chối (`FAIL --no-cluster refused: …`). State còn cluster (apply đỏ sau
-khi cluster đã có, hay terminal mở lại với thư mục buổi mới): chạy bước 8 trong thư mục buổi hiện tại (không cần bước 6), rồi lệnh ở đầu
-mục này, không `--no-cluster`.
+Chỉ áp file `stg.destroy.tfplan` của bước 9 (`terraform apply` file đó: không plan lại tại chỗ, không hỏi lại), rồi xoá file; thiếu file thì
+từ chối. Nên chỉ chạy sau khi đã đọc `stg-destroy-plan.txt`. Kẹt: mục **Destroy kẹt** dưới đây, rồi bước 9 lại (file plan cũ không áp lại
+được sau một apply dở) và lệnh này.
 
-### 10. Quét sót
+### 11. Quét sót
 
 ```sh
 aws/scripts/sweep.sh
@@ -263,19 +278,23 @@ aws/bootstrap` (exit 0). Có dòng `FAIL <loại>: N left`: xoá tay bằng lệ
 
 ## Destroy kẹt
 
+"Destroy lại" ở bảng dưới là bước 9 rồi bước 10: `aws/scripts/tf.sh stg plan --destroy` (plan mới từ state hiện tại), đọc file text, rồi
+`aws/scripts/tf.sh stg destroy`.
+
 | Triệu chứng | Nguyên nhân | Cách xử lý |
 | --- | --- | --- |
 | `DependencyViolation` khi xoá subnet, security group hay VPC | ENI còn gắn: ENI phụ của VPC CNI (`aws-K8S-<instance>`, `available` sau khi node mất) hay ENI của NLB (`ELB net/k8s-…`) mà bước 8 chưa gỡ | `sweep.sh` liệt kê ENI theo VPC; ENI `available`: xoá ENI; ENI của NLB: xoá NLB (ENI tự mất), rồi destroy lại |
 | Security group `k8s-…` của LBC không xoá được | security group node còn rule tham chiếu nó (LBC thêm rule cho NLB) | thu hồi các rule tham chiếu (lệnh dưới), xoá security group, destroy lại |
-| Destroy chờ lâu hay quá hạn ở `aws_cloudfront_distribution` | Terraform phải tắt distribution và chờ `Deployed` (vài phút tới ~15 phút) trước khi xoá | chạy lại destroy (Terraform chờ tiếp); vẫn kẹt thì tắt và xoá tay (lệnh dưới) |
+| Destroy chờ lâu hay quá hạn ở `aws_cloudfront_distribution` | Terraform phải tắt distribution và chờ `Deployed` (vài phút tới ~15 phút) trước khi xoá | destroy lại (`plan --destroy` rồi `destroy`; Terraform chờ tiếp); vẫn kẹt thì tắt và xoá tay (lệnh dưới) |
 | `BucketNotEmpty` | stg đặt `media_force_destroy = true` nên không nên gặp; object ghi giữa lúc destroy | destroy lại; còn thì `aws s3 rb --force` (lệnh dưới) |
-| RDS báo deletion protection | `rds_deletion_protection` của `stg.tfvars` phải `false` | sửa biến, `tf.sh stg plan`, `apply`, rồi destroy |
-| Node group xoá lâu | Spot, node drain | chờ tới hạn bước 9 |
+| RDS báo deletion protection | `rds_deletion_protection` của `stg.tfvars` phải `false` | sửa biến, `tf.sh stg plan`, `apply`, rồi destroy lại |
+| Node group xoá lâu | Spot, node drain | chờ tới hạn bước 10 |
 
 ## Lệnh xoá tay theo loại
 
-Mọi lệnh ghi; người học chạy sau khi `check-account.sh` đúng account, thay `<…>` bằng id `sweep.sh` in ra. Ưu tiên chạy lại
-`tf.sh stg destroy` cho thứ Terraform quản (VPC, NAT, EIP, EKS, RDS, bucket, CloudFront); lệnh tay cho thứ ngoài state hay khi state mất.
+Mọi lệnh ghi; người học chạy sau khi `check-account.sh` đúng account, thay `<…>` bằng id `sweep.sh` in ra. Ưu tiên destroy lại
+(`tf.sh stg plan --destroy` rồi `tf.sh stg destroy`) cho thứ Terraform quản (VPC, NAT, EIP, EKS, RDS, bucket, CloudFront); lệnh tay cho
+thứ ngoài state hay khi state mất.
 
 ```sh
 # Volume, snapshot EBS

@@ -4,7 +4,7 @@
 # network is reached. Runs on the Mac (bash 3.2) and on Linux; needs git and jq.
 #   - --print of the whole session (session.sh) calls no command at all, lists the steps in the order of the
 #     runbook's table, deletes root svp-root before any child, every PVC before the platform Applications, and
-#     every PVC before terraform destroy
+#     every PVC before terraform plan -destroy
 #   - check-account.sh stops on another account or none exported; check-dns.sh on name servers that differ or none
 #   - bootstrap-argocd.sh checks the account first; calls make eks-gitops-up with the context, the values file and the
 #     svp-gitops SHA, the RDS master password in make's environment only; the secret reaches jq through a pipe, never a
@@ -12,14 +12,15 @@
 #   - pre-destroy.sh against a fake cluster: root first, workloads by wave, Gateway, PVCs, platform last; on a cluster
 #     without Argo CD, no Application call and still the waits; after an apply that failed once EKS existed (no
 #     cluster-values.json, EKS in the state), it writes the context itself, reads the zone id from the tfvars, and
-#     destroy runs after it; it stops before kubectl when the account has no such cluster
+#     plan --destroy and destroy run after it; it stops before kubectl when the account has no such cluster
 #   - measure.sh checks the account first; a level that fails ends the ladder; a node lost makes the level interrupted
 #     (exit 3); a failed poll of the Job is waited past, not taken for its end; a Job never read again is a tooling
 #     error (exit 1), not a failed level, and is not deleted
 #   - tf.sh show refuses without a plan file and writes the plan as text in the session directory, as plan does;
-#     tf.sh destroy refuses before pre-destroy; --no-cluster only with no cluster-values.json and no EKS cluster in the
-#     state; sweep.sh reads only, works with no state, fails on a leftover volume or a secret scheduled for deletion,
-#     passes on the bootstrap's resources alone
+#     tf.sh plan --destroy refuses before pre-destroy; --no-cluster only with no cluster-values.json and no EKS cluster
+#     in the state; it writes the destroy plan file and its text; tf.sh destroy refuses without that file and applies
+#     it, never terraform destroy; sweep.sh reads only, works with no state, fails on a leftover volume or a secret
+#     scheduled for deletion, passes on the bootstrap's resources alone
 #
 # Usage: aws/scripts/session-test.sh
 #
@@ -133,6 +134,13 @@ case "${args#-chdir=* }" in
   # show: the text of a plan file.
   "show -no-color stg.tfplan") printf '%s\n' 'Terraform will perform the following actions:' '  # aws_vpc.this will be created' \
     'Plan: 1 to add, 0 to change, 0 to destroy.' ;;
+  "show -no-color stg.destroy.tfplan") printf '%s\n' 'Terraform will perform the following actions:' \
+    '  # aws_vpc.this will be destroyed' 'Plan: 0 to add, 0 to change, 3 to destroy.' ;;
+  # plan: writes the file of -out=, in the directory of -chdir=.
+  "plan "*)
+    dir= out=
+    for a in "$@"; do case $a in -chdir=*) dir=${a#-chdir=} ;; -out=*) out=${a#-out=} ;; esac; done
+    [ -z "$out" ] || : >"$dir/$out" ;;
   "state list")
     case ${FAKE_TF_STATE:-} in
       eks) printf '%s\n' 'module.eks.module.eks.data.aws_eks_cluster.this[0]' 'module.eks.module.eks.aws_eks_cluster.this[0]' \
@@ -303,7 +311,7 @@ expect "--print calls no aws, kubectl, helm, terraform, make, dig" test ! -s "$l
 sed -n 's/^### step [0-9]*: aws\/scripts\///p' "$work/print.out" >"$work/order.print"
 sed -n 's/^| [0-9]* | `aws\/scripts\/\([^`]*\)`.*/\1/p' "$runbook" >"$work/order.runbook"
 expect "the steps of --print are the runbook's table, in order" diff "$work/order.runbook" "$work/order.print"
-expect "the runbook's table has the ten steps" test "$(grep -c . "$work/order.runbook")" = 10
+expect "the runbook's table has the eleven steps" test "$(grep -c . "$work/order.runbook")" = 11
 expect "--print: root svp-root deleted before any child Application" \
   before "$work/print.out" 'delete application svp-root' "delete application '<each workload"
 expect "--print: root's auto-sync and finalizers cleared before it is deleted" \
@@ -311,8 +319,12 @@ expect "--print: root's auto-sync and finalizers cleared before it is deleted" \
 expect "--print: workloads, then Gateway svp" before "$work/print.out" "delete application '<each workload" 'delete gateway svp'
 expect "--print: every PVC deleted before svp-cluster and the platform Applications" \
   before "$work/print.out" 'delete pvc --all' "delete application '<each platform"
-expect "--print: every PVC deleted before terraform destroy" before "$work/print.out" 'delete pvc --all' 'terraform .* destroy'
-expect "--print: pre-destroy before terraform destroy, sweep last" before "$work/print.out" 'step 8: aws/scripts/pre-destroy.sh' 'destroy -var-file'
+expect "--print: every PVC deleted before terraform plan -destroy" before "$work/print.out" 'delete pvc --all' 'terraform .* plan -destroy'
+expect "--print: pre-destroy before the apply of the destroy plan" \
+  before "$work/print.out" 'step 8: aws/scripts/pre-destroy.sh' 'apply -input=false stg.destroy.tfplan'
+expect "--print: destroy plan saved to a file, apply of that file" \
+  before "$work/print.out" 'plan -destroy .*-out=stg.destroy.tfplan' 'apply -input=false stg.destroy.tfplan'
+expect "--print: sweep last" test "$(grep '^### step' "$work/print.out" | tail -n 1)" = '### step 11: aws/scripts/sweep.sh'
 expect "--print: plan saved to a file, apply of that file" before "$work/print.out" 'plan .*-out=stg.tfplan' 'apply -input=false stg.tfplan'
 expect "--print: an eks-rl-reset before each of the four k6 levels" test "$(grep -c 'make .* eks-rl-reset CONTEXT=svp-stg' "$work/print.out")" = 4
 expect "--print: every aws command names profile and region" \
@@ -339,20 +351,36 @@ expect "check-dns.sh calls no AWS API" test -z "$(grep '^aws ' "$log")"
 # --- tf.sh --------------------------------------------------------------------------------------------------------
 new_session
 bash "$here/check-account.sh" >/dev/null
-expect "tf.sh destroy refuses before pre-destroy.sh" sh -c '! bash "$1/tf.sh" stg destroy >/dev/null 2>&1' _ "$here"
-expect "tf.sh destroy did not run terraform" test -z "$(grep '^terraform .* destroy' "$log")"
-expect "tf.sh destroy --no-cluster runs with no cluster-values.json and no EKS cluster in the state" \
-  bash "$here/tf.sh" stg destroy --no-cluster >/dev/null
-expect "tf.sh destroy --no-cluster read the state before destroying" before "$log" 'terraform .* state list' 'terraform .* destroy'
+expect "tf.sh plan --destroy refuses before pre-destroy.sh" sh -c '! bash "$1/tf.sh" stg plan --destroy >/dev/null 2>&1' _ "$here"
+expect "tf.sh plan --destroy refused: terraform plan -destroy never ran" test -z "$(grep '^terraform .* plan -destroy' "$log")"
+expect "tf.sh destroy refuses without the destroy plan file, and says to plan it" \
+  sh -c '! bash "$1/tf.sh" stg destroy >"$2" 2>&1 && grep -q "run tf.sh stg plan --destroy" "$2"' _ "$here" "$work/out"
+expect "tf.sh destroy refused: no terraform apply, no destroy-start" \
+  sh -c '[ -z "$(grep "^terraform .* apply" "$1")" ] && ! grep -q destroy-start "$2/timeline.tsv"' _ "$log" "$SVP_SESSION_DIR"
+expect "tf.sh plan --destroy --no-cluster runs with no cluster-values.json and no EKS cluster in the state" \
+  bash "$here/tf.sh" stg plan --destroy --no-cluster >"$work/out" 2>&1
+expect "tf.sh plan --destroy --no-cluster read the state before planning" before "$log" 'terraform .* state list' 'terraform .* plan -destroy'
+expect "tf.sh plan --destroy ran terraform plan -destroy into stg.destroy.tfplan" \
+  grep -q '^terraform -chdir=.*/aws/envs/stg plan -destroy -input=false -var-file=stg.tfvars -out=stg.destroy.tfplan$' "$log"
+expect "tf.sh plan --destroy left the plan file" test -f "$infra_root/aws/envs/stg/stg.destroy.tfplan"
+expect "tf.sh plan --destroy wrote the text to the session directory" \
+  grep -qx 'Plan: 0 to add, 0 to change, 3 to destroy.' "$SVP_SESSION_DIR/stg-destroy-plan.txt"
+expect "tf.sh plan --destroy says which text to read, then destroy" \
+  grep -qF "read $SVP_SESSION_DIR/stg-destroy-plan.txt, then tf.sh stg destroy" "$work/out"
+expect "tf.sh plan --destroy left the plan text of apply alone" test ! -e "$SVP_SESSION_DIR/stg-plan.txt"
+rm -f "$infra_root/aws/envs/stg/stg.destroy.tfplan" "$SVP_SESSION_DIR/stg-destroy-plan.txt"
 : >"$log"
-expect "tf.sh destroy --no-cluster refuses when the state holds an EKS cluster, and says which" \
-  sh -c '! FAKE_TF_STATE=eks bash "$1/tf.sh" stg destroy --no-cluster >"$2" 2>&1 && grep -qF "state holds EKS cluster module.eks.module.eks.aws_eks_cluster.this[0]: run aws/scripts/pre-destroy.sh stg first" "$2"' _ "$here" "$work/out"
-expect "tf.sh destroy --no-cluster refuses when the state cannot be read" \
-  sh -c '! FAKE_TF_STATE=fail bash "$1/tf.sh" stg destroy --no-cluster >/dev/null 2>&1' _ "$here"
+expect "tf.sh plan --destroy --no-cluster refuses when the state holds an EKS cluster, and says which" \
+  sh -c '! FAKE_TF_STATE=eks bash "$1/tf.sh" stg plan --destroy --no-cluster >"$2" 2>&1 && grep -qF "state holds EKS cluster module.eks.module.eks.aws_eks_cluster.this[0]: run aws/scripts/pre-destroy.sh stg first" "$2"' _ "$here" "$work/out"
+expect "tf.sh plan --destroy --no-cluster refuses when the state cannot be read" \
+  sh -c '! FAKE_TF_STATE=fail bash "$1/tf.sh" stg plan --destroy --no-cluster >/dev/null 2>&1' _ "$here"
 echo '{"name":"svp-stg","domain":"stg.aws.svp.example","hostedZoneId":"Z0FAKE"}' >"$SVP_SESSION_DIR/cluster-values.json"
-expect "tf.sh destroy --no-cluster refuses when the session has cluster-values.json" \
-  sh -c '! bash "$1/tf.sh" stg destroy --no-cluster >"$2" 2>&1 && grep -q "cluster-values.json exists" "$2"' _ "$here" "$work/out"
-expect "tf.sh destroy --no-cluster refused: terraform destroy never ran" test -z "$(grep '^terraform .* destroy' "$log")"
+expect "tf.sh plan --destroy --no-cluster refuses when the session has cluster-values.json" \
+  sh -c '! bash "$1/tf.sh" stg plan --destroy --no-cluster >"$2" 2>&1 && grep -q "cluster-values.json exists" "$2"' _ "$here" "$work/out"
+expect "tf.sh plan --destroy --no-cluster refused: terraform plan -destroy never ran" test -z "$(grep '^terraform .* plan -destroy' "$log")"
+expect "tf.sh plan --destroy --no-cluster refused: no destroy plan file" test ! -e "$infra_root/aws/envs/stg/stg.destroy.tfplan"
+expect "tf.sh destroy takes no flag, --no-cluster included" sh -c '! bash "$1/tf.sh" stg destroy "$2" >/dev/null 2>&1' _ "$here" --no-cluster
+expect "tf.sh show takes no --destroy" sh -c '! bash "$1/tf.sh" stg show --destroy >/dev/null 2>&1' _ "$here"
 expect "tf.sh apply refuses without a plan file" sh -c '! bash "$1/tf.sh" stg apply >/dev/null 2>&1' _ "$here"
 expect "tf.sh show refuses without a plan file" sh -c '! bash "$1/tf.sh" stg show >/dev/null 2>&1' _ "$here"
 expect "tf.sh show wrote no plan text" test ! -e "$SVP_SESSION_DIR/stg-plan.txt"
@@ -370,6 +398,15 @@ expect "tf.sh plan says which text to read" grep -qF "read $SVP_SESSION_DIR/stg-
 rm -f "$SVP_SESSION_DIR/stg-plan.txt"
 expect "--print show: the command" sh -c 'bash "$1/tf.sh" --print stg show 2>&1 | grep -q "^+ AWS_PROFILE=anhnv-sso terraform -chdir=.* show -no-color stg.tfplan$"' _ "$here"
 expect "--print show wrote no plan text" test ! -e "$SVP_SESSION_DIR/stg-plan.txt"
+: >"$log"
+bash "$here/tf.sh" --print stg plan --destroy >"$work/out" 2>&1 || bad "--print plan --destroy exits 0"
+expect "--print plan --destroy: plan -destroy into the destroy plan file, then its show" \
+  sh -c 'grep -q "^+ AWS_PROFILE=anhnv-sso terraform -chdir=.* plan -destroy -input=false -var-file=stg.tfvars -out=stg.destroy.tfplan$" "$1" && grep -q "^+ AWS_PROFILE=anhnv-sso terraform -chdir=.* show -no-color stg.destroy.tfplan$" "$1"' _ "$work/out"
+bash "$here/tf.sh" --print stg destroy >"$work/out" 2>&1 || bad "--print destroy exits 0"
+expect "--print destroy: apply of the destroy plan file, never terraform destroy" \
+  sh -c 'grep -q "^+ AWS_PROFILE=anhnv-sso terraform -chdir=.* apply -input=false stg.destroy.tfplan$" "$1" && ! grep -q "^+ .*terraform -chdir=[^ ]* destroy" "$1"' _ "$work/out"
+expect "--print plan --destroy and destroy wrote and ran nothing" \
+  sh -c '[ ! -s "$1" ] && [ ! -e "$2/stg-destroy-plan.txt" ] && [ ! -e "$3/stg.destroy.tfplan" ]' _ "$log" "$SVP_SESSION_DIR" "$infra_root/aws/envs/stg"
 
 # --- bootstrap-argocd.sh -----------------------------------------------------------------------------------------
 new_session
@@ -422,7 +459,14 @@ expect "pre-destroy.sh: PVCs before every platform Application" before "$log" 'd
 expect "pre-destroy.sh: the PVCs of both namespaces" test "$(grep -c 'delete pvc --all' "$log")" = 2
 expect "pre-destroy.sh leaves no Application" test -z "$(grep . "$state/apps")"
 expect "pre-destroy.sh marks pre-destroy-done" has_mark pre-destroy-done
-expect "tf.sh destroy runs after pre-destroy.sh" bash "$here/tf.sh" stg destroy >/dev/null
+expect "tf.sh plan --destroy runs after pre-destroy.sh" bash "$here/tf.sh" stg plan --destroy >/dev/null
+: >"$log"
+expect "tf.sh destroy runs after it" bash "$here/tf.sh" stg destroy >"$work/out" 2>&1
+expect "tf.sh destroy applied the destroy plan file" grep -q '^terraform -chdir=.*/aws/envs/stg apply -input=false stg.destroy.tfplan$' "$log"
+expect "tf.sh destroy never ran terraform destroy" test -z "$(grep -E '^terraform -chdir=[^ ]* destroy' "$log")"
+expect "tf.sh destroy removed the destroy plan file" test ! -e "$infra_root/aws/envs/stg/stg.destroy.tfplan"
+expect "tf.sh destroy marks destroy-start, then destroy-end" sh -c 'has() { awk -F "\t" -v e="$2" "\$3 == e { f = 1 } END { exit !f }" "$1"; }; has "$1" destroy-start && has "$1" destroy-end' _ "$SVP_SESSION_DIR/timeline.tsv"
+expect "tf.sh destroy says to sweep next" grep -q 'now aws/scripts/sweep.sh' "$work/out"
 
 new_session
 echo '{"name":"svp-stg","domain":"stg.aws.svp.example","hostedZoneId":"Z0FAKE"}' >"$SVP_SESSION_DIR/cluster-values.json"
@@ -441,18 +485,19 @@ expect "pre-destroy.sh without Argo CD marks pre-destroy-done" has_mark pre-dest
 # bootstrap-argocd.sh cannot run): no cluster-values.json, EKS in the state. pre-destroy.sh is the way out.
 new_session
 expect "--no-cluster with EKS in the state points to pre-destroy.sh" \
-  sh -c '! FAKE_TF_STATE=eks bash "$1/tf.sh" stg destroy --no-cluster >"$2" 2>&1 && grep -q "run aws/scripts/pre-destroy.sh stg first" "$2"' _ "$here" "$work/out"
+  sh -c '! FAKE_TF_STATE=eks bash "$1/tf.sh" stg plan --destroy --no-cluster >"$2" 2>&1 && grep -q "run aws/scripts/pre-destroy.sh stg first" "$2"' _ "$here" "$work/out"
 FAKE_NO_ARGOCD=1 bash "$here/pre-destroy.sh" stg >"$work/pre.out" 2>&1 ||
   bad "pre-destroy.sh stg exits 0 with no cluster-values.json ($(tail -n 3 "$work/pre.out"))"
 expect "pre-destroy.sh writes the context svp-stg itself, before its first kubectl" \
   before "$log" '^aws eks update-kubeconfig --name svp-stg --alias svp-stg ' '^kubectl '
 expect "pre-destroy.sh reads the zone id from stg.auto.tfvars" grep -q 'route53 list-resource-record-sets --hosted-zone-id Z0TFVARS ' "$log"
 expect "pre-destroy.sh with no cluster-values.json marks pre-destroy-done" has_mark pre-destroy-done
-expect "tf.sh destroy runs after it, with EKS in the state" sh -c 'FAKE_TF_STATE=eks bash "$1/tf.sh" stg destroy >/dev/null' _ "$here"
-expect "tf.sh destroy ran terraform destroy" grep -q '^terraform .* destroy -var-file=stg.tfvars' "$log"
+expect "tf.sh plan --destroy runs after it, with EKS in the state" sh -c 'FAKE_TF_STATE=eks bash "$1/tf.sh" stg plan --destroy >/dev/null' _ "$here"
+expect "tf.sh destroy runs after it" bash "$here/tf.sh" stg destroy >/dev/null
+expect "tf.sh destroy ran terraform apply of the destroy plan file" grep -q '^terraform .* apply -input=false stg.destroy.tfplan$' "$log"
 : >"$log"
 expect "pre-destroy.sh on an account without the cluster stops before kubectl and points to --no-cluster" \
-  sh -c '! FAKE_NO_CLUSTER=1 bash "$1/pre-destroy.sh" stg >"$2" 2>&1 && grep -q "destroy --no-cluster" "$2" && ! grep -q "^kubectl " "$3"' _ "$here" "$work/out" "$log"
+  sh -c '! FAKE_NO_CLUSTER=1 bash "$1/pre-destroy.sh" stg >"$2" 2>&1 && grep -q "plan --destroy --no-cluster" "$2" && ! grep -q "^kubectl " "$3"' _ "$here" "$work/out" "$log"
 mv "$infra_root/aws/envs/stg/stg.auto.tfvars" "$work/tfvars.aside"
 : >"$log"
 expect "pre-destroy.sh without stg.auto.tfvars stops before any command, and names the file" \

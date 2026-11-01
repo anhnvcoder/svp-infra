@@ -22,6 +22,7 @@ tf.sh $env_name apply
 bootstrap-argocd.sh $env_name
 measure.sh $env_name
 pre-destroy.sh $env_name
+tf.sh $env_name plan --destroy
 tf.sh $env_name destroy
 sweep.sh"
 
