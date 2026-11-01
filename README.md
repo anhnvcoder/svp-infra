@@ -22,7 +22,7 @@ aws/
   modules/                    module nội bộ (network, eks, rds, media); lock file không commit
   envs/<env>/                 cấu hình gốc của mỗi env (stg ở 7a, prd ở 7b): một state key mỗi env
   scripts/                    script buổi AWS (kiểm account, DNS, bootstrap Argo CD, đo, pre-destroy, sweep)
-github/                       cài đặt GitHub của năm repo của lab (repo, quyền Actions, ruleset, environment promote); state trong bucket của aws/bootstrap
+github/                       cài đặt GitHub của sáu repo (năm repo của lab và `.github`) (repo, quyền Actions, ruleset, environment promote); state trong bucket của aws/bootstrap
 docs/diagrams/                sơ đồ AWS svp-aws.drawio (trang stg, prd, flows), PDF, PNG nhúng ở docs của repo code; sinh từ spec
 .claude/skills/aws-drawio-diagram/   spec và checker của sơ đồ (luật vẽ ở SKILL.md)
 ```
@@ -47,7 +47,7 @@ Chạy từ gốc repo, không cần credential AWS, cần Docker và mạng (re
 | `make check` | `fmt-check`, `validate`, `tflint`, `trivy` trên mọi thư mục có `*.tf`, rồi `shellcheck` trên mọi `*.sh` |
 | `make check DIRS="aws/modules/x aws/envs/stg"` | như trên, bốn phép Terraform chỉ trên các thư mục đó; thư mục không có, không có `*.tf` hay nằm ngoài repo thì dừng, nêu thư mục |
 | `make fmt-check` / `make fmt` | `terraform fmt -check -diff -recursive` / viết lại file |
-| `make validate` | mỗi thư mục: `terraform init -backend=false -input=false`, rồi `terraform validate` |
+| `make validate` | mỗi thư mục: `terraform init -backend=false -input=false`, rồi `terraform validate`; provider và module nằm ở thư mục tạm (`TF_DATA_DIR`), nên `.terraform/` của người học đã `init` với backend S3 không bị đọc hay ghi |
 | `make tflint` | mỗi thư mục: `tflint --init`, rồi `tflint` với `.tflint.hcl` |
 | `make trivy` | `trivy config` mỗi thư mục; HIGH và CRITICAL làm đỏ |
 | `make shellcheck` | shellcheck trên mọi `*.sh` (bản image, `--network none`; máy không cài shellcheck) |
@@ -62,14 +62,14 @@ Không target nào gọi `plan`, `apply`, `destroy`, `import`, `state`, `output`
 **Chạy song song trên hai thư mục khác nhau** (`make check DIRS=a` và `make check DIRS=b` cùng lúc) an toàn vì mỗi lượt chỉ ghi dưới
 thư mục nó kiểm:
 
-- `<dir>/.terraform/`: provider (bản Linux của container, ~700 MB cho provider AWS mỗi thư mục), module tải về, plugin tflint ở
-  `<dir>/.terraform/tflint.d/` (`TFLINT_PLUGIN_DIR`, ~70 MB);
+- thư mục tạm của lượt (`TF_DATA_DIR`): provider (bản Linux của container, ~700 MB cho provider AWS) và module tải về, xoá khi lượt kết thúc;
+- plugin tflint ở `<dir>/.terraform/tflint.d/` (`TFLINT_PLUGIN_DIR`, ~70 MB);
 - `<dir>/.terraform.lock.hcl` của module (root chỉ đọc lock của nó; `make lock` thì ghi);
 - cache của trivy nằm trong container (`/tmp/trivy`) và mất khi container dừng; shellcheck không ghi gì.
 
 Không có cache plugin dùng chung (`TF_PLUGIN_CACHE_DIR` không đặt, không thư mục plugin tflint chung): hai lượt không bao giờ cùng ghi một
-file, đổi lại mỗi thư mục tải provider riêng. `.terraform/` của một root dùng chung được với Terraform trên máy khi người học `init` với
-backend thật (Terraform thêm provider `darwin_arm64` cạnh bản Linux).
+file, đổi lại mỗi lượt tải provider riêng. `.terraform/` mà người học `init` với backend thật không bị `make check` đọc hay ghi (trừ
+`tflint.d/`).
 
 **Ngoại lệ của trivy:** finding trong file `.tf` của repo này bỏ qua ngay cạnh resource bằng dòng `#trivy:ignore:<id>`, lý do ở comment
 ngay trên; finding trong module tải từ registry (không comment được) vào `.trivyignore.yaml`, `paths` tương đối với thư mục được kiểm. Sửa

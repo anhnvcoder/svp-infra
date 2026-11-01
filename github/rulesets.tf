@@ -196,8 +196,9 @@ resource "github_repository_ruleset" "gitops_tags" {
   }
 }
 
-# svp-infra main: pull request and infra-ok, no one bypasses. New: created by the first apply, after the first green
-# run of check.yml on main (a required check that has never run would leave every pull request waiting).
+# svp-infra main: pull request and infra-ok, no one bypasses. Created by Terraform, not imported. On a new account it is
+# applied only after the first green run of check.yml on main (a required check that has never run would leave every
+# pull request waiting).
 resource "github_repository_ruleset" "infra_main" {
   repository  = github_repository.this["svp-infra"].name
   name        = "main"
