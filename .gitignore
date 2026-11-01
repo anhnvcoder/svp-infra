@@ -33,4 +33,6 @@ terraform.rc
 .session/
 
 .env
+# direnv: per-machine environment (the AWS profile of this machine), never shared.
+.envrc
 .DS_Store

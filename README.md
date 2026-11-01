@@ -86,6 +86,20 @@ lần đầu mỗi account là [`aws/bootstrap/README.md`](aws/bootstrap/README.
 `required_version` của root (`~> 1.15`). Backend S3 của mọi root đọc bucket, region từ `aws/backend.hcl` (không commit, sinh từ output của
 `aws/bootstrap`), mỗi root một `key`, khoá bằng lock file native của S3 (`use_lockfile`).
 
+**Profile AWS không nằm trong code** (khuyến nghị của HashiCorp và AWS: thông tin đăng nhập là của môi trường chạy, không của cấu hình; CI
+sau này dùng OIDC, máy khác đặt tên profile khác). Code chỉ chặn nhầm account bằng `allowed_account_ids`. Trên máy, đặt profile một lần cho
+thư mục bằng [direnv](https://direnv.net) (công cụ thông dụng nạp biến môi trường theo thư mục):
+
+```sh
+brew install direnv
+echo 'eval "$(direnv hook zsh)"' >> ~/.zshrc && exec zsh       # một lần mỗi máy (bash: direnv hook bash)
+printf 'export AWS_PROFILE=anhnv-sso\nexport AWS_REGION=ap-southeast-1\n' > .envrc   # ở gốc infra/; .envrc bị git bỏ qua
+direnv allow
+```
+
+Từ đó trong `infra/` gõ `terraform plan` trơn. Tài liệu vẫn ghi `AWS_PROFILE=…` trong từng lệnh để người đọc thấy rõ lệnh chạy vào đâu;
+không có direnv thì `export AWS_PROFILE=anhnv-sso` mỗi terminal.
+
 ## Luật an toàn
 
 - **AI** (Claude, Codex) chỉ chạy `make check` và các phép trong đó, `terraform fmt`, `terraform init -backend=false`, `terraform validate`,
