@@ -23,7 +23,7 @@
 # Needs no step but the apply that made the cluster: it writes the kubeconfig context itself and reads the lab zone's id
 # from the root's tfvars, not from the files of bootstrap-argocd.sh. So it also runs after an apply that failed once EKS
 # existed (its outputs were not stored, so bootstrap-argocd.sh cannot run), and from a new session directory.
-# Records pre-destroy-done in the timeline, which tf.sh <env> destroy requires. Run it again after a failure: each
+# Records pre-destroy-done in the timeline, which tf.sh <env> plan --destroy requires. Run it again after a failure: each
 # step finds what is left.
 #
 # Usage: aws/scripts/pre-destroy.sh [--print] stg
@@ -60,7 +60,7 @@ fi
 step "pre-destroy.sh: account and cluster $context"
 check_account
 aws_ eks update-kubeconfig --name "$cluster" --alias "$context" ||
-  fail "aws eks update-kubeconfig for cluster $cluster (no such cluster in the account? then nothing ever ran on one: aws/scripts/tf.sh $env_name destroy --no-cluster, which checks that the state holds none)"
+  fail "aws eks update-kubeconfig for cluster $cluster (no such cluster in the account? then nothing ever ran on one: aws/scripts/tf.sh $env_name plan --destroy --no-cluster, which checks that the state holds none)"
 ok "context $context in the kubeconfig"
 # The CRD rather than namespace argocd: make eks-gitops-up makes the namespace just before helm installs Argo CD.
 argocd=$(kc get crd applications.argoproj.io --ignore-not-found -o name) ||
@@ -290,4 +290,4 @@ else
   note "Application(s)$left_apps not gone after $platform_wave_limit s; terraform destroy deletes the cluster with them (steps 2 and 3 left nothing billed outside it)"
 fi
 mark pre-destroy-done
-ok "ready for: aws/scripts/tf.sh $env_name destroy"
+ok "ready for: aws/scripts/tf.sh $env_name plan --destroy"
