@@ -43,9 +43,21 @@ aws/scripts/session.sh --print stg
    `bootstrap-argocd.sh` tự kiểm lại: repo code ở `main`, sạch, bằng `origin/main`; nó fetch `svp-gitops` và lấy `GITOPS_REV` là SHA đủ 40
    hex của `origin/main` vừa fetch (cluster ở yên commit đó suốt buổi).
 3. Trên máy: Terraform 1.15 (`terraform version`), AWS CLI v2, `kubectl`, `helm`, `jq`, `dig`, `make`; `.env` của repo code đã có
-   (`make -C ../backend env`); `aws/backend.hcl` (từ output `backend_hcl` của `aws/bootstrap`); `aws/envs/stg/stg.auto.tfvars` chép từ
-   `example.auto.tfvars.example` và điền (`hosted_zone_id`, `domain` = `stg.aws.<domain>`, `acme_email`, `eks_public_access_cidrs` là IP
-   máy `/32`: `curl -s https://checkip.amazonaws.com`).
+   (`make -C ../backend env`); `aws/backend.hcl` (từ output `backend_hcl` của `aws/bootstrap`); `aws/envs/stg/stg.auto.tfvars` (git bỏ qua) sinh bằng khối lệnh dưới, chỉ đọc output của bootstrap; thay `<domain>`, `<email>`:
+
+   ```sh
+   zone=$(AWS_PROFILE=anhnv-sso terraform -chdir=aws/bootstrap output -raw zone_id)
+   ip=$(curl -s https://checkip.amazonaws.com)
+   cat > aws/envs/stg/stg.auto.tfvars <<EOF
+   hosted_zone_id          = "$zone"
+   domain                  = "stg.aws.<domain>"
+   acme_email              = "<email>"
+   eks_public_access_cidrs = ["$ip/32"]
+   EOF
+   ```
+
+   Đổi mạng giữa buổi (IP khác) thì `kubectl` không vào được endpoint EKS: sửa `eks_public_access_cidrs`, rồi `aws/scripts/tf.sh stg plan`,
+   `aws/scripts/tf.sh stg apply`.
 4. Mac cắm sạc, tắt Low Power Mode (đo k6 và chờ dài).
 
 ## Mở terminal của buổi
@@ -53,9 +65,12 @@ aws/scripts/session.sh --print stg
 ```sh
 cd infra
 AWS_PROFILE=anhnv-sso aws sso login
-export SVP_AWS_ACCOUNT_ID=<12 số của account sandbox, đọc trên trang SSO>     # không ghi vào file nào
+export SVP_AWS_ACCOUNT_ID="$TF_VAR_account_id"                                # direnv nạp biến này khi cd infra, nếu .envrc có nó
 export SVP_SESSION_DIR="$PWD/.session/$(date -u +%Y%m%dT%H%M%SZ)"             # số đo của buổi; .session/ git bỏ qua
 ```
+
+Không có `TF_VAR_account_id` trong `.envrc` thì gõ 12 số của account sandbox (đọc trên trang SSO) thay cho dòng `SVP_AWS_ACCOUNT_ID`:
+`export SVP_AWS_ACCOUNT_ID=<12 số>`; không ghi vào file nào.
 
 Mọi bước sau chạy trong **cùng terminal này** (cùng hai biến). Thư mục buổi chứa: `timeline.tsv` (mốc UTC: `session-start`,
 `apply-start`, `apply-end`, `argocd-healthy`, `smoke-ok`, `seed-ok`, `k6-<n>-start`/`-end`, `pre-destroy-*`, `destroy-start`,
@@ -68,7 +83,7 @@ destroy` đòi mốc `pre-destroy-done` trong `timeline.tsv` của nó.
 ```sh
 cd infra
 AWS_PROFILE=anhnv-sso aws sso login
-export SVP_AWS_ACCOUNT_ID=<12 số của account sandbox>
+export SVP_AWS_ACCOUNT_ID="$TF_VAR_account_id"                                 # hay gõ 12 số của account sandbox nếu .envrc không có biến này
 ls -1d .session/*/ | tail -n 3                                                 # thư mục mới nhất là buổi đang dở
 export SVP_SESSION_DIR="$PWD/.session/<thư mục đó>"
 tail -n 5 "$SVP_SESSION_DIR/timeline.tsv"                                      # mốc cuối: bước nào đã xong

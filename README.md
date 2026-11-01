@@ -81,8 +81,14 @@ là check bắt buộc của ruleset `main`. Chỉ action của GitHub, ghim SHA
 
 ## Plan và apply
 
-Chỉ người học chạy, từ máy, bằng SSO (`AWS_PROFILE=anhnv-sso`, region `ap-southeast-1` ghi trong lệnh), theo script và runbook của repo:
-lần đầu mỗi account là [`aws/bootstrap/README.md`](aws/bootstrap/README.md). Terraform của máy (Homebrew) phải nằm trong
+Hai đường vào:
+
+- **Lần đầu mỗi account:** [`aws/bootstrap/README.md`](aws/bootstrap/README.md) (bucket state, budget, hosted zone).
+- **Mỗi buổi dựng, đo, gỡ một env:** runbook [`docs/runbooks/session-stg.md`](docs/runbooks/session-stg.md). Xem trước toàn bộ lệnh của
+  buổi, không chạy gì và không cần credential: `aws/scripts/session.sh --print stg`.
+
+Chỉ người học chạy, từ máy, bằng SSO (`AWS_PROFILE=anhnv-sso`, region `ap-southeast-1` ghi trong lệnh), theo script và runbook của repo.
+Terraform của máy (Homebrew) phải nằm trong
 `required_version` của root (`~> 1.15`). Backend S3 của mọi root đọc bucket, region từ `aws/backend.hcl` (không commit, sinh từ output của
 `aws/bootstrap`), mỗi root một `key`, khoá bằng lock file native của S3 (`use_lockfile`).
 
@@ -93,9 +99,13 @@ thư mục bằng [direnv](https://direnv.net) (công cụ thông dụng nạp b
 ```sh
 brew install direnv
 echo 'eval "$(direnv hook zsh)"' >> ~/.zshrc && exec zsh       # một lần mỗi máy (bash: direnv hook bash)
-printf 'export AWS_PROFILE=anhnv-sso\nexport AWS_REGION=ap-southeast-1\n' > .envrc   # ở gốc infra/; .envrc bị git bỏ qua
+printf 'export AWS_PROFILE=anhnv-sso\nexport AWS_REGION=ap-southeast-1\nexport TF_VAR_account_id=<12 số>\n' > .envrc   # ở gốc infra/; .envrc bị git bỏ qua
 direnv allow
 ```
+
+`<12 số>` là account đọc từ `AWS_PROFILE=anhnv-sso aws sts get-caller-identity --query Account --output text`; `.envrc` git bỏ qua nên
+account không vào file commit nào. Các script buổi lấy `SVP_AWS_ACCOUNT_ID` từ biến `TF_VAR_account_id` này (runbook ở mục "Mở terminal
+của buổi").
 
 Từ đó trong `infra/` gõ `terraform plan` trơn. Tài liệu vẫn ghi `AWS_PROFILE=…` trong từng lệnh để người đọc thấy rõ lệnh chạy vào đâu;
 không có direnv thì `export AWS_PROFILE=anhnv-sso` mỗi terminal.
