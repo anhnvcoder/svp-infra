@@ -104,8 +104,8 @@ direnv allow
 ```
 
 `<12 số>` là account đọc từ `AWS_PROFILE=anhnv-sso aws sts get-caller-identity --query Account --output text`; `.envrc` git bỏ qua nên
-account không vào file commit nào. Các script buổi lấy `SVP_AWS_ACCOUNT_ID` từ biến `TF_VAR_account_id` này (runbook ở mục "Mở terminal
-của buổi").
+account không vào file commit nào. Script buổi đọc `SVP_AWS_ACCOUNT_ID`; runbook export nó từ biến này (`export SVP_AWS_ACCOUNT_ID="$TF_VAR_account_id"`, mục "Mở
+terminal của buổi").
 
 Từ đó trong `infra/` gõ `terraform plan` trơn. Tài liệu vẫn ghi `AWS_PROFILE=…` trong từng lệnh để người đọc thấy rõ lệnh chạy vào đâu;
 không có direnv thì `export AWS_PROFILE=anhnv-sso` mỗi terminal.
