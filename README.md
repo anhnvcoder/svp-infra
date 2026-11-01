@@ -12,11 +12,15 @@ Repo public: **không account ID, IP, email, tên miền thật, state hay plan 
 ## Bố cục
 
 ```text
-Makefile                      make check (fmt, validate, tflint, trivy, shellcheck), make lock, make fmt
+Makefile                      make check (fmt, validate, tflint, trivy, shellcheck, zizmor), make lock, make fmt
+CODEOWNERS                    đường có chủ: CODEOWNERS, .github/, renovate.json, Makefile, .trivyignore.yaml, github/, aws/
 .tflint.hcl                   ruleset terraform (recommended) và aws ghim version
 .trivyignore.yaml             ngoại lệ của trivy trong module tải từ registry
 renovate.json                 provider, module, ruleset tflint, image ghim của Makefile, action
 .github/workflows/check.yml   PR và push main: make check; check tổng infra-ok; chỉ contents: read, không secret
+.github/workflows/pr-title.yml  PR: tiêu đề theo Conventional Commits (check pr-title)
+.github/workflows/scorecard.yml push main và lịch tuần: OpenSSF Scorecard, kết quả công khai và lên code scanning
+.github/zizmor.yml            ngoại lệ của zizmor, mỗi mục một lý do (tạo khi có ngoại lệ đầu tiên)
 aws/
   bootstrap/                  một lần mỗi account, giữ giữa các buổi: bucket state, budget, hosted zone aws.<domain>
   modules/                    module nội bộ (network, eks, rds, media); lock file không commit
@@ -44,18 +48,19 @@ Chạy từ gốc repo, không cần credential AWS, cần Docker và mạng (re
 
 | Lệnh | Làm gì |
 | --- | --- |
-| `make check` | `fmt-check`, `validate`, `tflint`, `trivy` trên mọi thư mục có `*.tf`, rồi `shellcheck` trên mọi `*.sh` |
+| `make check` | `fmt-check`, `validate`, `tflint`, `trivy` trên mọi thư mục có `*.tf`, rồi `shellcheck` trên mọi `*.sh`, `zizmor` trên mọi workflow |
 | `make check DIRS="aws/modules/x aws/envs/stg"` | như trên, bốn phép Terraform chỉ trên các thư mục đó; thư mục không có, không có `*.tf` hay nằm ngoài repo thì dừng, nêu thư mục |
 | `make fmt-check` / `make fmt` | `terraform fmt -check -diff -recursive` / viết lại file |
 | `make validate` | mỗi thư mục: `terraform init -backend=false -input=false`, rồi `terraform validate`; provider và module nằm ở thư mục tạm (`TF_DATA_DIR`), nên `.terraform/` của người học đã `init` với backend S3 không bị đọc hay ghi |
 | `make tflint` | mỗi thư mục: `tflint --init`, rồi `tflint` với `.tflint.hcl` |
 | `make trivy` | `trivy config` mỗi thư mục; HIGH và CRITICAL làm đỏ |
 | `make shellcheck` | shellcheck trên mọi `*.sh` (bản image, `--network none`; máy không cài shellcheck) |
+| `make zizmor` | lint bảo mật workflow bằng zizmor (`--persona=regular`), mọi finding làm đỏ; có `GH_TOKEN` thì chạy thêm audit online (impostor commit, action có lỗ hổng), không thì offline; `ZIZMOR_FORMAT=github` in annotation |
 | `make lock [DIRS=<root>]` | `init -backend=false` rồi `terraform providers lock` cho ba nền tảng; module bị bỏ qua |
 | `make help` | liệt kê target |
 
 Chưa có thư mục `*.tf` nào thì bốn phép Terraform in một dòng và qua. Mọi công cụ chạy bằng image ghim digest trong `Makefile`
-(`TERRAFORM_IMAGE` 1.15.8, `TFLINT_IMAGE`, `TRIVY_IMAGE` cùng bản ghim của repo code, `SHELLCHECK_IMAGE`), qua
+(`TERRAFORM_IMAGE` 1.15.8, `TFLINT_IMAGE`, `TRIVY_IMAGE` và `ZIZMOR_IMAGE` cùng bản ghim của repo code, `SHELLCHECK_IMAGE`), qua
 `env -u DOCKER_DEFAULT_PLATFORM docker run` (shell của máy đặt `linux/amd64` cho dự án khác), container chạy dưới uid của người gọi.
 Không target nào gọi `plan`, `apply`, `destroy`, `import`, `state`, `output` hay `aws`.
 
@@ -65,7 +70,7 @@ thư mục nó kiểm:
 - thư mục tạm của lượt (`TF_DATA_DIR`): provider (bản Linux của container, ~700 MB cho provider AWS) và module tải về, xoá khi lượt kết thúc;
 - plugin tflint ở `<dir>/.terraform/tflint.d/` (`TFLINT_PLUGIN_DIR`, ~70 MB);
 - `<dir>/.terraform.lock.hcl` của module (root chỉ đọc lock của nó; `make lock` thì ghi);
-- cache của trivy nằm trong container (`/tmp/trivy`) và mất khi container dừng; shellcheck không ghi gì.
+- cache của trivy, zizmor nằm trong container (`/tmp/trivy`, `/tmp/zizmor`) và mất khi container dừng; shellcheck không ghi gì.
 
 Không có cache plugin dùng chung (`TF_PLUGIN_CACHE_DIR` không đặt, không thư mục plugin tflint chung): hai lượt không bao giờ cùng ghi một
 file, đổi lại mỗi lượt tải provider riêng. `.terraform/` mà người học `init` với backend thật không bị `make check` đọc hay ghi (trừ
@@ -76,8 +81,20 @@ ngay trên; finding trong module tải từ registry (không comment được) v
 được thì sửa, không ghi ngoại lệ.
 
 **CI** (`.github/workflows/check.yml`): mỗi PR và push `main` chạy đúng `make check` trên `ubuntu-24.04`; job `check` chỉ `contents: read`,
-token của lượt chỉ vào container tflint (giới hạn tải plugin từ GitHub), không secret, không OIDC, không credential AWS; job `infra-ok`
-là check bắt buộc của ruleset `main`. Chỉ action của GitHub, ghim SHA.
+token của lượt chỉ vào container tflint (giới hạn tải plugin từ GitHub) và container zizmor (audit online, finding thành annotation), không
+secret, không OIDC, không credential AWS; job `infra-ok` là check bắt buộc của ruleset `main`. Chỉ action của GitHub, ghim SHA.
+
+**Tiêu đề PR** (`.github/workflows/pr-title.yml`, check `pr-title`): `main` chỉ nhận squash merge, tiêu đề PR thành tiêu đề commit, nên
+tiêu đề theo [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/): `<type>[(<scope>)][!]: <mô tả>`, `type` là một trong
+`feat fix chore docs refactor test ci build perf revert`, scope tuỳ ý (không danh sách), hoặc `Revert "<tiêu đề>"` của nút Revert. Tiêu đề
+bot qua nguyên dạng (`chore(deps): …`, `fix(deps): …` của Renovate). Sửa tiêu đề chỉ chạy lại `pr-title`, không chạy lại `make check`; job
+không quyền, không checkout, tiêu đề vào script qua `env`. Regex và bộ thử dùng chung với ba repo có CI khác
+([ADR-0041](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0041-github-hardening.md) (h)).
+
+**Scorecard** (`.github/workflows/scorecard.yml`): [OpenSSF Scorecard](https://scorecard.dev/viewer/?uri=github.com/anhnvcoder/svp-infra)
+khi push `main`, mỗi tuần và khi branch protection cổ điển đổi; kết quả công khai (`publish_results`) và lên code scanning. Không chạy trên
+PR. `ossf/scorecard-action` là action duy nhất không của GitHub (API Scorecard chỉ nhận kết quả từ nó), được cho phép theo tên ở cài đặt
+Actions của repo (`github/`).
 
 ## Plan và apply
 

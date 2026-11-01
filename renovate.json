@@ -21,7 +21,7 @@
   },
   "customManagers": [
     {
-      "description": "Images pinned as <image>:<tag>@sha256:<digest> with a '# renovate: datasource=docker depName=<image>' line right above (TERRAFORM_IMAGE, TFLINT_IMAGE, TRIVY_IMAGE, SHELLCHECK_IMAGE of the Makefile).",
+      "description": "Images pinned as <image>:<tag>@sha256:<digest> with a '# renovate: datasource=docker depName=<image>' line right above (TERRAFORM_IMAGE, TFLINT_IMAGE, TRIVY_IMAGE, SHELLCHECK_IMAGE, ZIZMOR_IMAGE of the Makefile).",
       "customType": "regex",
       "managerFilePatterns": ["/^Makefile$/"],
       "matchStrings": [
