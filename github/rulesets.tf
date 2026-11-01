@@ -1,8 +1,13 @@
 ################################################################################
-# Rulesets. Each one as it runs on GitHub; required checks are accepted only from the GitHub Actions app (id 15368,
-# gh api apps/github-actions), so a status of the same name posted by any other app or token does not satisfy them.
+# Rulesets. Required checks are accepted only from the GitHub Actions app (id 15368, gh api apps/github-actions), so a
+# status of the same name posted by any other app or token does not satisfy them.
 #
-# allowed_merge_methods lists all three on purpose: the repository settings decide which merge buttons exist.
+# Every main ruleset keeps history linear, and every pull_request rule allows squash alone, so a merge commit or a
+# rebase stays blocked even if a repository's settings offer it again. No rule requires an approval: one person works
+# the lab, and an author cannot approve their own pull request.
+# strict_required_status_checks_policy stays false: true would make every pull request, the bots' own included, update
+# its branch and rebuild its images after each merge, and the merge queue that avoids that exists only for repositories
+# of an organization; the run on main after each merge catches what two pull requests break together.
 # require_extra_approval_for_unattributed_changes (on by GitHub's default) is not exposed by the provider.
 ################################################################################
 
@@ -25,11 +30,12 @@ resource "github_repository_ruleset" "backend_main" {
   }
 
   rules {
-    deletion         = true
-    non_fast_forward = true
+    deletion                = true
+    non_fast_forward        = true
+    required_linear_history = true
 
     pull_request {
-      allowed_merge_methods             = ["merge", "squash", "rebase"]
+      allowed_merge_methods             = ["squash"]
       required_approving_review_count   = 0
       dismiss_stale_reviews_on_push     = false
       require_code_owner_review         = false
@@ -53,6 +59,41 @@ resource "github_repository_ruleset" "backend_main" {
   }
 }
 
+# svp-backend owners: a change to a file with a code owner in CODEOWNERS (workflows, Renovate and scan rules,
+# Makefile, deploy/ci/, the svp-policy chart) needs the owner's review, so a bot pull request on them never merges
+# itself; files without an owner keep Renovate's auto-merge. The admin role may bypass it in pull requests only, and
+# each bypass is recorded; main above still requires its checks.
+resource "github_repository_ruleset" "backend_owners" {
+  repository  = github_repository.this["svp-backend"].name
+  name        = "owners"
+  target      = "branch"
+  enforcement = "active"
+
+  bypass_actors {
+    actor_id    = 5 # RepositoryRole admin
+    actor_type  = "RepositoryRole"
+    bypass_mode = "pull_request"
+  }
+
+  conditions {
+    ref_name {
+      include = ["~DEFAULT_BRANCH"]
+      exclude = []
+    }
+  }
+
+  rules {
+    pull_request {
+      allowed_merge_methods             = ["squash"]
+      required_approving_review_count   = 0
+      dismiss_stale_reviews_on_push     = true
+      require_code_owner_review         = true
+      require_last_push_approval        = false
+      required_review_thread_resolution = false
+    }
+  }
+}
+
 # svp-frontend: same shape and checks as svp-backend.
 resource "github_repository_ruleset" "frontend_main" {
   repository  = github_repository.this["svp-frontend"].name
@@ -68,11 +109,12 @@ resource "github_repository_ruleset" "frontend_main" {
   }
 
   rules {
-    deletion         = true
-    non_fast_forward = true
+    deletion                = true
+    non_fast_forward        = true
+    required_linear_history = true
 
     pull_request {
-      allowed_merge_methods             = ["merge", "squash", "rebase"]
+      allowed_merge_methods             = ["squash"]
       required_approving_review_count   = 0
       dismiss_stale_reviews_on_push     = false
       require_code_owner_review         = false
@@ -92,6 +134,41 @@ resource "github_repository_ruleset" "frontend_main" {
         context        = "images-ok"
         integration_id = local.github_actions_app_id
       }
+    }
+  }
+}
+
+# svp-frontend owners: a change to a file with a code owner in CODEOWNERS (workflows, Renovate and scan rules,
+# Makefile) needs the owner's review, so a bot pull request on them never merges itself; files without an owner keep
+# Renovate's auto-merge. The admin role may bypass it in pull requests only, and each bypass is recorded; main above
+# still requires its checks.
+resource "github_repository_ruleset" "frontend_owners" {
+  repository  = github_repository.this["svp-frontend"].name
+  name        = "owners"
+  target      = "branch"
+  enforcement = "active"
+
+  bypass_actors {
+    actor_id    = 5 # RepositoryRole admin
+    actor_type  = "RepositoryRole"
+    bypass_mode = "pull_request"
+  }
+
+  conditions {
+    ref_name {
+      include = ["~DEFAULT_BRANCH"]
+      exclude = []
+    }
+  }
+
+  rules {
+    pull_request {
+      allowed_merge_methods             = ["squash"]
+      required_approving_review_count   = 0
+      dismiss_stale_reviews_on_push     = true
+      require_code_owner_review         = true
+      require_last_push_approval        = false
+      required_review_thread_resolution = false
     }
   }
 }
@@ -112,11 +189,12 @@ resource "github_repository_ruleset" "gitops_main" {
   }
 
   rules {
-    deletion         = true
-    non_fast_forward = true
+    deletion                = true
+    non_fast_forward        = true
+    required_linear_history = true
 
     pull_request {
-      allowed_merge_methods             = ["merge", "squash", "rebase"]
+      allowed_merge_methods             = ["squash"]
       required_approving_review_count   = 0
       dismiss_stale_reviews_on_push     = true
       require_code_owner_review         = false
@@ -159,7 +237,7 @@ resource "github_repository_ruleset" "gitops_owners" {
 
   rules {
     pull_request {
-      allowed_merge_methods             = ["merge", "squash", "rebase"]
+      allowed_merge_methods             = ["squash"]
       required_approving_review_count   = 0
       dismiss_stale_reviews_on_push     = true
       require_code_owner_review         = true
@@ -213,11 +291,12 @@ resource "github_repository_ruleset" "infra_main" {
   }
 
   rules {
-    deletion         = true
-    non_fast_forward = true
+    deletion                = true
+    non_fast_forward        = true
+    required_linear_history = true
 
     pull_request {
-      allowed_merge_methods             = ["merge", "squash", "rebase"]
+      allowed_merge_methods             = ["squash"]
       required_approving_review_count   = 0
       dismiss_stale_reviews_on_push     = true
       require_code_owner_review         = false
@@ -233,6 +312,103 @@ resource "github_repository_ruleset" "infra_main" {
         context        = "infra-ok"
         integration_id = local.github_actions_app_id
       }
+    }
+  }
+}
+
+# svp-infra owners: a change to a file with a code owner in CODEOWNERS (workflows, Renovate and scan rules, Makefile,
+# github/, aws/) needs the owner's review, so a bot pull request on them never merges itself; files without an owner
+# keep Renovate's auto-merge. The admin role may bypass it in pull requests only, and each bypass is recorded; main
+# above still requires its checks.
+resource "github_repository_ruleset" "infra_owners" {
+  repository  = github_repository.this["svp-infra"].name
+  name        = "owners"
+  target      = "branch"
+  enforcement = "active"
+
+  bypass_actors {
+    actor_id    = 5 # RepositoryRole admin
+    actor_type  = "RepositoryRole"
+    bypass_mode = "pull_request"
+  }
+
+  conditions {
+    ref_name {
+      include = ["~DEFAULT_BRANCH"]
+      exclude = []
+    }
+  }
+
+  rules {
+    pull_request {
+      allowed_merge_methods             = ["squash"]
+      required_approving_review_count   = 0
+      dismiss_stale_reviews_on_push     = true
+      require_code_owner_review         = true
+      require_last_push_approval        = false
+      required_review_thread_resolution = false
+    }
+  }
+}
+
+# svp-labs main: no deletion, no force push, every change through a pull request. No required check: the repository
+# has no CI.
+resource "github_repository_ruleset" "labs_main" {
+  repository  = github_repository.this["svp-labs"].name
+  name        = "main"
+  target      = "branch"
+  enforcement = "active"
+
+  conditions {
+    ref_name {
+      include = ["~DEFAULT_BRANCH"]
+      exclude = []
+    }
+  }
+
+  rules {
+    deletion                = true
+    non_fast_forward        = true
+    required_linear_history = true
+
+    pull_request {
+      allowed_merge_methods             = ["squash"]
+      required_approving_review_count   = 0
+      dismiss_stale_reviews_on_push     = false
+      require_code_owner_review         = false
+      require_last_push_approval        = false
+      required_review_thread_resolution = false
+    }
+  }
+}
+
+# .github main: no deletion, no force push, every change through a pull request. No required check: the repository
+# has no CI.
+resource "github_repository_ruleset" "dotgithub_main" {
+  repository  = github_repository.this[".github"].name
+  name        = "main"
+  target      = "branch"
+  enforcement = "active"
+
+  conditions {
+    ref_name {
+      include = ["~DEFAULT_BRANCH"]
+      exclude = []
+    }
+  }
+
+  rules {
+    deletion                = true
+    non_fast_forward        = true
+    required_linear_history = true
+
+    pull_request {
+      allowed_merge_methods             = ["squash"]
+      required_approving_review_count   = 0
+      dismiss_stale_reviews_on_push     = false
+      require_code_owner_review         = false
+      require_last_push_approval        = false
+      required_review_thread_resolution = false
     }
   }
 }

@@ -1,11 +1,11 @@
 # `github/`: cài đặt GitHub của các repo của account
 
-Cài đặt GitHub mà ADR-0015 §11, ADR-0025, ADR-0033 quyết định, viết thành code: ruleset, quyền Actions, environment `promote` có lịch sử,
+Cài đặt GitHub mà ADR-0015 §11, ADR-0025, ADR-0033, ADR-0041 quyết định, viết thành code: ruleset, quyền Actions, environment `promote`, `promote-prd` có lịch sử,
 review và khôi phục được. Root này
 quản mọi repo trong `local.repositories` của `repositories.tf` (repo của lab và `anhnvcoder/.github`, default community health files của
 account: `CONTRIBUTING.md`, `SECURITY.md`, mẫu PR) bằng provider `integrations/github` ghim `6.13.0` (chính xác,
-trong `versions.tf`; Renovate mở PR khi có bản mới). Mọi giá trị là hiện trạng đọc bằng `gh api` GET lúc đưa repo vào quản lý, không "sửa
-cho đẹp": chỗ hiện trạng khác runbook nằm ở mục "Khác runbook".
+trong `versions.tf`; Renovate mở PR khi có bản mới). Giá trị ban đầu là hiện trạng đọc bằng `gh api` GET lúc đưa repo vào quản lý, không "sửa
+cho đẹp"; đổi sau đó đi qua PR ở đây theo ADR. Chỗ khác runbook nằm ở mục "Khác runbook".
 
 Root này không có provider AWS: luật `default_tags`, `allowed_account_ids` của root AWS không áp. State vẫn nằm trong bucket state của
 `aws/bootstrap` (key `github/terraform.tfstate`, `use_lockfile`), nên `init`, `plan`, `apply` cần cả đăng nhập AWS lẫn token GitHub.
@@ -14,14 +14,16 @@ Root này không có provider AWS: luật `default_tags`, `allowed_account_ids` 
 
 | Tệp | Resource | Repo |
 | --- | --- | --- |
-| `repositories.tf` | `github_repository`: visibility, mô tả, Issues/Projects/Wiki/Discussions, cách merge (squash, merge commit, rebase, auto-merge, tiêu đề và nội dung commit squash, xoá nhánh sau merge), secret scanning và push protection; `archive_on_destroy = true` và `prevent_destroy` | mọi repo trong `local.repositories` |
+| `repositories.tf` | `github_repository`: visibility, mô tả, Issues/Projects/Wiki/Discussions, cách merge (chỉ squash, commit lấy tiêu đề và mô tả của PR; auto-merge, xoá nhánh sau merge), secret scanning và push protection; `archive_on_destroy = true` và `prevent_destroy` | mọi repo trong `local.repositories` |
 | `repositories.tf` | `github_repository_vulnerability_alerts` (Dependabot alerts): bật | repo trong `local.vulnerability_alerts_on` |
 | `repositories.tf` | `github_repository_vulnerability_alerts.off`: tắt (như GitHub để mặc định), ngoại lệ trivy `GIT-0003` riêng resource này | repo trong `local.vulnerability_alerts_off` |
-| `repositories.tf` | `github_actions_repository_permissions`: Actions bật, action được phép (của GitHub + danh sách pattern), ghim SHA bắt buộc; `prevent_destroy` (destroy đưa repo về cho mọi action) | mọi repo trong `local.repositories` |
-| `repositories.tf` | `github_workflow_repository_permissions`: `GITHUB_TOKEN` mặc định chỉ đọc, "create and approve pull requests" | mọi repo trong `local.repositories` |
-| `rulesets.tf` | `github_repository_ruleset`: `main` của `svp-backend`, `svp-frontend`; `main`, `owners`, `tags` của `svp-gitops`; check bắt buộc kèm `integration_id` 15368 (app GitHub Actions) | `svp-backend`, `svp-frontend`, `svp-gitops` |
-| `rulesets.tf` | `github_repository_ruleset.infra_main`: Terraform tạo | `svp-infra` |
+| `repositories.tf` | `github_actions_repository_permissions`: Actions bật, action được phép (của GitHub + danh sách pattern, `ossf/scorecard-action@*` ở bốn repo có CI), ghim SHA bắt buộc; `prevent_destroy` (destroy đưa repo về cho mọi action) | mọi repo trong `local.repositories` |
+| `repositories.tf` | `github_workflow_repository_permissions`: `GITHUB_TOKEN` mặc định chỉ đọc, không "create and approve pull requests" | mọi repo trong `local.repositories` |
+| `rulesets.tf` | `github_repository_ruleset` `main` (cấm xoá, force push, lịch sử thẳng, PR chỉ squash, 0 approval; check bắt buộc kèm `integration_id` 15368 của app GitHub Actions: `ci-ok`, `images-ok` ở backend, frontend, `gitops-ok`, `infra-ok`; `svp-labs`, `.github` không check) | mọi repo trong `local.repositories` |
+| `rulesets.tf` | `github_repository_ruleset` `owners` (đòi duyệt Code Owner, vai admin bypass chỉ trong PR) | `svp-backend`, `svp-frontend`, `svp-gitops`, `svp-infra` |
+| `rulesets.tf` | `github_repository_ruleset.gitops_tags`: chỉ admin tạo, đổi, xoá tag | `svp-gitops` |
 | `environments.tf` | `github_repository_environment` `promote` (luật nhánh tuỳ chọn; `prevent_destroy`: xoá environment là xoá luôn secret khoá App), `github_repository_environment_deployment_policy` (chỉ `main`), biến `SVP_GITOPS_APP_CLIENT_ID` / `SVP_WEB_APP_CLIENT_ID` | `svp-backend`, `svp-frontend` |
+| `environments.tf` | `github_repository_environment.promote_prd` (người duyệt là người học, id lấy qua data source `github_user`; admin không bypass; tự duyệt được: người dispatch là người duyệt duy nhất; `prevent_destroy`), luật nhánh chỉ `main`, biến `SVP_GITOPS_APP_CLIENT_ID` | `svp-backend` |
 
 Giá trị của hai biến (client ID của hai GitHub App) vào qua `github.auto.tfvars` (git bỏ qua; dạng file ở `github.auto.tfvars.example`,
 cách ghi ở bước 1 dưới đây) hay `TF_VAR_svp_gitops_app_client_id`, `TF_VAR_svp_web_app_client_id`; hai biến `sensitive`, `plan` không in
@@ -31,26 +33,21 @@ giá trị.
 
 | Cài đặt | Vì sao không | Kiểm bằng |
 | --- | --- | --- |
-| Secret `SVP_GITOPS_APP_PRIVATE_KEY`, `SVP_WEB_APP_PRIVATE_KEY` (environment `promote`) | Giá trị của secret trong resource nằm rõ trong state; khoá App đặt tay một lần, đổi khi xoay khoá | Settings → Environments → `promote` |
+| Secret `SVP_GITOPS_APP_PRIVATE_KEY`, `SVP_WEB_APP_PRIVATE_KEY` (environment `promote`); `SVP_GITOPS_APP_PRIVATE_KEY` của `promote-prd` (khoá riêng thứ hai của App `svp-gitops-promoter`, thu hồi riêng với khoá của stg) | Giá trị của secret trong resource nằm rõ trong state; khoá App đặt tay một lần, đổi khi xoay khoá | Settings → Environments → `promote`, `promote-prd` |
 | GitHub App `svp-gitops-promoter`, `svp-web-promoter` (quyền, repo cài) và App Renovate (Mend) | Provider không quản App của tài khoản cá nhân hay việc cài App | trang cài đặt App, runbook của từng repo |
-| Duyệt workflow của PR fork (`fork-pr-contributor-approval`) | Provider 6.13.0 không có resource | `gh api repos/anhnvcoder/<repo>/actions/permissions/fork-pr-contributor-approval` |
+| Duyệt workflow của PR fork (`fork-pr-contributor-approval`; `svp-labs`, `.github` người học đặt tay `all_external_contributors` theo ADR-0041) | Provider 6.13.0 không có resource | `gh api repos/anhnvcoder/<repo>/actions/permissions/fork-pr-contributor-approval` |
 | CodeQL default setup (`svp-backend`) | Provider không có resource cho default setup | `docs/ci-cd.md` mục 7 của repo code |
 | Package GHCR public | Không có resource cho visibility của package | runbook của repo code |
 | Environment `stg` của `svp-gitops` | Không ai bật tay: API deployments của `record-stg.sh` tự tạo khi ghi bản ghi stg, không luật nào; quản nó chỉ thêm đường để Terraform xoá hay tạo lại nó | `gh api repos/anhnvcoder/svp-gitops/environments` |
 | Nhánh mặc định (`github_branch_default`) | Push đầu đặt nó; mọi repo trong `local.repositories` đang là `main` | `gh api repos/anhnvcoder/<repo> -q .default_branch` |
 | `require_extra_approval_for_unattributed_changes` của luật `pull_request` | Provider không có trường này (không đọc, không gửi); GitHub đang để `true` ở mọi ruleset có luật này (mặc định). Sau một `apply` sửa ruleset, đọc lại trường này | `gh api repos/anhnvcoder/<repo>/rulesets/<id> -q '.rules[] \| select(.type=="pull_request") \| .parameters'` |
 | Dependabot security updates | Đang tắt ở mọi repo trong `local.repositories`, không ai bật; Renovate nâng dependency | `gh api repos/anhnvcoder/<repo> -q .security_and_analysis` |
-| Ruleset của `.github` | Repo không có workflow nên không có check nào để bắt; GitHub hiện không có ruleset nào ở repo này | `gh api repos/anhnvcoder/.github/rulesets` |
+| Check bắt buộc ở ruleset `main` của `svp-labs`, `.github` | Hai repo không có CI nên không có check nào để đòi; ruleset của chúng chỉ cấm xoá, force push, đòi PR và lịch sử thẳng | `gh api repos/anhnvcoder/<repo>/rulesets` |
 
 ## Khác runbook (mã hoá đúng như đang chạy)
 
-- `svp-infra`: danh sách action ngoài là `hashicorp/setup-terraform@*`, `terraform-linters/setup-tflint@*`; runbook (A2, nguyên nhân 6) muốn
-  để trống. `delete_branch_on_merge` bật; runbook không nói.
-- `svp-labs`: mọi cài đặt là mặc định của GitHub (mọi action, không ghim SHA, duyệt PR fork chỉ người mới, Dependabot alerts tắt, cho merge
-  commit và rebase, không auto-merge).
-- `.github` (không runbook nào nói tới): như `svp-labs`, mọi cài đặt là mặc định của GitHub, trừ Wiki tắt.
-- `svp-backend`: cho cả merge commit và rebase, commit squash lấy tiêu đề và commit message (`COMMIT_OR_PR_TITLE`, `COMMIT_MESSAGES`);
-  `svp-frontend`, `svp-gitops`, `svp-infra` chỉ squash, commit lấy tiêu đề và mô tả của PR.
+- `svp-infra`: danh sách action ngoài có thêm `hashicorp/setup-terraform@*`, `terraform-linters/setup-tflint@*` mà `check.yml` không dùng;
+  runbook (A2, nguyên nhân 6) muốn không có hai action này. `delete_branch_on_merge` bật; runbook không nói.
 
 Đổi các chỗ này là một PR riêng (một thay đổi mỗi lần, `plan` thấy rõ).
 
