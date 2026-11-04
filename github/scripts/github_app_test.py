@@ -225,7 +225,7 @@ class Create(TempDirs):
 
 
 class Check(unittest.TestCase):
-    def run_check(self, override=None):
+    def run_check(self, override=None, with_app_keys=False):
         answers = {
             ".enabled": "true", ".approval_policy": "all_external_contributors", ".default_branch": "main",
             ".security_and_analysis.dependabot_security_updates.status": "disabled", ".[].id": "1", ".state": "configured",
@@ -247,9 +247,10 @@ class Check(unittest.TestCase):
                 contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()) as err:
             backend = pathlib.Path(tmp, "backend")
             backend.mkdir()
-            (backend / ".env").write_text("".join(f"SVP_ARGOCD_NOTIFY_{k}=x\n" for k in ("APP_ID", "INSTALLATION_ID", "PRIVATE_KEY_B64")))
+            (backend / ".env").write_text("SVP_ARGOCD_NOTIFY_APP_ID=x\nSVP_ARGOCD_NOTIFY_INSTALLATION_ID=x\n"
+                                          f"SVP_ARGOCD_NOTIFY_PRIVATE_KEY_B64={base64.b64encode(PEM.encode()).decode()}\n")
             try:
-                ga.check(with_app_keys=False)
+                ga.check(with_app_keys=with_app_keys)
                 code = 0
             except SystemExit as exc:
                 code = exc.code
@@ -260,6 +261,27 @@ class Check(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertIn("every setting matches", out)
         self.assertNotIn("x\n", out)  # values of .env are never printed
+
+    def test_default_check_never_reads_the_local_key_file(self):
+        real_open = pathlib.Path.read_text
+        touched = []
+
+        def guard(path, *a, **k):
+            if path.name == ".env":
+                touched.append(path)
+            return real_open(path, *a, **k)
+
+        with mock.patch.object(pathlib.Path, "read_text", guard):
+            code, out = self.run_check()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(touched, [])
+        self.assertIn("skip  svp-argocd-notifier key in backend/.env", out)
+
+    def test_with_app_keys_checks_the_local_variables_and_installation(self):
+        with mock.patch.object(ga, "installed_repositories", return_value=(7, ["svp-gitops"])):
+            code, out = self.run_check(with_app_keys=True)
+        self.assertEqual(code, 1, out)  # INSTALLATION_ID=x in the fixture is not 7
+        self.assertIn("installation repositories: ['svp-gitops']", out)
 
     def test_private_vulnerability_reporting_off_fails(self):
         code, out = self.run_check({".enabled": "false"})

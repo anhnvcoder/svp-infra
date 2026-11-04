@@ -8,8 +8,8 @@
   github-app.py set-key <app> <key> <pem>  Write a private key (a second key, or a rotated one) to destination <key> of the App
                                         and delete the .pem file. Keys are generated on the App's page; GitHub has no API for it.
   github-app.py check [--with-app-keys] Read-only check of every setting of the README table "Không quản" that has an API.
-                                        --with-app-keys also signs in as the Apps whose key is local (backend/.env) to read
-                                        their installation.
+                                        Local key files (backend/.env) are left alone unless --with-app-keys: then their
+                                        variables are checked and the Apps whose key is local sign in to read their installation.
   github-app.py selftest                Offline checks of the manifests, destinations and helpers (make check runs it).
 
 Private keys are never printed. Run by the person who owns the account (gh signed in with scope repo), never by CI.
@@ -306,11 +306,14 @@ def check(with_app_keys):
                 names = api(f"repos/{OWNER}/{key['repo']}/environments/{key['environment']}/secrets", ".secrets[].name").split()
                 expect(f"{name} key in {key['repo']} {key['environment']}", key["name"] in names, True)
             elif key["type"] == "dotenv":
+                if not with_app_keys:  # a local secret file: read only when its owner asks (make github-check WITH_APP_KEYS=1)
+                    print(f"skip  {name} key in {key['file']}: run with --with-app-keys (WITH_APP_KEYS=1) to read it")
+                    continue
                 env = WORKSPACE / key["file"]
                 have = {line.split("=", 1)[0] for line in env.read_text().splitlines()} if env.exists() else set()
                 want = {f"{key['prefix']}_{k}" for k in ("APP_ID", "INSTALLATION_ID", "PRIVATE_KEY_B64")}
                 expect(f"{name} variables in {key['file']}", sorted(want - have) or "all present", "all present")
-                if with_app_keys and not (want - have):
+                if not (want - have):
                     values = dict(line.split("=", 1) for line in env.read_text().splitlines() if line.startswith(key["prefix"]))
                     pem = base64.b64decode(values[f"{key['prefix']}_PRIVATE_KEY_B64"]).decode()
                     inst_id, repos = installed_repositories(values[f"{key['prefix']}_APP_ID"], pem)
