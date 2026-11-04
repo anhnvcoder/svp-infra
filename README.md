@@ -57,7 +57,7 @@ lychee.toml                   cấu hình lychee của make docs-check (cùng fi
 .tflint.hcl                   ruleset terraform (recommended) và aws ghim version
 .trivyignore.yaml             ngoại lệ của trivy trong module tải từ registry
 renovate.json                 provider, module, ruleset tflint, image ghim của Makefile, action
-.github/workflows/check.yml   PR và push main: make check; check tổng infra-ok; chỉ contents: read, không secret
+.github/workflows/check.yml   PR và push main: make check (bỏ qua khi PR chỉ tài liệu), docs-check; check tổng infra-ok; không secret
 .github/workflows/pr-title.yml  PR: tiêu đề theo Conventional Commits (check pr-title)
 .github/workflows/scorecard.yml push main và lịch tuần: OpenSSF Scorecard, kết quả công khai và lên code scanning
 .github/zizmor.yml            ngoại lệ của zizmor, mỗi mục một lý do (tạo khi có ngoại lệ đầu tiên)
@@ -137,7 +137,9 @@ ngay trên; finding trong module tải từ registry (không comment được) v
 
 **CI** (`.github/workflows/check.yml`): mỗi PR và push `main` chạy đúng `make check` trên `ubuntu-24.04`; job `check` chỉ `contents: read`,
 token của lượt chỉ vào container tflint (giới hạn tải plugin từ GitHub) và container zizmor (audit online, finding thành annotation), không
-secret, không OIDC, không credential AWS; job `infra-ok` là check bắt buộc của ruleset `main`. Chỉ action của GitHub, ghim SHA.
+secret, không OIDC, không credential AWS; job `infra-ok` là check bắt buộc của ruleset `main`. Job `changes` đọc danh sách file của PR
+qua API: PR chỉ đổi tài liệu (`.md`, `docs/`, `LICENSE`, trừ `README.md` của thư mục Terraform mà terraform-docs viết một phần) bỏ qua
+`make check`; job `docs` (`make docs-check`) luôn chạy; đổi `Makefile` hay `check.yml` và push thì chạy hết; `infra-ok` chỉ nhận skip đó. Chỉ action của GitHub, ghim SHA.
 
 **Tiêu đề PR** (`.github/workflows/pr-title.yml`, check `pr-title`): `main` chỉ nhận squash merge, tiêu đề PR thành tiêu đề commit, nên
 tiêu đề theo [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/): `<type>[(<scope>)][!]: <mô tả>`, `type` là một trong
