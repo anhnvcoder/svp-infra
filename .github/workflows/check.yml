@@ -29,7 +29,42 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Whether a pull request changes anything but documentation, so job check skips for a pull request that does not and
+  # infra-ok accepts that skip. Documentation is Markdown, docs/ and LICENSE, but not the README.md of a Terraform
+  # directory (aws/, github/): terraform-docs writes part of it and make check holds it to the code. A change of the
+  # Makefile or of this workflow, and a push, turn the output true: when in doubt, run. The list comes from GitHub's API
+  # for the pull request, not from git, so no history is fetched.
+  changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read
+    outputs:
+      code: ${{ steps.files.outputs.code }}
+    steps:
+      - id: files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          if [ "$EVENT" = pull_request ]; then
+            files=$(gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[].filename')
+          else
+            files=Makefile
+          fi
+          printf '%s\n' "$files"
+          code=false
+          if printf '%s\n' "$files" | grep -v -E -e '^$' -e '^docs/|^LICENSE$|\.md$' | grep -q . ||
+            printf '%s\n' "$files" | grep -q -E '^(aws|github)/.*README\.md$'; then
+            code=true
+          fi
+          echo "code=$code" | tee -a "$GITHUB_OUTPUT"
+
   check:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -50,16 +85,33 @@ jobs:
           ZIZMOR_FORMAT: github
         run: make check
 
-  # The required check: green only when every job above succeeded (a skipped or cancelled job is a failure).
+  # The Markdown lint and internal links of every pull request, documentation only included (make check runs it too).
+  docs:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: make docs-check
+
+  # The required check: green only when every job above succeeded. The one skip accepted is check's on a pull request
+  # job changes found documentation only; any other skip, and a cancelled job, is a failure.
   infra-ok:
     if: always()
-    needs: [check]
+    needs: [changes, check, docs]
     runs-on: ubuntu-24.04
     permissions: {}
     steps:
       - name: All checks passed
         env:
-          RESULT: ${{ needs.check.result }}
+          NEEDS: ${{ toJSON(needs) }}
         run: |
-          echo "check: $RESULT"
-          [ "$RESULT" = success ]
+          jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<< "$NEEDS"
+          jq -e '
+            (.changes.result == "success" and .changes.outputs.code == "false") as $docs_only
+            | length == 3 and all(to_entries[]; .value.result == "success"
+                or (.value.result == "skipped" and .key == "check" and $docs_only))
+          ' <<< "$NEEDS" > /dev/null
