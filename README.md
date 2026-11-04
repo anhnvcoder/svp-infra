@@ -43,6 +43,8 @@ make help                             # liệt kê target
 ```
 
 Dựng, đo và gỡ một env theo runbook [`docs/runbooks/session-stg.md`](docs/runbooks/session-stg.md) (mục [Plan và apply](#plan-và-apply)).
+Cài đặt GitHub của các repo (Terraform `github/`, GitHub App từ manifest, phần provider không quản) theo runbook
+[`docs/runbooks/github-setup.md`](docs/runbooks/github-setup.md); `make github-check` đọc lại phần ngoài Terraform.
 
 ## Bố cục
 
@@ -154,6 +156,7 @@ Actions của repo (`github/`).
 Hai đường vào:
 
 - **Lần đầu mỗi account:** [`aws/bootstrap/README.md`](aws/bootstrap/README.md) (bucket state, budget, hosted zone).
+- **Cài đặt GitHub** (một lần mỗi account, thêm repo hay App): runbook [`docs/runbooks/github-setup.md`](docs/runbooks/github-setup.md).
 - **Mỗi buổi dựng, đo, gỡ một env:** runbook [`docs/runbooks/session-stg.md`](docs/runbooks/session-stg.md). Xem trước toàn bộ lệnh của
   buổi, không chạy gì và không cần credential: `aws/scripts/session.sh --print stg`.
 

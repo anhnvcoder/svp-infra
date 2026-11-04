@@ -31,6 +31,9 @@ giá trị.
 
 ## Không quản, và vì sao
 
+Làm theo thứ tự ở runbook [`docs/runbooks/github-setup.md`](../docs/runbooks/github-setup.md) (GitHub App tạo từ manifest `apps/<tên>.json`
+bằng `make github-app`); `make github-check` đọc lại mọi hàng có API dưới đây.
+
 | Cài đặt | Vì sao không | Kiểm bằng |
 | --- | --- | --- |
 | Secret `SVP_GITOPS_APP_PRIVATE_KEY`, `SVP_WEB_APP_PRIVATE_KEY` (environment `promote`); `SVP_GITOPS_APP_PRIVATE_KEY` của `promote-prd` (khoá riêng thứ hai của App `svp-gitops-promoter`, thu hồi riêng với khoá của stg) | Giá trị của secret trong resource nằm rõ trong state; khoá App đặt tay một lần, đổi khi xoay khoá | Settings → Environments → `promote`, `promote-prd` |

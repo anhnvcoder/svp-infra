@@ -1,0 +1,23 @@
+{
+  "svp-gitops-promoter": {
+    "install_on": ["svp-gitops"],
+    "client_id_tfvar": "svp_gitops_app_client_id",
+    "keys": {
+      "stg": { "type": "environment-secret", "repo": "svp-backend", "environment": "promote", "name": "SVP_GITOPS_APP_PRIVATE_KEY" },
+      "prd": { "type": "environment-secret", "repo": "svp-backend", "environment": "promote-prd", "name": "SVP_GITOPS_APP_PRIVATE_KEY" }
+    }
+  },
+  "svp-web-promoter": {
+    "install_on": ["svp-gitops"],
+    "client_id_tfvar": "svp_web_app_client_id",
+    "keys": {
+      "stg": { "type": "environment-secret", "repo": "svp-frontend", "environment": "promote", "name": "SVP_WEB_APP_PRIVATE_KEY" }
+    }
+  },
+  "svp-argocd-notifier": {
+    "install_on": ["svp-gitops"],
+    "keys": {
+      "local": { "type": "dotenv", "file": "backend/.env", "prefix": "SVP_ARGOCD_NOTIFY" }
+    }
+  }
+}

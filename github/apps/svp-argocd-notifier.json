@@ -1,0 +1,15 @@
+{
+  "name": "svp-argocd-notifier",
+  "url": "https://github.com/anhnvcoder/svp-gitops",
+  "hook_attributes": {
+    "url": "https://github.com/anhnvcoder/svp-gitops",
+    "active": false
+  },
+  "public": false,
+  "request_oauth_on_install": false,
+  "default_permissions": {
+    "statuses": "write",
+    "metadata": "read"
+  },
+  "default_events": []
+}
