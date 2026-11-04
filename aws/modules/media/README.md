@@ -70,6 +70,7 @@ Kiểm ở buổi AWS: `POST /videos/{id}/complete` khi chưa tải file trả 4
 
 Root của env gắn mỗi JSON vào role của Pod Identity association `svp/video-service`, `svp/media-worker`.
 
+<!-- markdownlint-disable MD033 -->
 <!-- BEGIN_TF_DOCS -->
 ## Requirements
 
@@ -129,10 +130,11 @@ Root của env gắn mỗi JSON vào role của Pod Identity association `svp/vi
 | uploads\_bucket | Name of the uploads bucket (the web posts upload forms to https://<name>.s3.<region>.amazonaws.com). |
 | video\_service\_policy\_json | IAM policy of video-service (JSON) for the role of its Pod Identity association. |
 <!-- END_TF_DOCS -->
+<!-- markdownlint-enable MD033 -->
 
 ## Giá trị theo env
 
-| Biến | stg (7a) | prd (7b) |
+| Biến | stg | prd |
 | --- | --- | --- |
 | `name_prefix` | `svp-stg` | `svp-prd` |
 | `account_id` | `var.account_id` của root | `var.account_id` của root |

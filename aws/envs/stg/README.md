@@ -6,7 +6,7 @@ cluster không ở đây: Argo CD triển khai từ `svp-gitops`.
 
 ## Cái gì khác giữa các env
 
-Root prd (7b) là bản sao của thư mục này. Trong code chỉ khác **hai dòng**: `key` của backend (`versions.tf`) và `local.env` (`main.tf`);
+Root prd dựng bằng bản sao của thư mục này. Trong code chỉ khác **hai dòng**: `key` của backend (`versions.tf`) và `local.env` (`main.tf`);
 mọi tên tài nguyên bắt đầu bằng `svp-<env>` (cluster, role IAM, bucket, instance RDS), nên hai root trong một account không đụng tên
 nhau. Cỡ và mức bảo vệ nằm ở `<env>.tfvars`:
 
@@ -21,14 +21,14 @@ nhau. Cỡ và mức bảo vệ nằm ở `<env>.tfvars`:
 chúng là chỗ giá trị cá nhân hay nằm. Tệp cỡ của env cần commit nên mang tên khác và phải truyền bằng `-var-file=stg.tfvars` ở **mọi**
 `plan`, `apply`, `destroy`. Quên thì Terraform dừng ngay ở "No value for required variable" (biến cỡ không có mặc định), không dựng gì sai.
 
-| Biến | stg | prd (7b, hướng) |
+| Biến | stg | prd (hướng) |
 | --- | --- | --- |
 | `az_count`, `single_nat_gateway`, `flow_log_enabled` | `2`, `true`, `false` | `3`, `false`, `true` |
 | `kubernetes_version` | `1.36` | như stg lúc dựng |
-| `eks_endpoint_public_access`, `control_plane_log_types` | `true`, `[]` | chốt ở 7b, `["api", "audit"]` |
-| `node_instance_types`, `node_capacity_type` | `m7g.large`, `m6g.large`, `t4g.large`; `SPOT` | đo ở 7b; `ON_DEMAND` |
-| `node_min_size` / `desired` / `max` | `3` / `3` / `5` | đo ở 7b |
-| `rds_instance_class`, `rds_multi_az` | `db.t4g.small`, `false` | đo ở 7b, `true` |
+| `eks_endpoint_public_access`, `control_plane_log_types` | `true`, `[]` | chốt khi dựng prd, `["api", "audit"]` |
+| `node_instance_types`, `node_capacity_type` | `m7g.large`, `m6g.large`, `t4g.large`; `SPOT` | theo số đo khi dựng prd; `ON_DEMAND` |
+| `node_min_size` / `desired` / `max` | `3` / `3` / `5` | theo số đo khi dựng prd |
+| `rds_instance_class`, `rds_multi_az` | `db.t4g.small`, `false` | theo số đo khi dựng prd, `true` |
 | `rds_backup_retention_period`, `rds_delete_automated_backups` | `1`, `true` | ≥ 7, `false` |
 | `rds_deletion_protection`, `rds_skip_final_snapshot` | `false`, `true` | `true`, `false` |
 | `media_force_destroy`, `media_price_class` | `true`, `PriceClass_200` | `false`, `PriceClass_200` |

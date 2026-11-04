@@ -22,6 +22,7 @@ module "eks" {
 }
 ```
 
+<!-- markdownlint-disable MD033 -->
 <!-- BEGIN_TF_DOCS -->
 ## Requirements
 
@@ -93,22 +94,23 @@ module "eks" {
 | cluster\_service\_cidr | IPv4 range of Kubernetes Services, chosen by EKS when the cluster is created; the API server's Service takes its first address. |
 | node\_security\_group\_id | Security group of every node and, with the VPC CNI, of every pod: the source a database security group lets in. |
 <!-- END_TF_DOCS -->
+<!-- markdownlint-enable MD033 -->
 
 ## Giá trị theo env
 
-| Biến | stg (7a) | prd (7b) |
+| Biến | stg | prd |
 | --- | --- | --- |
 | `name` | `svp-stg` | `svp-prd` |
 | `kubernetes_version` | `1.36` | như stg lúc dựng |
 | `vpc_id` | output `vpc_id` của `network` | như stg |
 | `private_subnet_ids` | 2 subnet private | 3 subnet private |
-| `endpoint_public_access` | `true` | `true` hay `false` (chốt ở 7b) |
+| `endpoint_public_access` | `true` | `true` hay `false` (chốt khi dựng prd) |
 | `endpoint_public_access_cidrs` | CIDR của người học (`/32`) | CIDR của người học hay `[]` |
 | `control_plane_log_types` | `[]` (tắt) | `["api", "audit"]` |
-| `control_plane_log_retention_days` | (không dùng) | chốt ở 7b |
-| `node_instance_types` | mặc định | đo ở 7b |
+| `control_plane_log_retention_days` | (không dùng) | chốt khi dựng prd |
+| `node_instance_types` | mặc định | theo số đo khi dựng prd |
 | `node_capacity_type` | `SPOT` | `ON_DEMAND` |
-| `node_min_size` / `node_desired_size` / `node_max_size` | `3` / `3` / `5` | đo ở 7b |
+| `node_min_size` / `node_desired_size` / `node_max_size` | `3` / `3` / `5` | theo số đo khi dựng prd |
 | `hosted_zone_id` | zone `aws.<domain>` của `aws/bootstrap` | như stg |
 
 Endpoint public mặc định tắt để module an toàn khi gọi thiếu biến; root của stg bật và đưa CIDR. **Vì sao private luôn bật:** giới hạn
@@ -194,7 +196,7 @@ Với VPC CNI, pod mang IP phụ của ENI node, nên security group node lọc 
 | cluster → node | **TCP 10251** | **metrics-server của addon EKS** (API server gọi nó cho API `metrics.k8s.io`) |
 | cluster → node | TCP 4443 | metrics-server bản cũ |
 | cluster → node | TCP 6443 | API metrics của KEDA |
-| cluster → node | TCP 8443 | webhook của Karpenter (7b) |
+| cluster → node | TCP 8443 | webhook của Karpenter |
 | cluster → node | TCP 9443 | webhook của LBC, Kyverno, KEDA |
 | node ↔ node | TCP/UDP 53, TCP 1025–65535 | CoreDNS, pod tới pod |
 | node → mọi nơi | tất cả | kéo image qua NAT, gọi API AWS (finding trivy `AWS-0104` bỏ qua có lý do ở `cluster.tf`) |
@@ -212,7 +214,7 @@ tìm phần sót theo tag:
 | NLB, listener, target group | LBC (Service `LoadBalancer` của Envoy) | `elbv2.k8s.aws/cluster=<name>`, `service.k8s.aws/stack=<namespace>/<service>`, `service.k8s.aws/resource` |
 | Security group frontend, backend của NLB; rule LBC thêm vào security group node | LBC | `elbv2.k8s.aws/cluster=<name>`, `elbv2.k8s.aws/resource` (rule nằm trong security group node: đi cùng nó khi destroy, nhưng security group backend còn được tham chiếu thì không xoá được) |
 | Volume EBS của PVC | EBS CSI (StorageClass `gp3`) | `Project=svp` (`extraVolumeTags`), `ebs.csi.aws.com/cluster=true`, `kubernetes.io/created-for/pvc/name`, `…/namespace`, `kubernetes.io/created-for/pv/name` |
-| Snapshot EBS | EBS CSI, Velero (7b) | như volume |
+| Snapshot EBS | EBS CSI, Velero | như volume |
 | ENI của VPC CNI | `aws-node` trên mỗi node | `cluster.k8s.amazonaws.com/name=<name>`, `node.k8s.amazonaws.com/instance_id`; mô tả `aws-K8S-…`; tìm theo VPC id; tự gỡ khi node xoá, sót thì chặn xoá subnet |
 | Instance, ổ gốc, ENI chính của node | Auto Scaling group của node group (trong state qua node group) | `Project=svp`, `eks:cluster-name=<name>`, `eks:nodegroup-name`, `kubernetes.io/cluster/<name>=owned` |
 | Log group `/aws/eks/<name>/cluster` | EKS khi bật log control plane | module tạo trước (trong state) khi `control_plane_log_types` khác rỗng; sót nếu bật log ngoài Terraform: tìm theo tên |

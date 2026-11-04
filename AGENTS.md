@@ -8,7 +8,7 @@ quyết định chung của lab nằm ở `docs/` của repo code (bản clone `
 
 ## An toàn cloud
 
-- **AI chỉ chạy:** `make check` (và từng target của nó: `fmt-check`, `validate`, `tflint`, `tfdocs-check`, `trivy`, `shellcheck`, `zizmor`,
+- **AI chỉ chạy:** `make check` (và từng target của nó: `fmt-check`, `validate`, `tflint`, `tfdocs-check`, `trivy`, `shellcheck`, `zizmor`, `docs-check`,
   `session-test`, `test-guard`, `test`), `make fmt`,
   `make tfdocs` (terraform-docs, chỉ đọc `.tf`), `make lock`, tức `terraform fmt`, `terraform init -backend=false`, `terraform validate`, `terraform providers lock`; `bash -n`,
   test script với lệnh giả trên PATH; `aws --version`.

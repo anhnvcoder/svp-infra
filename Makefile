@@ -34,6 +34,11 @@ SHELLCHECK_IMAGE := koalaman/shellcheck:v0.11.0@sha256:61862eba1fcf09a484ebcc6fe
 # Same pin as ZIZMOR_IMAGE of the code repository's Makefile.
 # renovate: datasource=docker depName=ghcr.io/zizmorcore/zizmor
 ZIZMOR_IMAGE     := ghcr.io/zizmorcore/zizmor:1.31.1@sha256:42d409dbb851d4c5d35a058cf042b828bea1e3f2884378c526eb0974780e18d9
+# Same pins as MARKDOWNLINT_IMAGE and LYCHEE_IMAGE of the code repository's Makefile.
+# renovate: datasource=docker depName=davidanson/markdownlint-cli2
+MARKDOWNLINT_IMAGE := davidanson/markdownlint-cli2:v0.24.0@sha256:70ead7c0352d22d04bbe612cd96b54ec591538d8f4626cafe391bb2ecf3639ca
+# renovate: datasource=docker depName=lycheeverse/lychee
+LYCHEE_IMAGE     := lycheeverse/lychee:0.24.2@sha256:e2d19e57cf6ab037026f20b8e449a1f30d9d7f81eef4194763aab2eab20bd28d
 
 # Platforms whose provider hashes `make lock` writes into the lock file of a root: the Mac that runs plan and apply,
 # and the two Linux architectures of CI and of the images.
@@ -72,12 +77,12 @@ IS_MODULE = case "/$$d/" in (*/modules/*) true;; (*) false;; esac
 
 .DEFAULT_GOAL := help
 
-.PHONY: help check fmt-check fmt validate tflint tfdocs tfdocs-check trivy shellcheck zizmor session-test test-guard test lock
+.PHONY: help check fmt-check fmt validate tflint tfdocs tfdocs-check trivy shellcheck zizmor docs-check session-test test-guard test lock
 
 help: ## List the targets
 	@grep -hE '^[a-zA-Z0-9_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-11s %s\n", $$1, $$2}'
 
-check: fmt-check validate tflint tfdocs-check trivy shellcheck zizmor session-test test-guard test ## Every static check (narrow the Terraform ones with DIRS=<dir> ...)
+check: fmt-check validate tflint tfdocs-check trivy shellcheck zizmor docs-check session-test test-guard test ## Every static check (narrow the Terraform ones with DIRS=<dir> ...)
 
 fmt-check: ## terraform fmt -check on the checked directories
 	@dirs=$$($(LIST_DIRS)) || exit 1; [ -n "$$dirs" ] || { echo "fmt-check: no Terraform directory"; exit 0; }; \
@@ -166,6 +171,26 @@ zizmor: ## Security lint of the workflows with the pinned zizmor (online audits 
 	if [ -n "$${GH_TOKEN:-}" ]; then net="--env=GH_TOKEN"; else net="--env=ZIZMOR_OFFLINE=true --network=none"; fi; \
 	$(DOCKER) $$net -v "$(CURDIR):/src:ro" -w /src $(ZIZMOR_IMAGE) --persona=regular --no-progress --color=never \
 	  --cache-dir /tmp/zizmor --format='$(ZIZMOR_FORMAT)' . || { echo "FAIL: zizmor" >&2; exit 1; }
+
+# Static check of the Markdown: markdownlint-cli2 with .markdownlint.yaml (style), then lychee --offline --include-fragments
+# (relative links and heading anchors; links to other sites are not followed: the network is not stable and a check that
+# depends on it fails for reasons outside the change), both without network, the repository mounted read-only at /repo:
+# a relative link that leaves the repository is an error on purpose. DOCS narrows the files (paths or globs, relative to
+# the repository); the default is every Markdown file git tracks plus the new ones it does not track yet, except under
+# .claude/: that is configuration of a coding agent (the skill that draws the AWS diagrams), whose files follow the
+# agent's own format, not documentation of the repository. Both tools always run; the exit code is not 0 when either
+# reports a problem.
+# set -f keeps the globs of DOCS whole: the tools expand them (with **), sh does not and would drop the files at the top.
+DOCS ?=
+docs-check: ## markdownlint-cli2 + lychee --offline on the Markdown (DOCS='<files or globs>' narrows; no network)
+	@if [ -n '$(DOCS)' ]; then set -f; set -- $(DOCS); set +f; \
+	else set --; for f in $$(git ls-files --cached --others --exclude-standard -- '*.md' ':!:.claude/'); do [ -f "$$f" ] && set -- "$$@" "$$f"; done; fi; \
+	echo "docs-check $$# files"; \
+	rc=0; \
+	$(DOCKER) --network none -v "$(CURDIR):/repo:ro" -w /repo $(MARKDOWNLINT_IMAGE) "$$@" || rc=1; \
+	$(DOCKER) --network none -v "$(CURDIR):/repo:ro" -w /repo $(LYCHEE_IMAGE) --offline --include-fragments "$$@" || rc=1; \
+	[ $$rc = 0 ] || echo "FAIL: docs-check" >&2; \
+	exit $$rc
 
 # The session scripts reach the AWS account and the cluster when the learner runs them; their self-test puts fake aws,
 # kubectl, helm, terraform, make and dig first on PATH, so it reaches nothing. Only its FAIL lines are printed.

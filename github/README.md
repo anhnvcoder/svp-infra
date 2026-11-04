@@ -19,7 +19,7 @@ Root này không có provider AWS: luật `default_tags`, `allowed_account_ids` 
 | `repositories.tf` | `github_repository_vulnerability_alerts.off`: tắt (như GitHub để mặc định), ngoại lệ trivy `GIT-0003` riêng resource này | repo trong `local.vulnerability_alerts_off` |
 | `repositories.tf` | `github_actions_repository_permissions`: Actions bật, action được phép (của GitHub + danh sách pattern, `ossf/scorecard-action@*` ở bốn repo có CI), ghim SHA bắt buộc; `prevent_destroy` (destroy đưa repo về cho mọi action) | mọi repo trong `local.repositories` |
 | `repositories.tf` | `github_workflow_repository_permissions`: `GITHUB_TOKEN` mặc định chỉ đọc, không "create and approve pull requests" | mọi repo trong `local.repositories` |
-| `rulesets.tf` | `github_repository_ruleset` `main` (cấm xoá, force push, lịch sử thẳng, PR chỉ squash, 0 approval; check bắt buộc kèm `integration_id` 15368 của app GitHub Actions: `ci-ok`, `images-ok` ở backend, frontend, `gitops-ok`, `infra-ok`; `svp-labs`, `.github` không check) | mọi repo trong `local.repositories` |
+| `rulesets.tf` | `github_repository_ruleset` `main` (cấm xoá, force push, lịch sử thẳng, PR chỉ squash, 0 approval; check bắt buộc kèm `integration_id` 15368 của app GitHub Actions: `ci-ok`, `images-ok` ở backend, frontend, `gitops-ok`, `infra-ok`, `docs` ở `svp-labs`, `.github`) | mọi repo trong `local.repositories` |
 | `rulesets.tf` | `github_repository_ruleset` `owners` (đòi duyệt Code Owner, vai admin bypass chỉ trong PR) | `svp-backend`, `svp-frontend`, `svp-gitops`, `svp-infra` |
 | `rulesets.tf` | `github_repository_ruleset.gitops_tags`: chỉ admin tạo, đổi, xoá tag | `svp-gitops` |
 | `environments.tf` | `github_repository_environment` `promote` (luật nhánh tuỳ chọn; `prevent_destroy`: xoá environment là xoá luôn secret khoá App), `github_repository_environment_deployment_policy` (chỉ `main`), biến `SVP_GITOPS_APP_CLIENT_ID` / `SVP_WEB_APP_CLIENT_ID` | `svp-backend`, `svp-frontend` |
@@ -42,7 +42,6 @@ giá trị.
 | Nhánh mặc định (`github_branch_default`) | Push đầu đặt nó; mọi repo trong `local.repositories` đang là `main` | `gh api repos/anhnvcoder/<repo> -q .default_branch` |
 | `require_extra_approval_for_unattributed_changes` của luật `pull_request` | Provider không có trường này (không đọc, không gửi); GitHub đang để `true` ở mọi ruleset có luật này (mặc định). Sau một `apply` sửa ruleset, đọc lại trường này | `gh api repos/anhnvcoder/<repo>/rulesets/<id> -q '.rules[] \| select(.type=="pull_request") \| .parameters'` |
 | Dependabot security updates | Đang tắt ở mọi repo trong `local.repositories`, không ai bật; Renovate nâng dependency | `gh api repos/anhnvcoder/<repo> -q .security_and_analysis` |
-| Check bắt buộc ở ruleset `main` của `svp-labs`, `.github` | Hai repo không có CI nên không có check nào để đòi; ruleset của chúng chỉ cấm xoá, force push, đòi PR và lịch sử thẳng | `gh api repos/anhnvcoder/<repo>/rulesets` |
 
 ## Khác runbook (mã hoá đúng như đang chạy)
 
@@ -97,7 +96,8 @@ rm github.tfplan                                        # plan chứa giá trị
 **Account mới hay state mới:** repo đã có trên GitHub phải nhận quản trước theo mục "Nhận quản repo đã có" (không thì `plan` đòi tạo
 lại mọi repo và `apply` lỗi ở repo đầu tiên). Sau đó `apply` tạo `github_repository_ruleset.infra_main`. Chỉ `apply` nó sau khi `svp-infra` có nhánh mặc định `main` và lượt
 `check.yml` đầu xanh trên `main` (B1 của runbook `svp-infra-setup.md`): ruleset nhắm `~DEFAULT_BRANCH` và đòi check `infra-ok`, check chưa
-chạy lần nào thì mọi PR đứng chờ.
+chạy lần nào thì mọi PR đứng chờ. Cùng lý do, `labs_main` và `dotgithub_main` đòi check `docs` (job `docs` của `.github/workflows/docs.yml`,
+chạy `make docs-check`): chỉ `apply` chúng sau khi `docs.yml` đã ở `main` của `svp-labs`, `.github` và đã chạy xanh ở đó.
 
 ## Thay đổi thường gặp
 
