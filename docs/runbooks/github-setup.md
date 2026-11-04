@@ -5,7 +5,7 @@ Terraform `github/` lo phần có resource; phần provider không quản (bản
 theo thứ tự dưới đây. Mỗi bước có lệnh kiểm; cuối cùng `make github-check` đọc lại tất cả.
 
 **Người giữ account chạy mọi lệnh ở đây**, từ gốc repo này (`infra/`), với `gh` đăng nhập tài khoản admin của mọi repo (scope `repo`,
-`gh auth status`). AI không chạy lệnh ghi nào; AI chạy được `make github-check` (chỉ đọc, không đọc `.env`) và `make github-app-test`.
+`gh auth status`). AI không chạy lệnh ghi nào; AI chạy được `make github-check` (chỉ đọc, không mở `backend/.env`; phần đó chỉ chạy với `WITH_APP_KEYS=1`) và `make github-app-test`.
 Không dán khoá hay token vào đâu cả: script ghi khoá thẳng vào nơi dùng nó và không in ra.
 
 ## GitHub App
