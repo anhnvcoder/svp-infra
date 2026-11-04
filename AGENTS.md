@@ -8,7 +8,7 @@ quyết định chung của lab nằm ở `docs/` của repo code (bản clone `
 
 ## An toàn cloud
 
-- **AI chỉ chạy:** `make check` (và từng target của nó: `fmt-check`, `validate`, `tflint`, `trivy`, `shellcheck`), `make fmt`,
+- **AI chỉ chạy:** `make check` (và từng target của nó: `fmt-check`, `validate`, `tflint`, `trivy`, `shellcheck`, `zizmor`), `make fmt`,
   `make lock`, tức `terraform fmt`, `terraform init -backend=false`, `terraform validate`, `terraform providers lock`; `bash -n`,
   test script với lệnh giả trên PATH; `aws --version`.
 - **AI không chạy lệnh nào chạm account AWS, kể cả chỉ đọc:** `terraform init` có backend, `plan`, `apply`, `destroy`, `import`,
@@ -38,4 +38,10 @@ Quy ước chung (ngôn ngữ, tài liệu timeless, ADR, comment, Git, repo pub
   module registry vào `.trivyignore.yaml`. Sửa được thì sửa.
 - **Docker** chỉ qua `Makefile` (`env -u DOCKER_DEFAULT_PLATFORM docker run …`, image ghim digest có dòng `# renovate:` ngay trên).
 - **Card chạy song song** kiểm bằng `make check DIRS=<thư mục của mình>`: mỗi lượt chỉ ghi dưới thư mục đó, không có cache dùng chung.
-- **Git:** mọi thay đổi vào `main` qua PR có `infra-ok` xanh (từ khi bật ruleset).
+- **Git:** mọi thay đổi vào `main` qua PR có `infra-ok` xanh (từ khi bật ruleset), squash merge.
+- **Tiêu đề PR** thành tiêu đề commit squash, theo Conventional Commits: `<type>[(<scope>)][!]: <mô tả>`, `type` là một trong
+  `feat fix chore docs refactor test ci build perf revert`, hoặc `Revert "<tiêu đề>"`; check `pr-title` (`.github/workflows/pr-title.yml`)
+  chặn tiêu đề sai. Đổi regex thì đổi cùng bộ thử ở cả bốn repo có CI.
+- **Đường có chủ** (`CODEOWNERS`): `CODEOWNERS`, `.github/`, `renovate.json`, `Makefile`, `.trivyignore.yaml`, `github/`, `aws/`; PR đổi
+  chúng cần Code Owner duyệt.
+- **Workflow:** mọi workflow qua `make zizmor` sạch; ngoại lệ có chủ đích vào `.github/zizmor.yml`, mỗi mục một comment lý do.

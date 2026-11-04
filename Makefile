@@ -9,8 +9,9 @@
 # Parallel runs: `make check DIRS=<dir>` writes only below <dir> (.terraform/tflint.d with the tflint plugins, and the
 # .terraform.lock.hcl of a module); init and validate keep providers and modules in a temporary directory that nothing
 # else shares and the recipe removes, so a .terraform/ the learner made with a backend is never read or written; trivy's
-# cache stays inside its container, and session-test writes only in a temporary directory of its own, which it removes.
-# No plugin cache is shared between directories, so two runs on two different directories never write the same file.
+# and zizmor's caches stay inside their containers, and session-test writes only in a temporary directory of its own,
+# which it removes. No plugin cache is shared between directories, so two runs on two different directories never write
+# the same file.
 
 # renovate: datasource=docker depName=hashicorp/terraform
 TERRAFORM_IMAGE  := hashicorp/terraform:1.15.8@sha256:7ae513256f7ce67879e218ae8593d6fbe216ec9e123abe6c94e4e10704857963
@@ -21,6 +22,9 @@ TFLINT_IMAGE     := ghcr.io/terraform-linters/tflint:v0.65.0@sha256:2788f4d4fc66
 TRIVY_IMAGE      := ghcr.io/aquasecurity/trivy:0.76.0@sha256:2416d1f74045b57274df1a340eee6b510cacd73c66a6ccb8da092b117eb7d222
 # renovate: datasource=docker depName=koalaman/shellcheck
 SHELLCHECK_IMAGE := koalaman/shellcheck:v0.11.0@sha256:61862eba1fcf09a484ebcc6feea46f1782532571a34ed51fedf90dd25f925a8d
+# Same pin as ZIZMOR_IMAGE of the code repository's Makefile.
+# renovate: datasource=docker depName=ghcr.io/zizmorcore/zizmor
+ZIZMOR_IMAGE     := ghcr.io/zizmorcore/zizmor:1.31.1@sha256:42d409dbb851d4c5d35a058cf042b828bea1e3f2884378c526eb0974780e18d9
 
 # Platforms whose provider hashes `make lock` writes into the lock file of a root: the Mac that runs plan and apply,
 # and the two Linux architectures of CI and of the images.
@@ -59,12 +63,12 @@ IS_MODULE = case "/$$d/" in (*/modules/*) true;; (*) false;; esac
 
 .DEFAULT_GOAL := help
 
-.PHONY: help check fmt-check fmt validate tflint trivy shellcheck session-test lock
+.PHONY: help check fmt-check fmt validate tflint trivy shellcheck zizmor session-test lock
 
 help: ## List the targets
 	@grep -hE '^[a-zA-Z0-9_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-11s %s\n", $$1, $$2}'
 
-check: fmt-check validate tflint trivy shellcheck session-test ## Every static check (narrow the Terraform ones with DIRS=<dir> ...)
+check: fmt-check validate tflint trivy shellcheck zizmor session-test ## Every static check (narrow the Terraform ones with DIRS=<dir> ...)
 
 fmt-check: ## terraform fmt -check on the checked directories
 	@dirs=$$($(LIST_DIRS)) || exit 1; [ -n "$$dirs" ] || { echo "fmt-check: no Terraform directory"; exit 0; }; \
@@ -122,6 +126,18 @@ shellcheck: ## shellcheck on every *.sh of the repository
 	[ -n "$$files" ] || { echo "shellcheck: no shell script"; exit 0; }; \
 	echo "shellcheck $$(echo $$files | wc -w | tr -d ' ') files"; \
 	env -u DOCKER_DEFAULT_PLATFORM docker run --rm --network none -v "$(CURDIR):/mnt:ro" -w /mnt $(SHELLCHECK_IMAGE) $$files
+
+# Security lint of the workflows: zizmor with the regular persona on the whole repository, the repository mounted
+# read-only. Every finding fails (exit codes 11 to 14); the deliberate ones are left out in .github/zizmor.yml, each with
+# its reason. With GH_TOKEN set (CI passes the job's read-only token) the online audits run too (impostor commits,
+# actions with known vulnerabilities); without it, offline audits only. ZIZMOR_FORMAT=github writes workflow commands
+# (annotations in CI).
+ZIZMOR_FORMAT ?= plain
+zizmor: ## Security lint of the workflows with the pinned zizmor (online audits with GH_TOKEN; ZIZMOR_FORMAT=github)
+	@echo "zizmor .github"; \
+	if [ -n "$${GH_TOKEN:-}" ]; then net="--env=GH_TOKEN"; else net="--env=ZIZMOR_OFFLINE=true --network=none"; fi; \
+	$(DOCKER) $$net -v "$(CURDIR):/src:ro" -w /src $(ZIZMOR_IMAGE) --persona=regular --no-progress --color=never \
+	  --cache-dir /tmp/zizmor --format='$(ZIZMOR_FORMAT)' . || { echo "FAIL: zizmor" >&2; exit 1; }
 
 # The session scripts reach the AWS account and the cluster when the learner runs them; their self-test puts fake aws,
 # kubectl, helm, terraform, make and dig first on PATH, so it reaches nothing. Only its FAIL lines are printed.
