@@ -5,6 +5,12 @@ Module nội bộ mỏng bọc [`terraform-aws-modules/vpc/aws`](https://registr
 theo `single_nat_gateway`, S3 gateway endpoint trên mọi route table private, security group mặc định không rule nào, flow log tắt mặc
 định. Mức stg và prd chỉ khác ở biến (bảng dưới), một bộ code.
 
+Policy của S3 gateway endpoint: mặc định không có (endpoint cho qua mọi bucket IAM cho phép). `s3_endpoint_restricted = true` (mức prd) đặt
+policy chỉ cho qua các bucket trong `s3_endpoint_buckets` (bucket `uploads`, `media` của env, root truyền từ output của module `media`) và
+`s3:GetObject` trên bucket layer image của Amazon ECR trong region (`prod-<region>-starport-layer-bucket`). Route của endpoint nhận mọi địa
+chỉ S3 của region, nên từ subnet private mọi bucket khác của region bị từ chối: credential bị lộ không chép dữ liệu ra bucket của account
+khác được; image nào kéo blob từ bucket S3 khác trong cùng region cũng bị chặn.
+
 Không có provider nào trong module: root gọi nó (`aws/envs/<env>`) đặt provider, `default_tags` (`Project=svp`, `ManagedBy=terraform`,
 `Stack=<env>`) và ghim version provider trong lock file. Module không cấp quyền IAM nào cho pod.
 
@@ -46,6 +52,7 @@ module "network" {
 | ---- | ---- |
 | [aws_vpc_endpoint.s3](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/vpc_endpoint) | resource |
 | [aws_availability_zones.available](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/availability_zones) | data source |
+| [aws_partition.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/partition) | data source |
 | [aws_region.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/region) | data source |
 
 ## Inputs
@@ -58,6 +65,8 @@ module "network" {
 | flow\_log\_enabled | Send VPC flow logs (accepted and rejected traffic) to a CloudWatch log group that this module creates, with the IAM role that writes it. Off by default: ingestion is billed per GB. | `bool` | `false` | no |
 | flow\_log\_retention\_days | Days CloudWatch keeps the flow logs when flow\_log\_enabled is true. | `number` | `1` | no |
 | name | Name of the VPC and prefix of the names of its subnets, route tables, NAT gateways and Elastic IPs, e.g. svp-stg. | `string` | n/a | yes |
+| s3\_endpoint\_buckets | Names of the buckets of the env (uploads and media) reachable through the S3 gateway endpoint when s3\_endpoint\_restricted is true. | `list(string)` | `[]` | no |
+| s3\_endpoint\_restricted | Put a policy on the S3 gateway endpoint that lets through only the buckets of s3\_endpoint\_buckets and the image layer bucket of Amazon ECR in the region; every other bucket of the region is then unreachable from the private subnets. Off by default: the endpoint lets through every bucket IAM allows. | `bool` | `false` | no |
 | single\_nat\_gateway | true: one NAT gateway, in the first zone, for every private subnet (cheaper; losing that zone cuts the egress of the whole VPC). false: one NAT gateway per zone and one private route table per zone that sends its traffic to the NAT gateway of the same zone. | `bool` | `true` | no |
 
 ## Outputs

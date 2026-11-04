@@ -7,17 +7,31 @@ locals {
   tags = {
     Project = "svp"
   }
+
+  # Arguments of the module call below that guard the API and Secrets. The cluster and its key are made inside the
+  # registry module, whose outputs show none of them during a plan, so they are set here, where the tests read them.
+  guards = {
+    endpoint_private_access      = true
+    endpoint_public_access       = var.endpoint_public_access
+    endpoint_public_access_cidrs = var.endpoint_public_access ? var.endpoint_public_access_cidrs : []
+    create_kms_key               = var.secrets_kms_encryption
+    encryption_config            = var.secrets_kms_encryption ? { resources = ["secrets"] } : null
+  }
 }
 
 # Findings of trivy inside the registry module, each a deliberate choice:
-# - AWS-0039: no customer managed key for Secrets; EKS encrypts the Kubernetes API data, Secrets included, with an
-#   AWS owned key by default (see create_kms_key below).
-#   Scope: stg only; prd: envelope encryption of Secrets with a customer managed KMS key (a module variable for
-#   create_kms_key and encryption_config, set in the prd root), so reading Secrets also needs kms:Decrypt on that key.
+# - AWS-0039: no customer managed key for Secrets while secrets_kms_encryption is false; EKS then encrypts the
+#   Kubernetes API data, Secrets included, with an AWS owned key. The exception holds only for that value
+#   (create_kms_key=false): with the key on, the finding is cleared and nothing is ignored. trivy (0.76) matches this
+#   condition when it scans this module, but not when it reaches the module from a root (a condition on a bool or a
+#   number never matches there, one on a string does), so the root of an env that keeps the key off repeats the
+#   exception, without condition, on its call of this module.
+#   Scope: stg only; prd: secrets_kms_encryption = true, envelope encryption of Secrets with a customer managed KMS
+#   key, so reading Secrets also needs kms:Decrypt on that key.
 # - AWS-0104: the node security group allows all egress. Nodes pull images from public registries through the NAT
 #   gateway and pods call AWS APIs; egress per pod is narrowed by the NetworkPolicies of the charts.
 #   Scope: every environment.
-#trivy:ignore:AWS-0039
+#trivy:ignore:AWS-0039[create_kms_key=false]
 #trivy:ignore:AWS-0104
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
@@ -31,9 +45,9 @@ module "eks" {
 
   # The private endpoint stays on: with the public endpoint limited to a few addresses, nodes in private subnets would
   # otherwise reach the API through the NAT gateway's address, which is not on the list, and never join.
-  endpoint_private_access      = true
-  endpoint_public_access       = var.endpoint_public_access
-  endpoint_public_access_cidrs = var.endpoint_public_access ? var.endpoint_public_access_cidrs : []
+  endpoint_private_access      = local.guards.endpoint_private_access
+  endpoint_public_access       = local.guards.endpoint_public_access
+  endpoint_public_access_cidrs = local.guards.endpoint_public_access_cidrs
 
   # Access entries only (no aws-auth ConfigMap); the identity that runs apply gets cluster admin through an access
   # entry, so no ARN is written anywhere.
@@ -43,10 +57,15 @@ module "eks" {
   # Pods get AWS credentials through EKS Pod Identity, which needs no OIDC provider.
   enable_irsa = false
 
-  # No customer managed KMS key ($1 a month each, and it outlives the cluster for the deletion window): EKS encrypts
-  # the Kubernetes API data, Secrets included, with an AWS owned key by default.
-  create_kms_key    = false
-  encryption_config = null
+  # Off: no customer managed KMS key ($1 a month each, and it outlives the cluster for the deletion window); EKS
+  # encrypts the Kubernetes API data, Secrets included, with an AWS owned key. On: the registry module creates a key
+  # with its default key policy (the account, the identity that runs apply as administrator, the cluster role as
+  # user) and envelope-encrypts Secrets with it. The shortest deletion window AWS allows, 7 days, and an alias that
+  # starts with the cluster name, so the session sweep tells a key pending deletion of this env apart.
+  create_kms_key                  = local.guards.create_kms_key
+  encryption_config               = local.guards.encryption_config
+  kms_key_deletion_window_in_days = 7
+  kms_key_aliases                 = ["${var.name}-eks-secrets"]
 
   enabled_log_types                      = var.control_plane_log_types
   create_cloudwatch_log_group            = length(var.control_plane_log_types) > 0

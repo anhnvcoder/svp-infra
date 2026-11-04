@@ -55,6 +55,87 @@ run "valid" {
   }
 }
 
+# The defaults keep what the module did before secrets_kms_encryption existed: no customer managed key, the public
+# endpoint off, no control plane log group, Spot nodes. The cluster and the key are made inside the registry module,
+# whose outputs show neither during a plan, so the runs below read the arguments this module passes it
+# (local.guards, local.eks_managed_node_groups).
+run "defaults" {
+  command = plan
+
+  assert {
+    condition     = local.guards.create_kms_key == false && local.guards.encryption_config == null && module.eks.kms_key_arn == null
+    error_message = "By default the module must create no KMS key for Secrets."
+  }
+
+  assert {
+    condition     = local.guards.endpoint_private_access == true && local.guards.endpoint_public_access == false && length(local.guards.endpoint_public_access_cidrs) == 0
+    error_message = "By default the API must be reachable through its private endpoint only."
+  }
+
+  assert {
+    condition     = module.eks.cloudwatch_log_group_name == null
+    error_message = "By default the module must create no control plane log group."
+  }
+
+  assert {
+    condition     = local.eks_managed_node_groups.default.capacity_type == "SPOT"
+    error_message = "By default the nodes must stay Spot."
+  }
+}
+
+run "secrets_kms_encryption_on" {
+  command = plan
+
+  variables {
+    secrets_kms_encryption = true
+  }
+
+  assert {
+    condition     = local.guards.create_kms_key == true && local.guards.encryption_config.resources == ["secrets"]
+    error_message = "secrets_kms_encryption = true must have the registry module create a key and envelope-encrypt Secrets with it."
+  }
+}
+
+# Values of the prd root: public endpoint off with no range at all, control plane logs, Secrets under a key of the
+# env, On-Demand nodes over three zones.
+run "prd_values" {
+  command = plan
+
+  variables {
+    name                             = "svp-prd"
+    private_subnet_ids               = ["subnet-0aaaaaaaaaaaaaaa1", "subnet-0bbbbbbbbbbbbbbb2", "subnet-0ccccccccccccccc3"]
+    endpoint_public_access           = false
+    control_plane_log_types          = ["api", "audit", "authenticator"]
+    control_plane_log_retention_days = 30
+    secrets_kms_encryption           = true
+    node_instance_types              = ["m7g.large", "m6g.large"]
+    node_capacity_type               = "ON_DEMAND"
+    node_min_size                    = 3
+    node_desired_size                = 3
+    node_max_size                    = 6
+  }
+
+  assert {
+    condition     = local.guards.endpoint_private_access == true && local.guards.endpoint_public_access == false && length(local.guards.endpoint_public_access_cidrs) == 0
+    error_message = "prd must reach the API through its private endpoint only, with no public range."
+  }
+
+  assert {
+    condition     = local.guards.create_kms_key == true && local.guards.encryption_config.resources == ["secrets"]
+    error_message = "prd must envelope-encrypt Secrets with a customer managed key of the env."
+  }
+
+  assert {
+    condition     = module.eks.cloudwatch_log_group_name == "/aws/eks/svp-prd/cluster"
+    error_message = "prd must send its control plane logs to the log group of the cluster."
+  }
+
+  assert {
+    condition     = local.eks_managed_node_groups.default.capacity_type == "ON_DEMAND" && local.eks_managed_node_groups.default.min_size == 3 && local.eks_managed_node_groups.default.desired_size == 3 && local.eks_managed_node_groups.default.max_size == 6
+    error_message = "prd must run at least three On-Demand nodes."
+  }
+}
+
 run "name_uppercase" {
   command = plan
 

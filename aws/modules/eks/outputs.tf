@@ -8,6 +8,11 @@ output "cluster_endpoint" {
   value       = module.eks.cluster_endpoint
 }
 
+output "cluster_certificate_authority_data" {
+  description = "Certificate authority of the Kubernetes API server, base64-encoded PEM: cluster.certificate-authority-data of a kubeconfig, cluster_ca_certificate (after base64decode) of the helm and kubernetes providers."
+  value       = module.eks.cluster_certificate_authority_data
+}
+
 output "cluster_service_cidr" {
   description = "IPv4 range of Kubernetes Services, chosen by EKS when the cluster is created; the API server's Service takes its first address."
   value       = module.eks.cluster_service_cidr

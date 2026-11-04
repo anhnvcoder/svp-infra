@@ -58,3 +58,26 @@ variable "price_class" {
     error_message = "price_class must be PriceClass_100, PriceClass_200 or PriceClass_All."
   }
 }
+
+variable "versioning_enabled" {
+  description = "Keep earlier versions of overwritten and deleted objects in both buckets, each for 30 days after it was replaced (a lifecycle rule then deletes it). Off by default: objects are written once, and kept versions keep deleted bytes billed."
+  type        = bool
+  default     = false
+}
+
+variable "access_logging_enabled" {
+  description = "Write S3 server access logs of both buckets to a third bucket, <name_prefix>-logs-<account_id>-<region>, which this module creates (private, TLS only, SSE-S3, logs deleted after 90 days). Off by default."
+  type        = bool
+  default     = false
+}
+
+variable "web_acl_arn" {
+  description = "ARN of an AWS WAF web ACL of scope CLOUDFRONT (in us-east-1, output web_acl_arn of the waf module) to put in front of the distribution. null (the default) attaches none."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.web_acl_arn == null || can(regex("^arn:aws[a-z-]*:wafv2:us-east-1:[0-9]{12}:global/webacl/[A-Za-z0-9_-]+/[0-9a-f-]+$", var.web_acl_arn))
+    error_message = "web_acl_arn must be the ARN of a WAF web ACL of scope CLOUDFRONT, arn:aws:wafv2:us-east-1:<account>:global/webacl/<name>/<id>."
+  }
+}

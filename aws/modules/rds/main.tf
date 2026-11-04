@@ -66,8 +66,19 @@ resource "random_id" "final_snapshot" {
   byte_length = 4
 }
 
-# Performance Insights and enhanced monitoring stay off: the cluster's Prometheus and the database's own views are
-# what the lab reads, and both add cost and an IAM role.
+# Monitoring of the instance beyond what the cluster's Prometheus reads, each off by default (the lab reads Prometheus
+# and the database's own views; each adds cost, and enhanced monitoring an IAM role):
+# - CloudWatch Database Insights in Standard mode, the mode RDS enables by default and the one without the per-vCPU
+#   fee of Advanced; Performance Insights is optional in it, and its 7 days of history are the free retention
+#   (Advanced needs Performance Insights with at least 465 days). Instance classes: no restriction for PostgreSQL
+#   (the db.t4g.micro and small exclusions apply to MariaDB and MySQL). Sources, read 2026-11-05:
+#   https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_DatabaseInsights.html,
+#   https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_DatabaseInsights.TurningOnStandard.html,
+#   https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_DatabaseInsights.Considerations.html,
+#   https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_DatabaseInsights.Engines.html,
+#   https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_PerfInsights.Overview.cost.html
+# - Enhanced monitoring (OS metrics every monitoring_interval seconds), through the role below.
+# - PostgreSQL logs exported to CloudWatch, into log groups made here (below).
 resource "aws_db_instance" "this" {
   identifier     = var.name
   engine         = "postgres"
@@ -103,10 +114,80 @@ resource "aws_db_instance" "this" {
   skip_final_snapshot       = var.skip_final_snapshot
   final_snapshot_identifier = var.skip_final_snapshot ? null : "${var.name}-final-${random_id.final_snapshot.hex}"
 
-  performance_insights_enabled = false
-  monitoring_interval          = 0
+  database_insights_mode                = "standard"
+  performance_insights_enabled          = var.performance_insights_enabled
+  performance_insights_retention_period = var.performance_insights_enabled ? var.performance_insights_retention_period : null
+  monitoring_interval                   = var.monitoring_interval
+  monitoring_role_arn                   = var.monitoring_interval > 0 ? aws_iam_role.monitoring[0].arn : null
+  enabled_cloudwatch_logs_exports       = var.cloudwatch_logs_exports
 
   tags = {
     Name = var.name
   }
+
+  # RDS creates the log group of an export, and the one of enhanced monitoring, itself when it does not exist yet,
+  # outside the state; made first here, each group keeps the retention below and goes away with terraform destroy.
+  depends_on = [aws_cloudwatch_log_group.this, aws_cloudwatch_log_group.os_metrics]
+}
+
+# The group RDS writes each exported log to: /aws/rds/instance/<identifier>/<log type>.
+resource "aws_cloudwatch_log_group" "this" {
+  for_each = toset(var.cloudwatch_logs_exports)
+
+  name              = "/aws/rds/instance/${var.name}/${each.key}"
+  retention_in_days = var.cloudwatch_logs_retention_days
+}
+
+# The group enhanced monitoring writes OS metrics to, one log stream per instance. Its name is fixed by RDS and the
+# group is shared by every instance of the account and region, so this module expects to be the only one there with
+# monitoring on (one instance per env account). Left to RDS, the group would keep 30 days of metrics after the
+# instance is gone; the RDS guide tells to set the retention on this group
+# (https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_Monitoring.OS.html, read 2026-11-05).
+resource "aws_cloudwatch_log_group" "os_metrics" {
+  count = var.monitoring_interval > 0 ? 1 : 0
+
+  name              = "RDSOSMetrics"
+  retention_in_days = var.cloudwatch_logs_retention_days
+}
+
+data "aws_partition" "current" {
+  count = var.monitoring_interval > 0 ? 1 : 0
+}
+
+data "aws_region" "current" {
+  count = var.monitoring_interval > 0 ? 1 : 0
+}
+
+data "aws_caller_identity" "current" {
+  count = var.monitoring_interval > 0 ? 1 : 0
+}
+
+# The role enhanced monitoring assumes to write OS metrics to CloudWatch Logs. The trust policy is the one of the RDS
+# guide, with both confused deputy conditions: only RDS acting for this instance, in this account, may assume it
+# (https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_Monitoring.OS.Enabling.html).
+resource "aws_iam_role" "monitoring" {
+  count = var.monitoring_interval > 0 ? 1 : 0
+
+  name        = "${var.name}-rds-monitoring"
+  description = "Enhanced monitoring of RDS instance ${var.name}"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "monitoring.rds.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+      Condition = {
+        StringLike   = { "aws:SourceArn" = "arn:${data.aws_partition.current[0].partition}:rds:${data.aws_region.current[0].region}:${data.aws_caller_identity.current[0].account_id}:db:${var.name}" }
+        StringEquals = { "aws:SourceAccount" = data.aws_caller_identity.current[0].account_id }
+      }
+    }]
+  })
+}
+
+# The AWS managed policy of enhanced monitoring: create and write the RDSOSMetrics log group only.
+resource "aws_iam_role_policy_attachment" "monitoring" {
+  count = var.monitoring_interval > 0 ? 1 : 0
+
+  role       = aws_iam_role.monitoring[0].name
+  policy_arn = "arn:${data.aws_partition.current[0].partition}:iam::aws:policy/service-role/AmazonRDSEnhancedMonitoringRole"
 }

@@ -64,3 +64,25 @@ variable "flow_log_retention_days" {
     error_message = "flow_log_retention_days must be a retention CloudWatch Logs accepts: 1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1096, 1827, 2192, 2557, 2922, 3288 or 3653."
   }
 }
+
+variable "s3_endpoint_restricted" {
+  description = "Put a policy on the S3 gateway endpoint that lets through only the buckets of s3_endpoint_buckets and the image layer bucket of Amazon ECR in the region; every other bucket of the region is then unreachable from the private subnets. Off by default: the endpoint lets through every bucket IAM allows."
+  type        = bool
+  default     = false
+}
+
+variable "s3_endpoint_buckets" {
+  description = "Names of the buckets of the env (uploads and media) reachable through the S3 gateway endpoint when s3_endpoint_restricted is true."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for b in var.s3_endpoint_buckets : can(regex("^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$", b))])
+    error_message = "s3_endpoint_buckets must hold bucket names (3 to 63 lowercase letters, digits, dots and hyphens), not ARNs."
+  }
+
+  validation {
+    condition     = !var.s3_endpoint_restricted || length(var.s3_endpoint_buckets) > 0
+    error_message = "s3_endpoint_buckets must name at least one bucket while s3_endpoint_restricted is true."
+  }
+}
