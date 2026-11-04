@@ -22,22 +22,94 @@ module "eks" {
 }
 ```
 
-## Biến
+<!-- BEGIN_TF_DOCS -->
+## Requirements
 
-| Biến | Kiểu | Mặc định | stg (7a) | prd (7b) | Ý nghĩa |
-| --- | --- | --- | --- | --- | --- |
-| `name` | string | (bắt buộc) | `svp-stg` | `svp-prd` | tên cluster, tiền tố tên role, policy, security group; 3–38 ký tự |
-| `kubernetes_version` | string | (bắt buộc) | `1.36` | như stg lúc dựng | minor của control plane và node group |
-| `vpc_id` | string | (bắt buộc) | output `vpc_id` của `network` | như stg | VPC của cluster |
-| `private_subnet_ids` | list(string) | (bắt buộc) | 2 subnet private | 3 subnet private | ENI của control plane và node đặt vào mọi subnet này (node group trải mọi AZ của danh sách) |
-| `endpoint_public_access` | bool | `false` | `true` | `true` hay `false` (chốt ở 7b) | mở endpoint public của API; endpoint private **luôn bật** |
-| `endpoint_public_access_cidrs` | list(string) | `[]` | CIDR của người học (`/32`) | CIDR của người học hay `[]` | dải IPv4 được gọi endpoint public; bắt buộc khác rỗng khi `endpoint_public_access`, mọi dải phải dài từ `/8` trở lên (không bao giờ mở cả Internet); giá trị cá nhân, chỉ qua `*.auto.tfvars` không commit hay `TF_VAR_*` |
-| `control_plane_log_types` | list(string) | `[]` | `[]` (tắt) | `["api", "audit"]` | log control plane gửi CloudWatch; rỗng thì không tạo log group |
-| `control_plane_log_retention_days` | number | `1` | (không dùng) | chốt ở 7b | số ngày giữ log control plane |
-| `node_instance_types` | list(string) | `["m7g.large", "m6g.large", "t4g.large"]` | mặc định | đo ở 7b | loại Graviton cùng cỡ (2 vCPU, 8 GiB); phải là arm64 |
-| `node_capacity_type` | string | `SPOT` | `SPOT` | `ON_DEMAND` | |
-| `node_min_size` / `node_desired_size` / `node_max_size` | number | `3` / `3` / `5` | `3` / `3` / `5` | đo ở 7b | cỡ node group; `desired` chỉ có tác dụng lúc tạo (dưới đây) |
-| `hosted_zone_id` | string | (bắt buộc) | zone `aws.<domain>` của `aws/bootstrap` | như stg | zone duy nhất ExternalDNS và cert-manager được ghi |
+| Name | Version |
+| ---- | ------- |
+| terraform | ~> 1.15 |
+| aws | ~> 6.59 |
+
+## Providers
+
+| Name | Version |
+| ---- | ------- |
+| aws | ~> 6.59 |
+
+## Modules
+
+| Name | Source | Version |
+| ---- | ------ | ------- |
+| eks | terraform-aws-modules/eks/aws | 21.29.0 |
+
+## Resources
+
+| Name | Type |
+| ---- | ---- |
+| [aws_eks_pod_identity_association.aws_load_balancer_controller](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/eks_pod_identity_association) | resource |
+| [aws_eks_pod_identity_association.cert_manager](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/eks_pod_identity_association) | resource |
+| [aws_eks_pod_identity_association.external_dns](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/eks_pod_identity_association) | resource |
+| [aws_iam_policy.aws_load_balancer_controller](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_policy) | resource |
+| [aws_iam_role.aws_load_balancer_controller](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role) | resource |
+| [aws_iam_role.cert_manager](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role) | resource |
+| [aws_iam_role.ebs_csi](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role) | resource |
+| [aws_iam_role.external_dns](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role) | resource |
+| [aws_iam_role_policy.cert_manager](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy) | resource |
+| [aws_iam_role_policy.external_dns](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy) | resource |
+| [aws_iam_role_policy_attachment.aws_load_balancer_controller](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy_attachment) | resource |
+| [aws_iam_role_policy_attachment.ebs_csi](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy_attachment) | resource |
+| [aws_iam_policy_document.cert_manager](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
+| [aws_iam_policy_document.external_dns](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
+| [aws_iam_policy_document.pod_identity_trust](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
+| [aws_partition.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/partition) | data source |
+
+## Inputs
+
+| Name | Description | Type | Default | Required |
+| ---- | ----------- | ---- | ------- | :------: |
+| control\_plane\_log\_retention\_days | Days CloudWatch keeps the control plane logs when control\_plane\_log\_types is not empty. | `number` | `1` | no |
+| control\_plane\_log\_types | Control plane logs sent to CloudWatch, e.g. ["api", "audit"]. Empty (the default) sends none and creates no log group: ingestion is billed per GB. | `list(string)` | `[]` | no |
+| endpoint\_public\_access | Open the public endpoint of the Kubernetes API, reachable only from endpoint\_public\_access\_cidrs. The private endpoint is always on, so nodes and pods reach the API inside the VPC either way. | `bool` | `false` | no |
+| endpoint\_public\_access\_cidrs | IPv4 ranges allowed to call the public endpoint of the Kubernetes API, e.g. the address of the learner's machine as a /32. Personal data of a public repository: set it in an uncommitted *.auto.tfvars or TF\_VAR\_endpoint\_public\_access\_cidrs. | `list(string)` | `[]` | no |
+| hosted\_zone\_id | ID of the Route 53 hosted zone of the lab (output of aws/bootstrap). ExternalDNS and cert-manager may change records of this zone only. | `string` | n/a | yes |
+| kubernetes\_version | Kubernetes minor version of the control plane and of the node group, e.g. 1.36. Pick a minor in standard support: the cluster is created with the STANDARD support policy. | `string` | n/a | yes |
+| name | Name of the EKS cluster, e.g. svp-stg, and prefix of the names of its IAM roles, policies, security groups and node group. | `string` | n/a | yes |
+| node\_capacity\_type | SPOT (cheaper, nodes can be reclaimed with two minutes of notice) or ON\_DEMAND. | `string` | `"SPOT"` | no |
+| node\_desired\_size | Number of nodes when the node group is created. Terraform ignores later changes of it (the module leaves it to whoever scales the group), so a session scales with aws eks update-nodegroup-config. | `number` | `3` | no |
+| node\_instance\_types | Graviton (arm64) instance types of the node group, all of the same size so the scheduler sees the same node whichever one runs. Several types give Spot more pools to draw from when one runs short. | `list(string)` | <pre>[<br/>  "m7g.large",<br/>  "m6g.large",<br/>  "t4g.large"<br/>]</pre> | no |
+| node\_max\_size | Largest number of nodes of the node group. | `number` | `5` | no |
+| node\_min\_size | Smallest number of nodes of the node group. | `number` | `3` | no |
+| private\_subnet\_ids | Private subnets of the VPC, one per availability zone (output private\_subnet\_ids of the network module). The control plane's network interfaces and the nodes go into every one of them, so pods spread over all these zones. | `list(string)` | n/a | yes |
+| vpc\_id | ID of the VPC of the cluster (output vpc\_id of the network module). | `string` | n/a | yes |
+
+## Outputs
+
+| Name | Description |
+| ---- | ----------- |
+| cluster\_endpoint | URL of the Kubernetes API server. |
+| cluster\_name | Name of the EKS cluster: clusterName of the AWS Load Balancer Controller, txtOwnerId of ExternalDNS, aws eks update-kubeconfig --name. |
+| cluster\_primary\_security\_group\_id | Security group EKS creates for the cluster and attaches to the control plane's network interfaces. |
+| cluster\_security\_group\_id | Security group the module adds to the control plane's network interfaces. |
+| cluster\_service\_cidr | IPv4 range of Kubernetes Services, chosen by EKS when the cluster is created; the API server's Service takes its first address. |
+| node\_security\_group\_id | Security group of every node and, with the VPC CNI, of every pod: the source a database security group lets in. |
+<!-- END_TF_DOCS -->
+
+## Giá trị theo env
+
+| Biến | stg (7a) | prd (7b) |
+| --- | --- | --- |
+| `name` | `svp-stg` | `svp-prd` |
+| `kubernetes_version` | `1.36` | như stg lúc dựng |
+| `vpc_id` | output `vpc_id` của `network` | như stg |
+| `private_subnet_ids` | 2 subnet private | 3 subnet private |
+| `endpoint_public_access` | `true` | `true` hay `false` (chốt ở 7b) |
+| `endpoint_public_access_cidrs` | CIDR của người học (`/32`) | CIDR của người học hay `[]` |
+| `control_plane_log_types` | `[]` (tắt) | `["api", "audit"]` |
+| `control_plane_log_retention_days` | (không dùng) | chốt ở 7b |
+| `node_instance_types` | mặc định | đo ở 7b |
+| `node_capacity_type` | `SPOT` | `ON_DEMAND` |
+| `node_min_size` / `node_desired_size` / `node_max_size` | `3` / `3` / `5` | đo ở 7b |
+| `hosted_zone_id` | zone `aws.<domain>` của `aws/bootstrap` | như stg |
 
 Endpoint public mặc định tắt để module an toàn khi gọi thiếu biến; root của stg bật và đưa CIDR. **Vì sao private luôn bật:** giới hạn
 CIDR public mà tắt private thì node trong subnet private gọi API qua IP của NAT, IP đó không nằm trong danh sách, node không join được
@@ -47,17 +119,6 @@ CIDR public mà tắt private thì node trong subnet private gọi API qua IP c�
 node cho k6 bằng lệnh người học chạy, không bằng biến:
 `AWS_PROFILE=anhnv-sso aws eks update-nodegroup-config --cluster-name svp-stg --nodegroup-name <tên node group> --scaling-config minSize=3,maxSize=5,desiredSize=5 --region ap-southeast-1`
 (tên node group: `aws eks list-nodegroups --cluster-name svp-stg`, có tiền tố `default-`).
-
-## Output
-
-| Output | Dùng cho |
-| --- | --- |
-| `cluster_name` | khoá `name` của `cluster_values`, `aws eks update-kubeconfig --name` |
-| `cluster_endpoint` | URL API server |
-| `cluster_service_cidr` | khoá `serviceCidr` của `cluster_values` (EKS tự chọn dải lúc tạo; Service `kubernetes` lấy địa chỉ `.1`) |
-| `node_security_group_id` | nguồn được security group của RDS cho vào 5432 (pod mang IP của ENI node nên đi theo security group của node) |
-| `cluster_security_group_id` | security group module gắn thêm vào ENI của control plane |
-| `cluster_primary_security_group_id` | security group EKS tự tạo cho cluster, gắn vào ENI của control plane |
 
 Không output OIDC: không dùng IRSA (`enable_irsa = false`), Pod Identity không cần OIDC provider.
 

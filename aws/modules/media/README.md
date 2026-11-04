@@ -70,27 +70,76 @@ Kiểm ở buổi AWS: `POST /videos/{id}/complete` khi chưa tải file trả 4
 
 Root của env gắn mỗi JSON vào role của Pod Identity association `svp/video-service`, `svp/media-worker`.
 
-## Biến
+<!-- BEGIN_TF_DOCS -->
+## Requirements
 
-| Biến | Kiểu | Mặc định | stg (7a) | prd (7b) | Ý nghĩa |
-| --- | --- | --- | --- | --- | --- |
-| `name_prefix` | string | — | `svp-stg` | `svp-prd` | Đầu tên bucket, OAC, response headers policy (2–27 ký tự: tên bucket `uploads` tối đa 63) |
-| `account_id` | string | — | `var.account_id` của root | `var.account_id` của root | Account của bucket (12 số), phần của tên bucket |
-| `region` | string | — | `var.region` của root | `var.region` của root | Region của bucket (tối đa 14 ký tự), phần của tên bucket |
-| `cors_allowed_origins` | list(string) | — | `["https://<domain của stg>"]` | `["https://<domain của prd>"]` | Origin của web cho CORS hai bucket và CloudFront |
-| `force_destroy` | bool | **không có** | `true` | `false` | Destroy xoá mọi object rồi xoá bucket |
-| `price_class` | string | `PriceClass_200` | `PriceClass_200` | `PriceClass_200` | Nhóm edge của CloudFront |
+| Name | Version |
+| ---- | ------- |
+| terraform | ~> 1.15 |
+| aws | ~> 6.0 |
 
-## Output
+## Providers
 
-| Output | Giá trị |
-| --- | --- |
-| `uploads_bucket` | Tên bucket `uploads` (`UPLOAD_ORIGIN` của web: `https://<tên>.s3.<region>.amazonaws.com`) |
-| `media_bucket` | Tên bucket `media` |
-| `media_domain` | `<id>.cloudfront.net`: `mediaDomain` của `cluster_values` (`MEDIA_PUBLIC_BASE_URL`, `MEDIA_ORIGIN` là `https://<domain>`) |
-| `media_distribution_arn` | ARN của distribution |
-| `video_service_policy_json` | Policy IAM (JSON) của video-service |
-| `media_worker_policy_json` | Policy IAM (JSON) của media-worker |
+| Name | Version |
+| ---- | ------- |
+| aws | ~> 6.0 |
+
+## Resources
+
+| Name | Type |
+| ---- | ---- |
+| [aws_cloudfront_distribution.media](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudfront_distribution) | resource |
+| [aws_cloudfront_origin_access_control.media](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudfront_origin_access_control) | resource |
+| [aws_cloudfront_response_headers_policy.media_cors](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudfront_response_headers_policy) | resource |
+| [aws_s3_bucket.this](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket) | resource |
+| [aws_s3_bucket_cors_configuration.media](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket_cors_configuration) | resource |
+| [aws_s3_bucket_cors_configuration.uploads](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket_cors_configuration) | resource |
+| [aws_s3_bucket_lifecycle_configuration.media](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket_lifecycle_configuration) | resource |
+| [aws_s3_bucket_lifecycle_configuration.uploads](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket_lifecycle_configuration) | resource |
+| [aws_s3_bucket_ownership_controls.this](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket_ownership_controls) | resource |
+| [aws_s3_bucket_policy.media](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket_policy) | resource |
+| [aws_s3_bucket_policy.uploads](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket_policy) | resource |
+| [aws_s3_bucket_public_access_block.this](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket_public_access_block) | resource |
+| [aws_s3_bucket_server_side_encryption_configuration.this](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket_server_side_encryption_configuration) | resource |
+| [aws_cloudfront_cache_policy.caching_optimized](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/cloudfront_cache_policy) | data source |
+| [aws_iam_policy_document.media](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
+| [aws_iam_policy_document.media_worker](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
+| [aws_iam_policy_document.tls_only](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
+| [aws_iam_policy_document.video_service](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
+
+## Inputs
+
+| Name | Description | Type | Default | Required |
+| ---- | ----------- | ---- | ------- | :------: |
+| account\_id | The AWS account of the buckets (12 digits), part of their names. The root passes its own account\_id, which never goes into a committed file. | `string` | n/a | yes |
+| cors\_allowed\_origins | Origins of the web client (https://<domain>) that may post upload forms to the uploads bucket and read playlists, segments and thumbnails of media cross-origin. | `list(string)` | n/a | yes |
+| force\_destroy | Let terraform destroy delete both buckets with every object in them. Without it destroy fails on a bucket that is not empty. | `bool` | n/a | yes |
+| name\_prefix | Fixed start of every name (svp-stg, svp-prd): buckets are <name\_prefix>-uploads-<account\_id>-<region> and <name\_prefix>-media-<account\_id>-<region>. | `string` | n/a | yes |
+| price\_class | Edge locations of the CloudFront distribution. PriceClass\_200 serves Asia, Singapore and Vietnam included, from nearby edges, and leaves out the dearest regions (South America, Australia). | `string` | `"PriceClass_200"` | no |
+| region | Region of the buckets, part of their names; the root passes the region of its provider. | `string` | n/a | yes |
+
+## Outputs
+
+| Name | Description |
+| ---- | ----------- |
+| media\_bucket | Name of the media bucket. |
+| media\_distribution\_arn | ARN of the CloudFront distribution in front of the media bucket. |
+| media\_domain | Domain of the CloudFront distribution (<id>.cloudfront.net): MEDIA\_PUBLIC\_BASE\_URL of the gateway and MEDIA\_ORIGIN of the web are https://<domain>. |
+| media\_worker\_policy\_json | IAM policy of media-worker (JSON) for the role of its Pod Identity association. |
+| uploads\_bucket | Name of the uploads bucket (the web posts upload forms to https://<name>.s3.<region>.amazonaws.com). |
+| video\_service\_policy\_json | IAM policy of video-service (JSON) for the role of its Pod Identity association. |
+<!-- END_TF_DOCS -->
+
+## Giá trị theo env
+
+| Biến | stg (7a) | prd (7b) |
+| --- | --- | --- |
+| `name_prefix` | `svp-stg` | `svp-prd` |
+| `account_id` | `var.account_id` của root | `var.account_id` của root |
+| `region` | `var.region` của root | `var.region` của root |
+| `cors_allowed_origins` | `["https://<domain của stg>"]` | `["https://<domain của prd>"]` |
+| `force_destroy` | `true` | `false` |
+| `price_class` | `PriceClass_200` | `PriceClass_200` |
 
 ## Chi phí theo giờ (`ap-southeast-1`, giá đọc 2026-10-31, nguồn ở ADR-0034 [N9], [N10])
 

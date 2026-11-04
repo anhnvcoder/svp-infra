@@ -7,4 +7,9 @@
 # `<namespace>/<name>/<provider>/<file>` (for example `terraform-aws-modules/eks/aws/main.tf`). Each entry: id, paths
 # (never an id for every file), statement (the reason) and, while the choice is waiting on something, expired_at
 # (yyyy-mm-dd).
+#
+# Every exception, here or next to a resource, says which environments it holds for, one line per id in its reason:
+# `Scope: every environment.` when the reason holds for prd as well, or `Scope: stg only; prd: <what prd does
+# instead>.` when it rests on stg being a short-lived, one-person, cost-cut environment. Searching for `stg only`
+# lists what the prd root has to decide again.
 misconfigurations: []

@@ -44,6 +44,7 @@ resource "aws_s3_bucket_ownership_controls" "this" {
 # SSE-S3: encrypted at rest at no cost. A customer managed KMS key (what the finding below asks for) adds $1 a month,
 # a key policy, and kms:Decrypt for CloudFront and both services, and draws no line the bucket policy and IAM do not
 # draw already.
+# Scope: every environment.
 #trivy:ignore:AWS-0132
 resource "aws_s3_bucket_server_side_encryption_configuration" "this" {
   for_each = aws_s3_bucket.this
