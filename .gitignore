@@ -36,3 +36,8 @@ terraform.rc
 # direnv: per-machine environment (the AWS profile of this machine), never shared.
 .envrc
 .DS_Store
+# A GitHub App key waiting for its environment (make github-app on a new account); make github-app-key deletes it.
+github/.keys/
+
+# Python bytecode of github/scripts (py_compile, imports).
+__pycache__/

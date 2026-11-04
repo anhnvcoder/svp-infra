@@ -1,0 +1,16 @@
+{
+  "name": "svp-gitops-promoter",
+  "url": "https://github.com/anhnvcoder/svp-backend",
+  "hook_attributes": {
+    "url": "https://github.com/anhnvcoder/svp-backend",
+    "active": false
+  },
+  "public": false,
+  "request_oauth_on_install": false,
+  "default_permissions": {
+    "contents": "write",
+    "pull_requests": "write",
+    "metadata": "read"
+  },
+  "default_events": []
+}
