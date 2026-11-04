@@ -197,19 +197,20 @@ docs-check: ## markdownlint-cli2 + lychee --offline on the Markdown (DOCS='<file
 # kubectl, helm, terraform, make and dig first on PATH, so it reaches nothing. Only its FAIL lines are printed.
 # GitHub settings the github provider cannot manage (README of github/, table "Không quản"): Apps registered from their
 # manifest in github/apps/, and a read-only check of the rest. Python's standard library and gh, no container.
-github-app-test: ## Offline self-test of github/scripts/github-app.py (manifests, destinations, repository list)
-	@echo "github-app-test"; python3 -I github/scripts/github-app.py selftest >/dev/null || { echo "FAIL: github-app-test (python3 github/scripts/github-app.py selftest)" >&2; exit 1; }
+github-app-test: ## Unit tests of github/scripts/github-app.py (no network, gh or account) and its check of the manifests
+	@echo "github-app-test"; python3 -I -B -m unittest discover -s github/scripts -p '*_test.py' 2>&1 | tail -3 | \
+	  grep -q '^OK' || { echo "FAIL: github-app-test (python3 -B -m unittest discover -s github/scripts -p '*_test.py')" >&2; exit 1; }
 
 github-check: ## Read-only check of the GitHub settings Terraform does not manage (gh signed in; WITH_APP_KEYS=1 also reads App installations)
-	@python3 -I github/scripts/github-app.py check $(if $(WITH_APP_KEYS),--with-app-keys)
+	@python3 -I -B github/scripts/github-app.py check $(if $(WITH_APP_KEYS),--with-app-keys)
 
 github-app: ## Register GitHub App APP=<name> from github/apps/<name>.json and write its key and client ID (the account owner runs it)
 	@test -n '$(APP)' || { echo "make github-app: set APP=<name> (github/apps/<name>.json)" >&2; exit 1; }; \
-	python3 -I github/scripts/github-app.py create '$(APP)'
+	python3 -I -B github/scripts/github-app.py create '$(APP)'
 
 github-app-key: ## Write PEM=<file> as key KEY=<stg|prd|local> of App APP=<name> (github/apps/destinations.json), then delete the file
 	@test -n '$(APP)' -a -n '$(KEY)' -a -n '$(PEM)' || { echo "make github-app-key: set APP, KEY and PEM" >&2; exit 1; }; \
-	python3 -I github/scripts/github-app.py set-key '$(APP)' '$(KEY)' '$(PEM)'
+	python3 -I -B github/scripts/github-app.py set-key '$(APP)' '$(KEY)' '$(PEM)'
 
 session-test: ## Self-test of the session scripts of aws/scripts with fake commands (no account, cluster or network)
 	@echo "session-test aws/scripts"; \

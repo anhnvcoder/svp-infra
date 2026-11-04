@@ -177,42 +177,54 @@ def manifest_form(manifest, redirect_url, state):
             "<script>document.getElementById('f').submit()</script>")
 
 
-def wait_for_code(manifest):
+class ManifestServer:
+    """Loopback server: / posts the manifest to GitHub, /callback takes the code GitHub sends back with the right state."""
+
+    def __init__(self, manifest):
+        self.state, self.code = secrets.token_urlsafe(24), None
+        outer = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802 (http.server's name)
+                url = urllib.parse.urlparse(self.path)
+                query = urllib.parse.parse_qs(url.query)
+                if url.path == "/":
+                    page = manifest_form(manifest, f"{outer.url}callback", outer.state)
+                elif url.path == "/callback" and query.get("state") == [outer.state] and query.get("code"):
+                    outer.code = query["code"][0]
+                    page = "<!doctype html><meta charset=utf-8>App registered. Back to the terminal."
+                else:
+                    self.send_error(404)
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(page.encode())
+
+            def log_message(self, *args):
+                pass
+
+        self.server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}/"
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+def wait_for_code(manifest, timeout=900):
     """Serve the manifest form on loopback, open it, and return the code GitHub sends back to the redirect URL."""
-    state, found = secrets.token_urlsafe(24), {}
-
-    class Handler(http.server.BaseHTTPRequestHandler):
-        def do_GET(self):  # noqa: N802 (http.server's name)
-            url = urllib.parse.urlparse(self.path)
-            query = urllib.parse.parse_qs(url.query)
-            if url.path == "/":
-                page = manifest_form(manifest, f"http://127.0.0.1:{port}/callback", state)
-            elif url.path == "/callback" and query.get("state") == [state] and query.get("code"):
-                found["code"] = query["code"][0]
-                page = "<!doctype html><meta charset=utf-8>App registered. Back to the terminal."
-            else:
-                self.send_error(404)
-                return
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.end_headers()
-            self.wfile.write(page.encode())
-
-        def log_message(self, *args):
-            pass
-
-    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
-    port = server.server_address[1]
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    print(f"open  http://127.0.0.1:{port}/ (opening it now): check the name and permissions, then Create GitHub App")
-    webbrowser.open(f"http://127.0.0.1:{port}/")
-    deadline = time.time() + 900
-    while "code" not in found and time.time() < deadline:
+    srv = ManifestServer(manifest)
+    print(f"open  {srv.url} (opening it now): check the name and permissions, then Create GitHub App")
+    webbrowser.open(srv.url)
+    deadline = time.time() + timeout
+    while srv.code is None and time.time() < deadline:
         time.sleep(0.5)
-    server.shutdown()
-    if "code" not in found:
-        die("no answer from GitHub in 15 minutes; run create again")
-    return found["code"]
+    srv.close()
+    if srv.code is None:
+        die(f"no answer from GitHub in {timeout // 60} minutes; run create again")
+    return srv.code
 
 
 def create(name, code=None):
