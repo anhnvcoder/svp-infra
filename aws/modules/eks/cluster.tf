@@ -12,8 +12,11 @@ locals {
 # Findings of trivy inside the registry module, each a deliberate choice:
 # - AWS-0039: no customer managed key for Secrets; EKS encrypts the Kubernetes API data, Secrets included, with an
 #   AWS owned key by default (see create_kms_key below).
+#   Scope: stg only; prd: envelope encryption of Secrets with a customer managed KMS key (a module variable for
+#   create_kms_key and encryption_config, set in the prd root), so reading Secrets also needs kms:Decrypt on that key.
 # - AWS-0104: the node security group allows all egress. Nodes pull images from public registries through the NAT
 #   gateway and pods call AWS APIs; egress per pod is narrowed by the NetworkPolicies of the charts.
+#   Scope: every environment.
 #trivy:ignore:AWS-0039
 #trivy:ignore:AWS-0104
 module "eks" {

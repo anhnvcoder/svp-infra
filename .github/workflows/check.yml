@@ -1,11 +1,13 @@
 # Static checks of every pull request and of every push to main: make check (terraform fmt and validate, tflint, trivy,
-# shellcheck, the security lint of the workflows with zizmor, and the self-test of the session scripts with fake aws,
-# kubectl and terraform; the runner's bash, git and jq are all it needs). Job infra-ok is the only check the ruleset of
+# shellcheck, the security lint of the workflows with zizmor, the self-test of the session scripts with fake aws,
+# kubectl and terraform, for which the runner's bash, git and jq are all it needs, and terraform test of the modules
+# against a mock AWS provider, in a container without network). Job infra-ok is the only check the ruleset of
 # main requires, so jobs can be added or renamed without touching the ruleset.
 #
 # The repository is public and a pull request from a fork runs this workflow with the fork's code, so:
 # - no AWS credential of any kind, no OIDC (no id-token permission), no secret, no environment: make check never reaches
-#   an account (init runs with -backend=false; nothing calls plan, apply or the AWS CLI);
+#   an account (init runs with -backend=false; nothing calls apply or the AWS CLI; the only plans are those of
+#   terraform test, against a mock AWS provider, in a container with no network and no AWS variable);
 # - no pull_request_target and no workflow_run: a pull request never runs with a write token;
 # - the only job that runs code of the repository has contents: read and nothing else;
 # - every action of this workflow is GitHub's own and pinned to a full commit SHA; terraform, tflint, trivy, shellcheck

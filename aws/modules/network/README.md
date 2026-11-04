@@ -19,34 +19,75 @@ module "network" {
 }
 ```
 
-## Biến
+<!-- BEGIN_TF_DOCS -->
+## Requirements
 
-| Biến | Kiểu | Mặc định | stg (7a) | prd (7b) | Ý nghĩa |
-| --- | --- | --- | --- | --- | --- |
-| `name` | string | (bắt buộc) | `svp-stg` | `svp-prd` | tên VPC, tiền tố tên subnet, route table, NAT, EIP, security group mặc định, role flow log |
-| `cidr` | string | `10.0.0.0/16` | mặc định | mặc định (hay dải khác nếu 7b nối hai VPC) | dải IPv4 của VPC, `/16`–`/20` |
-| `az_count` | number | `2` | `2` | `3` | số AZ (2–6), lấy theo thứ tự trong các AZ không cần opt-in của region |
-| `single_nat_gateway` | bool | `true` | `true` (một NAT ở AZ đầu) | `false` (một NAT mỗi AZ, route table private mỗi AZ trỏ NAT cùng AZ) | |
-| `cluster_name` | string | (bắt buộc) | tên cluster EKS stg | tên cluster EKS prd | tag `kubernetes.io/cluster/<tên>=shared` trên mọi subnet |
-| `flow_log_enabled` | bool | `false` | `false` | `true` | flow log `ALL` vào log group CloudWatch do module tạo, cùng role IAM ghi nó |
-| `flow_log_retention_days` | number | `1` | (không dùng) | chốt ở 7b | số ngày giữ flow log, chỉ nhận giá trị CloudWatch cho phép |
+| Name | Version |
+| ---- | ------- |
+| terraform | ~> 1.15 |
+| aws | ~> 6.0 |
+
+## Providers
+
+| Name | Version |
+| ---- | ------- |
+| aws | ~> 6.0 |
+
+## Modules
+
+| Name | Source | Version |
+| ---- | ------ | ------- |
+| vpc | terraform-aws-modules/vpc/aws | 6.7.3 |
+
+## Resources
+
+| Name | Type |
+| ---- | ---- |
+| [aws_vpc_endpoint.s3](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/vpc_endpoint) | resource |
+| [aws_availability_zones.available](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/availability_zones) | data source |
+| [aws_region.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/region) | data source |
+
+## Inputs
+
+| Name | Description | Type | Default | Required |
+| ---- | ----------- | ---- | ------- | :------: |
+| az\_count | Number of availability zones, taken in order from the zones of the region that need no opt-in. Each zone gets one public and one private subnet. EKS needs subnets in at least two zones. | `number` | `2` | no |
+| cidr | IPv4 range of the VPC, a /16 to /20. Pods take their addresses from the private subnets (VPC CNI), so the range must not overlap any network the cluster talks to. | `string` | `"10.0.0.0/16"` | no |
+| cluster\_name | Name of the EKS cluster that runs in this VPC. The subnets get the tag kubernetes.io/cluster/<name> = shared, which the AWS Load Balancer Controller reads to pick subnets. | `string` | n/a | yes |
+| flow\_log\_enabled | Send VPC flow logs (accepted and rejected traffic) to a CloudWatch log group that this module creates, with the IAM role that writes it. Off by default: ingestion is billed per GB. | `bool` | `false` | no |
+| flow\_log\_retention\_days | Days CloudWatch keeps the flow logs when flow\_log\_enabled is true. | `number` | `1` | no |
+| name | Name of the VPC and prefix of the names of its subnets, route tables, NAT gateways and Elastic IPs, e.g. svp-stg. | `string` | n/a | yes |
+| single\_nat\_gateway | true: one NAT gateway, in the first zone, for every private subnet (cheaper; losing that zone cuts the egress of the whole VPC). false: one NAT gateway per zone and one private route table per zone that sends its traffic to the NAT gateway of the same zone. | `bool` | `true` | no |
+
+## Outputs
+
+| Name | Description |
+| ---- | ----------- |
+| azs | Availability zones of the subnets, in the order of the subnet lists. |
+| nat\_public\_ips | Public IPv4 addresses of the NAT gateways: every connection from the nodes and pods to the internet leaves from one of them. |
+| private\_subnet\_cidrs | IPv4 ranges of the private subnets, in the order of azs; network policies that allow traffic to a database in these subnets use them. |
+| private\_subnet\_ids | IDs of the private subnets, one per zone, in the order of azs: nodes, pods, database. |
+| public\_subnet\_ids | IDs of the public subnets, one per zone, in the order of azs: NAT gateways and internet-facing load balancers. |
+| vpc\_cidr | IPv4 range of the VPC. |
+| vpc\_id | ID of the VPC. |
+<!-- END_TF_DOCS -->
+
+## Giá trị theo env
+
+| Biến | stg (7a) | prd (7b) |
+| --- | --- | --- |
+| `name` | `svp-stg` | `svp-prd` |
+| `cidr` | mặc định | mặc định (hay dải khác nếu 7b nối hai VPC) |
+| `az_count` | `2` | `3` |
+| `single_nat_gateway` | `true` (một NAT ở AZ đầu) | `false` (một NAT mỗi AZ, route table private mỗi AZ trỏ NAT cùng AZ) |
+| `cluster_name` | tên cluster EKS stg | tên cluster EKS prd |
+| `flow_log_enabled` | `false` | `true` |
+| `flow_log_retention_days` | (không dùng) | chốt ở 7b |
 
 **Chia dải** (`cidr` chia 8 khối bằng nhau): khối 0–5 là subnet private, mỗi AZ một khối (`/19` với `/16`: 8 192 địa chỉ, vì VPC CNI cấp
 IP pod từ subnet private, prefix delegation lấy từng `/28` cho mỗi node); khối 7 chia tiếp 32 phần, mỗi AZ một subnet public (`/24` với
 `/16`: chỉ NAT gateway và NLB nằm đây); khối 6 để trống cho subnet database hay intra sau này. Với mặc định và 2 AZ: private `10.0.0.0/19`,
 `10.0.32.0/19`; public `10.0.224.0/24`, `10.0.225.0/24`.
-
-## Output
-
-| Output | Giá trị | Ai dùng |
-| --- | --- | --- |
-| `vpc_id` | ID của VPC | module EKS, RDS; khoá `cluster.vpcId` (LBC không đọc IMDS) |
-| `vpc_cidr` | dải IPv4 của VPC | khoá `cluster.vpcCidr` (`TRUSTED_PROXY_CIDRS`, `nodeSubnet`, health check NLB) |
-| `azs` | AZ theo thứ tự của các danh sách subnet | đọc kết quả, README của env |
-| `private_subnet_ids` | subnet private, mỗi AZ một cái | node group EKS, subnet group RDS |
-| `private_subnet_cidrs` | dải của subnet private | khoá `cluster.dbCidrs` khi RDS nằm ở subnet private |
-| `public_subnet_ids` | subnet public, mỗi AZ một cái | (LBC tự tìm theo tag; output để đọc) |
-| `nat_public_ips` | IP công khai của NAT | mọi kết nối ra Internet của node và pod đi từ đây (giới hạn tải ẩn danh của Docker Hub tính theo IP này) |
 
 ## Tài nguyên trong state
 

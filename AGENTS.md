@@ -8,11 +8,20 @@ quyết định chung của lab nằm ở `docs/` của repo code (bản clone `
 
 ## An toàn cloud
 
-- **AI chỉ chạy:** `make check` (và từng target của nó: `fmt-check`, `validate`, `tflint`, `trivy`, `shellcheck`, `zizmor`), `make fmt`,
-  `make lock`, tức `terraform fmt`, `terraform init -backend=false`, `terraform validate`, `terraform providers lock`; `bash -n`,
+- **AI chỉ chạy:** `make check` (và từng target của nó: `fmt-check`, `validate`, `tflint`, `tfdocs-check`, `trivy`, `shellcheck`, `zizmor`,
+  `session-test`, `test-guard`, `test`), `make fmt`,
+  `make tfdocs` (terraform-docs, chỉ đọc `.tf`), `make lock`, tức `terraform fmt`, `terraform init -backend=false`, `terraform validate`, `terraform providers lock`; `bash -n`,
   test script với lệnh giả trên PATH; `aws --version`.
+- **`terraform test` chỉ qua `make test`**, target tự ép ba điều kiện, không tin người viết test: (1) chạy trong container image Terraform
+  ghim digest (`TERRAFORM_IMAGE`) với `--network none`; (2) không truyền credential nào: `env -u` mọi biến `AWS_*`, không `-e AWS_*`, không
+  mount `~/.aws`, `.envrc`, `backend.hcl` (chỉ mount thư mục module, module chứa `.envrc` hay `backend.hcl` bị từ chối); (3) mỗi
+  `tests/*.tftest.hcl` có `mock_provider "aws"` và mọi `run` là `command = plan`, kiểm theo khuôn cố định (allowlist) chứ không dò từng cách viết
+  sai: đúng một dòng `mock_provider "aws" {` (hay `mock_provider "aws" {}`) đứng riêng; mỗi `run` mở bằng dòng `run "<tên>" {` (chữ, số, `_`, `-`)
+  và dòng không trống đầu tiên bên trong là `command = plan`; dòng khác bắt đầu bằng `run`, `mock_provider`, `provider`, `override_`, `module`,
+  `command` hay `/*`, dòng nào chứa `alias`, `*/` hay `<<` (heredoc), symlink trong thư mục module và `*.tftest.json` đều bị từ chối, target nêu
+  file và dòng. `make test-guard` kiểm chính ba điều kiện với `docker` giả. AI không chạy `terraform test` trần.
 - **AI không chạy lệnh nào chạm account AWS, kể cả chỉ đọc:** `terraform init` có backend, `plan`, `apply`, `destroy`, `import`,
-  `state`, `output`, `test`, `refresh`; `aws` (trừ `--version`); script hay chương trình dùng SDK AWS; script buổi của `aws/scripts/`.
+  `state`, `output`, `test` trần (ngoài `make test`), `refresh`; `aws` (trừ `--version`); script hay chương trình dùng SDK AWS; script buổi của `aws/scripts/`.
 - **Mọi lệnh chạm account do người học chạy** theo script và runbook viết sẵn: profile và region ghi ngay trong lệnh
   (`AWS_PROFILE=anhnv-sso … --region ap-southeast-1`), mỗi bước một khối, nói rõ cần dán lại output nào và tìm gì trong đó. Trước mọi lệnh
   ghi: `AWS_PROFILE=anhnv-sso aws sts get-caller-identity`, hai bên cùng đọc account. Buổi tạo tài nguyên kết thúc bằng lệnh destroy và

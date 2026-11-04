@@ -49,6 +49,8 @@ resource "aws_cloudfront_response_headers_policy" "media_cors" {
 # and a web ACL costs a monthly fee per ACL and per rule for no rule this content needs. The default *.cloudfront.net
 # certificate leaves the viewer TLS policy to CloudFront; a minimum protocol version needs a certificate of our own,
 # in ACM us-east-1 with a name of our own, which is a later step.
+# Scope: stg only; prd: a WAF web ACL on the distribution (AWS managed rule groups and a rate-based rule per client
+# IP, so a request flood is cut at the edge before it is billed), or a CloudFront flat-rate plan, which includes one.
 #trivy:ignore:AWS-0011
 resource "aws_cloudfront_distribution" "media" {
   enabled         = true

@@ -12,7 +12,7 @@ Repo public: **không account ID, IP, email, tên miền thật, state hay plan 
 ## Bố cục
 
 ```text
-Makefile                      make check (fmt, validate, tflint, trivy, shellcheck, zizmor), make lock, make fmt
+Makefile                      make check (fmt, validate, tflint, tfdocs, trivy, shellcheck, zizmor, test), make lock, make fmt, make tfdocs
 CODEOWNERS                    đường có chủ: CODEOWNERS, .github/, renovate.json, Makefile, .trivyignore.yaml, github/, aws/
 .tflint.hcl                   ruleset terraform (recommended) và aws ghim version
 .trivyignore.yaml             ngoại lệ của trivy trong module tải từ registry
@@ -48,8 +48,8 @@ Chạy từ gốc repo, không cần credential AWS, cần Docker và mạng (re
 
 | Lệnh | Làm gì |
 | --- | --- |
-| `make check` | `fmt-check`, `validate`, `tflint`, `trivy` trên mọi thư mục có `*.tf`, rồi `shellcheck` trên mọi `*.sh`, `zizmor` trên mọi workflow |
-| `make check DIRS="aws/modules/x aws/envs/stg"` | như trên, bốn phép Terraform chỉ trên các thư mục đó; thư mục không có, không có `*.tf` hay nằm ngoài repo thì dừng, nêu thư mục |
+| `make check` | `fmt-check`, `validate`, `tflint`, `tfdocs-check`, `trivy` trên mọi thư mục có `*.tf`, rồi `shellcheck` trên mọi `*.sh`, `zizmor` trên mọi workflow, `session-test`, `test-guard`, `test` trên mọi module |
+| `make check DIRS="aws/modules/x aws/envs/stg"` | như trên, sáu phép Terraform chỉ trên các thư mục đó; thư mục không có, không có `*.tf` hay nằm ngoài repo thì dừng, nêu thư mục |
 | `make fmt-check` / `make fmt` | `terraform fmt -check -diff -recursive` / viết lại file |
 | `make validate` | mỗi thư mục: `terraform init -backend=false -input=false`, rồi `terraform validate`; provider và module nằm ở thư mục tạm (`TF_DATA_DIR`), nên `.terraform/` của người học đã `init` với backend S3 không bị đọc hay ghi |
 | `make tflint` | mỗi thư mục: `tflint --init`, rồi `tflint` với `.tflint.hcl` |
@@ -57,12 +57,21 @@ Chạy từ gốc repo, không cần credential AWS, cần Docker và mạng (re
 | `make shellcheck` | shellcheck trên mọi `*.sh` (bản image, `--network none`; máy không cài shellcheck) |
 | `make zizmor` | lint bảo mật workflow bằng zizmor (`--persona=regular`), mọi finding làm đỏ; có `GH_TOKEN` thì chạy thêm audit online (impostor commit, action có lỗ hổng), không thì offline; `ZIZMOR_FORMAT=github` in annotation |
 | `make lock [DIRS=<root>]` | `init -backend=false` rồi `terraform providers lock` cho ba nền tảng; module bị bỏ qua |
+| `make tfdocs` / `make tfdocs-check` | terraform-docs ghi / kiểm khối sinh (requirements, providers, resources, inputs, outputs) giữa `<!-- BEGIN_TF_DOCS -->` và `<!-- END_TF_DOCS -->` của `README.md` mỗi module; `tfdocs-check` đỏ khi README lệch `.tf`, root bị bỏ qua; container `--network none` |
+| `make test` | `terraform test` của mỗi module (`tests/*.tftest.hcl`): `init -backend=false` trong một container, rồi `terraform test` trong container `--network none` với image `TERRAFORM_IMAGE` ghim digest, chỉ thư mục module được mount (chỉ đọc), không biến `AWS_*` nào (bỏ bằng `env -u`), không `~/.aws`, `.envrc`, `backend.hcl`; file test chỉ được nhận khi theo khuôn: đúng một dòng `mock_provider "aws" {`, mỗi `run "<tên>" {` có `command = plan` ở dòng không trống đầu tiên, không dòng nào khác bắt đầu bằng `run`, `mock_provider`, `provider`, `override_`, `module`, `command`, `/*`, không `alias`, `*/`, heredoc, symlink hay `*.tftest.json`; sai thì bị từ chối, nêu file và dòng; root bị bỏ qua |
+| `make test-guard` | tự kiểm ba luật của `make test` với `docker` giả trên PATH: file test sai bị từ chối, lệnh docker có `--network none`, image ghim digest, không biến hay file credential AWS nào tới container |
 | `make help` | liệt kê target |
 
-Chưa có thư mục `*.tf` nào thì bốn phép Terraform in một dòng và qua. Mọi công cụ chạy bằng image ghim digest trong `Makefile`
-(`TERRAFORM_IMAGE` 1.15.8, `TFLINT_IMAGE`, `TRIVY_IMAGE` và `ZIZMOR_IMAGE` cùng bản ghim của repo code, `SHELLCHECK_IMAGE`), qua
+Chưa có thư mục `*.tf` nào thì sáu phép Terraform in một dòng và qua. Mọi công cụ chạy bằng image ghim digest trong `Makefile`
+(`TERRAFORM_IMAGE` 1.15.8, `TFLINT_IMAGE`, `TRIVY_IMAGE` và `ZIZMOR_IMAGE` cùng bản ghim của repo code, `SHELLCHECK_IMAGE`, `TFDOCS_IMAGE_AMD64` và `TFDOCS_IMAGE_ARM64`:
+terraform-docs chỉ có tag theo kiến trúc nên ghim cả hai cùng bản, `Makefile` chọn theo `uname -m`), qua
 `env -u DOCKER_DEFAULT_PLATFORM docker run` (shell của máy đặt `linux/amd64` cho dự án khác), container chạy dưới uid của người gọi.
-Không target nào gọi `plan`, `apply`, `destroy`, `import`, `state`, `output` hay `aws`.
+Không target nào gọi `apply`, `destroy`, `import`, `state`, `output` hay `aws`; `plan` duy nhất là các `run` của `make test`, trên provider AWS giả
+(`mock_provider`), không mạng, không credential.
+
+**Test của module** (`aws/modules/<module>/tests/*.tftest.hcl`): mỗi rule `validation` trong `variables.tf` có một `run` với giá trị chỉ rule đó
+từ chối và `expect_failures` trỏ biến, mỗi module một `run` giá trị hợp lệ; data source cần giá trị có hình (JSON của policy, ARN, danh sách
+zone) lấy từ `mock_data` của file test vì provider giả vẫn kiểm đối số. Thêm rule `validation` thì thêm `run` trong cùng thay đổi.
 
 **Chạy song song trên hai thư mục khác nhau** (`make check DIRS=a` và `make check DIRS=b` cùng lúc) an toàn vì mỗi lượt chỉ ghi dưới
 thư mục nó kiểm:
@@ -129,8 +138,9 @@ không có direnv thì `export AWS_PROFILE=anhnv-sso` mỗi terminal.
 
 ## Luật an toàn
 
-- **AI** (Claude, Codex) chỉ chạy `make check` và các phép trong đó, `terraform fmt`, `terraform init -backend=false`, `terraform validate`,
-  `terraform providers lock` (`make lock`). Mọi lệnh chạm account (`plan`, `apply`, `destroy`, `import`, `state`, `output`, `aws` trừ
+- **AI** (Claude, Codex) chỉ chạy `make check` và các phép trong đó (kể cả `make test`: `terraform test` trên provider giả, `--network none`,
+  không credential), `make tfdocs`, `terraform fmt`, `terraform init -backend=false`, `terraform validate`,
+  `terraform providers lock` (`make lock`). Mọi lệnh chạm account (`terraform test` trần, `plan`, `apply`, `destroy`, `import`, `state`, `output`, `aws` trừ
   `--version`, script dùng SDK) do người học chạy; trước mọi lệnh ghi, `AWS_PROFILE=anhnv-sso aws sts get-caller-identity` và so account.
   Provider của root ghim account bằng `allowed_account_ids` từ `TF_VAR_account_id`.
 - **Không commit:** state (`*.tfstate*`), plan (`*.tfplan`), `backend.hcl`, `*.auto.tfvars`, `terraform.tfvars`, override
