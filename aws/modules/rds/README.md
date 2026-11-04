@@ -10,6 +10,7 @@ master username cố định `postgres`, mật khẩu master do RDS tạo và gi
 Terraform, không có trong plan hay state). Performance Insights và enhanced monitoring tắt (tốn tiền, thêm role IAM; lab đọc Prometheus của
 cluster). Minor tự nâng trong cửa sổ bảo trì, major không bao giờ tự nâng.
 
+<!-- markdownlint-disable MD033 -->
 <!-- BEGIN_TF_DOCS -->
 ## Requirements
 
@@ -63,20 +64,21 @@ cluster). Minor tự nâng trong cửa sổ bảo trì, major không bao giờ t
 | port | Port of the instance. |
 | security\_group\_id | Security group of the instance; network policies and egress rules of the cluster point at it. |
 <!-- END_TF_DOCS -->
+<!-- markdownlint-enable MD033 -->
 
 ## Giá trị theo env
 
-| Biến | stg (7a) | prd (7b) |
+| Biến | stg | prd |
 | --- | --- | --- |
 | `name` | `svp-stg` | `svp-prd` |
 | `vpc_id` | VPC của module `network` | như stg |
 | `subnet_ids` | subnet private, ≥ 2 AZ | subnet private, 3 AZ |
 | `allowed_security_groups` | `{ node = …, cluster = … }` của EKS | như stg |
 | `engine_major_version` | `"15"` | `"15"` |
-| `instance_class` | `db.t4g.small` | đo ở 7b |
-| `allocated_storage` | `20` | đo ở 7b |
+| `instance_class` | `db.t4g.small` | theo số đo khi dựng prd |
+| `allocated_storage` | `20` | theo số đo khi dựng prd |
 | `multi_az` | `false` | `true` |
-| `backup_retention_period` | `1` | ≥ 7, chốt ở 7b |
+| `backup_retention_period` | `1` | ≥ 7, chốt khi dựng prd |
 | `delete_automated_backups` | `true` | `false` |
 | `deletion_protection` | `false` | `true` |
 | `skip_final_snapshot` | `true` | `false` |
@@ -89,8 +91,8 @@ lần hai không trùng tên snapshot cũ.
 
 Secrets Manager xoay mật khẩu master do RDS quản lý theo chu kỳ mặc định 7 ngày. Script buổi AWS đọc mật khẩu từ `master_user_secret_arn`
 **ngay trước** khi nạp secret nguồn `pg-superuser` của cluster (chỉ `password`; username luôn `postgres`), không ra file, không in. Một
-lần xoay giữa buổi làm secret trong cluster cũ đi: Job bootstrap chạy lại sẽ không đăng nhập được tới khi nạp lại. Buổi dài hơn chu kỳ xoay
-nằm ngoài phạm vi 7a.
+lần xoay giữa buổi làm secret trong cluster cũ đi: Job bootstrap chạy lại sẽ không đăng nhập được tới khi nạp lại. Script buổi không tính
+tới buổi dài hơn chu kỳ xoay.
 
 ## Chi phí theo giờ (`ap-southeast-1`, giá đọc 2026-10-31, nguồn ở ADR-0034 [N7], [N11])
 

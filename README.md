@@ -1,19 +1,57 @@
 # svp-infra
 
-Terraform của nền tảng video ngắn [svp-backend](https://github.com/anhnvcoder/svp-backend): nền mà Argo CD triển khai
-lên (mạng, cluster, dữ liệu managed, DNS) cho AWS ở giai đoạn 7, sau đó GCP (giai đoạn 8), Cloudflare (8b), GitHub dưới dạng code (7c).
+Terraform của nền tảng video ngắn [svp-backend](https://github.com/anhnvcoder/svp-backend): nền mà Argo CD triển khai lên trên AWS
+(mạng, cluster, dữ liệu managed, DNS) và cài đặt GitHub của các repo, viết thành code.
+
+## Mục lục
+
+- [Bối cảnh](#bối-cảnh)
+- [Cài đặt](#cài-đặt)
+- [Sử dụng](#sử-dụng)
+- [Bố cục](#bố-cục)
+- [Lệnh kiểm](#lệnh-kiểm)
+- [Plan và apply](#plan-và-apply)
+- [Luật an toàn](#luật-an-toàn)
+- [Đóng góp](#đóng-góp)
+- [Giấy phép](#giấy-phép)
+
+## Bối cảnh
+
 Repo code giữ service, chart và CI build image; [svp-gitops](https://github.com/anhnvcoder/svp-gitops) giữ cái gì chạy ở mỗi env; repo
 này dựng chỗ để chạy. Thiết kế và lý do ở
 [ADR-0034](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0034-aws-stage7.md) §2; cài đặt GitHub của repo ở
 [runbook `svp-infra-setup.md`](https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks/svp-infra-setup.md).
 
-Repo public: **không account ID, IP, email, tên miền thật, state hay plan nào ở đây** (mục "Luật an toàn").
+Repo public: **không account ID, IP, email, tên miền thật, state hay plan nào ở đây** (mục [Luật an toàn](#luật-an-toàn)).
+
+## Cài đặt
+
+```sh
+git clone https://github.com/anhnvcoder/svp-infra.git
+cd svp-infra
+```
+
+Lệnh kiểm cần Docker và `make`; mọi công cụ chạy từ image ghim digest, không cài gì thêm. `plan`, `apply` (chỉ người học) cần thêm
+Terraform 1.15 (Homebrew), AWS CLI v2 đăng nhập SSO và direnv (mục [Plan và apply](#plan-và-apply)).
+
+## Sử dụng
+
+```sh
+make check                            # mọi phép kiểm tĩnh, không chạm account
+make check DIRS=aws/modules/network   # chỉ các phép Terraform của một thư mục
+make help                             # liệt kê target
+```
+
+Dựng, đo và gỡ một env theo runbook [`docs/runbooks/session-stg.md`](docs/runbooks/session-stg.md) (mục [Plan và apply](#plan-và-apply)).
 
 ## Bố cục
 
 ```text
-Makefile                      make check (fmt, validate, tflint, tfdocs, trivy, shellcheck, zizmor, test), make lock, make fmt, make tfdocs
+Makefile                      make check (fmt, validate, tflint, tfdocs, trivy, shellcheck, zizmor, docs, test), make lock, make fmt, make tfdocs
 CODEOWNERS                    đường có chủ: CODEOWNERS, .github/, renovate.json, Makefile, .trivyignore.yaml, github/, aws/
+LICENSE                       Apache-2.0
+.markdownlint.yaml            luật markdownlint của make docs-check (cùng file của repo code)
+lychee.toml                   cấu hình lychee của make docs-check (cùng file của repo code)
 .tflint.hcl                   ruleset terraform (recommended) và aws ghim version
 .trivyignore.yaml             ngoại lệ của trivy trong module tải từ registry
 renovate.json                 provider, module, ruleset tflint, image ghim của Makefile, action
@@ -24,7 +62,7 @@ renovate.json                 provider, module, ruleset tflint, image ghim của
 aws/
   bootstrap/                  một lần mỗi account, giữ giữa các buổi: bucket state, budget, hosted zone aws.<domain>
   modules/                    module nội bộ (network, eks, rds, media); lock file không commit
-  envs/<env>/                 cấu hình gốc của mỗi env (stg ở 7a, prd ở 7b): một state key mỗi env
+  envs/<env>/                 cấu hình gốc của mỗi env (stg; root prd dựng bằng bản sao của nó): một state key mỗi env
   scripts/                    script buổi AWS (kiểm account, DNS, bootstrap Argo CD, đo, pre-destroy, sweep)
 github/                       cài đặt GitHub của các repo trong `local.repositories` (repo, quyền Actions, ruleset, environment promote); state trong bucket của aws/bootstrap
 docs/diagrams/                sơ đồ AWS svp-aws.drawio (trang stg, prd, flows), PDF, PNG nhúng ở docs của repo code; sinh từ spec
@@ -48,7 +86,7 @@ Chạy từ gốc repo, không cần credential AWS, cần Docker và mạng (re
 
 | Lệnh | Làm gì |
 | --- | --- |
-| `make check` | `fmt-check`, `validate`, `tflint`, `tfdocs-check`, `trivy` trên mọi thư mục có `*.tf`, rồi `shellcheck` trên mọi `*.sh`, `zizmor` trên mọi workflow, `session-test`, `test-guard`, `test` trên mọi module |
+| `make check` | `fmt-check`, `validate`, `tflint`, `tfdocs-check`, `trivy` trên mọi thư mục có `*.tf`, rồi `shellcheck` trên mọi `*.sh`, `zizmor` trên mọi workflow, `docs-check` trên mọi `.md`, `session-test`, `test-guard`, `test` trên mọi module |
 | `make check DIRS="aws/modules/x aws/envs/stg"` | như trên, sáu phép Terraform chỉ trên các thư mục đó; thư mục không có, không có `*.tf` hay nằm ngoài repo thì dừng, nêu thư mục |
 | `make fmt-check` / `make fmt` | `terraform fmt -check -diff -recursive` / viết lại file |
 | `make validate` | mỗi thư mục: `terraform init -backend=false -input=false`, rồi `terraform validate`; provider và module nằm ở thư mục tạm (`TF_DATA_DIR`), nên `.terraform/` của người học đã `init` với backend S3 không bị đọc hay ghi |
@@ -56,6 +94,7 @@ Chạy từ gốc repo, không cần credential AWS, cần Docker và mạng (re
 | `make trivy` | `trivy config` mỗi thư mục; HIGH và CRITICAL làm đỏ |
 | `make shellcheck` | shellcheck trên mọi `*.sh` (bản image, `--network none`; máy không cài shellcheck) |
 | `make zizmor` | lint bảo mật workflow bằng zizmor (`--persona=regular`), mọi finding làm đỏ; có `GH_TOKEN` thì chạy thêm audit online (impostor commit, action có lỗ hổng), không thì offline; `ZIZMOR_FORMAT=github` in annotation |
+| `make docs-check [DOCS='<file hay glob>']` | markdownlint-cli2 theo `.markdownlint.yaml`, rồi lychee `--offline --include-fragments` (link tương đối và anchor heading; link ra ngoài không kiểm), container `--network none`; mặc định mọi `.md` git theo dõi và file mới chưa theo dõi, trừ `.claude/` (cấu hình agent, không phải tài liệu của repo) |
 | `make lock [DIRS=<root>]` | `init -backend=false` rồi `terraform providers lock` cho ba nền tảng; module bị bỏ qua |
 | `make tfdocs` / `make tfdocs-check` | terraform-docs ghi / kiểm khối sinh (requirements, providers, resources, inputs, outputs) giữa `<!-- BEGIN_TF_DOCS -->` và `<!-- END_TF_DOCS -->` của `README.md` mỗi module; `tfdocs-check` đỏ khi README lệch `.tf`, root bị bỏ qua; container `--network none` |
 | `make test` | `terraform test` của mỗi module (`tests/*.tftest.hcl`): `init -backend=false` trong một container, rồi `terraform test` trong container `--network none` với image `TERRAFORM_IMAGE` ghim digest, chỉ thư mục module được mount (chỉ đọc), không biến `AWS_*` nào (bỏ bằng `env -u`), không `~/.aws`, `.envrc`, `backend.hcl`; file test chỉ được nhận khi theo khuôn: đúng một dòng `mock_provider "aws" {`, mỗi `run "<tên>" {` có `command = plan` ở dòng không trống đầu tiên, không dòng nào khác bắt đầu bằng `run`, `mock_provider`, `provider`, `override_`, `module`, `command`, `/*`, không `alias`, `*/`, heredoc, symlink hay `*.tftest.json`; sai thì bị từ chối, nêu file và dòng; root bị bỏ qua |
@@ -63,11 +102,16 @@ Chạy từ gốc repo, không cần credential AWS, cần Docker và mạng (re
 | `make help` | liệt kê target |
 
 Chưa có thư mục `*.tf` nào thì sáu phép Terraform in một dòng và qua. Mọi công cụ chạy bằng image ghim digest trong `Makefile`
-(`TERRAFORM_IMAGE` 1.15.8, `TFLINT_IMAGE`, `TRIVY_IMAGE` và `ZIZMOR_IMAGE` cùng bản ghim của repo code, `SHELLCHECK_IMAGE`, `TFDOCS_IMAGE_AMD64` và `TFDOCS_IMAGE_ARM64`:
+(`TERRAFORM_IMAGE` 1.15.8, `TFLINT_IMAGE`, `TRIVY_IMAGE`, `ZIZMOR_IMAGE`, `MARKDOWNLINT_IMAGE` và `LYCHEE_IMAGE` cùng bản ghim của repo code,
+`SHELLCHECK_IMAGE`, `TFDOCS_IMAGE_AMD64` và `TFDOCS_IMAGE_ARM64`:
 terraform-docs chỉ có tag theo kiến trúc nên ghim cả hai cùng bản, `Makefile` chọn theo `uname -m`), qua
 `env -u DOCKER_DEFAULT_PLATFORM docker run` (shell của máy đặt `linux/amd64` cho dự án khác), container chạy dưới uid của người gọi.
 Không target nào gọi `apply`, `destroy`, `import`, `state`, `output` hay `aws`; `plan` duy nhất là các `run` của `make test`, trên provider AWS giả
 (`mock_provider`), không mạng, không credential.
+
+**Khối sinh của README module** nằm giữa `<!-- markdownlint-disable MD033 -->` và `<!-- markdownlint-enable MD033 -->`: terraform-docs viết
+giá trị mặc định dạng danh sách bằng HTML (`<pre>`, `<br/>`) và chép nguyên mô tả của biến, output, nên `docs-check` không đòi luật
+inline HTML trong khối đó; phần viết tay ngoài khối vẫn theo đủ luật.
 
 **Test của module** (`aws/modules/<module>/tests/*.tftest.hcl`): mỗi rule `validation` trong `variables.tf` có một `run` với giá trị chỉ rule đó
 từ chối và `expect_failures` trỏ biến, mỗi module một `run` giá trị hợp lệ; data source cần giá trị có hình (JSON của policy, ARN, danh sách
@@ -79,7 +123,7 @@ thư mục nó kiểm:
 - thư mục tạm của lượt (`TF_DATA_DIR`): provider (bản Linux của container, ~700 MB cho provider AWS) và module tải về, xoá khi lượt kết thúc;
 - plugin tflint ở `<dir>/.terraform/tflint.d/` (`TFLINT_PLUGIN_DIR`, ~70 MB);
 - `<dir>/.terraform.lock.hcl` của module (root chỉ đọc lock của nó; `make lock` thì ghi);
-- cache của trivy, zizmor nằm trong container (`/tmp/trivy`, `/tmp/zizmor`) và mất khi container dừng; shellcheck không ghi gì.
+- cache của trivy, zizmor nằm trong container (`/tmp/trivy`, `/tmp/zizmor`) và mất khi container dừng; shellcheck, `docs-check` không ghi gì.
 
 Không có cache plugin dùng chung (`TF_PLUGIN_CACHE_DIR` không đặt, không thư mục plugin tflint chung): hai lượt không bao giờ cùng ghi một
 file, đổi lại mỗi lượt tải provider riêng. `.terraform/` mà người học `init` với backend thật không bị `make check` đọc hay ghi (trừ
@@ -119,8 +163,8 @@ Terraform của máy (Homebrew) phải nằm trong
 `aws/bootstrap`), mỗi root một `key`, khoá bằng lock file native của S3 (`use_lockfile`).
 
 **Profile AWS không nằm trong code** (khuyến nghị của HashiCorp và AWS: thông tin đăng nhập là của môi trường chạy, không của cấu hình; CI
-sau này dùng OIDC, máy khác đặt tên profile khác). Code chỉ chặn nhầm account bằng `allowed_account_ids`. Trên máy, đặt profile một lần cho
-thư mục bằng [direnv](https://direnv.net) (công cụ thông dụng nạp biến môi trường theo thư mục):
+cần credential thì dùng OIDC, máy khác đặt tên profile khác). Code chỉ chặn nhầm account bằng `allowed_account_ids`. Trên máy, đặt profile
+một lần cho thư mục bằng [direnv](https://direnv.net) (công cụ thông dụng nạp biến môi trường theo thư mục):
 
 ```sh
 brew install direnv
@@ -149,3 +193,13 @@ không có direnv thì `export AWS_PROFILE=anhnv-sso` mỗi terminal.
 - Tên bucket theo `<tên>-<account>-<region>` (như bucket của AWS CDK, Control Tower): duy nhất toàn cầu không cần phần ngẫu nhiên.
   Account thật vẫn không nằm trong file commit nào: tên tính từ `var.account_id` lúc chạy.
 - Nghi đã lộ khoá AWS hay giá trị cá nhân: mục "Giảm thiểu" của runbook `svp-infra-setup.md`.
+
+## Đóng góp
+
+Quy ước chung (ngôn ngữ, tài liệu, ADR, Git, repo public) ở
+[`CONTRIBUTING.md`](https://github.com/anhnvcoder/.github/blob/main/CONTRIBUTING.md) của `anhnvcoder/.github`; luật riêng của repo, luật
+an toàn cloud ở [`AGENTS.md`](AGENTS.md). Mọi thay đổi vào `main` đi qua pull request có `infra-ok` xanh.
+
+## Giấy phép
+
+[Apache-2.0](LICENSE).

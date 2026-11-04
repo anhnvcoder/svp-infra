@@ -19,6 +19,7 @@ module "network" {
 }
 ```
 
+<!-- markdownlint-disable MD033 -->
 <!-- BEGIN_TF_DOCS -->
 ## Requirements
 
@@ -71,18 +72,19 @@ module "network" {
 | vpc\_cidr | IPv4 range of the VPC. |
 | vpc\_id | ID of the VPC. |
 <!-- END_TF_DOCS -->
+<!-- markdownlint-enable MD033 -->
 
 ## Giá trị theo env
 
-| Biến | stg (7a) | prd (7b) |
+| Biến | stg | prd |
 | --- | --- | --- |
 | `name` | `svp-stg` | `svp-prd` |
-| `cidr` | mặc định | mặc định (hay dải khác nếu 7b nối hai VPC) |
+| `cidr` | mặc định | mặc định (hay dải khác nếu prd nối hai VPC) |
 | `az_count` | `2` | `3` |
 | `single_nat_gateway` | `true` (một NAT ở AZ đầu) | `false` (một NAT mỗi AZ, route table private mỗi AZ trỏ NAT cùng AZ) |
 | `cluster_name` | tên cluster EKS stg | tên cluster EKS prd |
 | `flow_log_enabled` | `false` | `true` |
-| `flow_log_retention_days` | (không dùng) | chốt ở 7b |
+| `flow_log_retention_days` | (không dùng) | chốt khi dựng prd |
 
 **Chia dải** (`cidr` chia 8 khối bằng nhau): khối 0–5 là subnet private, mỗi AZ một khối (`/19` với `/16`: 8 192 địa chỉ, vì VPC CNI cấp
 IP pod từ subnet private, prefix delegation lấy từng `/28` cho mỗi node); khối 7 chia tiếp 32 phần, mỗi AZ một subnet public (`/24` với
@@ -113,7 +115,7 @@ stg một NAT, prd ba NAT.
 
 Các thành phần chạy trong cluster tạo tài nguyên trong VPC này mà Terraform không biết. Chúng còn thì `terraform destroy` không xoá được
 subnet, security group hay VPC (ENI còn gắn), nên script trước destroy và script quét của buổi phải tìm chúng theo tag. Tag đọc từ mã
-nguồn của từng thành phần (nhánh chính, 2026-10-31); buổi đầu kiểm lại trên tài nguyên thật.
+nguồn của từng thành phần (nhánh chính, tính đến 2026-10-31); buổi đầu kiểm lại trên tài nguyên thật.
 
 | Tài nguyên | Ai tạo | Tag hay dấu hiệu nhận diện |
 | --- | --- | --- |

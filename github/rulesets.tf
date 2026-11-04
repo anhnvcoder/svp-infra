@@ -351,8 +351,9 @@ resource "github_repository_ruleset" "infra_owners" {
   }
 }
 
-# svp-labs main: no deletion, no force push, every change through a pull request. No required check: the repository
-# has no CI.
+# svp-labs main: no deletion, no force push, every change through a pull request with docs green (job docs of
+# .github/workflows/docs.yml, make docs-check), no one bypasses. Applied only once docs.yml is on main of svp-labs and has
+# run there (a required check that has never run would leave every pull request waiting).
 resource "github_repository_ruleset" "labs_main" {
   repository  = github_repository.this["svp-labs"].name
   name        = "main"
@@ -379,11 +380,22 @@ resource "github_repository_ruleset" "labs_main" {
       require_last_push_approval        = false
       required_review_thread_resolution = false
     }
+
+    required_status_checks {
+      strict_required_status_checks_policy = false
+      do_not_enforce_on_create             = false
+
+      required_check {
+        context        = "docs"
+        integration_id = local.github_actions_app_id
+      }
+    }
   }
 }
 
-# .github main: no deletion, no force push, every change through a pull request. No required check: the repository
-# has no CI.
+# .github main: no deletion, no force push, every change through a pull request with docs green (job docs of
+# .github/workflows/docs.yml, make docs-check), no one bypasses. Applied only once docs.yml is on main of .github and has
+# run there (a required check that has never run would leave every pull request waiting).
 resource "github_repository_ruleset" "dotgithub_main" {
   repository  = github_repository.this[".github"].name
   name        = "main"
@@ -409,6 +421,16 @@ resource "github_repository_ruleset" "dotgithub_main" {
       require_code_owner_review         = false
       require_last_push_approval        = false
       required_review_thread_resolution = false
+    }
+
+    required_status_checks {
+      strict_required_status_checks_policy = false
+      do_not_enforce_on_create             = false
+
+      required_check {
+        context        = "docs"
+        integration_id = local.github_actions_app_id
+      }
     }
   }
 }

@@ -56,7 +56,7 @@ locals {
       can_approve_pull_request_reviews = false
     }
     svp-infra = {
-      description                 = "Terraform of the short-video-platform lab: AWS (stage 7), GCP, Cloudflare"
+      description                 = "Terraform of the short-video-platform lab: AWS, GCP, Cloudflare"
       has_wiki                    = true
       allow_merge_commit          = false
       allow_rebase_merge          = false
@@ -98,8 +98,8 @@ locals {
     ".github" = {
       description = "Quy ước chung và file cộng đồng mặc định cho mọi repo của anhnvcoder"
       has_wiki    = false
-      # Actions as in svp-labs, with no action outside GitHub's own: the repository holds no workflow and no dependency
-      # manifest.
+      # Actions as in svp-labs, with no action outside GitHub's own: its one workflow (docs.yml) runs GitHub's actions
+      # and pinned images alone, and the repository holds no dependency manifest.
       allow_merge_commit               = false
       allow_rebase_merge               = false
       allow_auto_merge                 = false
