@@ -9,13 +9,19 @@
 # its branch and rebuild its images after each merge, and the merge queue that avoids that exists only for repositories
 # of an organization; the run on main after each merge catches what two pull requests break together.
 # require_extra_approval_for_unattributed_changes (on by GitHub's default) is not exposed by the provider.
+#
+# pr-title is job pr-title of .github/workflows/pr-title.yml: the pull request title, which becomes the squash commit
+# title, follows Conventional Commits. It is required in the main ruleset of svp-backend, svp-frontend, svp-gitops and
+# svp-infra. A repository gets it only once pr-title.yml is on its main and has passed on at least one pull request (a
+# required check that has never run would leave every pull request waiting); bot pull requests (Renovate, the promote
+# Apps) already title themselves in Conventional Commits.
 ################################################################################
 
 locals {
   github_actions_app_id = 15368
 }
 
-# svp-backend: every change to main through a pull request with ci-ok and images-ok green; no one bypasses.
+# svp-backend: every change to main through a pull request with ci-ok, images-ok and pr-title green; no one bypasses.
 resource "github_repository_ruleset" "backend_main" {
   repository  = github_repository.this["svp-backend"].name
   name        = "main"
@@ -53,6 +59,10 @@ resource "github_repository_ruleset" "backend_main" {
       }
       required_check {
         context        = "images-ok"
+        integration_id = local.github_actions_app_id
+      }
+      required_check {
+        context        = "pr-title"
         integration_id = local.github_actions_app_id
       }
     }
@@ -134,6 +144,10 @@ resource "github_repository_ruleset" "frontend_main" {
         context        = "images-ok"
         integration_id = local.github_actions_app_id
       }
+      required_check {
+        context        = "pr-title"
+        integration_id = local.github_actions_app_id
+      }
     }
   }
 }
@@ -173,8 +187,8 @@ resource "github_repository_ruleset" "frontend_owners" {
   }
 }
 
-# svp-gitops main: pull request and gitops-ok, no one bypasses. Together with owners below, a bot pull request that
-# changes only envs/stg/ (no code owner) merges itself once gitops-ok is green.
+# svp-gitops main: pull request, gitops-ok and pr-title, no one bypasses. Together with owners below, a bot pull
+# request that changes only envs/stg/ (no code owner) merges itself once gitops-ok and pr-title are green.
 resource "github_repository_ruleset" "gitops_main" {
   repository  = github_repository.this["svp-gitops"].name
   name        = "main"
@@ -208,6 +222,10 @@ resource "github_repository_ruleset" "gitops_main" {
 
       required_check {
         context        = "gitops-ok"
+        integration_id = local.github_actions_app_id
+      }
+      required_check {
+        context        = "pr-title"
         integration_id = local.github_actions_app_id
       }
     }
@@ -274,7 +292,7 @@ resource "github_repository_ruleset" "gitops_tags" {
   }
 }
 
-# svp-infra main: pull request and infra-ok, no one bypasses. Created by Terraform. On a new account it is
+# svp-infra main: pull request, infra-ok and pr-title, no one bypasses. Created by Terraform. On a new account it is
 # applied only after the first green run of check.yml on main (a required check that has never run would leave every
 # pull request waiting).
 resource "github_repository_ruleset" "infra_main" {
@@ -310,6 +328,10 @@ resource "github_repository_ruleset" "infra_main" {
 
       required_check {
         context        = "infra-ok"
+        integration_id = local.github_actions_app_id
+      }
+      required_check {
+        context        = "pr-title"
         integration_id = local.github_actions_app_id
       }
     }
