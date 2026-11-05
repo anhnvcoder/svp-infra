@@ -1,30 +1,41 @@
 #!/usr/bin/env bash
 # The whole session in order, as docs/runbooks/session-<env>.md runs it: each step's script with --print, so every
 # command of the session shows up in the order it runs, and nothing runs. The session itself is run step by step from
-# the runbook (each step's output is read before the next).
+# the runbook (each step's output is read before the next, and the runbook adds what no script does: the promote gate
+# and the tunnel of prd, the drills, the final snapshot). The steps are the same for every environment; what differs is
+# data, in env_table of lib.sh.
 #
-# Usage: aws/scripts/session.sh --print stg
+# Usage: aws/scripts/session.sh --print stg|prd
 set -euo pipefail
 
 # shellcheck source=aws/scripts/lib.sh
 . "$(dirname "$0")/lib.sh"
-printing || fail "usage: $(basename "$0") --print stg (the session runs step by step from docs/runbooks/session-stg.md)"
+printing || fail "usage: $(basename "$0") --print $(env_names session) (the session runs step by step from docs/runbooks/session-<env>.md)"
 shift
-[ $# -eq 1 ] || fail "usage: $(basename "$0") --print stg"
+[ $# -eq 1 ] || fail "usage: $(basename "$0") --print $(env_names session)"
 env_arg "$1"
 
 # The steps, one per line: the script and its arguments. The runbook's table of steps lists the same, in this order.
-steps="check-account.sh
-check-dns.sh
-tf.sh $env_name init
-tf.sh $env_name plan
-tf.sh $env_name apply
-bootstrap-argocd.sh $env_name
+steps="check-account.sh $env_name
+check-dns.sh $env_name
+tf.sh $env_name env init
+tf.sh $env_name env plan
+tf.sh $env_name env apply
+bootstrap.sh $env_name secrets
+tf.sh $env_name gitops init
+tf.sh $env_name gitops plan
+tf.sh $env_name gitops apply
+bootstrap.sh $env_name wait
 measure.sh $env_name
 pre-destroy.sh $env_name
-tf.sh $env_name plan --destroy
-tf.sh $env_name destroy
-sweep.sh"
+tf.sh $env_name gitops plan --destroy
+tf.sh $env_name gitops destroy
+tf.sh $env_name env plan --teardown
+tf.sh $env_name env apply --teardown
+tf.sh $env_name env plan --destroy
+tf.sh $env_name env destroy
+sweep.sh $env_name
+sweep.sh mgmt"
 
 n=0
 while read -r script args; do

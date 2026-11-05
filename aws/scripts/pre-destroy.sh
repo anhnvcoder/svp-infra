@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # What Kubernetes made in the account, removed while the controllers that made it still run, before tf.sh <env>
-# destroy: the NLB and target groups (AWS Load Balancer Controller, from the Service of Envoy's Gateway), the EBS
+# gitops destroy: the NLB and target groups (AWS Load Balancer Controller, from the Service of Envoy's Gateway), the EBS
 # volumes of PVCs (EBS CSI driver) and the DNS records (ExternalDNS). Terraform knows none of them; left behind they
 # block the destroy (ENIs, security groups) or stay billed (volumes). Every wait has a limit, and what is left is printed.
-#   1. Root svp-root: its auto-sync (prune, self-heal) would make again every child deleted below. Its finalizers and
-#      automated sync are cleared, then it is deleted alone (no finalizer: no cascade, the children stay). The
+#   1. The root of GitOps: ApplicationSet svp-bootstrap would make svp-root again, and the auto-sync (prune, self-heal) of
+#      svp-root and svp-apps would make again every child deleted below. Their finalizers and automated sync are
+#      cleared, then the ApplicationSet and both are deleted alone (no finalizer: no cascade, the children stay). The
 #      children's auto-sync is turned off too, so that svp-cluster does not make the Gateway again.
 #   2. Workload Applications, highest sync wave first, one wave at a time (their finalizer deletes what each deployed):
 #      every Application but svp-cluster and the platform controllers (those whose finalizers and webhooks the
@@ -17,23 +18,24 @@
 #      driver and no EBS volume the driver made for the cluster are left.
 #   4. svp-cluster and the platform Applications, highest wave first. Waits a few minutes per wave and only notes
 #      what is left: nothing of them is billed outside the cluster, which terraform destroy deletes.
-# A cluster without Argo CD (make eks-gitops-up stopped before installing it, at its release checks say) has no
-# Application to delete: steps 1, 2 and 4 skip them, and the waits of steps 2 and 3 still check that nothing of
+# A cluster without Argo CD (root gitops never applied, or its apply stopped before Argo CD) has no Application to delete: steps 1, 2 and 4 skip them, and the waits of steps 2 and 3 still check that nothing of
 # Kubernetes is left in the account.
-# Needs no step but the apply that made the cluster: it writes the kubeconfig context itself and reads the lab zone's id
-# from the root's tfvars, not from the files of bootstrap-argocd.sh. So it also runs after an apply that failed once EKS
-# existed (its outputs were not stored, so bootstrap-argocd.sh cannot run), and from a new session directory.
+# Needs no step but the apply that made the cluster: it writes the kubeconfig context itself and reads the zone's id
+# from the root's tfvars, not from the files of bootstrap.sh. So it also runs after an apply that failed once EKS
+# existed (its outputs were not stored, so bootstrap.sh cannot run), and from a new session directory. For an
+# environment whose API endpoint is private, the tunnel must be open (checked before the first kubectl).
 # Records pre-destroy-start in the timeline once the account is checked, and pre-destroy-done at the end, which tf.sh
-# <env> plan --destroy requires. Run it again after a failure: each step finds what is left. When the session's time is
-# up and step 2 or 3 is still red, tf.sh <env> plan --destroy --leftovers (it needs pre-destroy-start) is the way out.
+# <env> gitops plan --destroy requires. Run it again after a failure: each step finds what is left. When the session's
+# time is up and step 2 or 3 is still red, tf.sh <env> gitops plan --destroy --leftovers (it needs pre-destroy-start)
+# is the way out.
 #
-# Usage: aws/scripts/pre-destroy.sh [--print] stg
+# Usage: aws/scripts/pre-destroy.sh [--print] stg|prd
 set -euo pipefail
 
 # shellcheck source=aws/scripts/lib.sh
 . "$(dirname "$0")/lib.sh"
 printing && shift
-[ $# -eq 1 ] || fail "usage: $(basename "$0") [--print] stg"
+[ $# -eq 1 ] || fail "usage: $(basename "$0") [--print] $(env_names session)"
 env_arg "$1"
 session_dir
 
@@ -45,26 +47,27 @@ wave_limit=600
 platform_wave_limit=300
 
 # The zone ExternalDNS writes into: hosted_zone_id of the root's personal tfvars, the value output cluster_values
-# passes to the cluster as hostedZoneId.
-tfvars=$root_dir/$env_name.auto.tfvars
+# passes to the cluster as hostedZoneId (the zone of the environment's account).
+tfvars=$env_root/$env_name.auto.tfvars
 if printing; then
   zone_id="<hosted_zone_id of aws/envs/$env_name/$env_name.auto.tfvars>"
-  zone='<lab zone>'
+  zone="<zone of $env_name>"
 else
   [ -f "$tfvars" ] || fail "no $tfvars: the file tf.sh $env_name plan read, with the hosted_zone_id of the lab zone"
   zone_id=$(sed -n 's/^[[:space:]]*hosted_zone_id[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$tfvars" | head -n 1)
   [[ $zone_id =~ ^Z[A-Z0-9]{1,31}$ ]] ||
     fail "hosted_zone_id of $tfvars is '$zone_id', not a hosted zone id such as Z0123456789ABCDEFGHIJ"
-  lab_zone
+  env_zone
 fi
 
 step "pre-destroy.sh: account and cluster $context"
 check_account
 mark pre-destroy-start
-aws_ eks update-kubeconfig --name "$cluster" --alias "$context" ||
-  fail "aws eks update-kubeconfig for cluster $cluster (no such cluster in the account? then nothing ever ran on one: aws/scripts/tf.sh $env_name plan --destroy --no-cluster, which checks that the state holds none)"
+kubeconfig ||
+  fail "kubeconfig context $context of cluster $cluster (no such cluster in the account? then nothing ever ran on one: aws/scripts/tf.sh $env_name env plan --destroy --no-cluster, which checks that the state holds none)"
 ok "context $context in the kubeconfig"
-# The CRD rather than namespace argocd: make eks-gitops-up makes the namespace just before helm installs Argo CD.
+need_tunnel
+# The CRD rather than namespace argocd: root gitops makes the namespace before Argo CD.
 argocd=$(kc get crd applications.argoproj.io --ignore-not-found -o name) ||
   fail "cannot reach the cluster on context $context (error above)"
 if printing || [ -n "$argocd" ]; then
@@ -198,21 +201,27 @@ delete_apps() {
   done
 }
 
-step "pre-destroy.sh 1/4: root svp-root"
-root=
-if [ -n "$argocd" ]; then
-  root=$(kc -n argocd get application svp-root --ignore-not-found -o name) || fail "read Application svp-root"
-fi
+step "pre-destroy.sh 1/4: ApplicationSet svp-bootstrap, Applications svp-root and svp-apps"
 if [ -z "$argocd" ]; then
   ok "no Application (no Argo CD)"
-elif printing || [ -n "$root" ]; then
-  kc -n argocd patch application svp-root --type merge \
-    -p '{"metadata":{"finalizers":null},"spec":{"syncPolicy":{"automated":null}}}' >/dev/null ||
-    fail "clear the finalizers and the auto-sync of svp-root"
-  kc -n argocd delete application svp-root --wait=true --timeout=120s >/dev/null || fail "delete svp-root"
-  ok "svp-root deleted alone; its children stay"
 else
-  ok "svp-root already gone"
+  for root in svp-root svp-apps; do
+    found=$(kc -n argocd get application "$root" --ignore-not-found -o name) || fail "read Application $root"
+    if printing || [ -n "$found" ]; then
+      kc -n argocd patch application "$root" --type merge \
+        -p '{"metadata":{"finalizers":null},"spec":{"syncPolicy":{"automated":null}}}' >/dev/null ||
+        fail "clear the finalizers and the auto-sync of $root"
+    fi
+  done
+  appset=$(kc get crd applicationsets.argoproj.io --ignore-not-found -o name) || fail "read the CRDs"
+  if printing || [ -n "$appset" ]; then
+    kc -n argocd delete applicationset svp-bootstrap --ignore-not-found --wait=true --timeout=120s >/dev/null ||
+      fail "delete ApplicationSet svp-bootstrap"
+  fi
+  for root in svp-root svp-apps; do
+    kc -n argocd delete application "$root" --ignore-not-found --wait=true --timeout=120s >/dev/null || fail "delete $root"
+  done
+  ok "svp-bootstrap, svp-root and svp-apps deleted alone; their children stay"
 fi
 if [ -n "$argocd" ]; then
   list=$(apps) || fail "list the Applications of argocd"
@@ -229,7 +238,7 @@ mark pre-destroy-root
 # is left.
 way_out() {
   [ "$1" = 0 ] ||
-    printf 'note  %s\n' "fix what the FAIL above names, then aws/scripts/pre-destroy.sh $env_name again; once the session's time is up and step 2 or 3 is still red: aws/scripts/tf.sh $env_name plan --destroy --leftovers, then aws/scripts/tf.sh $env_name destroy, then aws/scripts/sweep.sh (docs/runbooks/session-$env_name.md, step 8)" >&2
+    printf 'note  %s\n' "fix what the FAIL above names, then aws/scripts/pre-destroy.sh $env_name again; once the session's time is up and step 2 or 3 is still red: aws/scripts/tf.sh $env_name gitops plan --destroy --leftovers, and on with the teardown (docs/runbooks/session-stg.md, stuck-destroy section)" >&2
 }
 trap 'way_out $?' EXIT
 
@@ -259,7 +268,7 @@ else
   ok "no TargetGroupBinding (LBC's CRD is not installed)"
 fi
 wait_until "no load balancer or target group of $cluster is left in ELBv2" "$wave_limit" elb_gone ||
-  fail "ELBv2 still holds a load balancer or target group tagged elbv2.k8s.aws/cluster=$cluster (aws/scripts/sweep.sh lists it)"
+  fail "ELBv2 still holds a load balancer or target group tagged elbv2.k8s.aws/cluster=$cluster (aws/scripts/sweep.sh $env_name lists it)"
 ok "no load balancer or target group of $cluster in ELBv2"
 if ! wait_until "no record of ExternalDNS is left in $zone" "$wave_limit" dns_gone; then
   fail "records left in $zone: $(dns_records | oneline); ExternalDNS's log: kubectl --context $context -n external-dns logs deploy/external-dns"
@@ -285,7 +294,7 @@ wait_until "no PersistentVolume of the EBS CSI driver is left" "$wave_limit" pv_
   fail "a PersistentVolume of ebs.csi.aws.com is left: kubectl --context $context get pv (reclaim policy Retain?)"
 ok "no PersistentVolume of the EBS CSI driver"
 if ! wait_until "no EBS volume of the EBS CSI driver is left" "$wave_limit" volumes_gone; then
-  fail "EBS volumes left: $(csi_volumes | oneline) (aws/scripts/sweep.sh lists them; the runbook has the delete command)"
+  fail "EBS volumes left: $(csi_volumes | oneline) (aws/scripts/sweep.sh $env_name lists them with the delete command)"
 fi
 ok "no EBS volume of the EBS CSI driver"
 mark pre-destroy-volumes
@@ -301,4 +310,4 @@ else
   note "Application(s)$left_apps not gone after $platform_wave_limit s; terraform destroy deletes the cluster with them (steps 2 and 3 left nothing billed outside it)"
 fi
 mark pre-destroy-done
-ok "ready for: aws/scripts/tf.sh $env_name plan --destroy"
+ok "ready for: aws/scripts/tf.sh $env_name gitops plan --destroy"

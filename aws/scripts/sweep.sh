@@ -1,31 +1,39 @@
 #!/usr/bin/env bash
-# Last step of every AWS session, after tf.sh <env> destroy: lists what is left in the region of the lab, from the AWS
-# APIs alone, so it works when a destroy stopped half-way or the state is lost. Read only: no command here creates,
-# changes or deletes anything; deleting a leftover is the learner's, with the commands of the session runbook.
+# Last steps of every AWS session, after the destroy of both roots: lists what is left in an account, from the AWS APIs
+# alone, so it works when a destroy stopped half-way or the state is lost. Read only: no command here creates, changes
+# or deletes anything; each leftover comes with the command that deletes it, for the learner to run.
+# Run for the environment's account (stg, prd), then for the management account (mgmt), each with its own profile.
 # Looks for resources tagged Project=svp, or with a tag Kubernetes components put on what they make
 # (kubernetes.io/cluster/svp-*, elbv2.k8s.aws/cluster, ebs.csi.aws.com/cluster, cluster.k8s.amazonaws.com/name), or
 # named as the lab names them (svp-*):
 #   EKS clusters; EC2 instances, EBS volumes and snapshots, VPCs, NAT gateways, Elastic IPs, network interfaces and
 #   security groups (also any of a VPC of the lab); ELBv2 load balancers and target groups; RDS instances, snapshots and
 #   retained automated backups; S3 buckets; CloudFront distributions, origin access controls and response headers
-#   policies; CloudWatch log groups; Secrets Manager secrets, also those scheduled for deletion (they still hold their
-#   name); KMS keys; records of the lab zone but NS and SOA at its apex.
-# The resources of aws/bootstrap (state bucket and hosted zone, tagged Stack=bootstrap) are printed as kept.
+#   policies; WAF web ACLs of CloudFront (us-east-1); CloudWatch log groups, also those RDS and EKS make themselves;
+#   Secrets Manager secrets, also those scheduled for deletion (they still hold their name); KMS keys; records of the
+#   account's hosted zone but NS and SOA at its apex (and, in the lab zone, the NS records delegating the zone of each
+#   member account).
+# What stays between sessions is printed, not counted: what is tagged with a Stack of the environment's kept list in
+# env_table of lib.sh (baseline in a member account: state bucket, its KMS key, hosted zone; bootstrap and org in the
+# management account), as "kept", and KMS keys in PendingDeletion, as "pending deletion".
 # Exit 0 when nothing else is left, 1 when anything is left or a kind could not be read.
 #
-# Usage: aws/scripts/sweep.sh [--print]
+# Usage: aws/scripts/sweep.sh [--print] mgmt|stg|prd
 set -euo pipefail
 
 # shellcheck source=aws/scripts/lib.sh
 . "$(dirname "$0")/lib.sh"
-case "$*" in '' | --print) ;; *) fail "usage: $(basename "$0") [--print]" ;; esac
+printing && shift
+[ $# -eq 1 ] || fail "usage: $(basename "$0") [--print] $(env_names)"
+env_arg "$1" any
 
 svp_tag=Name=tag:Project,Values=svp
 k8s_tag='Name=tag-key,Values=kubernetes.io/cluster/svp-*'
 leftovers=0
 unread=
 
-# q FILTER AWS-ARGS...: the lines jq's FILTER makes of the JSON answer of aws AWS-ARGS (nothing with --print).
+# q FILTER AWS-ARGS...: the lines jq's FILTER makes of the JSON answer of aws AWS-ARGS (nothing with --print). The
+# Stack tags this account keeps are in $KEPT (a JSON list) for the filters.
 q() {
   local filter=$1 out
   shift
@@ -33,11 +41,22 @@ q() {
   printing && return 0
   jq -r "$filter" <<<"$out"
 }
+q_global() {
+  local filter=$1 out
+  shift
+  out=$(aws_global_ "$@" --output json) || return 1
+  printing && return 0
+  jq -r "$filter" <<<"$out"
+}
+KEPT=$(printf '%s' "$kept_stacks" | jq -Rc 'split(",")')
+export KEPT
 
-# found KIND LINES: one line ok or FAIL for KIND, then the leftovers indented.
+# found KIND LINES DELETE: one line ok or FAIL for KIND, then each leftover indented, with the command that deletes it:
+# DELETE with {} for the first word of the leftover's line, run with the account's profile in $region, or the runbook's
+# section when one command does not do it.
 found() {
-  local kind=$1 lines n
-  lines=$(grep . <<<"$2" | LC_ALL=C sort -u || true)
+  local kind=$1 lines=$2 delete=$3 n line id
+  lines=$(grep . <<<"$lines" | LC_ALL=C sort -u || true)
   printing && return 0
   if [ -z "$lines" ]; then
     ok "$kind: none"
@@ -45,7 +64,14 @@ found() {
   fi
   n=$(grep -c . <<<"$lines")
   printf 'FAIL  %s: %s left\n' "$kind" "$n"
-  while IFS= read -r line; do printf '        %s\n' "$line"; done <<<"$lines"
+  while IFS= read -r line; do
+    printf '        %s\n' "$line"
+    id=${line%% *}
+    case $delete in
+      aws\ *) printf '          delete: AWS_PROFILE=%s %s --region %s\n' "$profile" "${delete//\{\}/$id}" "$region" ;;
+      *) printf '          delete: %s\n' "$delete" ;;
+    esac
+  done <<<"$lines"
   leftovers=$((leftovers + n))
 }
 
@@ -55,15 +81,18 @@ unreadable() {
   unread="$unread $1"
 }
 
-# sweep_kind KIND FUNCTION: FUNCTION prints the leftovers of KIND, or fails when an API call failed.
+# sweep_kind KIND FUNCTION DELETE: FUNCTION prints the leftovers of KIND, or fails when an API call failed.
 sweep_kind() {
   local lines
   if lines=$("$2"); then
-    found "$1" "$lines"
+    found "$1" "$lines" "$3"
   else
     unreadable "$1"
   fi
 }
+
+# keep LINE: printed at the end as kept or pending deletion, not counted.
+keep() { printing || printf '%s\n' "$1" >>"$kept_file"; }
 
 eks_clusters() { q '.clusters[] | select(startswith("svp-"))' eks list-clusters; }
 
@@ -145,14 +174,17 @@ rds_instances() {
   q '.DBInstances[] | select((.DBInstanceIdentifier | startswith("svp-")) or any(.TagList[]?; .Key == "Project" and .Value == "svp"))
     | "\(.DBInstanceIdentifier) \(.DBInstanceStatus)"' rds describe-db-instances
 }
+# The final snapshot a destroy of prd writes is one of them: the runbook reads it, then deletes it.
 rds_snapshots() {
   q '.DBSnapshots[] | select((.DBInstanceIdentifier | startswith("svp-")) or any(.TagList[]?; .Key == "Project" and .Value == "svp"))
-    | "\(.DBSnapshotIdentifier) \(.SnapshotType) \(.Status)"' rds describe-db-snapshots || return 1
+    | "\(.DBSnapshotIdentifier) \(.SnapshotType) \(.Status)"' rds describe-db-snapshots
+}
+rds_backups() {
   q '.DBInstanceAutomatedBackups[] | select(.DBInstanceIdentifier | startswith("svp-")) | "\(.DBInstanceAutomatedBackupsArn) \(.Status)"' \
     rds describe-db-instance-automated-backups
 }
 
-# Buckets named svp-*; the state bucket of aws/bootstrap (Stack=bootstrap) goes to kept_buckets.
+# Buckets named svp-*; those tagged with a kept Stack go to the kept list.
 buckets() {
   local names b tags
   names=$(q '.Buckets[].Name | select(startswith("svp-"))' s3api list-buckets) || return 1
@@ -160,8 +192,8 @@ buckets() {
   for b in $names; do
     tags=$(aws_ s3api get-bucket-tagging --bucket "$b" --output json 2>/dev/null) || tags='{"TagSet": []}'
     printing && continue
-    if jq -e 'any(.TagSet[]?; .Key == "Stack" and .Value == "bootstrap")' <<<"$tags" >/dev/null; then
-      echo "$b" >>"$kept_file"
+    if jq -e 'any(.TagSet[]?; .Key == "Stack" and (.Value | IN($ENV.KEPT | fromjson[])))' <<<"$tags" >/dev/null; then
+      keep "kept  bucket $b (Stack=$(jq -r '.TagSet[] | select(.Key == "Stack") | .Value' <<<"$tags"))"
     else
       echo "$b"
     fi
@@ -173,17 +205,24 @@ distributions() {
     | "\(.Id) \(.Status) enabled=\(.Enabled) \(.DomainName)"' cloudfront list-distributions
 }
 cloudfront_policies() {
-  q '.OriginAccessControlList.Items[]? | select(.Name | startswith("svp-")) | "origin access control \(.Id) \(.Name)"' \
+  q '.OriginAccessControlList.Items[]? | select(.Name | startswith("svp-")) | "\(.Id) origin access control \(.Name)"' \
     cloudfront list-origin-access-controls || return 1
   q '.ResponseHeadersPolicyList.Items[]?.ResponseHeadersPolicy | select(.ResponseHeadersPolicyConfig.Name | startswith("svp-"))
-    | "response headers policy \(.Id) \(.ResponseHeadersPolicyConfig.Name)"' cloudfront list-response-headers-policies --type custom
+    | "\(.Id) response headers policy \(.ResponseHeadersPolicyConfig.Name)"' cloudfront list-response-headers-policies --type custom
+}
+web_acls() {
+  q_global '.WebACLs[] | select(.Name | startswith("svp-")) | "\(.Name) \(.Id)"' wafv2 list-web-acls --scope CLOUDFRONT
 }
 
-# Log groups EKS or RDS make under the lab's names (untagged), and any tagged Project=svp (the VPC flow log).
+# Log groups EKS or RDS make under the lab's names (untagged: they write them outside Terraform's state, and again
+# after a destroy while the last logs arrive), RDS's Enhanced Monitoring group, and any tagged Project=svp but with a
+# kept Stack (the VPC flow log, the groups the rds module makes).
 log_groups() {
-  q '.logGroups[].logGroupName | select(test("^/aws/eks/svp-|^/aws/rds/instance/svp-"))' logs describe-log-groups || return 1
-  q '.ResourceTagMappingList[].ResourceARN' resourcegroupstaggingapi get-resources --resource-type-filters logs:log-group \
-    --tag-filters Key=Project,Values=svp
+  q '.logGroups[].logGroupName | select(test("^/aws/eks/svp-|^/aws/rds/instance/svp-|^RDSOSMetrics$"))' logs describe-log-groups || return 1
+  # shellcheck disable=SC2016 # $ENV is jq's, not the shell's
+  q '.ResourceTagMappingList[] | select(any(.Tags[]?; .Key == "Stack" and (.Value | IN($ENV.KEPT | fromjson[]))) | not)
+    | .ResourceARN | sub("^arn:aws:logs:[^:]*:[^:]*:log-group:"; "") | sub(":\\*$"; "")' \
+    resourcegroupstaggingapi get-resources --resource-type-filters logs:log-group --tag-filters Key=Project,Values=svp
 }
 
 # Secrets of the lab, and the master secret RDS keeps for an instance svp-* (tag aws:rds:primaryDBInstanceArn); one
@@ -195,66 +234,97 @@ secrets() {
     secretsmanager list-secrets --include-planned-deletion
 }
 
+# KMS keys behind an alias of the lab (alias/svp*, alias/eks/svp-*) or tagged Project=svp, each read once: PendingDeletion
+# is "pending deletion", a kept Stack is "kept", anything else is left.
 kms_keys() {
-  q '.Aliases[] | select(.AliasName | test("^alias/(svp|eks/svp-)")) | "\(.AliasName) \(.TargetKeyId // "")"' kms list-aliases || return 1
-  q '.ResourceTagMappingList[].ResourceARN' resourcegroupstaggingapi get-resources --resource-type-filters kms:key \
-    --tag-filters Key=Project,Values=svp
+  local ids id key tags state stack
+  ids=$(q '.Aliases[] | select(.AliasName | test("^alias/(svp|eks/svp-)")) | select(.TargetKeyId) | .TargetKeyId' kms list-aliases) || return 1
+  ids="$ids
+$(q '.ResourceTagMappingList[].ResourceARN | sub("^.*:key/"; "")' resourcegroupstaggingapi get-resources --resource-type-filters kms:key \
+    --tag-filters Key=Project,Values=svp)" || return 1
+  printing && ids='<each-key-above>'
+  for id in $(grep . <<<"$ids" | LC_ALL=C sort -u || true); do
+    key=$(aws_ kms describe-key --key-id "$id" --output json) || return 1
+    tags=$(aws_ kms list-resource-tags --key-id "$id" --output json) || return 1
+    printing && continue
+    state=$(jq -r '.KeyMetadata.KeyState' <<<"$key")
+    [ "$(jq -r '.KeyMetadata.KeyManager' <<<"$key")" = CUSTOMER ] || continue
+    stack=$(jq -r '[.Tags[]? | select(.TagKey == "Stack") | .TagValue][0] // ""' <<<"$tags")
+    if [ "$state" = PendingDeletion ]; then
+      keep "pending deletion  KMS key $id, deleted on $(jq -r '.KeyMetadata.DeletionDate // "?"' <<<"$key")"
+    elif [ -n "$stack" ] && jq -e --arg s "$stack" 'IN($ENV.KEPT | fromjson[]; $s)' -n >/dev/null; then
+      keep "kept  KMS key $id (Stack=$stack)"
+    else
+      echo "$id $state${stack:+ Stack=$stack}"
+    fi
+  done
 }
 
-# Records of the lab zone but NS and SOA at its apex, the zone's own.
+# Records of the account's hosted zone but NS and SOA at its apex; in the lab zone (mgmt), also the NS records that
+# delegate the zone of a member account (delegated_subdomains of aws/bootstrap), which stay with it.
 records() {
-  local ids id
+  local ids id delegated
+  delegated=$(awk -v lab="$lab" '$4 != "-" { printf "%s%s.%s.", sep, $4, lab; sep = "," }' <<<"$env_table")
+  # Only the zone that is this account's own: the lab zone holds none of its delegates' records.
+  [ "$zone" = "$lab" ] || delegated=
+  export SVP_SWEEP_ZONE=$zone SVP_SWEEP_DELEGATED=$delegated
   # shellcheck disable=SC2016 # $ENV is jq's, not the shell's
   ids=$(q '.HostedZones[] | select(.Name == ($ENV.SVP_SWEEP_ZONE + ".")) | .Id' route53 list-hosted-zones-by-name --dns-name "$zone.") ||
     return 1
-  printing && ids='<id-of-the-lab-zone>'
+  printing && ids='<id-of-the-zone>'
   for id in $ids; do
-    printing || echo "hosted zone $zone ($id), NS and SOA at its apex" >>"$kept_file"
+    keep "kept  hosted zone $zone ($id), NS and SOA at its apex${delegated:+, NS of $delegated}"
     # shellcheck disable=SC2016 # $ENV is jq's, not the shell's
-    q '.ResourceRecordSets[] | select((.Name == ($ENV.SVP_SWEEP_ZONE + ".") and (.Type == "NS" or .Type == "SOA")) | not)
+    q '.ResourceRecordSets[]
+      | select((.Name == ($ENV.SVP_SWEEP_ZONE + ".") and (.Type == "NS" or .Type == "SOA")) | not)
+      | select((.Type == "NS" and (.Name | IN($ENV.SVP_SWEEP_DELEGATED | split(",")[]))) | not)
       | "\(.Name) \(.Type)"' route53 list-resource-record-sets --hosted-zone-id "$id" || return 1
   done
 }
 
-lab_zone
-export SVP_SWEEP_ZONE=$zone
+env_zone
 kept_file=$(mktemp)
 trap 'rm -f "$kept_file"' EXIT
+runbook=docs/runbooks/session-stg.md#lệnh-xoá-tay-theo-loại
 
-step "sweep.sh: leftovers of the lab in $region (read only)"
+step "sweep.sh: leftovers of the lab in account $env_name, $region and $global_region (read only)"
 check_account
-sweep_kind "EKS clusters" eks_clusters
-sweep_kind "EC2 instances" instances
-sweep_kind "EBS volumes" volumes
-sweep_kind "EBS snapshots" snapshots
+sweep_kind "EKS clusters" eks_clusters "aws eks delete-cluster --name {}"
+sweep_kind "EC2 instances" instances "aws ec2 terminate-instances --instance-ids {}"
+sweep_kind "EBS volumes" volumes "aws ec2 delete-volume --volume-id {}"
+sweep_kind "EBS snapshots" snapshots "aws ec2 delete-snapshot --snapshot-id {}"
 vpc_ids=
 if vpc_lines=$(vpcs); then
-  found VPCs "$vpc_lines"
+  found VPCs "$vpc_lines" "aws ec2 delete-vpc --vpc-id {}"
   vpc_ids=$(awk '{ print $1 }' <<<"$vpc_lines" | grep . | oneline || true)
 else
   unreadable VPCs
 fi
-sweep_kind "NAT gateways" nat_gateways
-sweep_kind "Elastic IPs" addresses
-sweep_kind "network interfaces" interfaces
-sweep_kind "security groups" security_groups
-sweep_kind "ELBv2 load balancers" load_balancers
-sweep_kind "ELBv2 target groups" target_groups
-sweep_kind "RDS instances" rds_instances
-sweep_kind "RDS snapshots and automated backups" rds_snapshots
-sweep_kind "S3 buckets" buckets
-sweep_kind "CloudFront distributions" distributions
-sweep_kind "CloudFront origin access controls and response headers policies" cloudfront_policies
-sweep_kind "CloudWatch log groups" log_groups
-sweep_kind "Secrets Manager secrets (scheduled for deletion included)" secrets
-sweep_kind "KMS keys" kms_keys
-sweep_kind "records of $zone" records
+sweep_kind "NAT gateways" nat_gateways "aws ec2 delete-nat-gateway --nat-gateway-id {}"
+sweep_kind "Elastic IPs" addresses "aws ec2 release-address --allocation-id {}"
+sweep_kind "network interfaces" interfaces "aws ec2 delete-network-interface --network-interface-id {}"
+sweep_kind "security groups" security_groups "aws ec2 delete-security-group --group-id {}"
+sweep_kind "ELBv2 load balancers" load_balancers "aws elbv2 delete-load-balancer --load-balancer-arn {}"
+sweep_kind "ELBv2 target groups" target_groups "aws elbv2 delete-target-group --target-group-arn {}"
+sweep_kind "RDS instances" rds_instances \
+  "aws rds delete-db-instance --db-instance-identifier {} --skip-final-snapshot --delete-automated-backups"
+sweep_kind "RDS snapshots" rds_snapshots "aws rds delete-db-snapshot --db-snapshot-identifier {}"
+sweep_kind "RDS automated backups" rds_backups "aws rds delete-db-instance-automated-backup --db-instance-automated-backups-arn {}"
+sweep_kind "S3 buckets" buckets "$runbook (versioned: every version first)"
+sweep_kind "CloudFront distributions" distributions "$runbook (disable, wait, then delete)"
+sweep_kind "CloudFront origin access controls and response headers policies" cloudfront_policies "$runbook"
+sweep_kind "WAF web ACLs of CloudFront" web_acls "docs/runbooks/session-prd.md#web-acl-waf-sót (delete-web-acl takes the lock token of get-web-acl)"
+sweep_kind "CloudWatch log groups" log_groups "aws logs delete-log-group --log-group-name {}"
+sweep_kind "Secrets Manager secrets (scheduled for deletion included)" secrets \
+  "aws secretsmanager delete-secret --secret-id {} --force-delete-without-recovery"
+sweep_kind "KMS keys" kms_keys "aws kms schedule-key-deletion --key-id {} --pending-window-in-days 7"
+sweep_kind "records of $zone" records "$runbook (change-resource-record-sets DELETE)"
 
 printing && exit 0
-while read -r line; do
-  [ -z "$line" ] || printf 'kept  %s (aws/bootstrap)\n' "$line"
+while IFS= read -r line; do
+  [ -z "$line" ] || printf '%s\n' "$line"
 done <"$kept_file"
 [ -z "$unread" ] || fail "could not read:$unread; the sweep is not clean until it reads every kind"
 [ "$leftovers" -eq 0 ] ||
-  fail "$leftovers leftover(s) above: delete them by hand with the commands of docs/runbooks/session-stg.md, then run the sweep again"
-ok "nothing left but aws/bootstrap"
+  fail "$leftovers leftover(s) in account $env_name above: delete each with the command under it, then run aws/scripts/sweep.sh $env_name again"
+ok "nothing left in account $env_name but what it keeps (Stack=$kept_stacks) and keys pending deletion"

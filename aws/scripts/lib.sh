@@ -2,14 +2,30 @@
 # Helpers of the session scripts of this directory, sourced by each of them. Those scripts reach the AWS account and
 # the EKS cluster of a session: the learner runs them, from a terminal of the Mac (bash 3.2 is enough). Each takes
 # --print as its first argument to show, in order, every command it would run, and then runs none: no aws, kubectl,
-# helm, terraform, make, git or dig is called, nothing is read from the account and nothing is written.
+# helm, terraform, make, git, nc or dig is called, nothing is read from the account and nothing is written.
 #
-# Every command that reaches AWS carries the profile and the region in the command itself (AWS_PROFILE=anhnv-sso ...
+# Every command that reaches AWS carries the profile and the region in the command itself (AWS_PROFILE=anhnv-stg ...
 # --region ap-southeast-1), never in a shell variable the reader has to look up. Each step prints one line: ok, FAIL
 # (and the script stops), note or skip. No secret value is ever printed or written to a file.
 
-profile=anhnv-sso
 region=ap-southeast-1
+# CloudFront's web ACLs (scope CLOUDFRONT) live in us-east-1 whatever the region of the distribution.
+global_region=us-east-1
+
+# The environments, one line each: the only place where they differ. No script branches on an environment's name;
+# each reads the fields of its line.
+#   name      argument of the scripts; the cluster, the kubectl context and the Terraform roots carry it
+#   profile   AWS profile (IAM Identity Center) of the environment's account, made by the learner with aws configure sso
+#   account   variable with the 12 digits of that account, exported in the session's terminal, never in a file
+#   zone      label of the account's hosted zone under the lab zone (<label>.aws.<domain>); - for the lab zone itself
+#   kept      Stack tags of what stays in the account between sessions (sweep.sh), comma-separated
+#   tunnel    local port of the SSM tunnel to a private API endpoint; - when the endpoint is public
+#   teardown  file of aws/envs/<name> that lifts the protections a destroy needs; - for none
+#   ladder    1 when measure.sh runs the k6 ladder after the smoke; - for the smoke and seed alone
+#   session   1 when the environment has the session's two roots, aws/envs/<name> and aws/gitops/<name>
+env_table='mgmt anhnv-sso SVP_AWS_MGMT_ACCOUNT_ID - bootstrap,org - - - -
+stg anhnv-stg SVP_AWS_STG_ACCOUNT_ID stg baseline - - 1 1
+prd anhnv-prd SVP_AWS_PRD_ACCOUNT_ID prd baseline 6443 teardown.tfvars - 1'
 
 scripts_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 infra_root=$(cd "$scripts_dir/../.." && pwd)
@@ -69,6 +85,8 @@ run_() {
 }
 
 aws_() { run_ "AWS_PROFILE=$profile" aws "$@" --region "$region"; }
+# aws_global_ ARGS...: aws in the region of CloudFront's web ACLs.
+aws_global_() { run_ "AWS_PROFILE=$profile" aws "$@" --region "$global_region"; }
 # tf_ DIR ARGS...: terraform in root DIR of this repository.
 tf_() {
   local dir=$1
@@ -81,19 +99,34 @@ kc() { run_ "AWS_PROFILE=$profile" kubectl --context "$context" "$@"; }
 # make_ TARGET VARS...: a target of the code repository's Makefile (the eks-* targets).
 make_() { run_ "AWS_PROFILE=$profile" make -C "$backend_dir" "$@"; }
 
-# env_arg ENV: the environment a script works on. Only stg exists in this stage; its cluster, kubectl context and
-# Terraform root carry its name.
+# env_names FIELD: the names of the environments whose FIELD (session) is set, or of all of them without FIELD.
+env_names() {
+  awk -v f="${1:-}" 'f == "" || $9 == "1" { printf "%s%s", sep, $1; sep = "|" }' <<<"$env_table"
+}
+
+# env_arg ENV [any]: the environment a script works on, and the fields of its line of env_table. Without any, only an
+# environment with the session's roots (stg, prd); with it, mgmt too.
 env_arg() {
-  case ${1:-} in
-    stg) ;;
-    *) fail "usage: $(basename "$0") [--print] stg (the only environment of this stage; got '${1:-}')" ;;
-  esac
-  env_name=$1
+  local line names
+  if [ "${2:-}" = any ]; then names=$(env_names); else names=$(env_names session); fi
+  case "|$names|" in
+    *"|${1:-}|"*) [ -n "${1:-}" ] ;;
+    *) false ;;
+  esac || fail "usage: $(basename "$0") [--print] $names ... (got '${1:-}')"
+  line=$(awk -v e="$1" '$1 == e' <<<"$env_table")
+  # shellcheck disable=SC2034 # read by the scripts that source this file
+  read -r env_name profile account_var zone_label kept_stacks tunnel_port teardown ladder _ <<<"$line"
+  [ "$zone_label" != - ] || zone_label=
+  [ "$tunnel_port" != - ] || tunnel_port=
+  [ "$teardown" != - ] || teardown=
+  [ "$ladder" != - ] || ladder=
   # shellcheck disable=SC2034 # read by the scripts that source this file
   cluster=svp-$env_name
   context=svp-$env_name
   # shellcheck disable=SC2034 # read by the scripts that source this file
-  root_dir=$infra_root/aws/envs/$env_name
+  env_root=$infra_root/aws/envs/$env_name
+  # shellcheck disable=SC2034 # read by the scripts that source this file
+  gitops_root=$infra_root/aws/gitops/$env_name
 }
 
 # session_dir: the directory of this session's files, $SVP_SESSION_DIR, which must sit under .session/ of this
@@ -126,25 +159,57 @@ mark() {
   printf 'mark  %s %s\n' "$1" "$t"
 }
 
-# check_account: the account of profile anhnv-sso must be SVP_AWS_ACCOUNT_ID, which the learner exports in the
-# terminal of the session after reading it on the SSO page (never in a committed file: the repository is public; the
-# .envrc git ignores may hold TF_VAR_account_id). Every script that reaches the account or the cluster runs it first,
-# so a wrong profile stops before anything else; check-dns.sh alone does not, as it only reads one output of the
-# bootstrap's state and changes nothing.
+# check_account: the account of the environment's profile must be the one in its account variable
+# (SVP_AWS_<ENV>_ACCOUNT_ID), which the learner exports in the terminal of the session after reading it on the SSO page
+# (never in a committed file: the repository is public). Every script that reaches the account or the cluster runs it
+# first, so a wrong profile stops before anything else; check-dns.sh alone does not, as it only reads one output of the
+# baseline's state and changes nothing.
 check_account() {
-  local id account arn
+  local id account arn want
+  want=${!account_var:-}
   if ! printing; then
-    [[ ${SVP_AWS_ACCOUNT_ID:-} =~ ^[0-9]{12}$ ]] ||
-      fail "set SVP_AWS_ACCOUNT_ID to the 12 digits of the sandbox account, as the SSO page shows it (export SVP_AWS_ACCOUNT_ID=...; never in a committed file, the ignored .envrc may hold TF_VAR_account_id)"
+    [[ $want =~ ^[0-9]{12}$ ]] ||
+      fail "set $account_var to the 12 digits of the $env_name account, as the SSO page shows it (export $account_var=...; never in a committed file)"
   fi
   id=$(aws_ sts get-caller-identity --output json) ||
     fail "aws sts get-caller-identity with profile $profile (expired SSO session? AWS_PROFILE=$profile aws sso login)"
   printing && return 0
   account=$(jq -r '.Account // empty' <<<"$id")
   arn=$(jq -r '.Arn // empty' <<<"$id")
-  [ "$account" = "$SVP_AWS_ACCOUNT_ID" ] ||
-    fail "profile $profile is account '$account' ($arn), not SVP_AWS_ACCOUNT_ID $SVP_AWS_ACCOUNT_ID: stop here and check the profile"
-  ok "account $account, $arn"
+  [ "$account" = "$want" ] ||
+    fail "profile $profile is account '$account' ($arn), not $account_var $want of $env_name: stop here and check the profile"
+  ok "account $account of $env_name, $arn"
+}
+
+# kubeconfig: the context $context of the session's cluster in the kubeconfig, under the alias the make targets of the
+# code repository take (CONTEXT=svp-<env>). For an environment whose API endpoint is private (tunnel), the cluster's
+# entry then points at the local end of the tunnel, with the endpoint's host as TLS server name, as output
+# kubeconfig_command of aws/envs/<env> does. Neither command reaches the API.
+kubeconfig() {
+  local out arn host
+  aws_ eks update-kubeconfig --name "$cluster" --alias "$context" >/dev/null || return 1
+  [ -n "$tunnel_port" ] || return 0
+  out=$(aws_ eks describe-cluster --name "$cluster" --output json) || return 1
+  if printing; then
+    arn='<cluster.arn>' host='<host of cluster.endpoint>'
+  else
+    arn=$(jq -r '.cluster.arn // empty' <<<"$out")
+    host=$(jq -r '.cluster.endpoint // empty' <<<"$out")
+    host=${host#https://}
+    host=${host%%/*}
+    [ -n "$arn" ] && [ -n "$host" ] || return 1
+  fi
+  run_ kubectl config set-cluster "$arn" --server="https://127.0.0.1:$tunnel_port" --tls-server-name="$host" >/dev/null
+}
+
+# need_tunnel: for an environment whose API endpoint is private, the SSM tunnel must be open on 127.0.0.1:<tunnel>
+# before any command to the API; it runs in a terminal of its own (output api_tunnel_command of aws/envs/<env>).
+# Nothing to check for a public endpoint.
+need_tunnel() {
+  [ -n "$tunnel_port" ] || return 0
+  run_ nc -z -w 3 127.0.0.1 "$tunnel_port" >/dev/null 2>&1 ||
+    fail "no tunnel on 127.0.0.1:$tunnel_port to the API of $cluster: in a terminal of its own, from the root of this repository, run eval \"\$(AWS_PROFILE=$profile terraform -chdir=aws/envs/$env_name output -raw api_tunnel_command)\" and keep it running; then run this again"
+  ok "tunnel to the API of $cluster open on 127.0.0.1:$tunnel_port"
 }
 
 # wait_until DESCRIPTION SECONDS CMD...: polls CMD (a function of the script) every $poll seconds until it succeeds;
@@ -181,4 +246,14 @@ lab_zone() {
   fi
   [[ $zone =~ ^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$ ]] ||
     fail "lab zone '$zone' is not a DNS name such as aws.svp.example (SVP_ZONE_NAME or zone_name of aws/bootstrap/bootstrap.auto.tfvars)"
+}
+
+# env_zone: the hosted zone of the environment's account, in zone: <label>.<lab zone> for a member account (its
+# baseline, aws/accounts/<env>, made it and the lab zone delegates it), the lab zone itself for mgmt; the lab zone in
+# lab.
+env_zone() {
+  lab_zone
+  # shellcheck disable=SC2034 # read by the scripts that source this file
+  lab=$zone
+  [ -z "$zone_label" ] || zone=$zone_label.$zone
 }

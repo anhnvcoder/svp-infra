@@ -22,10 +22,15 @@ quyết định chung của lab nằm ở `docs/` của repo code (bản clone `
   file và dòng. `make test-guard` kiểm chính ba điều kiện với `docker` giả. AI không chạy `terraform test` trần.
 - **AI không chạy lệnh nào chạm account AWS, kể cả chỉ đọc:** `terraform init` có backend, `plan`, `apply`, `destroy`, `import`,
   `state`, `output`, `test` trần (ngoài `make test`), `refresh`; `aws` (trừ `--version`); script hay chương trình dùng SDK AWS; script buổi của `aws/scripts/`.
-- **Mọi lệnh chạm account do người học chạy** theo script và runbook viết sẵn: profile và region ghi ngay trong lệnh
-  (`AWS_PROFILE=anhnv-sso … --region ap-southeast-1`), mỗi bước một khối, nói rõ cần dán lại output nào và tìm gì trong đó. Trước mọi lệnh
-  ghi: `AWS_PROFILE=anhnv-sso aws sts get-caller-identity`, hai bên cùng đọc account. Buổi tạo tài nguyên kết thúc bằng lệnh destroy và
-  lệnh quét sót; AI nhắc tới khi người học xác nhận đã chạy cả hai.
+- **Mọi lệnh chạm account do người học chạy** theo script và runbook viết sẵn, mỗi bước một khối, nói rõ cần dán lại output nào và tìm gì
+  trong đó. Mỗi account một profile SSO và một biến account (export trong terminal, không ghi vào file nào): management `anhnv-sso` +
+  `SVP_AWS_MGMT_ACCOUNT_ID` (`aws/bootstrap`, `aws/org`, `github/`), stg `anhnv-stg` + `SVP_AWS_STG_ACCOUNT_ID`, prd `anhnv-prd` +
+  `SVP_AWS_PRD_ACCOUNT_ID` (`aws/accounts/<env>`, `aws/envs/<env>`, `aws/gitops/<env>`). Lệnh viết sẵn ghi profile của đúng account đó ngay
+  trong lệnh, `TF_VAR_account_id` từ biến của account đó, và `--region` (`ap-southeast-1` cho dịch vụ theo region và STS, `us-east-1` cho
+  Organizations và WAF của CloudFront, region của Identity Center cho `sso-admin`, `identitystore`); không dựa vào region của profile, không
+  một `AWS_PROFILE` chung cho cả repo. Trước mọi lệnh ghi: `aws sts get-caller-identity` với **cùng profile** (`aws/scripts/check-account.sh
+  mgmt|stg|prd`), hai bên cùng đọc account. Script buổi lấy profile và biến từ bảng env của `aws/scripts/lib.sh`. Buổi tạo tài nguyên kết
+  thúc bằng lệnh destroy và lệnh quét sót (`sweep.sh <env>` rồi `sweep.sh mgmt`); AI nhắc tới khi người học xác nhận đã chạy cả hai.
 - CI (`check.yml`) không có credential AWS, secret, OIDC hay environment nào; thêm thì phải có ADR trước.
 
 ## Quy ước
@@ -33,7 +38,7 @@ quyết định chung của lab nằm ở `docs/` của repo code (bản clone `
 Quy ước chung (ngôn ngữ, tài liệu timeless, ADR, comment, Git, repo public, phụ thuộc): [`CONTRIBUTING.md` của `anhnvcoder/.github`](https://github.com/anhnvcoder/.github/blob/main/CONTRIBUTING.md); dưới đây chỉ luật riêng của repo này.
 
 - **Ngôn ngữ viết:** file `.md` viết tiếng Việt.
-- **Repo public, không commit:** state (`*.tfstate*`), plan (`*.tfplan`), `backend.hcl`, `*.auto.tfvars` hay `terraform.tfvars` (chứa
+- **Repo public, không commit:** state (`*.tfstate*`), plan (`*.tfplan`), `backend.hcl`, `backend-<env>.hcl`, `*.auto.tfvars` hay `terraform.tfvars` (chứa
   account ID, IP, email, tên miền thật), override (`*_override.tf`), `.terraform/`, `.session/`. Ví dụ và test dùng `000000000000`,
   `svp.example`, `<domain>`. Tên bucket theo `<tên>-<account>-<region>`, tính từ `var.account_id` lúc chạy, nên account thật vẫn không
   nằm trong file commit nào.
@@ -43,8 +48,13 @@ Quy ước chung (ngôn ngữ, tài liệu timeless, ADR, comment, Git, repo pub
 - **Root `github/`** (cài đặt GitHub của các repo trong `local.repositories` của `github/repositories.tf`, provider
   `integrations/github`): không provider AWS nên không `default_tags`, `allowed_account_ids`; `plan`, `apply` cần token GitHub admin và
   đăng nhập AWS (state ở bucket của `aws/bootstrap`), chỉ người học chạy.
-- **Ngoại lệ trivy:** finding trong `.tf` của repo bỏ qua bằng `#trivy:ignore:<id>` ngay trên resource, lý do ở comment; finding trong
-  module registry vào `.trivyignore.yaml`. Sửa được thì sửa.
+- **Ngoại lệ trivy** (luật đủ ở đầu `.trivyignore.yaml`): sửa được thì sửa. Finding trong `.tf` của repo bỏ qua bằng `#trivy:ignore:<id>`
+  ngay trên resource, lý do ở comment; finding trong module registry vào `.trivyignore.yaml` (`paths` không bao giờ là mọi file). Mỗi ngoại lệ
+  ghi phạm vi trong lý do, một dòng mỗi id: `Scope: every environment.` hay `Scope: stg only; prd: <prd làm gì thay>.`. `make trivy` quét
+  mỗi root với giá trị của env (`<root>/<env>.tfvars`), và ngoại lệ chỉ-stg không bao giờ che finding của prd: nó nằm ở lời gọi module trong
+  root stg, hay trong module với điều kiện trên thuộc tính khác nhau giữa hai env, đặt đúng giá trị của stg (`#trivy:ignore:AWS-0011[web_acl_id=]`).
+  trivy khớp điều kiện trên thuộc tính chuỗi ở mọi nơi quét, còn trên bool hay số chỉ khi quét chính module, nên root cần ngoại lệ như vậy
+  lặp lại nó ở lời gọi module. `.trivyignore.yaml` không có mục chỉ-stg nào (`paths` không phân biệt được env).
 - **Docker** chỉ qua `Makefile` (`env -u DOCKER_DEFAULT_PLATFORM docker run …`, image ghim digest có dòng `# renovate:` ngay trên).
 - **Card chạy song song** kiểm bằng `make check DIRS=<thư mục của mình>`: mỗi lượt chỉ ghi dưới thư mục đó, không có cache dùng chung.
 - **Git:** mọi thay đổi vào `main` qua PR có `infra-ok` xanh (từ khi bật ruleset), squash merge.

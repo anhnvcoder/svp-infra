@@ -32,7 +32,7 @@ cd svp-infra
 ```
 
 Lệnh kiểm cần Docker và `make`; mọi công cụ chạy từ image ghim digest, không cài gì thêm. `plan`, `apply` (chỉ người học) cần thêm
-Terraform 1.15 (Homebrew), AWS CLI v2 đăng nhập SSO và direnv (mục [Plan và apply](#plan-và-apply)).
+Terraform 1.15 (Homebrew) và AWS CLI v2 với một profile SSO mỗi account (mục [Plan và apply](#plan-và-apply)).
 
 ## Sử dụng
 
@@ -42,7 +42,8 @@ make check DIRS=aws/modules/network   # chỉ các phép Terraform của một t
 make help                             # liệt kê target
 ```
 
-Dựng, đo và gỡ một env theo runbook [`docs/runbooks/session-stg.md`](docs/runbooks/session-stg.md) (mục [Plan và apply](#plan-và-apply)).
+Dựng, đo và gỡ một env theo runbook [`docs/runbooks/session-stg.md`](docs/runbooks/session-stg.md) hay
+[`docs/runbooks/session-prd.md`](docs/runbooks/session-prd.md) (mục [Plan và apply](#plan-và-apply)).
 Cài đặt GitHub của các repo (Terraform `github/`, GitHub App từ manifest, phần provider không quản) theo runbook
 [`docs/runbooks/github-setup.md`](docs/runbooks/github-setup.md); `make github-check` đọc lại phần ngoài Terraform.
 
@@ -62,10 +63,22 @@ renovate.json                 provider, module, ruleset tflint, image ghim của
 .github/workflows/scorecard.yml push main và lịch tuần: OpenSSF Scorecard, kết quả công khai và lên code scanning
 .github/zizmor.yml            ngoại lệ của zizmor, mỗi mục một lý do (tạo khi có ngoại lệ đầu tiên)
 aws/
-  bootstrap/                  một lần mỗi account, giữ giữa các buổi: bucket state, budget, hosted zone aws.<domain>
-  modules/                    module nội bộ (network, eks, rds, media); lock file không commit
-  envs/<env>/                 cấu hình gốc của mỗi env (stg; root prd dựng bằng bản sao của nó): một state key mỗi env
-  scripts/                    script buổi AWS (kiểm account, DNS, bootstrap Argo CD, đo, pre-destroy, sweep)
+  bootstrap/                  management account, một lần, giữ giữa các buổi: bucket state, budget của org, zone lab aws.<domain> và bản ghi NS uỷ quyền zone của mỗi account thành viên
+  org/                        management account: Organizations, OU Workloads, account svp-stg và svp-prd, SCP, IAM Identity Center (SvpAdmin), organization trail
+  accounts/<env>/             baseline của mỗi account thành viên (stg, prd), giữ giữa các buổi: bucket state, KMS key của nó, zone <env>.aws.<domain>, budget
+  envs/<env>/                 cấu hình gốc của mỗi env (stg, prd: cùng module, cùng đối số, khác ở <env>.tfvars; prd thêm WAF, bastion SSM, teardown.tfvars)
+  gitops/<env>/               bootstrap GitOps của cluster EKS của env (GitOps Bridge): namespace, Argo CD, AppProject, cluster Secret, ApplicationSet svp-bootstrap
+  modules/                    module nội bộ; lock file không commit
+    network, eks, rds, media  nền của mỗi env
+    waf                       web ACL của CloudFront (chỉ prd gọi, provider us-east-1)
+    ssm-bastion               bastion SSM tới endpoint private của API EKS (prd)
+    external-secrets          vỏ entry Secrets Manager svp/<env>/*, role của External Secrets theo namespace, Pod Identity
+    gitops-bridge             giá trị của bootstrap GitOps (không resource): cluster Secret, values Argo CD, root
+    org-policies              ba SCP của OU Workloads
+    account-baseline          bucket state, KMS key, zone, budget của một account thành viên
+  backend.hcl                 backend của management (bucket của aws/bootstrap; không commit, sinh từ output backend_hcl)
+  backend-<env>.hcl           backend của account stg, prd (bucket, region, KMS; không key, mỗi root truyền key riêng; không commit, sinh từ output của accounts/<env>)
+  scripts/                    script buổi AWS theo bảng env (mgmt, stg, prd) của lib.sh: kiểm account, DNS, Terraform hai root, secret và chờ Argo CD, đo, pre-destroy, sweep
 github/                       cài đặt GitHub của các repo trong `local.repositories` (repo, quyền Actions, ruleset, environment promote); state trong bucket của aws/bootstrap
 docs/diagrams/                sơ đồ AWS svp-aws.drawio (trang stg, prd, flows), PDF, PNG nhúng ở docs của repo code; sinh từ spec
 .claude/skills/aws-drawio-diagram/   spec và checker của sơ đồ (luật vẽ ở SKILL.md)
@@ -157,41 +170,42 @@ Actions của repo (`github/`).
 
 Hai đường vào:
 
-- **Lần đầu mỗi account:** [`aws/bootstrap/README.md`](aws/bootstrap/README.md) (bucket state, budget, hosted zone).
-- **Cài đặt GitHub** (một lần mỗi account, thêm repo hay App): runbook [`docs/runbooks/github-setup.md`](docs/runbooks/github-setup.md).
-- **Mỗi buổi dựng, đo, gỡ một env:** runbook [`docs/runbooks/session-stg.md`](docs/runbooks/session-stg.md). Xem trước toàn bộ lệnh của
-  buổi, không chạy gì và không cần credential: `aws/scripts/session.sh --print stg`.
+- **Một lần ở management account:** [`aws/bootstrap/README.md`](aws/bootstrap/README.md) (bucket state, budget, zone lab), rồi
+  [`aws/org/README.md`](aws/org/README.md) (tổ chức, account stg và prd, SCP, Identity Center, trail).
+- **Một lần mỗi account thành viên:** [`aws/accounts/README.md`](aws/accounts/README.md) (baseline, uỷ quyền zone của env).
+- **Cài đặt GitHub** (thêm repo hay App): runbook [`docs/runbooks/github-setup.md`](docs/runbooks/github-setup.md).
+- **Mỗi buổi dựng, đo, gỡ một env:** runbook [`docs/runbooks/session-stg.md`](docs/runbooks/session-stg.md) (stg, cùng mọi mục chung) và
+  [`docs/runbooks/session-prd.md`](docs/runbooks/session-prd.md) (prd: cổng promote, tunnel tới API, diễn tập, final snapshot). Xem trước
+  toàn bộ lệnh của buổi, không chạy gì và không cần credential: `aws/scripts/session.sh --print stg` (hay `prd`).
 
-Chỉ người học chạy, từ máy, bằng SSO (`AWS_PROFILE=anhnv-sso`, region `ap-southeast-1` ghi trong lệnh), theo script và runbook của repo.
-Terraform của máy (Homebrew) phải nằm trong
-`required_version` của root (`~> 1.15`). Backend S3 của mọi root đọc bucket, region từ `aws/backend.hcl` (không commit, sinh từ output của
-`aws/bootstrap`), mỗi root một `key`, khoá bằng lock file native của S3 (`use_lockfile`).
+Chỉ người học chạy, từ máy, bằng SSO, theo script và runbook của repo. Mỗi account một profile và một biến chứa 12 số của account (export
+trong terminal của buổi, không ghi vào file nào); mọi lệnh viết sẵn ghi profile ngay trong lệnh, `TF_VAR_account_id` từ biến của account đó
+và `--region`:
+
+| Account | Profile SSO | Biến account | Root |
+| --- | --- | --- | --- |
+| management (account sandbox) | `anhnv-sso` | `SVP_AWS_MGMT_ACCOUNT_ID` | `aws/bootstrap`, `aws/org`, `github/` |
+| `svp-stg` | `anhnv-stg` | `SVP_AWS_STG_ACCOUNT_ID` | `aws/accounts/stg`, `aws/envs/stg`, `aws/gitops/stg` |
+| `svp-prd` | `anhnv-prd` | `SVP_AWS_PRD_ACCOUNT_ID` | `aws/accounts/prd`, `aws/envs/prd`, `aws/gitops/prd` |
+
+Region `ap-southeast-1` cho dịch vụ theo region và STS, `us-east-1` cho Organizations và WAF của CloudFront, region của instance Identity
+Center cho `sso-admin`, `identitystore`. Terraform của máy (Homebrew) phải nằm trong `required_version` của root (`~> 1.15`). Backend S3,
+khoá bằng lock file native của S3 (`use_lockfile`): root của management đọc `aws/backend.hcl` (sinh từ output của `aws/bootstrap`); root
+của account thành viên đọc `aws/backend-<env>.hcl` (sinh từ output `backend_hcl` của `aws/accounts/<env>`, không có `key`) cộng một
+`-backend-config=key=<key của root>` thứ hai, `init -reconfigure` (script buổi `tf.sh` làm vậy). Không file nào trong hai loại được commit.
 
 **Profile AWS không nằm trong code** (khuyến nghị của HashiCorp và AWS: thông tin đăng nhập là của môi trường chạy, không của cấu hình; CI
-cần credential thì dùng OIDC, máy khác đặt tên profile khác). Code chỉ chặn nhầm account bằng `allowed_account_ids`. Trên máy, đặt profile
-một lần cho thư mục bằng [direnv](https://direnv.net) (công cụ thông dụng nạp biến môi trường theo thư mục):
-
-```sh
-brew install direnv
-echo 'eval "$(direnv hook zsh)"' >> ~/.zshrc && exec zsh       # một lần mỗi máy (bash: direnv hook bash)
-printf 'export AWS_PROFILE=anhnv-sso\nexport AWS_REGION=ap-southeast-1\nexport TF_VAR_account_id=<12 số>\n' > .envrc   # ở gốc infra/; .envrc bị git bỏ qua
-direnv allow
-```
-
-`<12 số>` là account đọc từ `AWS_PROFILE=anhnv-sso aws sts get-caller-identity --query Account --output text`; `.envrc` git bỏ qua nên
-account không vào file commit nào. Script buổi đọc `SVP_AWS_ACCOUNT_ID`; runbook export nó từ biến này (`export SVP_AWS_ACCOUNT_ID="$TF_VAR_account_id"`, mục "Mở
-terminal của buổi").
-
-Từ đó trong `infra/` gõ `terraform plan` trơn. Tài liệu vẫn ghi `AWS_PROFILE=…` trong từng lệnh để người đọc thấy rõ lệnh chạy vào đâu;
-không có direnv thì `export AWS_PROFILE=anhnv-sso` mỗi terminal.
+cần credential thì dùng OIDC, máy khác đặt tên profile khác). Code chỉ chặn nhầm account bằng `allowed_account_ids = [var.account_id]`.
+Vì mỗi root thuộc một account, không đặt một `AWS_PROFILE` hay `TF_VAR_account_id` chung cho cả thư mục (`.envrc` của direnv, `~/.zshrc`):
+profile và account ghi trong từng lệnh, script buổi lấy chúng từ bảng env của `aws/scripts/lib.sh`.
 
 ## Luật an toàn
 
 - **AI** (Claude, Codex) chỉ chạy `make check` và các phép trong đó (kể cả `make test`: `terraform test` trên provider giả, `--network none`,
   không credential), `make tfdocs`, `terraform fmt`, `terraform init -backend=false`, `terraform validate`,
   `terraform providers lock` (`make lock`). Mọi lệnh chạm account (`terraform test` trần, `plan`, `apply`, `destroy`, `import`, `state`, `output`, `aws` trừ
-  `--version`, script dùng SDK) do người học chạy; trước mọi lệnh ghi, `AWS_PROFILE=anhnv-sso aws sts get-caller-identity` và so account.
-  Provider của root ghim account bằng `allowed_account_ids` từ `TF_VAR_account_id`.
+  `--version`, script dùng SDK) do người học chạy; trước mọi lệnh ghi, `aws sts get-caller-identity` với profile của chính account đó
+  (`aws/scripts/check-account.sh mgmt|stg|prd`) và so account. Provider của root ghim account bằng `allowed_account_ids` từ `TF_VAR_account_id`.
 - **Không commit:** state (`*.tfstate*`), plan (`*.tfplan`), `backend.hcl`, `*.auto.tfvars`, `terraform.tfvars`, override
   (`*_override.tf`), `.terraform/`, thư mục số đo `.session/`. Giá trị cá nhân (account ID, IP được gọi API EKS, email, tên miền thật,
   tên bucket) chỉ qua `*.auto.tfvars` không commit hay `TF_VAR_*`; repo có file `*.example` với `svp.example`, `000000000000`.
