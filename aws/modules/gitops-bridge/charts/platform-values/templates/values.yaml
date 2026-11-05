@@ -1,0 +1,6 @@
+{{- /* As chart argocd/apps of svp-gitops: tpl on this chart's values, and a render that is no YAML map fails. */}}
+{{- $values := tpl .Values.template . | fromYaml }}
+{{- if hasKey $values "Error" }}
+{{- fail (printf "the template does not render a YAML map: %s" (get $values "Error")) }}
+{{- end }}
+{{ toYaml $values }}

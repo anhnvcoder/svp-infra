@@ -1,0 +1,4 @@
+# Content of platforms/<platform>/<name>.values.tpl of svp-gitops.
+template: ""
+# The cluster.* contract (output cluster_values of the env root), which the template reads as .Values.cluster.
+cluster: {}
