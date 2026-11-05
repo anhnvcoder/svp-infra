@@ -147,12 +147,17 @@ tfdocs-check: ## terraform-docs --output-check: fails when the generated block o
 # --skip-check-update keeps the checks built into the pinned image: the bundle trivy would fetch otherwise sits behind a
 # moving tag, so new rules could turn the required check red on unchanged code, or drop a rule without anyone noticing.
 # Registry modules are downloaded by trivy itself and scanned with the configuration that calls them.
-trivy: ## trivy config on each checked directory (HIGH and CRITICAL fail)
+# A root is scanned with the values its env runs with: <dir>/<last part of dir>.tfvars (aws/envs/prd/prd.tfvars), when
+# that file exists, goes to --tf-vars, so an exception that holds for one env only (an ignore with an attribute
+# condition, an ignore on a module call of that env's root) never hides a finding of another env. A module, or a root
+# without such a file, is scanned with the defaults of its variables.
+trivy: ## trivy config on each checked directory (HIGH and CRITICAL fail; a root gets its <env>.tfvars)
 	@dirs=$$($(LIST_DIRS)) || exit 1; [ -n "$$dirs" ] || { echo "trivy: no Terraform directory"; exit 0; }; \
 	for d in $$dirs; do \
-	  echo "trivy $$d"; \
+	  vars="$$d/$${d##*/}.tfvars"; \
+	  if [ -f "$$vars" ]; then echo "trivy $$d ($$vars)"; set -- --tf-vars "$$vars"; else echo "trivy $$d"; set --; fi; \
 	  $(DOCKER) -v "$(CURDIR):/src:ro" -w /src $(TRIVY_IMAGE) config --quiet --skip-check-update --skip-dirs '**/.terraform/modules/**/examples' --cache-dir /tmp/trivy \
-	    --ignorefile .trivyignore.yaml --severity HIGH,CRITICAL --exit-code 1 "$$d" || { echo "FAIL: trivy $$d" >&2; exit 1; }; \
+	    --ignorefile .trivyignore.yaml --severity HIGH,CRITICAL --exit-code 1 "$$@" "$$d" || { echo "FAIL: trivy $$d" >&2; exit 1; }; \
 	done
 
 shellcheck: ## shellcheck on every *.sh of the repository

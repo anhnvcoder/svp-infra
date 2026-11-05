@@ -7,8 +7,19 @@ mục 9 và 11.
 Tạo: DB subnet group (subnet private), security group chỉ nhận TCP 5432 từ các security group truyền vào (không rule egress), parameter group
 `postgres<major>` với `rds.force_ssl = 1` (kết nối không TLS bị từ chối), instance gp3 mã hoá bằng key AWS quản lý của RDS, không public,
 master username cố định `postgres`, mật khẩu master do RDS tạo và giữ ở Secrets Manager (`manage_master_user_password`: không đi qua
-Terraform, không có trong plan hay state). Performance Insights và enhanced monitoring tắt (tốn tiền, thêm role IAM; lab đọc Prometheus của
-cluster). Minor tự nâng trong cửa sổ bảo trì, major không bao giờ tự nâng.
+Terraform, không có trong plan hay state). Minor tự nâng trong cửa sổ bảo trì, major không bao giờ tự nâng.
+
+Giám sát ngoài Prometheus của cluster, mỗi thứ tắt mặc định (tốn tiền; lab đọc Prometheus), prd bật qua biến:
+
+- **CloudWatch Database Insights chế độ Standard** (chế độ RDS bật mặc định, không phí theo vCPU như Advanced; module ghi tường minh).
+  `performance_insights_enabled` bật Performance Insights trong chế độ đó, `performance_insights_retention_period` mặc định 7 ngày (mức
+  miễn phí; Advanced đòi tối thiểu 465 ngày). Với PostgreSQL không giới hạn instance class (ngoại lệ `db.t4g.micro`, `small` chỉ áp cho
+  MariaDB, MySQL). Nguồn ở comment của `main.tf`.
+- **Enhanced monitoring:** `monitoring_interval` khác 0 thì module tạo role `<name>-rds-monitoring`, trust policy theo hướng dẫn RDS (chỉ
+  `monitoring.rds.amazonaws.com`, điều kiện `aws:SourceArn` là ARN của instance này và `aws:SourceAccount` là account này), gắn policy AWS
+  quản lý `AmazonRDSEnhancedMonitoringRole`.
+- **Export log:** `cloudwatch_logs_exports` (`postgresql`, `upgrade`, `iam-db-auth-error`); module tạo trước log group
+  `/aws/rds/instance/<name>/<loại>` với retention `cloudwatch_logs_retention_days`, nên RDS không tự tạo group không hạn và `destroy` gỡ được.
 
 <!-- markdownlint-disable MD033 -->
 <!-- BEGIN_TF_DOCS -->
@@ -31,12 +42,19 @@ cluster). Minor tự nâng trong cửa sổ bảo trì, major không bao giờ t
 
 | Name | Type |
 | ---- | ---- |
+| [aws_cloudwatch_log_group.os_metrics](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_log_group) | resource |
+| [aws_cloudwatch_log_group.this](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_log_group) | resource |
 | [aws_db_instance.this](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/db_instance) | resource |
 | [aws_db_parameter_group.this](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/db_parameter_group) | resource |
 | [aws_db_subnet_group.this](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/db_subnet_group) | resource |
+| [aws_iam_role.monitoring](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role) | resource |
+| [aws_iam_role_policy_attachment.monitoring](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy_attachment) | resource |
 | [aws_security_group.this](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/security_group) | resource |
 | [aws_vpc_security_group_ingress_rule.postgres](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/vpc_security_group_ingress_rule) | resource |
 | [random_id.final_snapshot](https://registry.terraform.io/providers/hashicorp/random/latest/docs/resources/id) | resource |
+| [aws_caller_identity.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/caller_identity) | data source |
+| [aws_partition.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/partition) | data source |
+| [aws_region.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/region) | data source |
 
 ## Inputs
 
@@ -45,12 +63,17 @@ cluster). Minor tự nâng trong cửa sổ bảo trì, major không bao giờ t
 | allocated\_storage | Size of the gp3 volume, in GiB (20 is the gp3 minimum of RDS PostgreSQL). | `number` | `20` | no |
 | allowed\_security\_groups | Security groups whose members may connect on 5432 (the EKS node and cluster security groups), keyed by a fixed label such as node or cluster: the keys name the rules, so they are known at plan time even when the ids are not. | `map(string)` | n/a | yes |
 | backup\_retention\_period | Days of automated backups and point-in-time recovery. At least 1: 0 turns backups off. | `number` | `1` | no |
+| cloudwatch\_logs\_exports | PostgreSQL logs RDS exports to CloudWatch Logs (postgresql, upgrade, iam-db-auth-error), each into a log group /aws/rds/instance/<name>/<type> this module creates. Empty (the default) exports nothing: ingestion is billed per GB. | `list(string)` | `[]` | no |
+| cloudwatch\_logs\_retention\_days | Days CloudWatch keeps the exported logs when cloudwatch\_logs\_exports is not empty, and the OS metrics of enhanced monitoring when monitoring\_interval is not 0. | `number` | `1` | no |
 | delete\_automated\_backups | Delete the automated backups, and with them the point-in-time recovery window, together with the instance, so a destroyed lab instance leaves no billed backup behind. Production keeps them (false): after a deletion they stay restorable to any second of the retention period, where the final snapshot alone holds one moment. | `bool` | `true` | no |
 | deletion\_protection | Refuse to delete the instance until this is turned off by an apply. Off where the instance is destroyed at the end of every session, on for production. | `bool` | n/a | yes |
 | engine\_major\_version | Major version of PostgreSQL. RDS picks the newest minor of it and upgrades minors in the maintenance window; a major upgrade is a change of its own. | `string` | `"15"` | no |
 | instance\_class | DB instance class. | `string` | `"db.t4g.small"` | no |
+| monitoring\_interval | Seconds between two enhanced monitoring samples of the operating system; 0 (the default) turns enhanced monitoring off and creates no IAM role. Any other value creates the role <name>-rds-monitoring and the log group RDSOSMetrics of the account and region, which RDS writes the OS metrics to: no other instance of that account and region may have enhanced monitoring on. | `number` | `0` | no |
 | multi\_az | Keep a synchronous standby in a second availability zone, which takes over on failure (twice the instance cost). Off for a lab env that lives a few hours, on for production. | `bool` | `false` | no |
 | name | Identifier of the DB instance (svp-stg, svp-prd), also the prefix of its security group, subnet group and parameter group. | `string` | n/a | yes |
+| performance\_insights\_enabled | Turn on Performance Insights (database load by wait event, SQL and host) within Database Insights in Standard mode. Off by default: the lab reads the cluster's Prometheus. | `bool` | `false` | no |
+| performance\_insights\_retention\_period | Days of Performance Insights history when performance\_insights\_enabled is true: 7 (the free retention), a multiple of 31 up to 713 (months), or 731. | `number` | `7` | no |
 | skip\_final\_snapshot | Delete the instance without a last manual snapshot. A final snapshot outlives the instance, is billed as backup storage and must be deleted by hand; skip it only where the data is disposable. | `bool` | n/a | yes |
 | subnet\_ids | Private subnets of the DB subnet group, in at least two availability zones (RDS requires two even for a single-AZ instance, and a Multi-AZ standby goes in the other one). | `list(string)` | n/a | yes |
 | vpc\_id | VPC of the instance and of its security group. | `string` | n/a | yes |

@@ -98,3 +98,53 @@ variable "skip_final_snapshot" {
   description = "Delete the instance without a last manual snapshot. A final snapshot outlives the instance, is billed as backup storage and must be deleted by hand; skip it only where the data is disposable."
   type        = bool
 }
+
+variable "performance_insights_enabled" {
+  description = "Turn on Performance Insights (database load by wait event, SQL and host) within Database Insights in Standard mode. Off by default: the lab reads the cluster's Prometheus."
+  type        = bool
+  default     = false
+}
+
+variable "performance_insights_retention_period" {
+  description = "Days of Performance Insights history when performance_insights_enabled is true: 7 (the free retention), a multiple of 31 up to 713 (months), or 731."
+  type        = number
+  default     = 7
+
+  validation {
+    condition     = var.performance_insights_retention_period == 7 || var.performance_insights_retention_period == 731 || (var.performance_insights_retention_period >= 31 && var.performance_insights_retention_period <= 713 && var.performance_insights_retention_period % 31 == 0)
+    error_message = "performance_insights_retention_period must be 7, a multiple of 31 from 31 to 713, or 731."
+  }
+}
+
+variable "monitoring_interval" {
+  description = "Seconds between two enhanced monitoring samples of the operating system; 0 (the default) turns enhanced monitoring off and creates no IAM role. Any other value creates the role <name>-rds-monitoring and the log group RDSOSMetrics of the account and region, which RDS writes the OS metrics to: no other instance of that account and region may have enhanced monitoring on."
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = contains([0, 1, 5, 10, 15, 30, 60], var.monitoring_interval)
+    error_message = "monitoring_interval must be one of 0, 1, 5, 10, 15, 30 or 60."
+  }
+}
+
+variable "cloudwatch_logs_exports" {
+  description = "PostgreSQL logs RDS exports to CloudWatch Logs (postgresql, upgrade, iam-db-auth-error), each into a log group /aws/rds/instance/<name>/<type> this module creates. Empty (the default) exports nothing: ingestion is billed per GB."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for t in var.cloudwatch_logs_exports : contains(["postgresql", "upgrade", "iam-db-auth-error"], t)])
+    error_message = "cloudwatch_logs_exports may only hold postgresql, upgrade and iam-db-auth-error."
+  }
+}
+
+variable "cloudwatch_logs_retention_days" {
+  description = "Days CloudWatch keeps the exported logs when cloudwatch_logs_exports is not empty, and the OS metrics of enhanced monitoring when monitoring_interval is not 0."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = contains([1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365], var.cloudwatch_logs_retention_days)
+    error_message = "cloudwatch_logs_retention_days must be one of 1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180 or 365."
+  }
+}

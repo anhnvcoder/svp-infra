@@ -2,7 +2,8 @@ provider "aws" {
   region = var.region
 
   # The provider refuses to touch any other account, so a wrong AWS_PROFILE stops before the first API call that
-  # writes. The account id comes from TF_VAR_account_id, never from a committed file.
+  # writes. The account is the env's own: profile anhnv-<env>, and TF_VAR_account_id set in the command from
+  # SVP_AWS_<ENV>_ACCOUNT_ID, the variable the learner exports in the session's terminal (never in a committed file).
   allowed_account_ids = [var.account_id]
 
   default_tags {

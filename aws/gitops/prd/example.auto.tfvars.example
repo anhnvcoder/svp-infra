@@ -1,0 +1,7 @@
+# Copy to <env>.auto.tfvars (ignored by git) beside this file and fill in. Never commit the real value: the repository
+# is public. The account id and the chart directory are not here: every command sets TF_VAR_account_id and
+# TF_VAR_svp_cluster_chart (README.md of aws/gitops).
+
+# Telegram chat of Alertmanager's receiver (SVP_ALERT_TELEGRAM_CHAT_ID of the .env of the code repository); empty sends
+# the commit status only.
+telegram_chat_id = ""

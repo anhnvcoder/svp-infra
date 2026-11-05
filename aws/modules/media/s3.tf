@@ -58,8 +58,23 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "this" {
   }
 }
 
-# Versioning stays off: media objects are written once under a new version path and never overwritten, uploads are
-# deleted once they are no longer needed, and kept versions would only keep deleted bytes billed.
+# Versioning is off by default: media objects are written once under a new version path and never overwritten,
+# uploads are deleted once they are no longer needed, and kept versions would only keep deleted bytes billed. On, a
+# deleted or overwritten object stays restorable for noncurrent_days below (the lifecycle rules drop it then), which
+# is what production wants against a mistaken delete.
+locals {
+  noncurrent_days = 30
+}
+
+resource "aws_s3_bucket_versioning" "this" {
+  for_each = var.versioning_enabled ? aws_s3_bucket.this : {}
+
+  bucket = each.value.id
+
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
 
 # The browser posts the presigned upload form straight to the uploads bucket with XHR, and reads the Retry-After of a
 # refusal, which a cross-origin answer only shows when exposed. POST only: nothing else may come from a page.
@@ -121,6 +136,30 @@ resource "aws_s3_bucket_lifecycle_configuration" "uploads" {
       days_after_initiation = 1
     }
   }
+
+  # Only with versioning on: older versions go noncurrent_days after they were replaced or deleted, and a delete
+  # marker with no version left behind it goes too.
+  dynamic "rule" {
+    for_each = var.versioning_enabled ? [1] : []
+
+    content {
+      id     = "expire-noncurrent-versions"
+      status = "Enabled"
+
+      filter {}
+
+      noncurrent_version_expiration {
+        noncurrent_days = local.noncurrent_days
+      }
+
+      expiration {
+        expired_object_delete_marker = true
+      }
+    }
+  }
+
+  # A lifecycle configuration written before versioning is on may be refused or applied to the wrong state.
+  depends_on = [aws_s3_bucket_versioning.this]
 }
 
 # No service writes with multipart uploads today (one PutObject per file; the browser form is a single POST), but
@@ -140,6 +179,30 @@ resource "aws_s3_bucket_lifecycle_configuration" "media" {
       days_after_initiation = 1
     }
   }
+
+  # Only with versioning on: older versions go noncurrent_days after they were replaced or deleted, and a delete
+  # marker with no version left behind it goes too.
+  dynamic "rule" {
+    for_each = var.versioning_enabled ? [1] : []
+
+    content {
+      id     = "expire-noncurrent-versions"
+      status = "Enabled"
+
+      filter {}
+
+      noncurrent_version_expiration {
+        noncurrent_days = local.noncurrent_days
+      }
+
+      expiration {
+        expired_object_delete_marker = true
+      }
+    }
+  }
+
+  # A lifecycle configuration written before versioning is on may be refused or applied to the wrong state.
+  depends_on = [aws_s3_bucket_versioning.this]
 }
 
 # Requests over plain HTTP are refused on both buckets: the services, the upload forms and CloudFront all use HTTPS.

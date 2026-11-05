@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# The measurements of a session, after bootstrap-argocd.sh: everything into $SVP_SESSION_DIR. The account of the
-# profile is checked first, as check-account.sh checks it.
+# The measurements of a session, after bootstrap.sh <env> wait: everything into $SVP_SESSION_DIR. The account of the
+# profile is checked first, as check-account.sh checks it, and the tunnel of a private API endpoint.
 #   1. make eks-smoke: the end-to-end flow through https://api.<domain> (domain of cluster-values.json)
 #   2. make eks-seed: at least 30 READY videos in GET /feed/explore, which the k6 profile cloud reads
 #   3. k6 profile cloud (deploy/k6/cloud/run.sh of the code repository) at 1, 2, 4 and 8 pods, each pod the load of one
@@ -10,25 +10,27 @@
 #      the nodes (k6-<n>/nodes.tsv) and kubectl top of nodes and pods (top-nodes.tsv, top-pods.tsv), run.sh logs, the
 #      pods' summaries copied into k6-<n>/summaries/, the Job deleted. A level passes when every pod wrote its summary
 #      with every threshold passed, no dropped iteration and no 429.
+# Steps 2 and 3 run for an environment whose line of env_table (lib.sh) sets ladder; for the others the smoke is the
+# whole of this script, and their measurements are the drills of their session runbook.
 # A node of the level's start that leaves or turns NotReady before the Job ends (a Spot interruption, most likely) makes
 # the level "interrupted", not failed: the load did not run on the cluster it was measured for. The script stops there
-# with exit 3; aws/scripts/measure.sh stg --from <n> runs the ladder again from that level (no smoke, no seed).
+# with exit 3; aws/scripts/measure.sh <env> --from <n> runs the ladder again from that level (no smoke, no seed).
 # The session has 4 hours, and measuring stops at 3: a level that could not end before 3 hours after session-start of
 # the timeline is skipped, and the session goes on to pre-destroy.
 # A level whose wait runs out while the last read of its Job failed (SSO session expired, network gone) is "error": a
 # failure of the tooling, not of the system. Its Job is left as it is (it may still be running, its logs would be of
-# pods not done), and the script stops with exit 1; once the profile reads again, measure.sh stg --from <n> deletes
+# pods not done), and the script stops with exit 1; once the profile reads again, measure.sh <env> --from <n> deletes
 # that Job and runs the level again.
 # Results: k6-levels.tsv (level, result, reason) and the timeline; exit 0 once the ladder has ended (a failed level is
 # a result), 1 when the smoke, the seed or a level's tooling failed (error), 3 on a level interrupted.
 #
-# Usage: aws/scripts/measure.sh [--print] stg [--from 1|2|4|8]
+# Usage: aws/scripts/measure.sh [--print] stg|prd [--from 1|2|4|8]
 set -euo pipefail
 
 # shellcheck source=aws/scripts/lib.sh
 . "$(dirname "$0")/lib.sh"
 printing && shift
-usage="usage: $(basename "$0") [--print] stg [--from 1|2|4|8]"
+usage="usage: $(basename "$0") [--print] $(env_names session) [--from 1|2|4|8]"
 env_arg "${1:-}"
 from=
 case "${2:-} ${3:-}" in
@@ -52,7 +54,7 @@ if printing; then
   domain='<domain of cluster-values.json>'
 else
   domain=$(jq -r '.domain // empty' "$session/cluster-values.json" 2>/dev/null) || domain=
-  [ -n "$domain" ] || fail "no domain in $session/cluster-values.json: run aws/scripts/bootstrap-argocd.sh $env_name first"
+  [ -n "$domain" ] || fail "no domain in $session/cluster-values.json: run aws/scripts/bootstrap.sh $env_name secrets first"
 fi
 
 k6_() { run_ "AWS_PROFILE=$profile" bash "$run_sh" --context "$context" --domain "$domain" "$@"; }
@@ -181,12 +183,18 @@ level() {
 
 step "measure.sh: the account of profile $profile"
 check_account
+need_tunnel
+[ -n "$ladder" ] || [ -z "$from" ] || fail "--from: $env_name runs no k6 ladder (env_table of lib.sh), only the smoke"
 
 if [ -z "$from" ]; then
   step "measure.sh: smoke"
   make_ eks-smoke "CONTEXT=$context" "DOMAIN=$domain" || fail "make eks-smoke"
   mark smoke-ok
   ok "smoke passed through https://api.$domain"
+  if [ -z "$ladder" ]; then
+    printing || ok "no k6 ladder for $env_name: its measurements are the drills of its session runbook"
+    exit 0
+  fi
 
   step "measure.sh: seed"
   make_ eks-seed "CONTEXT=$context" "DOMAIN=$domain" || fail "make eks-seed"

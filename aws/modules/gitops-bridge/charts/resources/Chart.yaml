@@ -1,0 +1,8 @@
+# Prints the manifests of value resources as they are, one document each, and nothing of its own: the GitOps bootstrap
+# roots (aws/gitops/<env>) apply AppProjects and the ApplicationSet with it through helm_release, so that Helm, not
+# the Terraform plan, needs the CRDs of Argo CD, which the release of Argo CD installs earlier in the same apply.
+apiVersion: v2
+name: resources
+description: Manifests given in value resources, printed as they are.
+type: application
+version: 0.1.0

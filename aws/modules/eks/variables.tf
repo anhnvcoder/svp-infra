@@ -68,6 +68,12 @@ variable "endpoint_public_access_cidrs" {
   }
 }
 
+variable "secrets_kms_encryption" {
+  description = "Envelope-encrypt Kubernetes Secrets with a customer managed KMS key the module creates (alias <name>-eks-secrets, rotated yearly, 7-day deletion window). Off by default: EKS encrypts them with an AWS owned key, and a key of our own costs a month's fee and outlives the cluster for the deletion window."
+  type        = bool
+  default     = false
+}
+
 variable "control_plane_log_types" {
   description = "Control plane logs sent to CloudWatch, e.g. [\"api\", \"audit\"]. Empty (the default) sends none and creates no log group: ingestion is billed per GB."
   type        = list(string)

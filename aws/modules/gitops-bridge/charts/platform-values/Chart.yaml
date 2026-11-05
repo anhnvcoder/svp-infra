@@ -1,0 +1,8 @@
+# Prints the values a template of platforms/<platform>/ of svp-gitops (<name>.values.tpl) renders on value cluster, as
+# chart argocd/apps there renders it with tpl into the valuesObject of the component's Application. The GitOps
+# bootstrap roots (aws/gitops/<env>) render chart svp-cluster with these values last, as Argo CD reads them.
+apiVersion: v2
+name: platform-values
+description: Values a template of a platform of svp-gitops renders on value cluster.
+type: application
+version: 0.1.0

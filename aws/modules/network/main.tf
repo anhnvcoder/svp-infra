@@ -74,11 +74,48 @@ module "vpc" {
 # Gateway endpoint for S3 on every private route table: object traffic of the pods (uploads, HLS output) stays on
 # the AWS network instead of going through the NAT gateway, which bills every GB it processes. Gateway endpoints are
 # free. No interface endpoint: each costs per hour and per zone.
+#
+# Without a policy (s3_endpoint_restricted = false) the endpoint lets through any request to any bucket of the region
+# that IAM allows, and the NetworkPolicies of the pods, which match S3 by address, cannot tell one bucket from
+# another. With it, only the buckets of the env and the bucket Amazon ECR serves image layers from in this region
+# (https://docs.aws.amazon.com/AmazonECR/latest/userguide/vpc-endpoints.html, "Minimum Amazon S3 bucket permissions
+# for Amazon ECR") are reachable through the endpoint: a stolen credential cannot copy data to a bucket of another
+# account from inside the VPC. Every other bucket of the region is then refused from the private subnets, as the
+# endpoint's route takes all S3 addresses of the region.
+locals {
+  s3_endpoint_policy = var.s3_endpoint_restricted ? jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        # The env's own buckets: what may be done in them is IAM's to decide, the endpoint only names the buckets.
+        Sid       = "EnvBuckets"
+        Effect    = "Allow"
+        Principal = "*"
+        Action    = "s3:*"
+        Resource = flatten([for b in var.s3_endpoint_buckets : [
+          "arn:${data.aws_partition.current.partition}:s3:::${b}",
+          "arn:${data.aws_partition.current.partition}:s3:::${b}/*",
+        ]])
+      },
+      {
+        Sid       = "EcrImageLayers"
+        Effect    = "Allow"
+        Principal = "*"
+        Action    = "s3:GetObject"
+        Resource  = "arn:${data.aws_partition.current.partition}:s3:::prod-${data.aws_region.current.region}-starport-layer-bucket/*"
+      },
+    ]
+  }) : null
+}
+
+data "aws_partition" "current" {}
+
 resource "aws_vpc_endpoint" "s3" {
   vpc_id            = module.vpc.vpc_id
   service_name      = "com.amazonaws.${data.aws_region.current.region}.s3"
   vpc_endpoint_type = "Gateway"
   route_table_ids   = module.vpc.private_route_table_ids
+  policy            = local.s3_endpoint_policy
 
   tags = {
     Name = "${var.name}-s3"

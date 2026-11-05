@@ -45,19 +45,23 @@ resource "aws_cloudfront_response_headers_policy" "media_cors" {
   }
 }
 
-# No WAF web ACL (the finding below): the distribution serves public, immutable HLS objects from a read-only origin,
-# and a web ACL costs a monthly fee per ACL and per rule for no rule this content needs. The default *.cloudfront.net
+# A WAF web ACL only when web_acl_arn is set (the waf module, in us-east-1). Without one (web_acl_id "", the finding
+# below): the distribution serves public, immutable HLS objects from a read-only origin, and a web ACL costs a monthly
+# fee per ACL and per rule for no rule a short-lived lab needs. The exception holds only for that value
+# (web_acl_id=""): with a web ACL the finding is cleared and nothing is ignored. The default *.cloudfront.net
 # certificate leaves the viewer TLS policy to CloudFront; a minimum protocol version needs a certificate of our own,
 # in ACM us-east-1 with a name of our own, which is a later step.
-# Scope: stg only; prd: a WAF web ACL on the distribution (AWS managed rule groups and a rate-based rule per client
-# IP, so a request flood is cut at the edge before it is billed), or a CloudFront flat-rate plan, which includes one.
-#trivy:ignore:AWS-0011
+# Scope: stg only; prd: web_acl_arn of the waf module (AWS managed rule groups and a rate-based rule per client IP, so
+# a request flood is cut at the edge before it is billed).
+#trivy:ignore:AWS-0011[web_acl_id=]
 resource "aws_cloudfront_distribution" "media" {
   enabled         = true
   comment         = "Media of ${var.name_prefix}"
   price_class     = var.price_class
   http_version    = "http2and3"
   is_ipv6_enabled = true
+  # "" and null both mean no web ACL to the provider; "" gives the trivy exception above a value to match.
+  web_acl_id = var.web_acl_arn == null ? "" : var.web_acl_arn
 
   origin {
     origin_id                = "media"

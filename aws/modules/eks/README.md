@@ -8,6 +8,14 @@ Không có provider nào trong module (kể cả provider Kubernetes hay Helm: S
 do Argo CD cài): root gọi nó (`aws/envs/<env>`) đặt provider, `default_tags` và ghim version provider (`~> 6.59`) trong lock file. Module không
 cấp quyền nào cho pod của `svp` (role của video-service, media-worker ở root env).
 
+Secret của Kubernetes: mặc định EKS mã hoá dữ liệu API (gồm Secret) bằng key do AWS sở hữu, không tốn phí. `secrets_kms_encryption = true`
+(mức prd) cho module registry tạo KMS key riêng (chính sách key mặc định của module registry: account, danh tính chạy `apply` là quản trị,
+role của cluster là người dùng; xoay key hằng năm), alias `<name>-eks-secrets` (cạnh alias `eks/<name>` của module registry), cửa sổ xoá
+7 ngày, và mã hoá phong bì Secret bằng nó: đọc Secret cần thêm `kms:Decrypt` trên key đó. Ngoại lệ trivy AWS-0039 trong module có điều kiện
+`create_kms_key=false`; root của env để key tắt đặt lại ngoại lệ ở lời gọi module (trivy không khớp điều kiện bool khi quét từ root, xem
+`.trivyignore.yaml`). Endpoint công khai của API tắt được (`endpoint_public_access = false`, khi đó không cần `endpoint_public_access_cidrs`);
+output `cluster_endpoint`, `cluster_certificate_authority_data` cho provider `helm`, `kubernetes` của root bootstrap.
+
 ```hcl
 module "eks" {
   source = "../../modules/eks"
@@ -81,12 +89,14 @@ module "eks" {
 | node\_max\_size | Largest number of nodes of the node group. | `number` | `5` | no |
 | node\_min\_size | Smallest number of nodes of the node group. | `number` | `3` | no |
 | private\_subnet\_ids | Private subnets of the VPC, one per availability zone (output private\_subnet\_ids of the network module). The control plane's network interfaces and the nodes go into every one of them, so pods spread over all these zones. | `list(string)` | n/a | yes |
+| secrets\_kms\_encryption | Envelope-encrypt Kubernetes Secrets with a customer managed KMS key the module creates (alias <name>-eks-secrets, rotated yearly, 7-day deletion window). Off by default: EKS encrypts them with an AWS owned key, and a key of our own costs a month's fee and outlives the cluster for the deletion window. | `bool` | `false` | no |
 | vpc\_id | ID of the VPC of the cluster (output vpc\_id of the network module). | `string` | n/a | yes |
 
 ## Outputs
 
 | Name | Description |
 | ---- | ----------- |
+| cluster\_certificate\_authority\_data | Certificate authority of the Kubernetes API server, base64-encoded PEM: cluster.certificate-authority-data of a kubeconfig, cluster\_ca\_certificate (after base64decode) of the helm and kubernetes providers. |
 | cluster\_endpoint | URL of the Kubernetes API server. |
 | cluster\_name | Name of the EKS cluster: clusterName of the AWS Load Balancer Controller, txtOwnerId of ExternalDNS, aws eks update-kubeconfig --name. |
 | cluster\_primary\_security\_group\_id | Security group EKS creates for the cluster and attaches to the control plane's network interfaces. |

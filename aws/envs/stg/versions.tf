@@ -11,12 +11,10 @@ terraform {
     }
   }
 
-  # One state and one lock per env: this key belongs to stg alone. Bucket and region come from aws/backend.hcl, which
-  # is not committed (the bucket name is unique per account):
-  # AWS_PROFILE=anhnv-sso terraform init -backend-config=../../backend.hcl.
-  backend "s3" {
-    key          = "aws/stg/terraform.tfstate"
-    encrypt      = true
-    use_lockfile = true
-  }
+  # Partial configuration: every setting comes from the command line at init, so the block stays the same in every env
+  # root. aws/backend-<env>.hcl (written from output backend_hcl of aws/accounts/<env>, not committed) gives the
+  # bucket, region and KMS key of the env's account; the second -backend-config gives the key of this root, with <env>
+  # the value of local.env (main.tf):
+  # AWS_PROFILE=anhnv-<env> terraform init -reconfigure -backend-config=../../backend-<env>.hcl -backend-config=key=aws/<env>/terraform.tfstate
+  backend "s3" {}
 }

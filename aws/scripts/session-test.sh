@@ -1,28 +1,38 @@
 #!/usr/bin/env bash
-# Self-test of the session scripts of this directory, with fake aws, kubectl, helm, terraform, make and dig on PATH
-# (and git repositories made here as the clones of the code repository and of svp-gitops): no account, cluster or
-# network is reached. Runs on the Mac (bash 3.2) and on Linux; needs git and jq.
-#   - --print of the whole session (session.sh) calls no command at all, lists the steps in the order of the
-#     runbook's table, deletes root svp-root before any child, every PVC before the platform Applications, and
-#     every PVC before terraform plan -destroy
-#   - check-account.sh stops on another account or none exported; check-dns.sh on name servers that differ or none
-#   - bootstrap-argocd.sh checks the account first; calls make eks-gitops-up with the context, the values file and the
-#     svp-gitops SHA, the RDS master password in make's environment only; the secret reaches jq through a pipe, never a
-#     file; never helm; no fake secret in any output or file; a password in make's output deletes the log and fails
-#   - pre-destroy.sh against a fake cluster: root first, workloads by wave, Gateway, PVCs, platform last; on a cluster
-#     without Argo CD, no Application call and still the waits; after an apply that failed once EKS existed (no
-#     cluster-values.json, EKS in the state), it writes the context itself, reads the zone id from the tfvars, and
-#     plan --destroy and destroy run after it; it stops before kubectl when the account has no such cluster, and still
-#     marks pre-destroy-start; a FAIL of step 2 ends with the way out, --leftovers
-#   - measure.sh checks the account first; a level that fails ends the ladder; a node lost makes the level interrupted
-#     (exit 3); a failed poll of the Job is waited past, not taken for its end; a Job never read again is a tooling
-#     error (exit 1), not a failed level, and is not deleted
-#   - tf.sh show refuses without a plan file and writes the plan as text in the session directory, as plan does;
-#     tf.sh plan --destroy refuses before pre-destroy; --no-cluster only with no cluster-values.json and no EKS cluster
-#     in the state; --leftovers only after pre-destroy-start and before pre-destroy-done, never with --no-cluster, and
-#     it marks pre-destroy-skipped; it writes the destroy plan file and its text; tf.sh destroy refuses without that
-#     file and applies it, never terraform destroy; sweep.sh reads only, works with no state, fails on a leftover
-#     volume or a secret scheduled for deletion, passes on the bootstrap's resources alone
+# Self-test of the session scripts of this directory, with fake aws, kubectl, terraform, make, nc and dig on PATH (and
+# git repositories made here as the clones of the code repository and of svp-gitops): no account, cluster or network is
+# reached. Runs on the Mac (bash 3.2) and on Linux; needs git and jq. The fake aws and terraform answer as the account
+# of their profile (anhnv-sso 000000000000, anhnv-stg 111111111111, anhnv-prd 222222222222).
+#   - --print of the whole session (session.sh) of stg and of prd calls no command at all, lists the steps in the
+#     order of the runbook's table of each environment, names the environment's profile in every command (anhnv-sso
+#     for the last sweep alone), destroys root gitops before root env, deletes ApplicationSet svp-bootstrap before any
+#     child, every PVC before the platform Applications and before terraform plan -destroy; prd checks its tunnel
+#     before any kubectl and lifts its protections before the destroy plan
+#   - check-account.sh: each environment passes on its own account with its own profile, refuses the account of each
+#     other one, and refuses when its variable is not exported, naming it, the old single variable included
+#   - check-dns.sh reads the name servers of aws/accounts/<env> and asks the zone of the environment; stops on name
+#     servers that differ or none
+#   - tf.sh init: both roots of an environment take the same backend file and their own key, with -reconfigure, even
+#     when .terraform still names another backend; TF_VAR_account_id is the environment's account; plan, show, apply,
+#     plan --teardown, apply --teardown, plan --destroy (--leftovers, --no-cluster) and destroy keep their order rules;
+#     the teardown plan of prd targets the DB instance and the buckets of the state alone (after an apply that failed
+#     halfway too), and records that nothing is to lift when the state has none; root gitops takes the chart at the
+#     revision of envs/<env>/charts.yaml and the Telegram chat of .env (plain or in one pair of quotes), and refuses
+#     without the tunnel of prd
+#   - every script of the directory is executable
+#   - bootstrap.sh secrets checks the account first; writes the context (through the tunnel for prd); calls make
+#     eks-secrets with the context, the RDS master password in make's environment only; the secret reaches jq through
+#     a pipe, never a file; no fake secret in any output or file; a password in make's output deletes the log and
+#     fails. bootstrap.sh wait runs no kubectl or make while the tunnel of prd is closed; waits on svp-observability,
+#     then GlitchTip, then svp-root; fails after its limit
+#   - pre-destroy.sh against a fake cluster: ApplicationSet and roots first, workloads by wave, Gateway, PVCs, platform
+#     last; on a cluster without Argo CD, no Application call and still the waits; it stops before kubectl when the
+#     account has no such cluster, and still marks pre-destroy-start; a FAIL of step 2 ends with the way out,
+#     --leftovers
+#   - measure.sh: stg's ladder as before; prd's smoke alone, behind its tunnel
+#   - sweep.sh <env> reads only, needs no state, prints kept and pending-deletion lines, exits 0 on them alone (stg,
+#     prd, mgmt with the delegations of the lab zone), and exits 1 on a leftover volume, a secret scheduled for deletion,
+#     a final snapshot, a retained automated backup, a KMS key not pending deletion or a web ACL, with the delete command
 #
 # Usage: aws/scripts/session-test.sh
 #
@@ -31,7 +41,7 @@
 set -euo pipefail
 
 src=$(cd "$(dirname "$0")" && pwd)
-runbook=$(cd "$src/../.." && pwd)/docs/runbooks/session-stg.md
+runbooks=$(cd "$src/../.." && pwd)/docs/runbooks
 command -v jq >/dev/null || {
   echo "FAIL  jq not found" >&2
   exit 1
@@ -45,12 +55,17 @@ mkdir -p "$bin" "$state"
 
 # The scripts run from a copy in a tree of their own, $work/infra: the session directories they write and the
 # personal tfvars they read are there, so the test writes nothing in this repository and never reads or removes the
-# learner's own files (stg.auto.tfvars, a plan file, a session).
+# learner's own files (<env>.auto.tfvars, a plan file, a session).
 infra_root=$work/infra
 here=$infra_root/aws/scripts
-mkdir -p "$here" "$infra_root/aws/envs/stg"
+mkdir -p "$here"
+for e in stg prd; do
+  mkdir -p "$infra_root/aws/envs/$e" "$infra_root/aws/gitops/$e" "$infra_root/aws/accounts/$e"
+  printf '%s\n' "hosted_zone_id = \"Z0TFVARS\"" "domain         = \"$e.aws.svp.example\"" >"$infra_root/aws/envs/$e/$e.auto.tfvars"
+  printf 'bucket = "svp-tfstate-fake"\n' >"$infra_root/aws/backend-$e.hcl"
+done
+printf 'rds_deletion_protection = false\n' >"$infra_root/aws/envs/prd/teardown.tfvars"
 cp "$src"/*.sh "$here"/
-printf '%s\n' 'hosted_zone_id = "Z0TFVARS"' 'domain         = "stg.aws.svp.example"' >"$infra_root/aws/envs/stg/stg.auto.tfvars"
 password=fake-Rds-Master-9f3c27e1
 failures=0
 
@@ -67,31 +82,63 @@ expect() {
 }
 
 # --- fakes -------------------------------------------------------------------------------------------------------
-# Each fake logs its call to $FAKE_LOG; aws and terraform check the profile, aws the region.
+# Each fake logs its call to $FAKE_LOG. aws and terraform answer as the account of their profile, and log the profile
+# to $FAKE_LOG.profiles; aws checks the region (us-east-1 for WAF of CloudFront).
 cat >"$bin/aws" <<'EOF'
 #!/usr/bin/env bash
 echo "aws $*" >>"$FAKE_LOG"
-[ "${AWS_PROFILE:-}" = anhnv-sso ] || { echo "fake aws: AWS_PROFILE is '${AWS_PROFILE:-}'" >&2; exit 97; }
-case " $* " in *" --region ap-southeast-1 "*) ;; *) echo "fake aws: no --region ap-southeast-1" >&2; exit 97 ;; esac
+case ${AWS_PROFILE:-} in
+  anhnv-sso) account=000000000000 zone=aws.svp.example stack=bootstrap ;;
+  anhnv-stg) account=111111111111 zone=stg.aws.svp.example stack=baseline ;;
+  anhnv-prd) account=222222222222 zone=prd.aws.svp.example stack=baseline ;;
+  *) echo "fake aws: AWS_PROFILE is '${AWS_PROFILE:-}'" >&2; exit 97 ;;
+esac
+echo "$AWS_PROFILE" >>"$FAKE_LOG.profiles"
+# FAKE_ACCOUNT: the profile signs in to another account (a profile pointing at the wrong account).
+account=${FAKE_ACCOUNT:-$account}
+case "$1" in wafv2) want=us-east-1 ;; *) want=ap-southeast-1 ;; esac
+case " $* " in *" --region $want "*) ;; *) echo "fake aws: no --region $want" >&2; exit 97 ;; esac
 left=${FAKE_LEFTOVER:-}
 case "$1 $2" in
-  "sts get-caller-identity") echo '{"Account":"000000000000","Arn":"arn:aws:sts::000000000000:assumed-role/learner/session"}' ;;
+  "sts get-caller-identity") echo "{\"Account\":\"$account\",\"Arn\":\"arn:aws:sts::$account:assumed-role/AWSReservedSSO_SvpAdmin_0/learner\"}" ;;
   # FAKE_NO_CLUSTER: an account where the cluster was never made.
   "eks update-kubeconfig")
-    [ -z "${FAKE_NO_CLUSTER:-}" ] || { echo "fake aws: ResourceNotFoundException: No cluster found for name: svp-stg." >&2; exit 254; }
-    echo "Added new context svp-stg" ;;
+    [ -z "${FAKE_NO_CLUSTER:-}" ] || { echo "fake aws: ResourceNotFoundException: No cluster found." >&2; exit 254; }
+    echo "Added new context" ;;
+  "eks describe-cluster")
+    printf '{"cluster":{"arn":"arn:aws:eks:ap-southeast-1:%s:cluster/%s","endpoint":"https://0123ABCD.gr7.ap-southeast-1.eks.amazonaws.com"}}\n' "$account" "$4" ;;
   "eks list-clusters") echo '{"clusters":[]}' ;;
   "secretsmanager get-secret-value") printf '{"username":"postgres","password":"%s"}\n' "$FAKE_PASSWORD" ;;
   "secretsmanager list-secrets")
     if [ "$left" = secret ]; then
-      echo '{"SecretList":[{"Name":"svp-stg-old","DeletedDate":"2026-10-30T10:00:00Z","Tags":[{"Key":"Project","Value":"svp"}]}]}'
+      echo '{"SecretList":[{"Name":"svp/stg/web","DeletedDate":"2026-10-30T10:00:00Z","Tags":[{"Key":"Project","Value":"svp"}]}]}'
     else
       echo '{"SecretList":[{"Name":"other-project","Tags":[]}]}'
     fi ;;
-  "route53 list-hosted-zones-by-name") echo '{"HostedZones":[{"Id":"/hostedzone/Z0FAKE","Name":"aws.svp.example."}]}' ;;
+  "route53 list-hosted-zones-by-name") echo "{\"HostedZones\":[{\"Id\":\"/hostedzone/Z0FAKE\",\"Name\":\"$zone.\"}]}" ;;
   "route53 list-resource-record-sets")
-    echo '{"ResourceRecordSets":[{"Name":"aws.svp.example.","Type":"NS"},{"Name":"aws.svp.example.","Type":"SOA"}]}' ;;
-  "resourcegroupstaggingapi get-resources") echo '{"ResourceTagMappingList":[]}' ;;
+    {
+      printf '{"Name":"%s.","Type":"NS"}\n{"Name":"%s.","Type":"SOA"}\n' "$zone" "$zone"
+      # The lab zone delegates the zone of each member account.
+      [ "$zone" != aws.svp.example ] || printf '{"Name":"stg.aws.svp.example.","Type":"NS"}\n{"Name":"prd.aws.svp.example.","Type":"NS"}\n'
+      [ "$left" != record ] || printf '{"Name":"api.%s.","Type":"A"}\n' "$zone"
+    } | jq -s '{ResourceRecordSets: .}' ;;
+  "resourcegroupstaggingapi get-resources")
+    case " $* " in
+      *" kms:key "*) echo "{\"ResourceTagMappingList\":[{\"ResourceARN\":\"arn:aws:kms:ap-southeast-1:$account:key/key-eks\",\"Tags\":[{\"Key\":\"Project\",\"Value\":\"svp\"}]}]}" ;;
+      *) echo '{"ResourceTagMappingList":[]}' ;;
+    esac ;;
+  "kms list-aliases") echo '{"Aliases":[{"AliasName":"alias/aws/ebs","TargetKeyId":"key-aws"},{"AliasName":"alias/svp-tfstate","TargetKeyId":"key-state"},{"AliasName":"alias/svp-prd-eks-secrets","TargetKeyId":"key-eks"}]}' ;;
+  "kms describe-key")
+    # key-eks: the key of the cluster's Secrets, PendingDeletion after a destroy (FAKE_LEFTOVER=kms: still Enabled).
+    if [ "$4" = key-eks ] && [ "$left" != kms ]; then
+      echo '{"KeyMetadata":{"KeyId":"key-eks","KeyState":"PendingDeletion","KeyManager":"CUSTOMER","DeletionDate":"2026-11-12T00:00:00Z"}}'
+    else
+      echo "{\"KeyMetadata\":{\"KeyId\":\"$4\",\"KeyState\":\"Enabled\",\"KeyManager\":\"CUSTOMER\"}}"
+    fi ;;
+  "kms list-resource-tags")
+    if [ "$4" = key-state ]; then echo "{\"Tags\":[{\"TagKey\":\"Project\",\"TagValue\":\"svp\"},{\"TagKey\":\"Stack\",\"TagValue\":\"$stack\"}]}"
+    else echo '{"Tags":[{"TagKey":"Project","TagValue":"svp"},{"TagKey":"Stack","TagValue":"prd"}]}'; fi ;;
   "ec2 describe-volumes")
     if [ "$left" = volume ] && [[ "$*" == *tag:Project* ]]; then
       echo '{"Volumes":[{"VolumeId":"vol-0fake","State":"available","Size":10,"Tags":[{"Key":"kubernetes.io/created-for/pvc/name","Value":"data-redpanda-0"}]}]}'
@@ -108,45 +155,76 @@ case "$1 $2" in
   "elbv2 describe-load-balancers") echo '{"LoadBalancers":[]}' ;;
   "elbv2 describe-target-groups") echo '{"TargetGroups":[]}' ;;
   "rds describe-db-instances") echo '{"DBInstances":[]}' ;;
-  "rds describe-db-snapshots") echo '{"DBSnapshots":[]}' ;;
-  "rds describe-db-instance-automated-backups") echo '{"DBInstanceAutomatedBackups":[]}' ;;
-  "s3api list-buckets") echo '{"Buckets":[{"Name":"svp-tfstate-000000000000-ap-southeast-1"},{"Name":"someone-else"}]}' ;;
-  "s3api get-bucket-tagging") echo '{"TagSet":[{"Key":"Project","Value":"svp"},{"Key":"Stack","Value":"bootstrap"}]}' ;;
+  "rds describe-db-snapshots")
+    if [ "$left" = snapshot ]; then
+      echo '{"DBSnapshots":[{"DBSnapshotIdentifier":"svp-prd-final-0a1b2c3d","DBInstanceIdentifier":"svp-prd","SnapshotType":"manual","Status":"available"}]}'
+    else
+      echo '{"DBSnapshots":[]}'
+    fi ;;
+  "rds describe-db-instance-automated-backups")
+    if [ "$left" = backup ]; then
+      echo '{"DBInstanceAutomatedBackups":[{"DBInstanceIdentifier":"svp-prd","DBInstanceAutomatedBackupsArn":"arn:aws:rds:ap-southeast-1:222222222222:auto-backup:ab-fake","Status":"retained"}]}'
+    else
+      echo '{"DBInstanceAutomatedBackups":[]}'
+    fi ;;
+  "s3api list-buckets") echo "{\"Buckets\":[{\"Name\":\"svp-tfstate-$account-ap-southeast-1\"},{\"Name\":\"someone-else\"}]}" ;;
+  "s3api get-bucket-tagging") echo "{\"TagSet\":[{\"Key\":\"Project\",\"Value\":\"svp\"},{\"Key\":\"Stack\",\"Value\":\"$stack\"}]}" ;;
   "cloudfront list-distributions") echo '{"DistributionList":{"Items":[]}}' ;;
   "cloudfront list-origin-access-controls") echo '{"OriginAccessControlList":{"Items":[]}}' ;;
   "cloudfront list-response-headers-policies") echo '{"ResponseHeadersPolicyList":{"Items":[]}}' ;;
+  "wafv2 list-web-acls")
+    if [ "$left" = waf ]; then echo '{"WebACLs":[{"Name":"svp-prd-media","Id":"waf-fake"}]}'; else echo '{"WebACLs":[]}'; fi ;;
   "logs describe-log-groups") echo '{"logGroups":[]}' ;;
-  "kms list-aliases") echo '{"Aliases":[{"AliasName":"alias/aws/ebs"}]}' ;;
   *) echo "fake aws: unexpected $1 $2" >&2; exit 98 ;;
 esac
 EOF
 
+# terraform: init with a backend, as the real one, refuses a .terraform that names another backend unless told to
+# -reconfigure (or -migrate-state), and records the backend it was given; plan writes the file of -out=.
 cat >"$bin/terraform" <<'EOF'
 #!/usr/bin/env bash
 echo "terraform $*" >>"$FAKE_LOG"
-[ "${AWS_PROFILE:-}" = anhnv-sso ] || { echo "fake terraform: AWS_PROFILE is '${AWS_PROFILE:-}'" >&2; exit 97; }
+case ${AWS_PROFILE:-} in anhnv-sso | anhnv-stg | anhnv-prd) ;; *) echo "fake terraform: AWS_PROFILE is '${AWS_PROFILE:-}'" >&2; exit 97 ;; esac
+echo "$AWS_PROFILE" >>"$FAKE_LOG.profiles"
+echo "account=${TF_VAR_account_id:-} chart=${TF_VAR_svp_cluster_chart:-} chat=${TF_VAR_telegram_chat_id-unset}" >>"$FAKE_LOG.tfenv"
+dir= out=
+for a in "$@"; do case $a in -chdir=*) dir=${a#-chdir=} ;; -out=*) out=${a#-out=} ;; esac; done
+env=${dir##*/}
 args="$*"
 case "${args#-chdir=* }" in
+  init\ *)
+    backend=$(printf '%s\n' "$@" | sed -n 's/^-backend-config=//p' | tr '\n' ' ')
+    if [ -f "$dir/.terraform/terraform.tfstate" ] && [ "$(cat "$dir/.terraform/terraform.tfstate")" != "$backend" ]; then
+      case " $* " in
+        *" -reconfigure "* | *" -migrate-state "*) ;;
+        *) echo "fake terraform: Backend configuration changed; run init with -reconfigure or -migrate-state" >&2; exit 1 ;;
+      esac
+    fi
+    mkdir -p "$dir/.terraform" && printf '%s' "$backend" >"$dir/.terraform/terraform.tfstate" ;;
   "output -json name_servers")
     echo '["ns-1.awsdns-01.org","ns-2.awsdns-02.co.uk","ns-3.awsdns-03.com","ns-4.awsdns-04.net"]' ;;
   "output -json cluster_values")
-    echo '{"name":"svp-stg","domain":"stg.aws.svp.example","hostedZoneId":"Z0FAKE","acmeEmail":"you@svp.example"}' ;;
+    echo "{\"name\":\"svp-$env\",\"domain\":\"$env.aws.svp.example\",\"hostedZoneId\":\"Z0FAKE\",\"acmeEmail\":\"you@svp.example\"}" ;;
   "output -raw rds_master_user_secret_arn") printf 'arn:aws:secretsmanager:ap-southeast-1:000000000000:secret:rds!db-fake' ;;
-  # FAKE_TF_STATE: eks, a state with the cluster (and a data source of it); fail, no readable state; else, no cluster.
-  # show: the text of a plan file.
-  "show -no-color stg.tfplan") printf '%s\n' 'Terraform will perform the following actions:' '  # aws_vpc.this will be created' \
+  "show -no-color "*.destroy.tfplan) printf '%s\n' 'Terraform will perform the following actions:' '  # aws_vpc.this will be destroyed' \
+    'Plan: 0 to add, 0 to change, 3 to destroy.' ;;
+  "show -no-color "*.teardown.tfplan) printf '%s\n' 'Terraform will perform the following actions:' \
+    '  # module.rds.aws_db_instance.this will be updated in-place' 'Plan: 0 to add, 2 to change, 0 to destroy.' ;;
+  "show -no-color "*.tfplan) printf '%s\n' 'Terraform will perform the following actions:' '  # aws_vpc.this will be created' \
     'Plan: 1 to add, 0 to change, 0 to destroy.' ;;
-  "show -no-color stg.destroy.tfplan") printf '%s\n' 'Terraform will perform the following actions:' \
-    '  # aws_vpc.this will be destroyed' 'Plan: 0 to add, 0 to change, 3 to destroy.' ;;
-  # plan: writes the file of -out=, in the directory of -chdir=.
-  "plan "*)
-    dir= out=
-    for a in "$@"; do case $a in -chdir=*) dir=${a#-chdir=} ;; -out=*) out=${a#-out=} ;; esac; done
-    [ -z "$out" ] || : >"$dir/$out" ;;
+  plan\ *) [ -z "$out" ] || : >"$dir/$out" ;;
+  # FAKE_TF_STATE: eks, the state of a whole apply: the cluster (and a data source of it), the DB instance, the buckets
+  # (and a read of one, and a resource of a type that starts like it); partial, an apply that failed before the cluster
+  # and the DB instance, with the buckets made; fail, no readable state; else, neither cluster nor DB instance nor
+  # bucket.
   "state list")
     case ${FAKE_TF_STATE:-} in
       eks) printf '%s\n' 'module.eks.module.eks.data.aws_eks_cluster.this[0]' 'module.eks.module.eks.aws_eks_cluster.this[0]' \
-        'module.network.module.vpc.aws_vpc.this[0]' ;;
+        'module.network.module.vpc.aws_vpc.this[0]' 'module.rds.aws_db_instance.this' 'module.media.aws_s3_bucket.this["media"]' \
+        'module.media.aws_s3_bucket.this["uploads"]' 'module.media.aws_s3_bucket.logs[0]' 'module.media.data.aws_s3_bucket.read' \
+        'module.media.aws_s3_bucket_versioning.this["media"]' ;;
+      partial) printf '%s\n' 'module.network.module.vpc.aws_vpc.this[0]' 'module.media.aws_s3_bucket.this["media"]' \
+        'module.media.aws_s3_bucket.this["uploads"]' 'module.media.aws_s3_bucket_versioning.this["media"]' ;;
       fail) echo "fake terraform: No state file was found!" >&2; exit 1 ;;
       *) printf '%s\n' 'module.eks.module.eks.data.aws_eks_cluster.this[0]' 'module.network.module.vpc.aws_vpc.this[0]' ;;
     esac ;;
@@ -164,13 +242,20 @@ case ${FAKE_DIG:-same} in
 esac
 EOF
 
+# nc: the check of the tunnel; FAKE_TUNNEL=closed, nothing listens.
+cat >"$bin/nc" <<'EOF'
+#!/usr/bin/env bash
+echo "nc $*" >>"$FAKE_LOG"
+[ "${FAKE_TUNNEL:-open}" = open ]
+EOF
+
 cat >"$bin/make" <<'EOF'
 #!/usr/bin/env bash
 # Logs whether the password reached make's environment, never the value.
 if [ "${SVP_RDS_MASTER_PASSWORD:-}" = "$FAKE_PASSWORD" ]; then pw=match; elif [ -n "${SVP_RDS_MASTER_PASSWORD:-}" ]; then pw=other; else pw=none; fi
 echo "make $* password=$pw profile=${AWS_PROFILE:-}" >>"$FAKE_LOG"
-echo "ok    every Application Synced and Healthy (fake make)"
-# FAKE_MAKE_LEAK: a target that prints the password, which bootstrap-argocd.sh must catch in its log.
+echo "ok    entries written (fake make)"
+# FAKE_MAKE_LEAK: a target that prints the password, which bootstrap.sh must catch in its log.
 [ -z "${FAKE_MAKE_LEAK:-}" ] || echo "debug: password $SVP_RDS_MASTER_PASSWORD"
 EOF
 
@@ -189,31 +274,46 @@ case " \$* " in *password*) [ ! -f /dev/stdin ] || echo "jq \$* stdin=file" >>"\
 exec "$real_jq" "\$@"
 EOF
 
-# kubectl: a cluster in files of $FAKE_STATE (apps: "wave name", root, lb, pvcs: "namespace name", nodes); with
-# FAKE_NO_ARGOCD, a cluster where make eks-gitops-up stopped before Argo CD (no CRD of Argo CD, Gateway API or LBC);
-# with FAKE_GATEWAY_CRD_DOWN, the read of the Gateway API CRD (step 2 of pre-destroy.sh) fails.
+# kubectl: a cluster in files of $FAKE_STATE (apps: "wave name", appset, root, svp-apps, lb, pvcs: "namespace name",
+# nodes); with FAKE_NO_ARGOCD, a cluster where root gitops never ran (no CRD of Argo CD, Gateway API or LBC); with
+# FAKE_GATEWAY_CRD_DOWN, the read of the Gateway API CRD (step 2 of pre-destroy.sh) fails; FAKE_ROOT_NEVER, svp-root
+# never gets Synced and Healthy.
 cat >"$bin/kubectl" <<'EOF'
 #!/usr/bin/env bash
 echo "kubectl $*" >>"$FAKE_LOG"
-[ "${1:-} ${2:-}" = "--context svp-stg" ] || { echo "fake kubectl: not --context svp-stg: $*" >&2; exit 97; }
+[ "${1:-}" != config ] || exit 0
+case "${1:-} ${2:-}" in "--context svp-stg" | "--context svp-prd") ;; *) echo "fake kubectl: not --context svp-stg|svp-prd: $*" >&2; exit 97 ;; esac
 shift 2
 s=$FAKE_STATE
 items() { jq -s '{items: .}'; }
 case "$*" in
-  "get crd applications.argoproj.io --ignore-not-found -o name")
-    [ -n "${FAKE_NO_ARGOCD:-}" ] || echo customresourcedefinition.apiextensions.k8s.io/applications.argoproj.io ;;
+  "get crd applications.argoproj.io --ignore-not-found -o name" | "get crd applicationsets.argoproj.io --ignore-not-found -o name")
+    [ -n "${FAKE_NO_ARGOCD:-}" ] || echo "customresourcedefinition.apiextensions.k8s.io/$2" ;;
   "get crd gateways.gateway.networking.k8s.io --ignore-not-found -o name")
     [ -z "${FAKE_GATEWAY_CRD_DOWN:-}" ] || { echo "fake kubectl: connection refused" >&2; exit 1; }
     [ -n "${FAKE_NO_ARGOCD:-}" ] || echo customresourcedefinition.apiextensions.k8s.io/gateways.gateway.networking.k8s.io ;;
   "-n argocd get application svp-root --ignore-not-found -o name") [ ! -e "$s/root" ] || echo application.argoproj.io/svp-root ;;
+  "-n argocd get application svp-apps --ignore-not-found -o name") [ ! -e "$s/svp-apps" ] || echo application.argoproj.io/svp-apps ;;
   "-n argocd patch application "*) ;;
+  # The ApplicationSet owns svp-root: deleting it deletes svp-root, which has no finalizer.
+  "-n argocd delete applicationset svp-bootstrap "*) rm -f "$s/appset" "$s/root" ;;
   "-n argocd delete application svp-root "*) rm -f "$s/root" ;;
+  "-n argocd delete application svp-apps "*) rm -f "$s/svp-apps" ;;
   "-n argocd get applications -o json")
     while read -r w n; do [ -z "$n" ] || jq -n --arg w "$w" --arg n "$n" \
       '{metadata: {name: $n, annotations: {"argocd.argoproj.io/sync-wave": $w}}}'; done <"$s/apps" | items ;;
   "-n argocd delete application "*" --wait=false")
     name=$5; grep -v " $name\$" "$s/apps" >"$s/apps.new" || true; mv "$s/apps.new" "$s/apps" ;;
   "-n argocd get application "*" --ignore-not-found -o name") ! grep -q " $5\$" "$s/apps" || echo "application.argoproj.io/$5" ;;
+  "-n argocd get applications.argoproj.io "*" --ignore-not-found -o json")
+    # svp-observability turns Healthy at the second read; svp-root is Synced and Healthy unless FAKE_ROOT_NEVER.
+    c=$(( $(cat "$s/app-calls-$5" 2>/dev/null || echo 0) + 1 )); echo "$c" >"$s/app-calls-$5"
+    case $5 in
+      svp-observability) if [ "$c" -ge 2 ]; then h=Healthy; else h=Progressing; fi; sy=Synced ;;
+      svp-root) if [ -n "${FAKE_ROOT_NEVER:-}" ]; then sy=OutOfSync h=Progressing; else sy=Synced h=Healthy; fi ;;
+      *) exit 0 ;;
+    esac
+    jq -n --arg s "$sy" --arg h "$h" '{status: {sync: {status: $s}, health: {status: $h}}}' ;;
   "-n svp-edge delete gateway svp "*) rm -f "$s/lb" ;;
   "get services -A -o json")
     if [ -e "$s/lb" ]; then echo '{"items":[{"spec":{"type":"LoadBalancer"}}]}'; else echo '{"items":[{"spec":{"type":"ClusterIP"}}]}'; fi ;;
@@ -245,14 +345,27 @@ esac
 EOF
 chmod +x "$bin"/*
 
-# The clones: the code repository with a fake run.sh of the k6 Job, and svp-gitops, each with an origin.
+# The clones: the code repository with chart svp-cluster, a fake run.sh of the k6 Job and a .env (untracked, as
+# make env leaves it), and svp-gitops whose envs/<env>/charts.yaml name a commit of it; each with an origin.
 git_() { git -c user.name=test -c user.email=test@svp.example -c init.defaultBranch=main -c advice.detachedHead=false "$@"; }
 make_clone() {
   local dir=$1
   git_ init -q --bare "$dir.origin.git"
   git_ init -q "$dir"
-  mkdir -p "$dir/deploy/k6/cloud"
-  cat >"$dir/deploy/k6/cloud/run.sh" <<'EOF'
+}
+push_clone() {
+  local dir=$1
+  git_ -C "$dir" add -A
+  git_ -C "$dir" commit -q -m init
+  git_ -C "$dir" remote add origin "$dir.origin.git"
+  git_ -C "$dir" push -q origin main
+  git_ -C "$dir" fetch -q origin
+}
+make_clone "$work/backend"
+mkdir -p "$work/backend/deploy/k6/cloud" "$work/backend/deploy/helm/svp-cluster/templates"
+printf 'apiVersion: v2\nname: svp-cluster\nversion: 0.1.0\n' >"$work/backend/deploy/helm/svp-cluster/Chart.yaml"
+printf '.env\n.k6/\n' >"$work/backend/.gitignore"
+cat >"$work/backend/deploy/k6/cloud/run.sh" <<'EOF'
 #!/usr/bin/env bash
 # Fake of the k6 Job's script: start records the pods, logs writes their summaries, failing from FAKE_K6_FAIL_AT pods.
 echo "run.sh $*" >>"$FAKE_LOG"
@@ -271,33 +384,38 @@ case $cmd in
   delete) ;;
 esac
 EOF
-  chmod +x "$dir/deploy/k6/cloud/run.sh"
-  git_ -C "$dir" add -A
-  git_ -C "$dir" commit -q -m init
-  git_ -C "$dir" remote add origin "$dir.origin.git"
-  git_ -C "$dir" push -q origin main
-  git_ -C "$dir" fetch -q origin
-}
-make_clone "$work/backend"
+chmod +x "$work/backend/deploy/k6/cloud/run.sh"
+push_clone "$work/backend"
+printf 'SVP_ALERT_TELEGRAM_CHAT_ID=-1001234\n' >"$work/backend/.env"
+chart_rev=$(git -C "$work/backend" rev-parse HEAD)
 make_clone "$work/gitops"
-gitops_sha=$(git -C "$work/gitops" rev-parse refs/remotes/origin/main)
+for e in stg prd; do
+  mkdir -p "$work/gitops/envs/$e"
+  printf '# The commit of the code repository.\nrevision: %s\npodSecurityVersion: v1.36\n' "$chart_rev" >"$work/gitops/envs/$e/charts.yaml"
+done
+push_clone "$work/gitops"
 
 export PATH="$bin:$PATH" FAKE_LOG=$log FAKE_STATE=$state FAKE_PASSWORD=$password
 export SVP_BACKEND_DIR=$work/backend SVP_GITOPS_DIR=$work/gitops SVP_SESSION_POLL=0 SVP_ZONE_NAME=aws.svp.example
-export SVP_AWS_ACCOUNT_ID=000000000000
+export SVP_AWS_MGMT_ACCOUNT_ID=000000000000 SVP_AWS_STG_ACCOUNT_ID=111111111111 SVP_AWS_PRD_ACCOUNT_ID=222222222222
 unset SVP_SESSION_DIR
 
+# clear_log: an empty log of calls, profiles and Terraform variables.
+clear_log() { : >"$log" && : >"$log.profiles" && : >"$log.tfenv"; }
 # new_session: a fresh session directory under .session/ of the copy.
 new_session() {
   SVP_SESSION_DIR=$infra_root/.session/test-$$-$RANDOM
   export SVP_SESSION_DIR
   mkdir -p "$SVP_SESSION_DIR"
-  : >"$log"
+  clear_log
 }
+# profiles_are PROFILE: every aws and terraform call since the log was cleared used PROFILE, and there was one.
+profiles_are() { [ "$(LC_ALL=C sort -u "$log.profiles")" = "$1" ]; }
 
 # has_mark EVENT: the session's timeline holds EVENT.
 has_mark() { awk -F '\t' -v e="$1" '$3 == e { found = 1 } END { exit !found }' "$SVP_SESSION_DIR/timeline.tsv"; }
 no_mark() { ! has_mark "$1"; }
+add_mark() { printf '%s\t%s\t%s\n' 2026-11-05T00:00:00Z "$(date +%s)" "$1" >>"$SVP_SESSION_DIR/timeline.tsv"; }
 
 # index FILE PATTERN: the number of the first line of FILE matching PATTERN (grep -E), 0 when none.
 index() { grep -nE -- "$2" "$1" | head -n 1 | cut -d: -f1 || true; }
@@ -308,265 +426,405 @@ before() {
   [ -n "$a" ] && [ -n "$b" ] && [ "$a" -lt "$b" ]
 }
 
+# --- the scripts themselves -------------------------------------------------------------------------------------
+# The runbooks run each script by its path (aws/scripts/<script> ...), never through bash, so each must be executable
+# as git records it (lib.sh, sourced, too).
+for f in "$src"/*.sh; do
+  expect "$(basename "$f") is executable" test -x "$f"
+done
+
 # --- --print ----------------------------------------------------------------------------------------------------
-: >"$log"
-bash "$here/session.sh" --print stg >"$work/print.out" 2>&1 || bad "session.sh --print stg exits 0"
-expect "--print calls no aws, kubectl, helm, terraform, make, dig" test ! -s "$log"
-sed -n 's/^### step [0-9]*: aws\/scripts\///p' "$work/print.out" >"$work/order.print"
-sed -n 's/^| [0-9]* | `aws\/scripts\/\([^`]*\)`.*/\1/p' "$runbook" >"$work/order.runbook"
-expect "the steps of --print are the runbook's table, in order" diff "$work/order.runbook" "$work/order.print"
-expect "the runbook's table has the eleven steps" test "$(grep -c . "$work/order.runbook")" = 11
-expect "--print: root svp-root deleted before any child Application" \
-  before "$work/print.out" 'delete application svp-root' "delete application '<each workload"
-expect "--print: root's auto-sync and finalizers cleared before it is deleted" \
-  before "$work/print.out" 'patch application svp-root' 'delete application svp-root'
-expect "--print: workloads, then Gateway svp" before "$work/print.out" "delete application '<each workload" 'delete gateway svp'
-expect "--print: every PVC deleted before svp-cluster and the platform Applications" \
-  before "$work/print.out" 'delete pvc --all' "delete application '<each platform"
-expect "--print: every PVC deleted before terraform plan -destroy" before "$work/print.out" 'delete pvc --all' 'terraform .* plan -destroy'
-expect "--print: pre-destroy before the apply of the destroy plan" \
-  before "$work/print.out" 'step 8: aws/scripts/pre-destroy.sh' 'apply -input=false stg.destroy.tfplan'
-expect "--print: destroy plan saved to a file, apply of that file" \
-  before "$work/print.out" 'plan -destroy .*-out=stg.destroy.tfplan' 'apply -input=false stg.destroy.tfplan'
-expect "--print: sweep last" test "$(grep '^### step' "$work/print.out" | tail -n 1)" = '### step 11: aws/scripts/sweep.sh'
-expect "--print: plan saved to a file, apply of that file" before "$work/print.out" 'plan .*-out=stg.tfplan' 'apply -input=false stg.tfplan'
-expect "--print: an eks-rl-reset before each of the four k6 levels" test "$(grep -c 'make .* eks-rl-reset CONTEXT=svp-stg' "$work/print.out")" = 4
-expect "--print: every aws command names profile and region" \
-  test -z "$(grep -E '^\+ .* aws ' "$work/print.out" | grep -vE '^\+ AWS_PROFILE=anhnv-sso aws .*--region ap-southeast-1')"
+for e in stg prd; do
+  clear_log
+  out=$work/print-$e.out
+  bash "$here/session.sh" --print "$e" >"$out" 2>&1 || bad "session.sh --print $e exits 0"
+  expect "--print $e calls no aws, kubectl, terraform, make, nc, dig" test ! -s "$log"
+  sed -n 's/^### step [0-9]*: aws\/scripts\///p' "$out" >"$work/order.print"
+  sed -n 's/^| [0-9]* | `aws\/scripts\/\([^`]*\)`.*/\1/p' "$runbooks/session-$e.md" >"$work/order.runbook"
+  expect "--print $e: the steps are the table of session-$e.md, in order" diff "$work/order.runbook" "$work/order.print"
+  expect "--print $e: twenty steps" test "$(grep -c . "$work/order.runbook")" = 20
+  sed -n '/^### step 20:/q;p' "$out" >"$work/print-env.out"
+  expect "--print $e: every aws and terraform command of steps 1 to 19 names profile anhnv-$e, every aws command a region" \
+    sh -c '[ -z "$(grep -E "^\+ ([^ ]+ )*(aws|terraform) " "$1" | grep -vE "^\+ ([^ ]+ )?AWS_PROFILE=anhnv-$2 (aws .*--region (ap-southeast-1|us-east-1)|terraform )")" ]' _ "$work/print-env.out" "$e"
+  expect "--print $e: step 20 is sweep.sh mgmt, with profile anhnv-sso alone" \
+    sh -c 'sed -n "/^### step 20:/,\$p" "$1" >"$1.20" && grep -q "^### step 20: aws/scripts/sweep.sh mgmt$" "$1.20" &&
+      [ -z "$(grep -E "^\+ .* aws " "$1.20" | grep -vE "^\+ AWS_PROFILE=anhnv-sso aws .*--region (ap-southeast-1|us-east-1)")" ]' _ "$out"
+  expect "--print $e: init of both roots with the account's backend, each its own key, -reconfigure" \
+    sh -c 'grep -q "aws/envs/$2 init -input=false -reconfigure -backend-config=../../backend-$2.hcl -backend-config=key=aws/$2/terraform.tfstate$" "$1" &&
+      grep -q "aws/gitops/$2 init -input=false -reconfigure -backend-config=../../backend-$2.hcl -backend-config=key=aws/gitops/$2/terraform.tfstate$" "$1"' _ "$out" "$e"
+  expect "--print $e: root env applied, then the secrets, then root gitops" \
+    sh -c 'b() { a=$(grep -nE -- "$2" "$1" | head -n 1 | cut -d: -f1); c=$(grep -nE -- "$3" "$1" | head -n 1 | cut -d: -f1); [ -n "$a" ] && [ -n "$c" ] && [ "$a" -lt "$c" ]; }
+      b "$1" "aws/envs/$2 apply -input=false $2.tfplan" "make .* eks-secrets CONTEXT=svp-$2" &&
+      b "$1" "make .* eks-secrets CONTEXT=svp-$2" "aws/gitops/$2 apply -input=false $2.tfplan" &&
+      b "$1" "aws/gitops/$2 apply -input=false $2.tfplan" "make .* eks-glitchtip-init CONTEXT=svp-$2"' _ "$out" "$e"
+  expect "--print $e: ApplicationSet svp-bootstrap deleted before any child Application" \
+    before "$out" 'delete applicationset svp-bootstrap' "delete application '<each workload"
+  expect "--print $e: every PVC deleted before the platform Applications and before terraform plan -destroy" \
+    sh -c 'b() { a=$(grep -nE -- "$2" "$1" | head -n 1 | cut -d: -f1); c=$(grep -nE -- "$3" "$1" | head -n 1 | cut -d: -f1); [ -n "$a" ] && [ -n "$c" ] && [ "$a" -lt "$c" ]; }
+      b "$1" "delete pvc --all" "delete application .<each platform" && b "$1" "delete pvc --all" "terraform .* plan -destroy"' _ "$out"
+  expect "--print $e: root gitops destroyed before root env" \
+    before "$out" "aws/gitops/$e apply -input=false $e.destroy.tfplan" "aws/envs/$e plan -destroy"
+  expect "--print $e: no terraform destroy, only the apply of saved plans" test -z "$(grep -E '^\+ .*terraform -chdir=[^ ]* destroy' "$out")"
+done
+expect "--print prd: the tunnel checked before the first kubectl to the API" before "$work/print-prd.out" '^\+ nc -z -w 3 127.0.0.1 6443' 'kubectl --context svp-prd'
+expect "--print prd: the tunnel checked before the plan of root gitops" before "$work/print-prd.out" '^\+ nc -z' 'aws/gitops/prd plan '
+expect "--print prd: the kubeconfig points at the tunnel" grep -q "^+ kubectl config set-cluster .* --server=https://127.0.0.1:6443 '--tls-server-name=" "$work/print-prd.out"
+expect "--print prd: teardown plan with both var files, targeting the DB instance and buckets of the state, applied, before the destroy plan with both" \
+  sh -c 'before() { a=$(grep -nE -- "$2" "$1" | head -n 1 | cut -d: -f1); c=$(grep -nE -- "$3" "$1" | head -n 1 | cut -d: -f1); [ -n "$a" ] && [ -n "$c" ] && [ "$a" -lt "$c" ]; }
+    before "$1" "aws/envs/prd state list$" "aws/envs/prd plan -input=false -var-file=prd.tfvars -var-file=teardown.tfvars" &&
+    grep -qF "aws/envs/prd plan -input=false -var-file=prd.tfvars -var-file=teardown.tfvars '"'"'-target=<each aws_db_instance and aws_s3_bucket of the state>'"'"' -out=prd.teardown.tfplan" "$1" &&
+    grep -q "aws/envs/prd apply -input=false prd.teardown.tfplan$" "$1" &&
+    grep -q "aws/envs/prd plan -destroy -input=false -var-file=prd.tfvars -var-file=teardown.tfvars -out=prd.destroy.tfplan$" "$1"' _ "$work/print-prd.out"
+expect "--print prd: no k6 level, the smoke alone" sh -c '! grep -q "eks-rl-reset" "$1" && grep -q "eks-smoke CONTEXT=svp-prd" "$1"' _ "$work/print-prd.out"
+expect "--print stg: no tunnel, no teardown file" \
+  sh -c '! grep -E "^\+ " "$1" | grep -qE "nc -z|set-cluster|teardown" && grep -q "aws/envs/stg plan -destroy -input=false -var-file=stg.tfvars -out=stg.destroy.tfplan$" "$1"' _ "$work/print-stg.out"
+expect "--print stg: an eks-rl-reset before each of the four k6 levels" test "$(grep -c 'make .* eks-rl-reset CONTEXT=svp-stg' "$work/print-stg.out")" = 4
 
 # --- check-account.sh -------------------------------------------------------------------------------------------
-new_session
-expect "check-account.sh passes on the exported account" bash "$here/check-account.sh" >"$work/out" 2>&1
-expect "check-account.sh prints the ARN" grep -q 'arn:aws:sts::000000000000:assumed-role/learner/session' "$work/out"
-expect "check-account.sh starts the timeline" has_mark session-start
-expect "check-account.sh stops on another account" \
-  sh -c '! SVP_AWS_ACCOUNT_ID=111111111111 bash "$1/check-account.sh" >"$2" 2>&1 && grep -q "not SVP_AWS_ACCOUNT_ID" "$2"' _ "$here" "$work/out"
-expect "check-account.sh stops when no account is exported" \
-  sh -c '! env -u SVP_AWS_ACCOUNT_ID bash "$1/check-account.sh" >/dev/null 2>&1' _ "$here"
+for e in mgmt stg prd; do
+  new_session
+  case $e in mgmt) p=anhnv-sso a=000000000000 ;; stg) p=anhnv-stg a=111111111111 ;; prd) p=anhnv-prd a=222222222222 ;; esac
+  expect "check-account.sh $e passes on its account" bash "$here/check-account.sh" "$e" >"$work/out" 2>&1
+  expect "check-account.sh $e uses profile $p alone and prints its account and ARN" \
+    sh -c '[ "$(sort -u "$1.profiles")" = "$2" ] && grep -q "^ok    account $3 of $4, arn:aws:sts::$3:" "$5"' _ "$log" "$p" "$a" "$e" "$work/out"
+  expect "check-account.sh $e starts the timeline" has_mark session-start
+  for o in 000000000000 111111111111 222222222222; do
+    [ "$o" != "$a" ] || continue
+    expect "check-account.sh $e refuses the account $o of another environment" \
+      sh -c '! FAKE_ACCOUNT=$3 bash "$1/check-account.sh" "$2" >"$4" 2>&1 && grep -q "is account .$3. .*not SVP_AWS_.*_ACCOUNT_ID $5 of $2" "$4"' \
+      _ "$here" "$e" "$o" "$work/out" "$a"
+  done
+done
+expect "check-account.sh stg refuses when its variable is not exported, and names it" \
+  sh -c '! env -u SVP_AWS_STG_ACCOUNT_ID bash "$1/check-account.sh" stg >"$2" 2>&1 && grep -q "set SVP_AWS_STG_ACCOUNT_ID" "$2"' _ "$here" "$work/out"
+# The single variable of one account, before the accounts of the organization: never read, so set alone it is refused.
+expect "check-account.sh prd ignores the old single account variable, and names SVP_AWS_PRD_ACCOUNT_ID" \
+  sh -c '! env -u SVP_AWS_PRD_ACCOUNT_ID "SVP_AWS_""ACCOUNT_ID=222222222222" bash "$1/check-account.sh" prd >"$2" 2>&1 && grep -q "set SVP_AWS_PRD_ACCOUNT_ID" "$2"' _ "$here" "$work/out"
+expect "check-account.sh refuses an environment it does not know" sh -c '! bash "$1/check-account.sh" dev >/dev/null 2>&1' _ "$here"
 
 # --- check-dns.sh -----------------------------------------------------------------------------------------------
-: >"$log"
-expect "check-dns.sh passes when both resolvers answer the zone's name servers" bash "$here/check-dns.sh" >/dev/null
-expect "check-dns.sh asks two public resolvers" test "$(grep -cE '^dig NS aws.svp.example .*@(1.1.1.1|8.8.8.8)$' "$log")" -ge 2
-expect "check-dns.sh stops on other name servers" sh -c '! FAKE_DIG=other bash "$1/check-dns.sh" >/dev/null 2>&1' _ "$here"
-expect "check-dns.sh stops on no answer" sh -c '! FAKE_DIG=empty bash "$1/check-dns.sh" >/dev/null 2>&1' _ "$here"
+clear_log
+expect "check-dns.sh stg passes when both resolvers answer the zone's name servers" bash "$here/check-dns.sh" stg >/dev/null
+expect "check-dns.sh stg reads name_servers of aws/accounts/stg with anhnv-stg" \
+  sh -c 'grep -q "^terraform -chdir=.*/aws/accounts/stg output -json name_servers$" "$1" && [ "$(sort -u "$1.profiles")" = anhnv-stg ]' _ "$log"
+expect "check-dns.sh stg asks two public resolvers for stg.aws.svp.example" \
+  test "$(grep -cE '^dig NS stg.aws.svp.example .*@(1.1.1.1|8.8.8.8)$' "$log")" -ge 2
+expect "check-dns.sh stops on other name servers" sh -c '! FAKE_DIG=other bash "$1/check-dns.sh" prd >/dev/null 2>&1' _ "$here"
+expect "check-dns.sh stops on no answer" sh -c '! FAKE_DIG=empty bash "$1/check-dns.sh" prd >/dev/null 2>&1' _ "$here"
 expect "check-dns.sh calls no AWS API" test -z "$(grep '^aws ' "$log")"
+expect "check-dns.sh takes no mgmt" sh -c '! bash "$1/check-dns.sh" mgmt >/dev/null 2>&1' _ "$here"
 
-# --- tf.sh --------------------------------------------------------------------------------------------------------
+# --- tf.sh: backend of each root ---------------------------------------------------------------------------------
 new_session
-bash "$here/check-account.sh" >/dev/null
-expect "tf.sh plan --destroy refuses before pre-destroy.sh" sh -c '! bash "$1/tf.sh" stg plan --destroy >/dev/null 2>&1' _ "$here"
-expect "tf.sh plan --destroy refused: terraform plan -destroy never ran" test -z "$(grep '^terraform .* plan -destroy' "$log")"
-expect "tf.sh plan --destroy --leftovers refuses without pre-destroy-start, and says to run pre-destroy.sh first" \
-  sh -c '! bash "$1/tf.sh" stg plan --destroy --leftovers >"$2" 2>&1 && grep -q "pre-destroy.sh stg never started in this session" "$2"' _ "$here" "$work/out"
-expect "tf.sh plan --destroy --leftovers and --no-cluster do not go together, in either order" \
-  sh -c '! bash "$1/tf.sh" stg plan --destroy --leftovers --no-cluster >"$2" 2>&1 && grep -q "do not go together" "$2" &&
-    ! bash "$1/tf.sh" stg plan --destroy --no-cluster --leftovers >"$2" 2>&1 && grep -q "do not go together" "$2"' _ "$here" "$work/out"
-expect "tf.sh plan --destroy --leftovers refused: no terraform plan -destroy, no pre-destroy-skipped" \
-  sh -c '[ -z "$(grep "^terraform .* plan -destroy" "$1")" ] && ! grep -q pre-destroy-skipped "$2/timeline.tsv"' _ "$log" "$SVP_SESSION_DIR"
-expect "tf.sh destroy refuses without the destroy plan file, and says to plan it" \
-  sh -c '! bash "$1/tf.sh" stg destroy >"$2" 2>&1 && grep -q "run tf.sh stg plan --destroy" "$2"' _ "$here" "$work/out"
-expect "tf.sh destroy refused: no terraform apply, no destroy-start" \
-  sh -c '[ -z "$(grep "^terraform .* apply" "$1")" ] && ! grep -q destroy-start "$2/timeline.tsv"' _ "$log" "$SVP_SESSION_DIR"
-expect "tf.sh plan --destroy --no-cluster runs with no cluster-values.json and no EKS cluster in the state" \
-  bash "$here/tf.sh" stg plan --destroy --no-cluster >"$work/out" 2>&1
-expect "tf.sh plan --destroy --no-cluster read the state before planning" before "$log" 'terraform .* state list' 'terraform .* plan -destroy'
-expect "tf.sh plan --destroy ran terraform plan -destroy into stg.destroy.tfplan" \
-  grep -q '^terraform -chdir=.*/aws/envs/stg plan -destroy -input=false -var-file=stg.tfvars -out=stg.destroy.tfplan$' "$log"
-expect "tf.sh plan --destroy left the plan file" test -f "$infra_root/aws/envs/stg/stg.destroy.tfplan"
-expect "tf.sh plan --destroy wrote the text to the session directory" \
-  grep -qx 'Plan: 0 to add, 0 to change, 3 to destroy.' "$SVP_SESSION_DIR/stg-destroy-plan.txt"
-expect "tf.sh plan --destroy says which text to read, then destroy" \
-  grep -qF "read $SVP_SESSION_DIR/stg-destroy-plan.txt, then tf.sh stg destroy" "$work/out"
-expect "tf.sh plan --destroy left the plan text of apply alone" test ! -e "$SVP_SESSION_DIR/stg-plan.txt"
-rm -f "$infra_root/aws/envs/stg/stg.destroy.tfplan" "$SVP_SESSION_DIR/stg-destroy-plan.txt"
-: >"$log"
-expect "tf.sh plan --destroy --no-cluster refuses when the state holds an EKS cluster, and says which" \
-  sh -c '! FAKE_TF_STATE=eks bash "$1/tf.sh" stg plan --destroy --no-cluster >"$2" 2>&1 && grep -qF "state holds EKS cluster module.eks.module.eks.aws_eks_cluster.this[0]: run aws/scripts/pre-destroy.sh stg first" "$2"' _ "$here" "$work/out"
-expect "tf.sh plan --destroy --no-cluster refuses when the state cannot be read" \
-  sh -c '! FAKE_TF_STATE=fail bash "$1/tf.sh" stg plan --destroy --no-cluster >/dev/null 2>&1' _ "$here"
-echo '{"name":"svp-stg","domain":"stg.aws.svp.example","hostedZoneId":"Z0FAKE"}' >"$SVP_SESSION_DIR/cluster-values.json"
-expect "tf.sh plan --destroy --no-cluster refuses when the session has cluster-values.json" \
-  sh -c '! bash "$1/tf.sh" stg plan --destroy --no-cluster >"$2" 2>&1 && grep -q "cluster-values.json exists" "$2"' _ "$here" "$work/out"
-expect "tf.sh plan --destroy --no-cluster refused: terraform plan -destroy never ran" test -z "$(grep '^terraform .* plan -destroy' "$log")"
-expect "tf.sh plan --destroy --no-cluster refused: no destroy plan file" test ! -e "$infra_root/aws/envs/stg/stg.destroy.tfplan"
-expect "tf.sh destroy takes no flag, --no-cluster included" sh -c '! bash "$1/tf.sh" stg destroy "$2" >/dev/null 2>&1' _ "$here" --no-cluster
-expect "tf.sh show takes no --destroy" sh -c '! bash "$1/tf.sh" stg show --destroy >/dev/null 2>&1' _ "$here"
-expect "tf.sh apply refuses without a plan file" sh -c '! bash "$1/tf.sh" stg apply >/dev/null 2>&1' _ "$here"
-expect "tf.sh show refuses without a plan file" sh -c '! bash "$1/tf.sh" stg show >/dev/null 2>&1' _ "$here"
-expect "tf.sh show wrote no plan text" test ! -e "$SVP_SESSION_DIR/stg-plan.txt"
-: >"$log"
-: >"$infra_root/aws/envs/stg/stg.tfplan"
-expect "tf.sh show runs" bash "$here/tf.sh" stg show >"$work/out" 2>&1
-expect "tf.sh show ran terraform show -no-color of the plan file" grep -q '^terraform -chdir=.*/aws/envs/stg show -no-color stg.tfplan$' "$log"
-expect "tf.sh show wrote the text to the session directory" grep -q '^Plan: 1 to add' "$SVP_SESSION_DIR/stg-plan.txt"
-expect "tf.sh show prints the file and its Plan: line" grep -qF "stg-plan.txt: Plan: 1 to add, 0 to change, 0 to destroy." "$work/out"
+for e in stg prd; do
+  # A .terraform left by an init with the backend of the management account, before the accounts of the organization.
+  for r in envs gitops; do
+    mkdir -p "$infra_root/aws/$r/$e/.terraform"
+    printf '%s' '../../backend.hcl ' >"$infra_root/aws/$r/$e/.terraform/terraform.tfstate"
+  done
+  clear_log
+  expect "tf.sh $e env init and gitops init run where .terraform names the old backend" \
+    sh -c 'bash "$1/tf.sh" "$2" env init >/dev/null 2>&1 && bash "$1/tf.sh" "$2" gitops init >/dev/null 2>&1' _ "$here" "$e"
+  expect "tf.sh $e init: root env with backend-$e.hcl, key aws/$e/terraform.tfstate, -reconfigure" \
+    grep -q "^terraform -chdir=.*/aws/envs/$e init -input=false -reconfigure -backend-config=../../backend-$e.hcl -backend-config=key=aws/$e/terraform.tfstate$" "$log"
+  expect "tf.sh $e init: root gitops with the same file, key aws/gitops/$e/terraform.tfstate, -reconfigure" \
+    grep -q "^terraform -chdir=.*/aws/gitops/$e init -input=false -reconfigure -backend-config=../../backend-$e.hcl -backend-config=key=aws/gitops/$e/terraform.tfstate$" "$log"
+  expect "tf.sh $e init: the two roots end on the same backend file and two different keys" \
+    sh -c '[ "$(cat "$1/aws/envs/$2/.terraform/terraform.tfstate")" = "../../backend-$2.hcl key=aws/$2/terraform.tfstate " ] &&
+      [ "$(cat "$1/aws/gitops/$2/.terraform/terraform.tfstate")" = "../../backend-$2.hcl key=aws/gitops/$2/terraform.tfstate " ]' _ "$infra_root" "$e"
+  expect "tf.sh $e init: profile anhnv-$e, TF_VAR_account_id the account of $e" \
+    sh -c 'profile=$(sort -u "$1.profiles"); account=$(sed -n "s/^account=\([0-9]*\) .*/\1/p" "$1.tfenv" | sort -u)
+      [ "$profile" = anhnv-$2 ] && case $2 in stg) [ "$account" = 111111111111 ] ;; prd) [ "$account" = 222222222222 ] ;; esac' _ "$log" "$e"
+done
+mv "$infra_root/aws/backend-stg.hcl" "$work/backend.aside"
+expect "tf.sh init refuses without aws/backend-stg.hcl, and says how to write it" \
+  sh -c '! bash "$1/tf.sh" stg env init >"$2" 2>&1 && grep -q "terraform -chdir=aws/accounts/stg output -raw backend_hcl > aws/backend-stg.hcl" "$2"' _ "$here" "$work/out"
+mv "$work/backend.aside" "$infra_root/aws/backend-stg.hcl"
+expect "tf.sh refuses a root it does not know" sh -c '! bash "$1/tf.sh" stg accounts init >/dev/null 2>&1' _ "$here"
+expect "tf.sh refuses mgmt" sh -c '! bash "$1/tf.sh" mgmt env init >/dev/null 2>&1' _ "$here"
+
+# --- tf.sh: plan, show, apply ------------------------------------------------------------------------------------
+new_session
+envs=$infra_root/aws/envs
+expect "tf.sh apply refuses without a plan file" sh -c '! bash "$1/tf.sh" stg env apply >/dev/null 2>&1' _ "$here"
+expect "tf.sh show refuses without a plan file" sh -c '! bash "$1/tf.sh" stg env show >/dev/null 2>&1' _ "$here"
+expect "tf.sh env plan runs" bash "$here/tf.sh" stg env plan >"$work/out" 2>&1
+expect "tf.sh env plan: stg.tfvars alone into stg.tfplan" grep -q '^terraform -chdir=.*/aws/envs/stg plan -input=false -var-file=stg.tfvars -out=stg.tfplan$' "$log"
+expect "tf.sh env plan wrote the plan text in the session directory" grep -q '^Plan: 1 to add' "$SVP_SESSION_DIR/stg-env-plan.txt"
+expect "tf.sh env plan says which text to read, then apply" grep -qF "read $SVP_SESSION_DIR/stg-env-plan.txt, then tf.sh stg env apply" "$work/out"
 expect "tf.sh show wrote nothing in the repository tree" test -z "$(find "$infra_root" -name '*-plan.txt' -not -path "$infra_root/.session/*")"
-rm -f "$SVP_SESSION_DIR/stg-plan.txt" "$infra_root/aws/envs/stg/stg.tfplan"
-expect "tf.sh plan runs" bash "$here/tf.sh" stg plan >"$work/out" 2>&1
-expect "tf.sh plan also wrote the plan text" grep -q '^Plan: 1 to add' "$SVP_SESSION_DIR/stg-plan.txt"
-expect "tf.sh plan says which text to read" grep -qF "read $SVP_SESSION_DIR/stg-plan.txt, then" "$work/out"
-rm -f "$SVP_SESSION_DIR/stg-plan.txt"
-expect "--print show: the command" sh -c 'bash "$1/tf.sh" --print stg show 2>&1 | grep -q "^+ AWS_PROFILE=anhnv-sso terraform -chdir=.* show -no-color stg.tfplan$"' _ "$here"
-expect "--print show wrote no plan text" test ! -e "$SVP_SESSION_DIR/stg-plan.txt"
-: >"$log"
-bash "$here/tf.sh" --print stg plan --destroy >"$work/out" 2>&1 || bad "--print plan --destroy exits 0"
-expect "--print plan --destroy: plan -destroy into the destroy plan file, then its show" \
-  sh -c 'grep -q "^+ AWS_PROFILE=anhnv-sso terraform -chdir=.* plan -destroy -input=false -var-file=stg.tfvars -out=stg.destroy.tfplan$" "$1" && grep -q "^+ AWS_PROFILE=anhnv-sso terraform -chdir=.* show -no-color stg.destroy.tfplan$" "$1"' _ "$work/out"
-bash "$here/tf.sh" --print stg plan --destroy --leftovers >"$work/out" 2>&1 || bad "--print plan --destroy --leftovers exits 0"
-expect "--print plan --destroy --leftovers: plan -destroy into the destroy plan file, and the mark pre-destroy-skipped" \
-  sh -c 'grep -q "^+ AWS_PROFILE=anhnv-sso terraform -chdir=.* plan -destroy -input=false -var-file=stg.tfvars -out=stg.destroy.tfplan$" "$1" && grep -qF "(timeline: pre-destroy-skipped)" "$1"' _ "$work/out"
-bash "$here/tf.sh" --print stg destroy >"$work/out" 2>&1 || bad "--print destroy exits 0"
-expect "--print destroy: apply of the destroy plan file, never terraform destroy" \
-  sh -c 'grep -q "^+ AWS_PROFILE=anhnv-sso terraform -chdir=.* apply -input=false stg.destroy.tfplan$" "$1" && ! grep -q "^+ .*terraform -chdir=[^ ]* destroy" "$1"' _ "$work/out"
-expect "--print plan --destroy and destroy wrote and ran nothing" \
-  sh -c '[ ! -s "$1" ] && [ ! -e "$2/stg-destroy-plan.txt" ] && [ ! -e "$3/stg.destroy.tfplan" ]' _ "$log" "$SVP_SESSION_DIR" "$infra_root/aws/envs/stg"
+expect "tf.sh env apply runs" bash "$here/tf.sh" stg env apply >/dev/null 2>&1
+expect "tf.sh env apply applied the plan file and removed it" \
+  sh -c 'grep -q "^terraform -chdir=.*/aws/envs/stg apply -input=false stg.tfplan$" "$1" && [ ! -e "$2/stg/stg.tfplan" ]' _ "$log" "$envs"
+expect "tf.sh env apply marks env-apply-start, then env-apply-end" sh -c 'has() { awk -F "\t" -v e="$2" "\$3 == e { f = 1 } END { exit !f }" "$1"; }; has "$1" env-apply-start && has "$1" env-apply-end' _ "$SVP_SESSION_DIR/timeline.tsv"
+mv "$envs/stg/stg.auto.tfvars" "$work/tfvars.aside"
+expect "tf.sh env plan refuses without stg.auto.tfvars" sh -c '! bash "$1/tf.sh" stg env plan >"$2" 2>&1 && grep -q "stg.auto.tfvars" "$2"' _ "$here" "$work/out"
+mv "$work/tfvars.aside" "$envs/stg/stg.auto.tfvars"
+clear_log
+expect "tf.sh gitops plan runs, needing no auto.tfvars" bash "$here/tf.sh" stg gitops plan >"$work/out" 2>&1
+expect "tf.sh gitops plan: stg.tfvars into stg.tfplan of aws/gitops/stg" \
+  grep -q '^terraform -chdir=.*/aws/gitops/stg plan -input=false -var-file=stg.tfvars -out=stg.tfplan$' "$log"
+expect "tf.sh gitops plan: chart svp-cluster at the revision of envs/stg/charts.yaml, extracted in the session" \
+  sh -c 'sed -n "s/^account=[0-9]* //p" "$2.tfenv" | grep -q "^chart=$1/svp-cluster-chart/deploy/helm/svp-cluster " && [ -f "$1/svp-cluster-chart/deploy/helm/svp-cluster/Chart.yaml" ] &&
+    grep -q "^ok    chart svp-cluster at $3 " "$4"' _ "$SVP_SESSION_DIR" "$log" "$chart_rev" "$work/out"
+expect "tf.sh gitops plan: Telegram chat of the code repository's .env" grep -q ' chat=-1001234$' "$log.tfenv"
+# The value as the strict reader of .env of the code repository takes it: plain, or in one pair of quotes.
+for q in "'" '"'; do
+  printf 'SVP_ALERT_TELEGRAM_CHAT_ID=%s-1001234%s\n' "$q" "$q" >"$work/backend/.env"
+  clear_log
+  expect "tf.sh gitops plan: the chat of .env in $q quotes, without them" \
+    sh -c 'bash "$1/tf.sh" stg gitops plan >/dev/null 2>&1 && grep -q " chat=-1001234$" "$2.tfenv"' _ "$here" "$log"
+done
+printf 'SVP_ALERT_TELEGRAM_CHAT_ID=%s\n' "'-1001234\"" >"$work/backend/.env"
+expect "tf.sh gitops plan refuses a chat of .env in quotes that do not match" \
+  sh -c '! bash "$1/tf.sh" stg gitops plan >"$2" 2>&1 && grep -q "SVP_ALERT_TELEGRAM_CHAT_ID of .* is not a Telegram chat id" "$2"' _ "$here" "$work/out"
+printf 'SVP_ALERT_TELEGRAM_CHAT_ID=-1001234\n' >"$work/backend/.env"
+expect "tf.sh gitops plan wrote its own plan text" grep -q '^Plan: 1 to add' "$SVP_SESSION_DIR/stg-gitops-plan.txt"
+clear_log
+expect "tf.sh prd gitops plan refuses while the tunnel is closed, before any terraform, and says how to open it" \
+  sh -c '! FAKE_TUNNEL=closed bash "$1/tf.sh" prd gitops plan >"$2" 2>&1 && grep -q "no tunnel on 127.0.0.1:6443" "$2" && grep -q "output -raw api_tunnel_command" "$2" &&
+    ! grep -q "^terraform " "$3"' _ "$here" "$work/out" "$log"
+expect "tf.sh prd gitops init needs no tunnel" sh -c 'FAKE_TUNNEL=closed bash "$1/tf.sh" prd gitops init >/dev/null 2>&1' _ "$here"
+rm -f "$infra_root"/aws/*/*/*.tfplan
 
-# --- bootstrap-argocd.sh -----------------------------------------------------------------------------------------
+# --- tf.sh: teardown and destroy order ---------------------------------------------------------------------------
 new_session
-bash "$here/bootstrap-argocd.sh" stg >"$work/boot.out" 2>&1 || bad "bootstrap-argocd.sh stg exits 0 ($(tail -n 3 "$work/boot.out"))"
-values=$SVP_SESSION_DIR/cluster-values.json
-expect "bootstrap-argocd.sh writes the kubeconfig context svp-stg" grep -qE '^aws eks update-kubeconfig --name svp-stg --alias svp-stg' "$log"
-expect "bootstrap-argocd.sh writes the cluster values" sh -c 'jq -e ".name == \"svp-stg\"" "$1" >/dev/null' _ "$values"
-expect "cluster-values.json is readable by its owner only" test -n "$(find "$values" -perm 0600)"
-expect "bootstrap-argocd.sh calls make eks-gitops-up with the context, the file and the svp-gitops SHA" \
-  grep -qF "make -C $work/backend eks-gitops-up CONTEXT=svp-stg CLUSTER_VALUES=$values GITOPS_REV=$gitops_sha password=match profile=anhnv-sso" "$log"
-expect "bootstrap-argocd.sh never calls helm" test -z "$(grep '^helm ' "$log")"
-expect "bootstrap-argocd.sh: the password is in no output, log or session file" \
-  sh -c '! grep -rqF -- "$1" "$2" "$3" "$4"' _ "$password" "$work/boot.out" "$log" "$SVP_SESSION_DIR"
-expect "bootstrap-argocd.sh marks Argo CD healthy" has_mark argocd-healthy
-expect "bootstrap-argocd.sh: the RDS secret reaches jq through a pipe, never a file" test -z "$(grep 'stdin=file' "$log")"
-: >"$log"
-expect "bootstrap-argocd.sh stops on another account before any other command" \
-  sh -c '! SVP_AWS_ACCOUNT_ID=111111111111 bash "$1/bootstrap-argocd.sh" stg >/dev/null 2>&1 && [ -s "$2" ] && ! grep -qv "^aws sts get-caller-identity " "$2"' _ "$here" "$log"
+bash "$here/check-account.sh" stg >/dev/null
+expect "tf.sh gitops plan --destroy refuses before pre-destroy.sh" sh -c '! bash "$1/tf.sh" stg gitops plan --destroy >"$2" 2>&1 && grep -q "pre-destroy.sh stg has not finished" "$2"' _ "$here" "$work/out"
+expect "tf.sh env plan --destroy refuses before root gitops is destroyed" \
+  sh -c '! bash "$1/tf.sh" stg env plan --destroy >"$2" 2>&1 && grep -q "root gitops of stg is not destroyed" "$2"' _ "$here" "$work/out"
+expect "tf.sh: refused destroy plans ran no terraform plan -destroy" test -z "$(grep '^terraform .* plan -destroy' "$log")"
+expect "tf.sh gitops plan --destroy --leftovers refuses without pre-destroy-start" \
+  sh -c '! bash "$1/tf.sh" stg gitops plan --destroy --leftovers >"$2" 2>&1 && grep -q "pre-destroy.sh stg never started in this session" "$2"' _ "$here" "$work/out"
+expect "tf.sh: --leftovers is for root gitops, --no-cluster for root env" \
+  sh -c '! bash "$1/tf.sh" stg env plan --destroy --leftovers >/dev/null 2>&1 && ! bash "$1/tf.sh" stg gitops plan --destroy --no-cluster >/dev/null 2>&1' _ "$here"
+expect "tf.sh destroy refuses without the destroy plan file" \
+  sh -c '! bash "$1/tf.sh" stg gitops destroy >"$2" 2>&1 && grep -q "run tf.sh stg gitops plan --destroy" "$2"' _ "$here" "$work/out"
+expect "tf.sh stg env plan --teardown and apply --teardown skip: stg has no teardown file" \
+  sh -c 'bash "$1/tf.sh" stg env plan --teardown >"$2" 2>&1 && grep -q "^skip  aws/envs/stg has no teardown file" "$2" && bash "$1/tf.sh" stg env apply --teardown >/dev/null 2>&1' _ "$here" "$work/out"
+expect "tf.sh: --teardown is for root env" sh -c '! bash "$1/tf.sh" prd gitops plan --teardown >/dev/null 2>&1' _ "$here"
+add_mark pre-destroy-done
+clear_log
+expect "tf.sh gitops plan --destroy runs after pre-destroy.sh" bash "$here/tf.sh" stg gitops plan --destroy >"$work/out" 2>&1
+expect "tf.sh gitops plan --destroy: plan -destroy of aws/gitops/stg with its chart" \
+  sh -c 'grep -q "^terraform -chdir=.*/aws/gitops/stg plan -destroy -input=false -var-file=stg.tfvars -out=stg.destroy.tfplan$" "$1" && grep -q "chart=.*/svp-cluster-chart/" "$1.tfenv"' _ "$log"
+expect "tf.sh gitops plan --destroy wrote the text to the session directory" \
+  grep -qx 'Plan: 0 to add, 0 to change, 3 to destroy.' "$SVP_SESSION_DIR/stg-gitops-destroy-plan.txt"
+expect "tf.sh gitops destroy runs" bash "$here/tf.sh" stg gitops destroy >"$work/out" 2>&1
+expect "tf.sh gitops destroy applied the destroy plan file, never terraform destroy, and removed it" \
+  sh -c 'grep -q "^terraform -chdir=.*/aws/gitops/stg apply -input=false stg.destroy.tfplan$" "$1" && ! grep -qE "^terraform -chdir=[^ ]* destroy" "$1" && [ ! -e "$2/aws/gitops/stg/stg.destroy.tfplan" ]' _ "$log" "$infra_root"
+expect "tf.sh gitops destroy marks gitops-destroy-end and says what is next" sh -c 'awk -F "\t" "\$3 == \"gitops-destroy-end\" { f = 1 } END { exit !f }" "$1" && grep -q "next: tf.sh stg env plan --teardown" "$2"' _ "$SVP_SESSION_DIR/timeline.tsv" "$work/out"
+expect "tf.sh stg env plan --destroy runs once root gitops is destroyed" bash "$here/tf.sh" stg env plan --destroy >/dev/null 2>&1
+expect "tf.sh stg env plan --destroy: stg.tfvars alone" grep -q '^terraform -chdir=.*/aws/envs/stg plan -destroy -input=false -var-file=stg.tfvars -out=stg.destroy.tfplan$' "$log"
+clear_log
+expect "tf.sh stg env destroy runs and says to sweep next" sh -c 'bash "$1/tf.sh" stg env destroy >"$2" 2>&1 && grep -q "now aws/scripts/sweep.sh stg" "$2"' _ "$here" "$work/out"
+expect "tf.sh stg env destroy marks env-destroy-start and env-destroy-end" sh -c 'has() { awk -F "\t" -v e="$2" "\$3 == e { f = 1 } END { exit !f }" "$1"; }; has "$1" env-destroy-start && has "$1" env-destroy-end' _ "$SVP_SESSION_DIR/timeline.tsv"
+
 new_session
-expect "bootstrap-argocd.sh fails when make's output holds the password" \
-  sh -c '! FAKE_MAKE_LEAK=1 bash "$1/bootstrap-argocd.sh" stg >"$2" 2>&1 && grep -q "held the RDS master password" "$2"' _ "$here" "$work/leak.out"
-expect "bootstrap-argocd.sh deletes a log that holds the password" test ! -e "$SVP_SESSION_DIR/eks-gitops-up.log"
-expect "bootstrap-argocd.sh: no session file holds the password after a leak" sh -c '! grep -rqF -- "$1" "$2"' _ "$password" "$SVP_SESSION_DIR"
+add_mark gitops-destroy-end
+export FAKE_TF_STATE=eks
+expect "tf.sh prd env plan --destroy refuses while the protections are on, before any terraform plan, and says how to lift them" \
+  sh -c '! bash "$1/tf.sh" prd env plan --destroy >"$2" 2>&1 && grep -q "protections of aws/envs/prd are still on" "$2" && grep -q "tf.sh prd env plan --teardown" "$2" &&
+    ! grep -q "^terraform .* plan" "$3"' _ "$here" "$work/out" "$log"
+expect "tf.sh prd env apply --teardown refuses without the teardown plan" sh -c '! bash "$1/tf.sh" prd env apply --teardown >/dev/null 2>&1' _ "$here"
+expect "tf.sh prd env plan --teardown runs" bash "$here/tf.sh" prd env plan --teardown >"$work/out" 2>&1
+expect "tf.sh prd env plan --teardown: prd.tfvars and teardown.tfvars, the DB instance and the buckets of the state as targets, into prd.teardown.tfplan, its text in the session" \
+  sh -c 'grep -qxF "terraform -chdir=$3/prd plan -input=false -var-file=prd.tfvars -var-file=teardown.tfvars -target=module.rds.aws_db_instance.this -target=module.media.aws_s3_bucket.this[\"media\"] -target=module.media.aws_s3_bucket.this[\"uploads\"] -target=module.media.aws_s3_bucket.logs[0] -out=prd.teardown.tfplan" "$1" &&
+    grep -q "^Plan: 0 to add, 2 to change" "$2/prd-env-teardown-plan.txt"' _ "$log" "$SVP_SESSION_DIR" "$envs"
+expect "tf.sh prd env plan --teardown: no target of a data source, of another type or of the cluster" \
+  sh -c '! grep "^terraform .* -out=prd.teardown.tfplan$" "$1" | grep -qE "target=[^ ]*(data\.|aws_s3_bucket_versioning|aws_eks_cluster|aws_vpc)"' _ "$log"
+expect "tf.sh prd env plan --teardown read the state first" before "$log" 'terraform .*/aws/envs/prd state list' 'terraform .* -out=prd.teardown.tfplan'
+expect "tf.sh prd env plan --destroy still refuses: the teardown plan is not applied" sh -c '! bash "$1/tf.sh" prd env plan --destroy >/dev/null 2>&1' _ "$here"
+expect "tf.sh prd env apply --teardown applies it and marks env-teardown-applied" \
+  sh -c 'bash "$1/tf.sh" prd env apply --teardown >/dev/null 2>&1 && grep -q "^terraform -chdir=.*/aws/envs/prd apply -input=false prd.teardown.tfplan$" "$2" &&
+    awk -F "\t" "\$3 == \"env-teardown-applied\" { f = 1 } END { exit !f }" "$3/timeline.tsv" && [ ! -e "$4/prd/prd.teardown.tfplan" ]' _ "$here" "$log" "$SVP_SESSION_DIR" "$envs"
+clear_log
+expect "tf.sh prd env plan --destroy runs once the teardown is applied" bash "$here/tf.sh" prd env plan --destroy >/dev/null 2>&1
+expect "tf.sh prd env plan --destroy: prd.tfvars and teardown.tfvars, no target, profile anhnv-prd" \
+  sh -c 'grep -q "^terraform -chdir=.*/aws/envs/prd plan -destroy -input=false -var-file=prd.tfvars -var-file=teardown.tfvars -out=prd.destroy.tfplan$" "$1" && [ "$(sort -u "$1.profiles")" = anhnv-prd ]' _ "$log"
+rm -f "$envs/prd/prd.destroy.tfplan"
+unset FAKE_TF_STATE
+
+# An apply of prd that failed halfway (a quota, before the cluster and the DB instance): the teardown plan targets the
+# buckets it made alone, so it creates nothing and never meets the failure again, and the destroy can go on.
+new_session
+add_mark env-apply-start
+expect "tf.sh prd env plan --destroy --no-cluster after a failed apply refuses while the buckets keep their protection" \
+  sh -c '! FAKE_TF_STATE=partial bash "$1/tf.sh" prd env plan --destroy --no-cluster >"$2" 2>&1 && grep -q "protections of aws/envs/prd are still on" "$2"' _ "$here" "$work/out"
+clear_log
+expect "tf.sh prd env plan --teardown after a failed apply targets the buckets of the state alone" \
+  sh -c 'FAKE_TF_STATE=partial bash "$1/tf.sh" prd env plan --teardown >/dev/null 2>&1 &&
+    grep -qxF "terraform -chdir=$3/prd plan -input=false -var-file=prd.tfvars -var-file=teardown.tfvars -target=module.media.aws_s3_bucket.this[\"media\"] -target=module.media.aws_s3_bucket.this[\"uploads\"] -out=prd.teardown.tfplan" "$2"' _ "$here" "$log" "$envs"
+expect "tf.sh prd env apply --teardown, then plan --destroy --no-cluster run after a failed apply" \
+  sh -c 'FAKE_TF_STATE=partial bash "$1/tf.sh" prd env apply --teardown >/dev/null 2>&1 && FAKE_TF_STATE=partial bash "$1/tf.sh" prd env plan --destroy --no-cluster >/dev/null 2>&1 &&
+    grep -q "^terraform -chdir=.*/aws/envs/prd plan -destroy -input=false -var-file=prd.tfvars -var-file=teardown.tfvars -out=prd.destroy.tfplan$" "$2"' _ "$here" "$log"
+rm -f "$envs/prd/prd.destroy.tfplan"
+
+# An apply that failed before any DB instance or bucket: nothing to lift, no teardown plan.
+new_session
+add_mark env-apply-start
+expect "tf.sh prd env plan --teardown with no DB instance or bucket in the state skips, and records env-teardown-applied" \
+  sh -c 'bash "$1/tf.sh" prd env plan --teardown >"$2" 2>&1 && grep -q "^skip  the state of aws/envs/prd holds no aws_db_instance or aws_s3_bucket" "$2" &&
+    ! grep -q "^terraform .* plan" "$3" && [ ! -e "$4/prd/prd.teardown.tfplan" ]' _ "$here" "$work/out" "$log" "$envs"
+expect "tf.sh prd env plan --teardown with nothing to lift marks env-teardown-applied" has_mark env-teardown-applied
+expect "tf.sh prd env apply --teardown skips once env-teardown-applied is recorded and no teardown plan is left" \
+  sh -c 'bash "$1/tf.sh" prd env apply --teardown >"$2" 2>&1 && grep -q "^skip  no teardown plan left" "$2" && ! grep -q "^terraform .* apply" "$3"' _ "$here" "$work/out" "$log"
+expect "tf.sh prd env plan --destroy --no-cluster runs when nothing was to lift" bash "$here/tf.sh" prd env plan --destroy --no-cluster >/dev/null 2>&1
+rm -f "$envs/prd/prd.destroy.tfplan"
+
+# --no-cluster: an apply that failed before EKS; root gitops was never applied.
+new_session
+expect "tf.sh env plan --destroy --no-cluster runs with no cluster-values.json and no EKS cluster in the state" \
+  bash "$here/tf.sh" stg env plan --destroy --no-cluster >/dev/null 2>&1
+expect "tf.sh env plan --destroy --no-cluster read the state before planning" before "$log" 'terraform .* state list' 'terraform .* plan -destroy'
+rm -f "$envs/stg/stg.destroy.tfplan"
+clear_log
+expect "tf.sh env plan --destroy --no-cluster refuses when the state holds an EKS cluster, and points to pre-destroy.sh" \
+  sh -c '! FAKE_TF_STATE=eks bash "$1/tf.sh" stg env plan --destroy --no-cluster >"$2" 2>&1 && grep -q "state holds EKS cluster .*run aws/scripts/pre-destroy.sh stg first" "$2"' _ "$here" "$work/out"
+expect "tf.sh env plan --destroy --no-cluster refuses when the state cannot be read" \
+  sh -c '! FAKE_TF_STATE=fail bash "$1/tf.sh" stg env plan --destroy --no-cluster >/dev/null 2>&1' _ "$here"
+echo '{"name":"svp-stg","domain":"stg.aws.svp.example"}' >"$SVP_SESSION_DIR/cluster-values.json"
+expect "tf.sh env plan --destroy --no-cluster refuses when the session has cluster-values.json" \
+  sh -c '! bash "$1/tf.sh" stg env plan --destroy --no-cluster >"$2" 2>&1 && grep -q "cluster-values.json exists" "$2"' _ "$here" "$work/out"
+expect "tf.sh env plan --destroy --no-cluster refused: terraform plan -destroy never ran" test -z "$(grep '^terraform .* plan -destroy' "$log")"
+
+# --- bootstrap.sh -------------------------------------------------------------------------------------------------
+for e in stg prd; do
+  new_session
+  bash "$here/bootstrap.sh" "$e" secrets >"$work/boot.out" 2>&1 || bad "bootstrap.sh $e secrets exits 0 ($(tail -n 3 "$work/boot.out"))"
+  values=$SVP_SESSION_DIR/cluster-values.json
+  expect "bootstrap.sh $e secrets: account first, profile anhnv-$e alone" \
+    sh -c 'grep -m1 "^aws " "$1" | grep -q "^aws sts get-caller-identity " && [ "$(sort -u "$1.profiles")" = "anhnv-$2" ]' _ "$log" "$e"
+  expect "bootstrap.sh $e secrets writes the kubeconfig context svp-$e" grep -qE "^aws eks update-kubeconfig --name svp-$e --alias svp-$e" "$log"
+  expect "bootstrap.sh $e secrets writes the cluster values, owner only" \
+    sh -c 'jq -e ".name == \"svp-$2\"" "$1" >/dev/null && [ -n "$(find "$1" -perm 0600)" ]' _ "$values" "$e"
+  expect "bootstrap.sh $e secrets calls make eks-secrets with the context and the password in its environment" \
+    grep -qF "make -C $work/backend eks-secrets CONTEXT=svp-$e password=match profile=anhnv-$e" "$log"
+  expect "bootstrap.sh $e secrets: the password is in no output, log or session file" \
+    sh -c '! grep -rqF -- "$1" "$2" "$3" "$4"' _ "$password" "$work/boot.out" "$log" "$SVP_SESSION_DIR"
+  expect "bootstrap.sh $e secrets: the RDS secret reaches jq through a pipe, never a file" test -z "$(grep 'stdin=file' "$log")"
+  expect "bootstrap.sh $e secrets marks secrets-written" has_mark secrets-written
+done
+expect "bootstrap.sh prd secrets points the context at the tunnel, TLS server name the endpoint's host" \
+  grep -q '^kubectl config set-cluster arn:aws:eks:ap-southeast-1:222222222222:cluster/svp-prd --server=https://127.0.0.1:6443 --tls-server-name=0123ABCD.gr7.ap-southeast-1.eks.amazonaws.com$' "$log"
+new_session
+bash "$here/bootstrap.sh" stg secrets >/dev/null 2>&1 || true
+expect "bootstrap.sh stg secrets: no set-cluster for a public endpoint" test -z "$(grep 'set-cluster' "$log")"
+clear_log
+expect "bootstrap.sh stops on another account before any other command" \
+  sh -c '! FAKE_ACCOUNT=222222222222 bash "$1/bootstrap.sh" stg secrets >/dev/null 2>&1 && [ -s "$2" ] && ! grep -qv "^aws sts get-caller-identity " "$2"' _ "$here" "$log"
+new_session
+expect "bootstrap.sh fails when make's output holds the password, and deletes the log" \
+  sh -c '! FAKE_MAKE_LEAK=1 bash "$1/bootstrap.sh" stg secrets >"$2" 2>&1 && grep -q "held the RDS master password" "$2" && [ ! -e "$3/eks-secrets.log" ] &&
+    ! grep -rqF -- "$4" "$3"' _ "$here" "$work/leak.out" "$SVP_SESSION_DIR" "$password"
 git_ -C "$work/backend" switch -q -c feature
-expect "bootstrap-argocd.sh stops when the code repository is not on main" \
-  sh -c '! bash "$1/bootstrap-argocd.sh" stg >/dev/null 2>&1' _ "$here"
+expect "bootstrap.sh stops when the code repository is not on main" sh -c '! bash "$1/bootstrap.sh" stg secrets >/dev/null 2>&1' _ "$here"
 git_ -C "$work/backend" switch -q main
+
+new_session
+expect "bootstrap.sh prd wait refuses while the tunnel is closed" \
+  sh -c '! FAKE_TUNNEL=closed bash "$1/bootstrap.sh" prd wait >"$2" 2>&1 && grep -q "no tunnel on 127.0.0.1:6443" "$2"' _ "$here" "$work/out"
+expect "bootstrap.sh prd wait with the tunnel closed: no kubectl, no make" test -z "$(grep -E '^(kubectl|make) ' "$log")"
+rm -f "$state"/app-calls-*
+clear_log
+expect "bootstrap.sh prd wait runs with the tunnel open" bash "$here/bootstrap.sh" prd wait >"$work/out" 2>&1
+expect "bootstrap.sh wait: svp-observability Healthy, then GlitchTip, then svp-root" \
+  sh -c 'b() { a=$(grep -nE -- "$2" "$1" | head -n 1 | cut -d: -f1); c=$(grep -nE -- "$3" "$1" | head -n 1 | cut -d: -f1); [ -n "$a" ] && [ -n "$c" ] && [ "$a" -lt "$c" ]; }
+    [ "$(grep -c "applications.argoproj.io svp-observability" "$1")" = 2 ] && b "$1" "applications.argoproj.io svp-observability" "eks-glitchtip-init CONTEXT=svp-prd" &&
+    b "$1" "eks-glitchtip-init" "applications.argoproj.io svp-root"' _ "$log"
+expect "bootstrap.sh wait marks svp-root-healthy" has_mark svp-root-healthy
+new_session
+expect "bootstrap.sh wait fails when svp-root never gets Synced and Healthy" \
+  sh -c '! FAKE_ROOT_NEVER=1 SVP_BOOTSTRAP_LIMIT=0 bash "$1/bootstrap.sh" stg wait >"$2" 2>&1 && grep -q "svp-root not Synced and Healthy after 0 s (OutOfSync Progressing)" "$2"' _ "$here" "$work/out"
+expect "bootstrap.sh wait: no svp-root-healthy when it fails" no_mark svp-root-healthy
 
 # --- pre-destroy.sh ----------------------------------------------------------------------------------------------
 new_session
-cp "$values" "$SVP_SESSION_DIR/cluster-values.json" 2>/dev/null ||
-  echo '{"name":"svp-stg","domain":"stg.aws.svp.example","hostedZoneId":"Z0FAKE"}' >"$SVP_SESSION_DIR/cluster-values.json"
 printf '%s\n' "0 cert-manager" "0 envoy-gateway" "0 external-secrets" "1 svp-cluster" "1 aws-load-balancer-controller" \
   "2 keda" "2 external-dns" "2 argo-rollouts" "2 kyverno" "2 kube-prometheus-stack" "3 svp-policy" "3 redpanda" "3 loki" \
   "4 svp-data" "5 svp-observability" "6 otel-collector" "7 gateway" "7 web" >"$state/apps"
-touch "$state/root" "$state/lb"
+touch "$state/appset" "$state/root" "$state/svp-apps" "$state/lb"
 printf '%s\n' "svp-data data-redpanda-0" "svp-obs prometheus-db-0" >"$state/pvcs"
 bash "$here/pre-destroy.sh" stg >"$work/pre.out" 2>&1 || bad "pre-destroy.sh stg exits 0 ($(tail -n 3 "$work/pre.out"))"
-expect "pre-destroy.sh: root's sync and finalizers cleared, then root deleted, before any child" \
-  sh -c '[ "$(grep -E -- "-n argocd (patch|delete) application" "$1" | head -n 2 | grep -c " application svp-root ")" = 2 ]' _ "$log"
+expect "pre-destroy.sh: sync and finalizers of svp-root and svp-apps cleared before the ApplicationSet is deleted" \
+  sh -c 'b() { a=$(grep -nE -- "$2" "$1" | head -n 1 | cut -d: -f1); c=$(grep -nE -- "$3" "$1" | head -n 1 | cut -d: -f1); [ -n "$a" ] && [ -n "$c" ] && [ "$a" -lt "$c" ]; }
+    b "$1" "patch application svp-root .*finalizers" "delete applicationset svp-bootstrap" && b "$1" "patch application svp-apps .*finalizers" "delete applicationset svp-bootstrap"' _ "$log"
+expect "pre-destroy.sh: ApplicationSet, then svp-apps, before any child" \
+  sh -c 'b() { a=$(grep -nE -- "$2" "$1" | head -n 1 | cut -d: -f1); c=$(grep -nE -- "$3" "$1" | head -n 1 | cut -d: -f1); [ -n "$a" ] && [ -n "$c" ] && [ "$a" -lt "$c" ]; }
+    b "$1" "delete applicationset svp-bootstrap" "delete application svp-apps " && b "$1" "delete application svp-apps " "delete application [a-z-]+ --wait=false"' _ "$log"
 expect "pre-destroy.sh: auto-sync of svp-cluster off before the first child is deleted" \
   before "$log" 'patch application svp-cluster .*automated' 'delete application [a-z-]+ --wait=false'
 expect "pre-destroy.sh: wave 7 before wave 3, workloads before the Gateway" \
-  sh -c 'grep -q . "$1" && [ "$(grep -n "delete application gateway " "$1" | cut -d: -f1)" -lt "$(grep -n "delete application redpanda " "$1" | cut -d: -f1)" ]' _ "$log"
-expect "pre-destroy.sh: last workload (kube-prometheus-stack) before the Gateway" \
-  before "$log" 'delete application kube-prometheus-stack ' 'delete gateway svp'
+  sh -c '[ "$(grep -n "delete application gateway " "$1" | cut -d: -f1)" -lt "$(grep -n "delete application redpanda " "$1" | cut -d: -f1)" ]' _ "$log"
+expect "pre-destroy.sh: last workload (kube-prometheus-stack) before the Gateway" before "$log" 'delete application kube-prometheus-stack ' 'delete gateway svp'
 expect "pre-destroy.sh: Gateway before the PVCs" before "$log" 'delete gateway svp' 'delete pvc --all'
-expect "pre-destroy.sh: PVCs before svp-cluster" before "$log" 'delete pvc --all' 'delete application svp-cluster '
-expect "pre-destroy.sh: PVCs before every platform Application" before "$log" 'delete pvc --all' 'delete application (keda|kyverno|external-dns|aws-load-balancer-controller) '
+expect "pre-destroy.sh: PVCs before every platform Application" before "$log" 'delete pvc --all' 'delete application (svp-cluster|keda|kyverno|external-dns|aws-load-balancer-controller) '
 expect "pre-destroy.sh: the PVCs of both namespaces" test "$(grep -c 'delete pvc --all' "$log")" = 2
-expect "pre-destroy.sh leaves no Application" test -z "$(grep . "$state/apps")"
-expect "pre-destroy.sh marks pre-destroy-start and pre-destroy-done" \
-  sh -c 'has_mark() { awk -F "\t" -v e="$2" "\$3 == e { f = 1 } END { exit !f }" "$1"; }; has_mark "$1" pre-destroy-start && has_mark "$1" pre-destroy-done' _ "$SVP_SESSION_DIR/timeline.tsv"
-expect "pre-destroy.sh: no way-out note when every step passes" sh -c '! grep -q -- "--leftovers" "$1"' _ "$work/pre.out"
-: >"$log"
-expect "tf.sh plan --destroy --leftovers refuses once pre-destroy-done is there, and says to go without it" \
-  sh -c '! bash "$1/tf.sh" stg plan --destroy --leftovers >"$2" 2>&1 && grep -q "plan --destroy without --leftovers" "$2" && [ -z "$(grep "^terraform .* plan -destroy" "$3")" ]' _ "$here" "$work/out" "$log"
-expect "tf.sh plan --destroy runs after pre-destroy.sh" bash "$here/tf.sh" stg plan --destroy >/dev/null
-: >"$log"
-expect "tf.sh destroy runs after it" bash "$here/tf.sh" stg destroy >"$work/out" 2>&1
-expect "tf.sh destroy applied the destroy plan file" grep -q '^terraform -chdir=.*/aws/envs/stg apply -input=false stg.destroy.tfplan$' "$log"
-expect "tf.sh destroy never ran terraform destroy" test -z "$(grep -E '^terraform -chdir=[^ ]* destroy' "$log")"
-expect "tf.sh destroy removed the destroy plan file" test ! -e "$infra_root/aws/envs/stg/stg.destroy.tfplan"
-expect "tf.sh destroy marks destroy-start, then destroy-end" sh -c 'has() { awk -F "\t" -v e="$2" "\$3 == e { f = 1 } END { exit !f }" "$1"; }; has "$1" destroy-start && has "$1" destroy-end' _ "$SVP_SESSION_DIR/timeline.tsv"
-expect "tf.sh destroy says to sweep next" grep -q 'now aws/scripts/sweep.sh' "$work/out"
+expect "pre-destroy.sh leaves no Application, ApplicationSet or root" sh -c '[ -z "$(grep . "$1/apps")" ] && [ ! -e "$1/appset" ] && [ ! -e "$1/root" ] && [ ! -e "$1/svp-apps" ]' _ "$state"
+expect "pre-destroy.sh: the records of the zone of stg" grep -q 'route53 list-resource-record-sets --hosted-zone-id Z0TFVARS ' "$log"
+expect "pre-destroy.sh marks pre-destroy-start and pre-destroy-done" sh -c 'has() { awk -F "\t" -v e="$2" "\$3 == e { f = 1 } END { exit !f }" "$1"; }; has "$1" pre-destroy-start && has "$1" pre-destroy-done' _ "$SVP_SESSION_DIR/timeline.tsv"
+expect "pre-destroy.sh: no way-out note when every step passes; next is root gitops" \
+  sh -c '! grep -q -- "--leftovers" "$1" && grep -q "ready for: aws/scripts/tf.sh stg gitops plan --destroy" "$1"' _ "$work/pre.out"
 
 new_session
-echo '{"name":"svp-stg","domain":"stg.aws.svp.example","hostedZoneId":"Z0FAKE"}' >"$SVP_SESSION_DIR/cluster-values.json"
 : >"$state/apps"
 : >"$state/pvcs"
-rm -f "$state/root" "$state/lb"
-FAKE_NO_ARGOCD=1 bash "$here/pre-destroy.sh" stg >"$work/pre.out" 2>&1 ||
-  bad "pre-destroy.sh stg exits 0 on a cluster without Argo CD ($(tail -n 3 "$work/pre.out"))"
-expect "pre-destroy.sh without Argo CD says so" grep -q '^note  no Argo CD on svp-stg' "$work/pre.out"
+rm -f "$state/appset" "$state/root" "$state/svp-apps" "$state/lb"
+FAKE_NO_ARGOCD=1 bash "$here/pre-destroy.sh" prd >"$work/pre.out" 2>&1 ||
+  bad "pre-destroy.sh prd exits 0 on a cluster without Argo CD ($(tail -n 3 "$work/pre.out"))"
+expect "pre-destroy.sh prd: context through the tunnel, checked before the first kubectl to the API" \
+  sh -c 'b() { a=$(grep -nE -- "$2" "$1" | head -n 1 | cut -d: -f1); c=$(grep -nE -- "$3" "$1" | head -n 1 | cut -d: -f1); [ -n "$a" ] && [ -n "$c" ] && [ "$a" -lt "$c" ]; }
+    b "$1" "^kubectl config set-cluster .*6443" "^nc -z" && b "$1" "^nc -z" "^kubectl --context svp-prd"' _ "$log"
+expect "pre-destroy.sh without Argo CD says so" grep -q '^note  no Argo CD on svp-prd' "$work/pre.out"
 expect "pre-destroy.sh without Argo CD calls nothing of Argo CD or the Gateway" test -z "$(grep -E -- '-n argocd |delete gateway' "$log")"
 expect "pre-destroy.sh without Argo CD still waits on load balancers, records and volumes" \
   sh -c 'grep -q "get services -A" "$1" && grep -q "route53 list-resource-record-sets" "$1" && grep -q "ec2 describe-volumes" "$1"' _ "$log"
 expect "pre-destroy.sh without Argo CD marks pre-destroy-done" has_mark pre-destroy-done
-
-# An apply that failed once EKS existed (RDS or CloudFront failed, so output cluster_values was never stored and
-# bootstrap-argocd.sh cannot run): no cluster-values.json, EKS in the state. pre-destroy.sh is the way out.
 new_session
-expect "--no-cluster with EKS in the state points to pre-destroy.sh" \
-  sh -c '! FAKE_TF_STATE=eks bash "$1/tf.sh" stg plan --destroy --no-cluster >"$2" 2>&1 && grep -q "run aws/scripts/pre-destroy.sh stg first" "$2"' _ "$here" "$work/out"
-FAKE_NO_ARGOCD=1 bash "$here/pre-destroy.sh" stg >"$work/pre.out" 2>&1 ||
-  bad "pre-destroy.sh stg exits 0 with no cluster-values.json ($(tail -n 3 "$work/pre.out"))"
-expect "pre-destroy.sh writes the context svp-stg itself, before its first kubectl" \
-  before "$log" '^aws eks update-kubeconfig --name svp-stg --alias svp-stg ' '^kubectl '
-expect "pre-destroy.sh reads the zone id from stg.auto.tfvars" grep -q 'route53 list-resource-record-sets --hosted-zone-id Z0TFVARS ' "$log"
-expect "pre-destroy.sh with no cluster-values.json marks pre-destroy-done" has_mark pre-destroy-done
-expect "tf.sh plan --destroy runs after it, with EKS in the state" sh -c 'FAKE_TF_STATE=eks bash "$1/tf.sh" stg plan --destroy >/dev/null' _ "$here"
-expect "tf.sh destroy runs after it" bash "$here/tf.sh" stg destroy >/dev/null
-expect "tf.sh destroy ran terraform apply of the destroy plan file" grep -q '^terraform .* apply -input=false stg.destroy.tfplan$' "$log"
-: >"$log"
+expect "pre-destroy.sh prd refuses while the tunnel is closed, before any kubectl to the API" \
+  sh -c '! FAKE_TUNNEL=closed bash "$1/pre-destroy.sh" prd >"$2" 2>&1 && grep -q "no tunnel on 127.0.0.1:6443" "$2" && ! grep -q "^kubectl --context" "$3"' _ "$here" "$work/out" "$log"
+clear_log
 expect "pre-destroy.sh on an account without the cluster stops before kubectl and points to --no-cluster" \
-  sh -c '! FAKE_NO_CLUSTER=1 bash "$1/pre-destroy.sh" stg >"$2" 2>&1 && grep -q "plan --destroy --no-cluster" "$2" && ! grep -q "^kubectl " "$3"' _ "$here" "$work/out" "$log"
-mv "$infra_root/aws/envs/stg/stg.auto.tfvars" "$work/tfvars.aside"
-: >"$log"
+  sh -c '! FAKE_NO_CLUSTER=1 bash "$1/pre-destroy.sh" stg >"$2" 2>&1 && grep -q "tf.sh stg env plan --destroy --no-cluster" "$2" && ! grep -q "^kubectl " "$3"' _ "$here" "$work/out" "$log"
+expect "pre-destroy.sh red at the kubeconfig still marks pre-destroy-start, not pre-destroy-done" \
+  sh -c 'has() { awk -F "\t" -v e="$2" "\$3 == e { f = 1 } END { exit !f }" "$1"; }; has "$1" pre-destroy-start && ! has "$1" pre-destroy-done' _ "$SVP_SESSION_DIR/timeline.tsv"
+clear_log
+expect "tf.sh gitops plan --destroy --leftovers runs after pre-destroy-start without pre-destroy-done" \
+  bash "$here/tf.sh" stg gitops plan --destroy --leftovers >"$work/out" 2>&1
+expect "tf.sh gitops plan --destroy --leftovers says what may be left and that sweep.sh lists it" \
+  grep -q "^note  --leftovers: .*Load Balancer.*DNS records.*EBS volumes.*stuck-destroy.*sweep.sh stg" "$work/out"
+expect "tf.sh gitops plan --destroy --leftovers marks pre-destroy-skipped and writes the destroy plan" \
+  sh -c 'awk -F "\t" "\$3 == \"pre-destroy-skipped\" { f = 1 } END { exit !f }" "$1/timeline.tsv" && [ -f "$2/stg.destroy.tfplan" ]' _ "$SVP_SESSION_DIR" "$infra_root/aws/gitops/stg"
+expect "tf.sh gitops plan --destroy without --leftovers still refuses in that session" sh -c '! bash "$1/tf.sh" stg gitops plan --destroy >/dev/null 2>&1' _ "$here"
+rm -f "$infra_root/aws/gitops/stg/stg.destroy.tfplan"
+mv "$envs/stg/stg.auto.tfvars" "$work/tfvars.aside"
+clear_log
 expect "pre-destroy.sh without stg.auto.tfvars stops before any command, and names the file" \
   sh -c '! bash "$1/pre-destroy.sh" stg >"$2" 2>&1 && grep -q "stg.auto.tfvars" "$2" && [ ! -s "$3" ]' _ "$here" "$work/out" "$log"
-mv "$work/tfvars.aside" "$infra_root/aws/envs/stg/stg.auto.tfvars"
-
-# Out of time with pre-destroy.sh still red: --leftovers once it has started in this session.
-new_session
-FAKE_NO_CLUSTER=1 bash "$here/pre-destroy.sh" stg >/dev/null 2>&1 && bad "pre-destroy.sh fails when the account has no such cluster"
-expect "pre-destroy.sh red at update-kubeconfig still marks pre-destroy-start, not pre-destroy-done" \
-  sh -c 'has_mark() { awk -F "\t" -v e="$2" "\$3 == e { f = 1 } END { exit !f }" "$1"; }; has_mark "$1" pre-destroy-start && ! has_mark "$1" pre-destroy-done' _ "$SVP_SESSION_DIR/timeline.tsv"
-: >"$log"
-expect "tf.sh plan --destroy --leftovers runs after pre-destroy-start without pre-destroy-done" \
-  bash "$here/tf.sh" stg plan --destroy --leftovers >"$work/out" 2>&1
-expect "tf.sh plan --destroy --leftovers says what may be left and that sweep.sh lists it" \
-  sh -c 'grep -q "^note  --leftovers: .*Load Balancer.*DNS records.*EBS volumes.*stuck-destroy.*sweep.sh" "$1"' _ "$work/out"
-expect "tf.sh plan --destroy --leftovers marks pre-destroy-skipped" has_mark pre-destroy-skipped
-expect "tf.sh plan --destroy --leftovers ran terraform plan -destroy into stg.destroy.tfplan" \
-  grep -q '^terraform -chdir=.*/aws/envs/stg plan -destroy -input=false -var-file=stg.tfvars -out=stg.destroy.tfplan$' "$log"
-expect "tf.sh plan --destroy --leftovers left the plan file and its text" \
-  sh -c '[ -f "$1/stg.destroy.tfplan" ] && grep -qx "Plan: 0 to add, 0 to change, 3 to destroy." "$2/stg-destroy-plan.txt"' _ "$infra_root/aws/envs/stg" "$SVP_SESSION_DIR"
-expect "tf.sh plan --destroy without --leftovers still refuses in that session" \
-  sh -c '! bash "$1/tf.sh" stg plan --destroy >/dev/null 2>&1' _ "$here"
-rm -f "$infra_root/aws/envs/stg/stg.destroy.tfplan"
+mv "$work/tfvars.aside" "$envs/stg/stg.auto.tfvars"
 new_session
 FAKE_NO_ARGOCD=1 FAKE_GATEWAY_CRD_DOWN=1 bash "$here/pre-destroy.sh" stg >"$work/pre.out" 2>&1 &&
   bad "pre-destroy.sh fails when step 2 cannot read the cluster"
 expect "pre-destroy.sh red at step 2: the FAIL, then a last line with run again and the way out --leftovers" \
-  sh -c 'grep -q "^FAIL  read the CRDs" "$1" && tail -n 1 "$1" | grep -q "^note  fix what the FAIL above names, then aws/scripts/pre-destroy.sh stg again; .*aws/scripts/tf.sh stg plan --destroy --leftovers"' _ "$work/pre.out"
-expect "pre-destroy.sh red at step 2 marks pre-destroy-start, not pre-destroy-done" \
-  sh -c 'has_mark() { awk -F "\t" -v e="$2" "\$3 == e { f = 1 } END { exit !f }" "$1"; }; has_mark "$1" pre-destroy-start && ! has_mark "$1" pre-destroy-done' _ "$SVP_SESSION_DIR/timeline.tsv"
+  sh -c 'grep -q "^FAIL  read the CRDs" "$1" && tail -n 1 "$1" | grep -q "^note  fix what the FAIL above names, then aws/scripts/pre-destroy.sh stg again; .*aws/scripts/tf.sh stg gitops plan --destroy --leftovers"' _ "$work/pre.out"
 
 # --- measure.sh ---------------------------------------------------------------------------------------------------
-new_session
-echo '{"name":"svp-stg","domain":"stg.aws.svp.example","hostedZoneId":"Z0FAKE"}' >"$SVP_SESSION_DIR/cluster-values.json"
-printf '%s\t%s\t%s\n' 2026-10-31T00:00:00Z "$(date +%s)" session-start >"$SVP_SESSION_DIR/timeline.tsv"
-rm -f "$state/node-calls"
+start_measure() {
+  new_session
+  echo "{\"name\":\"svp-$1\",\"domain\":\"$1.aws.svp.example\",\"hostedZoneId\":\"Z0FAKE\"}" >"$SVP_SESSION_DIR/cluster-values.json"
+  printf '%s\t%s\t%s\n' 2026-10-31T00:00:00Z "${2:-$(date +%s)}" session-start >"$SVP_SESSION_DIR/timeline.tsv"
+  rm -f "$state/node-calls" "$state/job-calls"
+}
+start_measure stg
 FAKE_K6_FAIL_AT=2 bash "$here/measure.sh" stg >"$work/measure.out" 2>&1 || bad "measure.sh stg exits 0 with a failed level ($(tail -n 3 "$work/measure.out"))"
 expect "measure.sh: smoke and seed with the domain" grep -q 'make .* eks-seed CONTEXT=svp-stg DOMAIN=stg.aws.svp.example' "$log"
-expect "measure.sh: level 1 passes, level 2 fails" \
-  test "$(cut -f1,2 "$SVP_SESSION_DIR/k6-levels.tsv" | tr '\t\n' ': ')" = "1:pass 2:fail "
+expect "measure.sh: level 1 passes, level 2 fails" test "$(cut -f1,2 "$SVP_SESSION_DIR/k6-levels.tsv" | tr '\t\n' ': ')" = "1:pass 2:fail "
 expect "measure.sh: no level after the failed one" test -z "$(grep -- '--pods 4' "$log")"
 expect "measure.sh: eks-rl-reset before each level's start" before "$log" 'eks-rl-reset' 'run.sh .*--pods 1 .*start'
 expect "measure.sh: summaries copied into the session" test -s "$SVP_SESSION_DIR/k6-1/summaries/pod-0.json"
 expect "measure.sh: nodes and kubectl top sampled" test -s "$SVP_SESSION_DIR/k6-1/top-nodes.tsv"
 
-new_session
-echo '{"name":"svp-stg","domain":"stg.aws.svp.example","hostedZoneId":"Z0FAKE"}' >"$SVP_SESSION_DIR/cluster-values.json"
-printf '%s\t%s\t%s\n' 2026-10-31T00:00:00Z "$(date +%s)" session-start >"$SVP_SESSION_DIR/timeline.tsv"
-rm -f "$state/node-calls"
+start_measure stg
 rc=0
 FAKE_NODE_LOST=1 bash "$here/measure.sh" stg --from 2 >"$work/measure.out" 2>&1 || rc=$?
 expect "measure.sh: a node lost during a level exits 3" test "$rc" = 3
@@ -581,56 +839,77 @@ expect "measure.sh --from 2 again: the interrupted try kept aside, not read agai
   sh -c 'ls -d "$1"/k6-2.* >/dev/null 2>&1 && [ ! -e "$1/k6-2/lost" ] && [ "$(ls "$1/k6-2/summaries")" = "pod-0.json
 pod-1.json" ]' _ "$SVP_SESSION_DIR"
 
-new_session
-echo '{"name":"svp-stg","domain":"stg.aws.svp.example","hostedZoneId":"Z0FAKE"}' >"$SVP_SESSION_DIR/cluster-values.json"
-printf '%s\t%s\t%s\n' 2026-10-31T00:00:00Z "$(($(date +%s) - 10000))" session-start >"$SVP_SESSION_DIR/timeline.tsv"
+start_measure stg "$(($(date +%s) - 10000))"
 bash "$here/measure.sh" stg --from 1 >"$work/measure.out" 2>&1 || bad "measure.sh past 3 hours exits 0"
 expect "measure.sh: no level starts that would end past 3 hours" test -z "$(grep 'run.sh .* start' "$log")"
 
-new_session
-echo '{"name":"svp-stg","domain":"stg.aws.svp.example","hostedZoneId":"Z0FAKE"}' >"$SVP_SESSION_DIR/cluster-values.json"
-printf '%s\t%s\t%s\n' 2026-10-31T00:00:00Z "$(date +%s)" session-start >"$SVP_SESSION_DIR/timeline.tsv"
-rm -f "$state/node-calls" "$state/job-calls"
+start_measure stg
 FAKE_JOB_FLAKY=1 FAKE_K6_FAIL_AT=2 bash "$here/measure.sh" stg --from 1 >"$work/measure.out" 2>&1 ||
   bad "measure.sh with a failed poll of the Job exits 0 ($(tail -n 3 "$work/measure.out"))"
 expect "measure.sh: a failed poll of the Job is noted" grep -q 'kubectl get job svp-load/svp-k6 failed .*waiting on' "$work/measure.out"
 expect "measure.sh: after a failed poll it polls again before reading the logs" \
   test "$(awk '/get job svp-k6/ { n++ } /run\.sh .*logs/ { print n; exit }' "$log")" = 2
 expect "measure.sh: the level with a failed poll still passes" test "$(head -n 1 "$SVP_SESSION_DIR/k6-levels.tsv" | cut -f1,2 | tr '\t' ':')" = 1:pass
-new_session
-echo '{"name":"svp-stg","domain":"stg.aws.svp.example","hostedZoneId":"Z0FAKE"}' >"$SVP_SESSION_DIR/cluster-values.json"
-printf '%s\t%s\t%s\n' 2026-10-31T00:00:00Z "$(date +%s)" session-start >"$SVP_SESSION_DIR/timeline.tsv"
-rm -f "$state/node-calls" "$state/job-calls"
+start_measure stg
 rc=0
 FAKE_JOB_DOWN=1 SVP_MEASURE_LEVEL_LIMIT=1 bash "$here/measure.sh" stg --from 1 >"$work/measure.out" 2>&1 || rc=$?
 expect "measure.sh: a Job no read reaches exits 1" test "$rc" = 1
-expect "measure.sh: that level is a tooling error, not a failed level" \
-  test "$(cut -f1,2 "$SVP_SESSION_DIR/k6-levels.tsv" | tr '\t\n' ': ')" = "1:error "
+expect "measure.sh: that level is a tooling error, not a failed level" test "$(cut -f1,2 "$SVP_SESSION_DIR/k6-levels.tsv" | tr '\t\n' ': ')" = "1:error "
 expect "measure.sh: the error says the Job could not be read and how to go on" \
   sh -c 'grep -q "^FAIL  level 1: Job svp-load/svp-k6 could not be read" "$1" && grep -q "measure.sh stg --from 1" "$1"' _ "$work/measure.out"
 expect "measure.sh: the unread Job is not deleted (one delete, before the level's start)" \
   sh -c '[ "$(grep -c "^run\.sh .* delete$" "$1")" = 1 ] && [ "$(grep -n "^run\.sh " "$1" | tail -n 1 | grep -c -- "--pods 1 .*start$")" = 1 ]' _ "$log"
 expect "measure.sh: no logs read and no level after the error" test -z "$(grep -E 'run\.sh .* logs$|--pods 2 ' "$log")"
-expect "measure.sh: the error is in the timeline" has_mark k6-1-error
 expect "measure.sh: no measure-end after the error" no_mark measure-end
-: >"$log"
+clear_log
 expect "measure.sh stops on another account before any other command" \
-  sh -c '! SVP_AWS_ACCOUNT_ID=111111111111 bash "$1/measure.sh" stg >/dev/null 2>&1 && [ -s "$2" ] && ! grep -qv "^aws sts get-caller-identity " "$2"' _ "$here" "$log"
+  sh -c '! FAKE_ACCOUNT=000000000000 bash "$1/measure.sh" stg >/dev/null 2>&1 && [ -s "$2" ] && ! grep -qv "^aws sts get-caller-identity " "$2"' _ "$here" "$log"
+
+start_measure prd
+expect "measure.sh prd runs the smoke alone" bash "$here/measure.sh" prd >"$work/measure.out" 2>&1
+expect "measure.sh prd: smoke through its domain, no seed, no k6" \
+  sh -c 'grep -q "make .* eks-smoke CONTEXT=svp-prd DOMAIN=prd.aws.svp.example" "$1" && ! grep -qE "eks-seed|run\.sh" "$1"' _ "$log"
+expect "measure.sh prd --from refuses: no ladder" sh -c '! bash "$1/measure.sh" prd --from 2 >/dev/null 2>&1' _ "$here"
+start_measure prd
+expect "measure.sh prd refuses while the tunnel is closed, before the smoke" \
+  sh -c '! FAKE_TUNNEL=closed bash "$1/measure.sh" prd >/dev/null 2>&1 && ! grep -q "^make " "$2"' _ "$here" "$log"
 
 # --- sweep.sh -----------------------------------------------------------------------------------------------------
 unset SVP_SESSION_DIR
-: >"$log"
-expect "sweep.sh passes with the bootstrap's resources alone" bash "$here/sweep.sh" >"$work/sweep.out" 2>&1
-expect "sweep.sh prints the state bucket as kept" grep -q '^kept  svp-tfstate-000000000000-ap-southeast-1' "$work/sweep.out"
-expect "sweep.sh prints the zone as kept" grep -q '^kept  hosted zone aws.svp.example' "$work/sweep.out"
+for e in stg prd mgmt; do
+  case $e in mgmt) p=anhnv-sso a=000000000000 s=bootstrap z=aws.svp.example ;; stg) p=anhnv-stg a=111111111111 s=baseline z=stg.aws.svp.example ;;
+    prd) p=anhnv-prd a=222222222222 s=baseline z=prd.aws.svp.example ;; esac
+  clear_log
+  expect "sweep.sh $e passes with what the account keeps alone" bash "$here/sweep.sh" "$e" >"$work/sweep.out" 2>&1
+  expect "sweep.sh $e: profile $p alone" profiles_are "$p"
+  expect "sweep.sh $e prints the state bucket and its KMS key as kept (Stack=$s)" \
+    sh -c 'grep -q "^kept  bucket svp-tfstate-$2-ap-southeast-1 (Stack=$3)$" "$1" && grep -q "^kept  KMS key key-state (Stack=$3)$" "$1"' _ "$work/sweep.out" "$a" "$s"
+  expect "sweep.sh $e prints the zone $z as kept" grep -q "^kept  hosted zone $z " "$work/sweep.out"
+  expect "sweep.sh $e prints the key of a destroyed root as pending deletion" grep -q '^pending deletion  KMS key key-eks, deleted on 2026-11-12' "$work/sweep.out"
+  expect "sweep.sh $e reads WAF of CloudFront in us-east-1" grep -q '^aws wafv2 list-web-acls --scope CLOUDFRONT --output json --region us-east-1$' "$log"
+done
+expect "sweep.sh mgmt keeps the NS records delegating stg and prd" grep -q 'NS of stg.aws.svp.example.,prd.aws.svp.example.' "$work/sweep.out"
 expect "sweep.sh needs no Terraform state" test -z "$(grep '^terraform ' "$log")"
 expect "sweep.sh only reads (describe, list, get)" \
   test -z "$(grep '^aws ' "$log" | awk '{ print $3 }' | grep -vE '^(describe|list|get)-' || true)"
-: >"$log"
-expect "sweep.sh fails on a leftover EBS volume, and names it" \
-  sh -c '! FAKE_LEFTOVER=volume bash "$1/sweep.sh" >"$2" 2>&1 && grep -q "vol-0fake available 10 GiB data-redpanda-0" "$2"' _ "$here" "$work/sweep.out"
+expect "sweep.sh fails on a leftover EBS volume, names it and the command that deletes it" \
+  sh -c '! FAKE_LEFTOVER=volume bash "$1/sweep.sh" stg >"$2" 2>&1 && grep -q "vol-0fake available 10 GiB data-redpanda-0" "$2" &&
+    grep -q "delete: AWS_PROFILE=anhnv-stg aws ec2 delete-volume --volume-id vol-0fake --region ap-southeast-1$" "$2"' _ "$here" "$work/sweep.out"
 expect "sweep.sh fails on a secret scheduled for deletion, and says so" \
-  sh -c '! FAKE_LEFTOVER=secret bash "$1/sweep.sh" >"$2" 2>&1 && grep -q "svp-stg-old (scheduled for deletion since" "$2"' _ "$here" "$work/sweep.out"
+  sh -c '! FAKE_LEFTOVER=secret bash "$1/sweep.sh" stg >"$2" 2>&1 && grep -q "svp/stg/web (scheduled for deletion since" "$2"' _ "$here" "$work/sweep.out"
+expect "sweep.sh prd fails on the final snapshot, with its delete command" \
+  sh -c '! FAKE_LEFTOVER=snapshot bash "$1/sweep.sh" prd >"$2" 2>&1 && grep -q "^FAIL  RDS snapshots: 1 left" "$2" &&
+    grep -q "delete: AWS_PROFILE=anhnv-prd aws rds delete-db-snapshot --db-snapshot-identifier svp-prd-final-0a1b2c3d --region ap-southeast-1$" "$2"' _ "$here" "$work/sweep.out"
+expect "sweep.sh prd fails on a retained automated backup" \
+  sh -c '! FAKE_LEFTOVER=backup bash "$1/sweep.sh" prd >"$2" 2>&1 && grep -q "^FAIL  RDS automated backups: 1 left" "$2"' _ "$here" "$work/sweep.out"
+expect "sweep.sh prd fails on a KMS key of the root not pending deletion" \
+  sh -c '! FAKE_LEFTOVER=kms bash "$1/sweep.sh" prd >"$2" 2>&1 && grep -q "^FAIL  KMS keys: 1 left" "$2" && grep -q "key-eks Enabled Stack=prd" "$2"' _ "$here" "$work/sweep.out"
+expect "sweep.sh prd fails on a web ACL left in us-east-1" \
+  sh -c '! FAKE_LEFTOVER=waf bash "$1/sweep.sh" prd >"$2" 2>&1 && grep -q "^FAIL  WAF web ACLs of CloudFront: 1 left" "$2"' _ "$here" "$work/sweep.out"
+expect "sweep.sh stg fails on a record of its zone" \
+  sh -c '! FAKE_LEFTOVER=record bash "$1/sweep.sh" stg >"$2" 2>&1 && grep -q "api.stg.aws.svp.example. A" "$2"' _ "$here" "$work/sweep.out"
+expect "sweep.sh stops on another account before any other command" \
+  sh -c '! FAKE_ACCOUNT=000000000000 bash "$1/sweep.sh" stg >/dev/null 2>&1' _ "$here"
 
 if [ "$failures" -gt 0 ]; then
   echo "FAIL  $failures check(s) failed" >&2
