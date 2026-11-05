@@ -219,7 +219,9 @@ mục "Xác nhận" của ADR-0048 và ADR-0049.
    Ready. Broker của AZ mất ở `Pending` cho tới khi có node mới ở đúng AZ đó (topology spread `minDomains: 3`, ADR-0049 §4) là đúng thiết kế.
 
 (Tuỳ chọn) **Đổi một secret của env đang chạy**: như mục cùng tên của `session-stg.md`, với `aws/scripts/bootstrap.sh prd secrets`,
-`AWS_PROFILE=anhnv-prd`, `--context svp-prd`, tunnel mở.
+`AWS_PROFILE=anhnv-prd`, `--context svp-prd`, tunnel mở; cùng thứ tự: ghi nguồn và force-sync, restart broker nếu mật khẩu admin Kafka
+đổi, sync `svp-data` và chờ lượt đó `Succeeded`, rồi restart workload. Ba broker restart lần lượt (ordinal cao trước, chờ Ready rồi sang
+broker sau), luôn còn hai broker, đủ đa số Raft; không restart song song (không `kubectl delete pod` nhiều broker một lúc).
 
 ## Kết thúc buổi
 

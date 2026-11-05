@@ -474,12 +474,18 @@ AWS_PROFILE=anhnv-stg aws secretsmanager restore-secret --secret-id <name> --reg
 
 Sửa `.env` của repo code, rồi theo đúng thứ tự (cùng thứ tự với `make k8s-secrets` trên k3d):
 
-1. Một lệnh làm ba việc đầu: mật khẩu admin Kafka mới vào broker đang chạy trước, ghi lại mọi entry `svp/stg/*` (trừ `glitchtip-runtime`,
-   đã có giá trị), rồi force-sync mọi ExternalSecret. Script đọc lại mật khẩu master RDS và chạy `make eks-secrets` như bước 6:
+1. Một lệnh làm bốn việc đầu: mật khẩu admin Kafka mới vào broker đang chạy trước, ghi lại mọi entry `svp/stg/*` (trừ `glitchtip-runtime`,
+   đã có giá trị), force-sync mọi ExternalSecret, rồi chỉ khi mật khẩu admin Kafka đổi thì rolling restart StatefulSet `redpanda` (từng
+   broker một, chờ Ready rồi sang broker sau): broker và sidecar đọc mật khẩu đó từ environment lúc khởi động, giữ mật khẩu cũ thì probe
+   nhận 401, broker NotReady và sync ở bước 2 không chạy được hook PostSync. Script đọc lại mật khẩu master RDS và chạy `make eks-secrets`
+   như bước 6:
 
    ```sh
    aws/scripts/bootstrap.sh stg secrets
    ```
+
+   Tìm `ok statefulset/redpanda restarted one broker at a time` (mật khẩu admin Kafka đổi) hay `skip  restart of Redpanda's brokers` (không
+   đổi) trong `$SVP_SESSION_DIR/eks-secrets.log`.
 
 2. Sync Application `svp-data` (Job init đặt mật khẩu mới trong Postgres, Kafka) và chờ đúng lượt sync đó xong, gồm hook PostSync
    `pg-bootstrap`, `redpanda-init`: restart trước khi Job đặt mật khẩu mới thì pod mới đăng nhập bằng mật khẩu hệ thống chưa có:
@@ -504,7 +510,7 @@ Sửa `.env` của repo code, rồi theo đúng thứ tự (cùng thứ tự v�
    AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp patch rollout <tên> --type merge -p "{\"spec\":{\"restartAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}}"
    ```
 
-Đổi thứ tự (Secret đổi trước hệ thống dùng nó) làm service mất đăng nhập tới khi bước 4, 5 chạy. Chi tiết: `docs/reference/eks.md` của repo
+Đổi thứ tự (Secret đổi trước hệ thống dùng nó) làm service mất đăng nhập tới khi bước 2, 3 chạy. Chi tiết: `docs/reference/eks.md` của repo
 code, mục "Đổi secret của env đang chạy".
 
 ## Kết thúc buổi
