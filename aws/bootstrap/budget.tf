@@ -9,6 +9,8 @@ locals {
   ]
 }
 
+# Created in the management account, the budget has no filter, so it covers the consolidated bill of the organization:
+# the cost of the management account and of every member account (stg, prd), whose own budgets cover only themselves.
 resource "aws_budgets_budget" "monthly" {
   name         = "svp-monthly"
   budget_type  = "COST"

@@ -1,0 +1,14 @@
+# Copy to org.auto.tfvars (ignored by git) and fill in. Never commit the real values: the repository is public.
+# The management account id is not here: TF_VAR_account_id is set in each command from SVP_AWS_MGMT_ACCOUNT_ID.
+
+# Root email of each new member account: an address no AWS account uses, a closed or suspended one included.
+account_emails = {
+  stg = "stg@svp.example"
+  prd = "prd@svp.example"
+}
+
+# User name in IAM Identity Center (top right of the AWS access portal).
+sso_user_name = "<user>"
+
+# sso_region of the SSO profile in ~/.aws/config (inside its [sso-session ...] block when it has one).
+sso_region = "us-east-1"

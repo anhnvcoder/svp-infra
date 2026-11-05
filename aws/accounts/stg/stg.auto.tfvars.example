@@ -1,0 +1,5 @@
+# Copy to stg.auto.tfvars (ignored by git) and fill in. Never commit the real values: the repository is public.
+# The account id is not here: every command sets TF_VAR_account_id from SVP_AWS_STG_ACCOUNT_ID (aws/accounts/README.md).
+budget_emails    = ["you@svp.example"]
+budget_limit_usd = 20
+lab_zone_name    = "aws.svp.example"

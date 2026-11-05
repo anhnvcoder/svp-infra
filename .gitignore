@@ -18,6 +18,9 @@ crash.*.log
 terraform.tfvars
 terraform.tfvars.json
 backend.hcl
+# Backend of each member account, written from the backend_hcl output of aws/accounts/<env>.
+aws/backend-stg.hcl
+aws/backend-prd.hcl
 
 # Override files, such as the local_override.tf of the first apply of aws/bootstrap.
 override.tf
