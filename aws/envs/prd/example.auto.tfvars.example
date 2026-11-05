@@ -1,0 +1,14 @@
+# Copy to prd.auto.tfvars (ignored by git) and fill in. Never commit the real values: the repository is public.
+# The account id is not here: every command sets TF_VAR_account_id from SVP_AWS_PRD_ACCOUNT_ID (README.md). No address
+# of the learner's machine either: the public endpoint of the API is off in prd (prd.tfvars).
+
+# Output zone_id of aws/accounts/prd, the zone of the prd account:
+#   AWS_PROFILE=anhnv-prd terraform -chdir=../../accounts/prd output -raw zone_id
+hosted_zone_id = "Z0123456789ABCDEFGHIJ"
+
+# Name of that zone, without the trailing dot (the web is at the apex, the API at api.<this name>):
+#   AWS_PROFILE=anhnv-prd aws route53 get-hosted-zone --id <hosted_zone_id> --region ap-southeast-1 --query HostedZone.Name --output text
+domain = "prd.aws.svp.example"
+
+# Let's Encrypt account of cert-manager.
+acme_email = "you@svp.example"

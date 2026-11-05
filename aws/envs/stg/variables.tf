@@ -3,7 +3,7 @@
 ################################################################################
 
 variable "account_id" {
-  description = "The AWS account this root may change (12 digits). Set it with TF_VAR_account_id after reading the account from aws sts get-caller-identity; it never goes into a committed file."
+  description = "The AWS account of the env, the only one this root may change (12 digits). Set it with TF_VAR_account_id from the account variable of the env after checking the account with aws sts get-caller-identity; it never goes into a committed file."
   type        = string
 
   validation {
@@ -23,7 +23,7 @@ variable "region" {
 ################################################################################
 
 variable "hosted_zone_id" {
-  description = "ID of the Route 53 hosted zone of the lab, output zone_id of aws/bootstrap. ExternalDNS and cert-manager may change records of this zone only, and domain must lie inside it."
+  description = "ID of the Route 53 hosted zone of the env, in the env's account: output zone_id of aws/accounts/<env>. ExternalDNS and cert-manager may change records of this zone only, and domain must be its name or a name inside it."
   type        = string
 
   validation {
@@ -33,7 +33,7 @@ variable "hosted_zone_id" {
 }
 
 variable "domain" {
-  description = "Host name of the web client of this env, inside the lab zone (e.g. stg.aws.svp.example); the API is api.<domain>. Origin of the CORS rules of both buckets and of CloudFront."
+  description = "Host name of the web client of this env: the name of the zone of hosted_zone_id (e.g. stg.aws.svp.example) or a name inside it; the API is api.<domain>. Origin of the CORS rules of both buckets and of CloudFront."
   type        = string
 
   validation {
@@ -77,6 +77,24 @@ variable "flow_log_enabled" {
   type        = bool
 }
 
+variable "flow_log_retention_days" {
+  description = "Days CloudWatch keeps the flow logs when flow_log_enabled is true."
+  type        = number
+  default     = 1
+}
+
+variable "s3_endpoint_restricted" {
+  description = "Let only the env's buckets, s3_endpoint_extra_buckets and the image layer bucket of Amazon ECR through the S3 gateway endpoint; every other bucket of the region is then unreachable from the private subnets."
+  type        = bool
+  default     = false
+}
+
+variable "s3_endpoint_extra_buckets" {
+  description = "Names of buckets outside the env reachable through the S3 gateway endpoint when s3_endpoint_restricted is true, such as the bucket of the region that registry.k8s.io redirects image pulls to. The uploads and media buckets of the env are always added."
+  type        = list(string)
+  default     = []
+}
+
 variable "kubernetes_version" {
   description = "Kubernetes minor version of the cluster, e.g. 1.36."
   type        = string
@@ -90,6 +108,18 @@ variable "eks_endpoint_public_access" {
 variable "control_plane_log_types" {
   description = "Control plane logs sent to CloudWatch; empty sends none."
   type        = list(string)
+}
+
+variable "control_plane_log_retention_days" {
+  description = "Days CloudWatch keeps the control plane logs when control_plane_log_types is not empty."
+  type        = number
+  default     = 1
+}
+
+variable "eks_secrets_kms_encryption" {
+  description = "Envelope-encrypt Kubernetes Secrets with a customer managed KMS key the eks module creates; false leaves them encrypted with an AWS owned key."
+  type        = bool
+  default     = false
 }
 
 variable "node_instance_types" {
@@ -147,6 +177,36 @@ variable "rds_skip_final_snapshot" {
   type        = bool
 }
 
+variable "rds_performance_insights_enabled" {
+  description = "Turn on Performance Insights within Database Insights in Standard mode."
+  type        = bool
+  default     = false
+}
+
+variable "rds_performance_insights_retention_period" {
+  description = "Days of Performance Insights history when rds_performance_insights_enabled is true (7 is the free retention)."
+  type        = number
+  default     = 7
+}
+
+variable "rds_monitoring_interval" {
+  description = "Seconds between two enhanced monitoring samples; 0 turns enhanced monitoring off."
+  type        = number
+  default     = 0
+}
+
+variable "rds_cloudwatch_logs_exports" {
+  description = "PostgreSQL logs exported to CloudWatch Logs (postgresql, upgrade, iam-db-auth-error); empty exports none."
+  type        = list(string)
+  default     = []
+}
+
+variable "rds_cloudwatch_logs_retention_days" {
+  description = "Days CloudWatch keeps the exported logs and the enhanced monitoring metrics of the DB instance."
+  type        = number
+  default     = 1
+}
+
 variable "media_force_destroy" {
   description = "Let destroy delete both buckets with every object in them."
   type        = bool
@@ -155,4 +215,16 @@ variable "media_force_destroy" {
 variable "media_price_class" {
   description = "Edge locations of the CloudFront distribution of the media bucket."
   type        = string
+}
+
+variable "media_versioning_enabled" {
+  description = "Keep earlier versions of overwritten and deleted objects in both buckets for 30 days."
+  type        = bool
+  default     = false
+}
+
+variable "media_access_logging_enabled" {
+  description = "Write S3 server access logs of both buckets to a log bucket of the env."
+  type        = bool
+  default     = false
 }
