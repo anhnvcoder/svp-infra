@@ -1,0 +1,76 @@
+# Module `account-baseline`
+
+Phần sống lâu hơn mọi buổi AWS của một account thành viên (`svp-stg`, `svp-prd`), gọi từ root `aws/accounts/<env>`
+([README](../../accounts/README.md)): state Terraform của mọi root chạy trong account đó, zone DNS của env và budget tháng.
+
+Tạo:
+
+- **KMS key `alias/svp-tfstate`** (xoay vòng tự động, chờ 30 ngày khi xoá, `prevent_destroy`). Key policy theo mẫu của tài liệu KMS
+  ([default key policy](https://docs.aws.amazon.com/kms/latest/developerguide/key-policy-default.html)): account quản trị key qua IAM với
+  nhóm quyền "key administrators" (không có quyền mã hoá, giải mã), nên admin nào của account (SvpAdmin, `OrganizationAccountAccessRole`)
+  cũng sửa lại được policy, key không bị khoá chết; mã hoá, giải mã chỉ cho role SSO của permission set `SvpAdmin`, khớp bằng `ArnLike`
+  `aws:PrincipalArn` với mẫu `AWSReservedSSO_SvpAdmin_*` (hậu tố ngẫu nhiên thay bằng `*`, đường dẫn có và không có đoạn region) theo
+  [IAM Identity Center](https://docs.aws.amazon.com/singlesignon/latest/userguide/referencingpermissionsets.html). Không statement nào có
+  principal `*`. Hệ quả: role chỉ được đọc hay liệt kê bucket không đọc được state (state chứa output, thuộc tính tài nguyên).
+- **Bucket `svp-tfstate-<account>-<region>`**: versioning, mã hoá mặc định SSE-KMS bằng key trên (S3 Bucket Key bật để giảm request KMS),
+  chặn public, `BucketOwnerEnforced`, policy từ chối request không TLS, `prevent_destroy`.
+- **Hosted zone `<env>.<lab_zone_name>`** (vd `stg.aws.svp.example`): management account uỷ quyền nó bằng bản ghi `NS` trong zone lab
+  (biến `delegated_subdomains` của `aws/bootstrap`). ExternalDNS và cert-manager của env chỉ ghi zone này.
+- **Budget `svp-<env>-monthly`**: chi phí của riêng account, email ở 50 %, 80 %, 100 % chi phí thực tế và 100 % dự báo (cùng mẫu budget
+  của `aws/bootstrap`, budget đó tính cả org).
+
+Output `backend_hcl` là nội dung file `aws/backend-<env>.hcl` (git bỏ qua) mà mọi root của account đọc bằng `-backend-config`: `bucket`,
+`region`, `encrypt`, `kms_key_id`, `use_lockfile`; không có `key`, mỗi root tự đặt key state của mình.
+
+<!-- markdownlint-disable MD033 -->
+<!-- BEGIN_TF_DOCS -->
+## Requirements
+
+| Name | Version |
+| ---- | ------- |
+| terraform | ~> 1.15 |
+| aws | ~> 6.0 |
+
+## Providers
+
+| Name | Version |
+| ---- | ------- |
+| aws | ~> 6.0 |
+
+## Resources
+
+| Name | Type |
+| ---- | ---- |
+| [aws_budgets_budget.monthly](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/budgets_budget) | resource |
+| [aws_kms_alias.state](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/kms_alias) | resource |
+| [aws_kms_key.state](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/kms_key) | resource |
+| [aws_route53_zone.env](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/route53_zone) | resource |
+| [aws_s3_bucket.state](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket) | resource |
+| [aws_s3_bucket_ownership_controls.state](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket_ownership_controls) | resource |
+| [aws_s3_bucket_policy.state](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket_policy) | resource |
+| [aws_s3_bucket_public_access_block.state](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket_public_access_block) | resource |
+| [aws_s3_bucket_server_side_encryption_configuration.state](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket_server_side_encryption_configuration) | resource |
+| [aws_s3_bucket_versioning.state](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket_versioning) | resource |
+| [aws_iam_policy_document.state_bucket](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
+| [aws_iam_policy_document.state_key](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
+
+## Inputs
+
+| Name | Description | Type | Default | Required |
+| ---- | ----------- | ---- | ------- | :------: |
+| account\_id | The AWS account of the baseline (12 digits): part of the state bucket name and of the key policy. The root passes its own account\_id, which never goes into a committed file. | `string` | n/a | yes |
+| budget\_emails | Addresses that receive the budget alerts. Personal data of a public repository: the root reads them from an uncommitted *.auto.tfvars or TF\_VAR\_budget\_emails. | `list(string)` | n/a | yes |
+| budget\_limit\_usd | Monthly cost budget of the account, in US dollars. Alerts go out at 50, 80 and 100 percent of actual cost and at 100 percent of forecast cost. | `number` | n/a | yes |
+| env | Environment the account runs (stg, prd): names the hosted zone <env>.<lab\_zone\_name> and the budget svp-<env>-monthly. | `string` | n/a | yes |
+| lab\_zone\_name | Name of the lab zone of the management account, aws.<domain>. The baseline creates <env>.<lab\_zone\_name>, which the management account delegates with NS records (delegated\_subdomains of aws/bootstrap). | `string` | n/a | yes |
+| region | Region of the state bucket and its KMS key, part of the bucket name; the root passes the region of its provider. | `string` | n/a | yes |
+
+## Outputs
+
+| Name | Description |
+| ---- | ----------- |
+| backend\_hcl | Content of aws/backend-<env>.hcl, the partial backend configuration every root of this account reads with -backend-config: bucket, region, encryption with the KMS key of the state and the S3 lock file. It holds no key argument: each root sets the key of its own state. |
+| name\_servers | The four name servers of the environment's zone, to delegate with NS records in the lab zone (delegated\_subdomains of aws/bootstrap). |
+| state\_bucket | Bucket of the remote state of every root of this account. |
+| zone\_id | Id of the hosted zone of the environment, <env>.<lab\_zone\_name>. |
+<!-- END_TF_DOCS -->
