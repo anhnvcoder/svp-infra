@@ -45,3 +45,16 @@ variable "zone_name" {
     error_message = "zone_name must be a lowercase DNS name without a trailing dot, e.g. aws.svp.example."
   }
 }
+
+variable "delegated_subdomains" {
+  description = "Zones of other accounts to delegate from the lab zone: zone name (<env>.<zone_name>) to its four name servers, the name_servers output of aws/accounts/<env>. Each entry becomes an NS record in the lab zone. Set it in the uncommitted bootstrap.auto.tfvars."
+  type        = map(list(string))
+  default     = {}
+
+  validation {
+    condition = alltrue([for name, servers in var.delegated_subdomains :
+      endswith(name, ".${var.zone_name}") && length(servers) == 4 && length(distinct(servers)) == 4
+    ])
+    error_message = "Each key of delegated_subdomains must end in \".\" followed by zone_name, and each value must hold exactly four distinct name servers."
+  }
+}

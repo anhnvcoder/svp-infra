@@ -1,5 +1,7 @@
-# Remote state of every root of the repository: one key per root (aws/bootstrap/terraform.tfstate,
-# aws/stg/terraform.tfstate, ...), locked with the S3 backend's native lock file, so no DynamoDB table.
+# Remote state of the roots that change the management account and of the GitHub settings: aws/bootstrap
+# (aws/bootstrap/terraform.tfstate), aws/org (aws/org/terraform.tfstate) and github/ (github/terraform.tfstate), one key
+# per root, locked with the S3 backend's native lock file, so no DynamoDB table. The roots of each environment keep
+# their state in the bucket of their own account (aws/accounts/<env>).
 
 # Bucket names are global. <name>-<account>-<region>, the convention of AWS's own buckets (the CDK bootstrap bucket,
 # the Control Tower log bucket), is unique without a random part and tells the account and region at a glance. AWS
@@ -24,10 +26,12 @@ resource "aws_s3_bucket_versioning" "state" {
 }
 
 # SSE-S3: encrypted at rest at no cost. A customer managed KMS key (what the finding below asks for) adds $1 a month and
-# a key policy to keep, and draws no line that IAM and the bucket policy do not draw already in a one-person sandbox.
-# Scope: stg only; prd: the bucket holding the prd state is encrypted with a customer managed KMS key whose key
-# policy grants kms:Decrypt only to the roles that run plan and apply for prd, since state holds outputs and
-# attributes that roles allowed only to list or read the bucket should not see.
+# a key policy to keep, and draws no line that IAM and the bucket policy do not draw already: only the administrators
+# of the management account reach this bucket, and they are the ones who run its three roots.
+# Scope: management account only (aws/bootstrap, aws/org, github/); stg and prd: the state of each environment is in the
+# bucket of its own account, encrypted with a customer managed KMS key whose key policy grants kms:Decrypt only to the
+# SvpAdmin roles (aws/modules/account-baseline), since state holds outputs and attributes that roles allowed only to
+# list or read the bucket should not see.
 #trivy:ignore:AWS-0132
 resource "aws_s3_bucket_server_side_encryption_configuration" "state" {
   bucket = aws_s3_bucket.state.id
