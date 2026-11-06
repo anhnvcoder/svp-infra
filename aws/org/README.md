@@ -163,6 +163,41 @@ AWS_PROFILE=anhnv-sso aws s3api list-objects-v2 --bucket "svp-cloudtrail-$SVP_AW
   --prefix "AWSLogs/$(AWS_PROFILE=anhnv-sso terraform output -raw organization_id)/$SVP_AWS_STG_ACCOUNT_ID/" --max-items 3 --query 'Contents[].Key'
 ```
 
+### 8. Quota và xác minh CloudFront của account mới
+
+Account mới có quota EC2 mặc định (5 cho mỗi mã dưới đây ở `ap-southeast-1`), chưa đủ cho buổi stg, prd. Đọc:
+
+```sh
+for p in anhnv-stg anhnv-prd; do
+  for q in L-1216C47A L-34B43A08 L-0263D0A3; do
+    printf '%s %s ' "$p" "$q"
+    AWS_PROFILE=$p aws service-quotas get-service-quota --service-code ec2 --quota-code $q --region ap-southeast-1 --query Quota.Value --output text
+  done
+done
+```
+
+| Mã | Quota | stg cần | prd cần |
+| --- | --- | --- | --- |
+| `L-1216C47A` | vCPU on-demand (Standard) | ≥ 4 | ≥ 16 |
+| `L-34B43A08` | vCPU Spot (Standard) | ≥ 10 | — |
+| `L-0263D0A3` | Elastic IP | ≥ 1 | ≥ 3 |
+
+Thiếu thì xin tăng (mỗi mã thiếu một lệnh; `PENDING` rồi `APPROVED`, account mới thường vài giờ tới 1–2 ngày):
+
+```sh
+AWS_PROFILE=<anhnv-stg|anhnv-prd> aws service-quotas request-service-quota-increase --service-code ec2 --quota-code <mã> \
+  --desired-value <số> --region ap-southeast-1 --query 'RequestedQuota.[QuotaCode,DesiredValue,Status]' --output text
+```
+
+Mỗi yêu cầu tăng quota thành một case loại "Service limits" trong Support Center của account đó.
+
+Account mới chưa dùng được CloudFront tới khi AWS xác minh. Trên console của từng account (AWS access portal, permission set `SvpAdmin`),
+Support Center mở bằng ô chat với trợ lý AI: gõ yêu cầu, ví dụ `Please verify this new account so it can create Amazon CloudFront
+distributions. It is a member account of organization <o-…> (management account <id>), used for a <staging|production> environment.`; trợ lý
+không tự giải quyết được thì hiện form tạo case đã điền sẵn. Kiểm Case type "Account and billing", Service "Account Activation", Category
+"Account Verification", Severity "General question", liên lạc qua Web, rồi Submit; dán số case. Buổi stg, prd chỉ bắt đầu khi quota đã duyệt
+và case đã xong.
+
 ## Gỡ có chủ đích
 
 Chỉ khi lab kết thúc, sau khi mọi env và baseline của hai account thành viên đã gỡ theo runbook của chúng. Các bước theo thứ tự; lệnh
