@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
-# Second step of every AWS session, before any plan or apply: the delegation of the environment's hosted zone
-# (<env>.aws.<domain>, made by the baseline aws/accounts/<env> and delegated by NS records of the lab zone) must be what
-# public resolvers answer. Let's Encrypt checks DNS-01 and the web reaches its names through public resolvers, so a
-# delegation not yet propagated (or undone in the lab zone, or at the parent's DNS) fails the session later, after the
-# cluster is paid for; this stops it before.
+# Second step of every AWS session, before any plan or apply: the delegation of the environment's hosted zone (made by
+# the baseline aws/accounts/<env>) must be what public resolvers answer. A child zone is delegated by NS records in the
+# zone above it (delegated_subdomains of aws/accounts/prd), the root zone of the lab by the NS records aws at the
+# parent's DNS. Let's Encrypt checks DNS-01 and the web reaches its names through public resolvers, so a delegation not
+# yet propagated (or undone) fails the session later, after the cluster is paid for; this stops it before.
 #
 # Reads the name servers of the zone from the output name_servers of root aws/accounts/<env> (its state, with the
 # environment's profile) and calls no other AWS API; asks the NS of the zone from two public resolvers. Both answers
-# must be exactly those name servers. The lab zone's name comes from SVP_ZONE_NAME or zone_name of
-# aws/bootstrap/bootstrap.auto.tfvars.
+# must be exactly those name servers. The zone's name is zone_name of aws/accounts/<env>/<env>.auto.tfvars.
 #
 # Usage: aws/scripts/check-dns.sh [--print] stg|prd
 set -euo pipefail
@@ -21,6 +20,8 @@ env_arg "$1"
 
 # Cloudflare's and Google's resolvers: two operators, so one stale cache does not decide.
 resolvers="1.1.1.1 8.8.8.8"
+# Where a delegation is made, for every environment alike.
+delegation="the delegation of a child zone is delegated_subdomains of aws/accounts/prd, of the root zone the NS records aws at the parent's DNS (README.md of aws/accounts)"
 
 # names: the DNS names on stdin, one per line, lowercase, without the trailing dot, sorted.
 names() { tr '[:upper:]' '[:lower:]' | sed 's/\.$//' | grep . | LC_ALL=C sort -u || true; }
@@ -40,8 +41,8 @@ for r in $resolvers; do
   got=$(run_ dig NS "$zone" +short +time=5 +tries=2 "@$r") || got=
   printing && continue
   got=$(names <<<"$got")
-  [ -n "$got" ] || fail "resolver $r returns no NS for $zone: the delegation is missing or not propagated yet (delegated_subdomains of aws/bootstrap, README.md of aws/accounts); do not start the session"
+  [ -n "$got" ] || fail "resolver $r returns no NS for $zone: the delegation is missing or not propagated yet; $delegation; do not start the session"
   [ "$got" = "$want" ] ||
-    fail "resolver $r returns NS $(oneline <<<"$got") for $zone, not the hosted zone's $(oneline <<<"$want"): fix delegated_subdomains of aws/bootstrap (README.md of aws/accounts); do not start the session"
+    fail "resolver $r returns NS $(oneline <<<"$got") for $zone, not the hosted zone's $(oneline <<<"$want"): fix it; $delegation; do not start the session"
   ok "resolver $r: NS of $zone are the hosted zone's"
 done

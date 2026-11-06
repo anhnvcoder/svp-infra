@@ -15,11 +15,11 @@ output "backend_hcl" {
 }
 
 output "zone_id" {
-  description = "Id of the hosted zone of the environment, <env>.<lab_zone_name>."
+  description = "Id of the hosted zone of the environment, zone_name."
   value       = aws_route53_zone.env.zone_id
 }
 
 output "name_servers" {
-  description = "The four name servers of the environment's zone, to delegate with NS records in the lab zone (delegated_subdomains of aws/bootstrap)."
+  description = "The four name servers of the environment's zone, which the zone above it delegates with NS records: the zone of prd for stg (delegated_subdomains of aws/accounts/prd), the NS records aws at the parent domain's DNS for prd."
   value       = aws_route53_zone.env.name_servers
 }

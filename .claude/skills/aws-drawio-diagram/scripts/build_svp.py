@@ -87,10 +87,19 @@ class Env:
     multi_az: bool
     logs: bool             # flow log or control plane log → CloudWatch Logs
     secrets: str           # what Secrets Manager holds in this env
+    zone: str              # Route 53 zone of the env as drawn: zone_name of its committed example, the example domain a placeholder
 
     @property
     def nat_rows(self) -> list[int]:
         return [0] if self.single_nat else list(range(self.az_count))
+
+
+def zone_label(env: str) -> str:
+    """`zone_name` of aws/accounts/<env>/<env>.auto.tfvars.example (the committed example, never the real file) as a drawn label."""
+    zone = tfvars(ROOT / f"aws/accounts/{env}/{env}.auto.tfvars.example")["zone_name"]
+    if not zone.endswith("svp.example"):
+        raise SystemExit(f"aws/accounts/{env}: zone_name {zone!r} does not end in the example domain svp.example")
+    return zone.removesuffix("svp.example") + "&lt;domain&gt;"
 
 
 def envs() -> list[Env]:
@@ -99,12 +108,12 @@ def envs() -> list[Env]:
     cidr = var_default(ROOT / "aws/modules/network/variables.tf", "cidr")
     s = tfvars(STG_TFVARS)
     stg = Env("stg", region, cidr, s["az_count"], s["single_nat_gateway"], s["node_capacity_type"], s["rds_multi_az"],
-              s["flow_log_enabled"] or bool(s["control_plane_log_types"]), "RDS master password")
+              s["flow_log_enabled"] or bool(s["control_plane_log_types"]), "RDS master password", zone_label("stg"))
     prd = Env("prd", region, cidr, readme_value("network", "az_count", "prd"), readme_value("network", "single_nat_gateway", "prd"),
               readme_value("eks", "node_capacity_type", "prd"), readme_value("rds", "multi_az", "prd"),
               readme_value("network", "flow_log_enabled", "prd") or bool(readme_value("eks", "control_plane_log_types", "prd")),
               # store `aws` of the svp-cluster chart's prd overlay: External Secrets reads svp/prd/<entry>
-              "RDS master, svp/prd/* (External Secrets)")
+              "RDS master, svp/prd/* (External Secrets)", zone_label("prd"))
     return [stg, prd]
 
 
@@ -255,7 +264,7 @@ def env_page(env: Env) -> Page:
 
     # outside the VPC
     users = p.flat("Users", "users", 40, nlb_y, cid="users")
-    r53 = p.icon("Route 53 · aws.&lt;domain&gt;", "route_53", 160, nlb_y, NET, cid="r53")
+    r53 = p.icon(f"Route 53 · {env.zone}", "route_53", 160, nlb_y, NET, cid="r53")
     cf = p.icon("CloudFront · *.cloudfront.net", "cloudfront", 160, row, NET, cid="cf")
     igw = p.flat("Internet gateway", "internet_gateway", IGW_X, nlb_y, VPC_PURPLE, cid="igw")
     cp = p.icon("EKS control plane · AWS managed", "eks", CP_X, CP_Y, COMP, cid="cp", label_top=True)

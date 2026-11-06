@@ -26,7 +26,7 @@ module "eks" {
   private_subnet_ids           = module.network.private_subnet_ids
   endpoint_public_access       = true
   endpoint_public_access_cidrs = var.eks_public_access_cidrs # *.auto.tfvars không commit
-  hosted_zone_id               = var.hosted_zone_id          # output của aws/bootstrap
+  hosted_zone_id               = var.hosted_zone_id          # output zone_id của aws/accounts/stg
 }
 ```
 
@@ -80,7 +80,7 @@ module "eks" {
 | control\_plane\_log\_types | Control plane logs sent to CloudWatch, e.g. ["api", "audit"]. Empty (the default) sends none and creates no log group: ingestion is billed per GB. | `list(string)` | `[]` | no |
 | endpoint\_public\_access | Open the public endpoint of the Kubernetes API, reachable only from endpoint\_public\_access\_cidrs. The private endpoint is always on, so nodes and pods reach the API inside the VPC either way. | `bool` | `false` | no |
 | endpoint\_public\_access\_cidrs | IPv4 ranges allowed to call the public endpoint of the Kubernetes API, e.g. the address of the learner's machine as a /32. Personal data of a public repository: set it in an uncommitted *.auto.tfvars or TF\_VAR\_endpoint\_public\_access\_cidrs. | `list(string)` | `[]` | no |
-| hosted\_zone\_id | ID of the Route 53 hosted zone of the lab (output of aws/bootstrap). ExternalDNS and cert-manager may change records of this zone only. | `string` | n/a | yes |
+| hosted\_zone\_id | ID of the Route 53 hosted zone of the env, in the env's account (output zone\_id of aws/accounts/<env>). ExternalDNS and cert-manager may change records of this zone only. | `string` | n/a | yes |
 | kubernetes\_version | Kubernetes minor version of the control plane and of the node group, e.g. 1.36. Pick a minor in standard support: the cluster is created with the STANDARD support policy. | `string` | n/a | yes |
 | name | Name of the EKS cluster, e.g. svp-stg, and prefix of the names of its IAM roles, policies, security groups and node group. | `string` | n/a | yes |
 | node\_capacity\_type | SPOT (cheaper, nodes can be reclaimed with two minutes of notice) or ON\_DEMAND. | `string` | `"SPOT"` | no |
@@ -121,7 +121,7 @@ module "eks" {
 | `node_instance_types` | mặc định | theo số đo khi dựng prd |
 | `node_capacity_type` | `SPOT` | `ON_DEMAND` |
 | `node_min_size` / `node_desired_size` / `node_max_size` | `3` / `3` / `5` | theo số đo khi dựng prd |
-| `hosted_zone_id` | zone `aws.<domain>` của `aws/bootstrap` | như stg |
+| `hosted_zone_id` | output `zone_id` của `aws/accounts/stg` (zone `stg.aws.<domain>`) | output `zone_id` của `aws/accounts/prd` (zone `aws.<domain>`) |
 
 Endpoint public mặc định tắt để module an toàn khi gọi thiếu biến; root của stg bật và đưa CIDR. **Vì sao private luôn bật:** giới hạn
 CIDR public mà tắt private thì node trong subnet private gọi API qua IP của NAT, IP đó không nằm trong danh sách, node không join được
@@ -162,8 +162,8 @@ API, gồm Secret, bằng key do AWS sở hữu theo mặc định), OIDC provid
 | Controller | Namespace / ServiceAccount | Role | Quyền |
 | --- | --- | --- | --- |
 | AWS Load Balancer Controller | `kube-system` / `aws-load-balancer-controller` | `<name>-aws-load-balancer-controller` | managed policy cùng tên, nội dung là `docs/install/iam_policy.json` của tag **v3.6.2** giữ nguyên ở `policies/aws-load-balancer-controller-v3.6.2.json`; chart `eks/aws-load-balancer-controller` phải ghim **3.6.2** (appVersion v3.6.2), nâng controller thì thay file bằng policy của tag mới trong cùng thay đổi |
-| ExternalDNS | `external-dns` / `external-dns` | `<name>-external-dns` | inline: `ChangeResourceRecordSets`, `ListResourceRecordSets`, `ListTagsForResources` chỉ trên `arn:aws:route53:::hostedzone/<hosted_zone_id>`; `ListHostedZones` trên `*` tách riêng (không có quyền theo resource) |
-| cert-manager (DNS-01) | `cert-manager` / `cert-manager` | `<name>-cert-manager` | inline: `ChangeResourceRecordSets` chỉ trên zone lab, chỉ bản ghi `TXT` có tên `_acme-challenge.*` (condition `route53:ChangeResourceRecordSetsRecordTypes`, `…NormalizedRecordNames`); `ListResourceRecordSets` trên zone; `GetChange` trên `change/*`; `ListHostedZonesByName` trên `*` tách riêng. Issuer dùng credential ambient (ClusterIssuer) |
+| ExternalDNS | `external-dns` / `external-dns` | `<name>-external-dns` | inline: `ChangeResourceRecordSets` chỉ trên `arn:aws:route53:::hostedzone/<hosted_zone_id>`, chỉ bản ghi `A`, `AAAA`, `CNAME`, `TXT` (condition `route53:ChangeResourceRecordSetsRecordTypes`; `TXT` cho registry của ExternalDNS; không ghi được `NS` uỷ quyền zone con hay `SOA`); `ListResourceRecordSets`, `ListTagsForResources` trên zone; `ListHostedZones` trên `*` tách riêng (không có quyền theo resource) |
+| cert-manager (DNS-01) | `cert-manager` / `cert-manager` | `<name>-cert-manager` | inline: `ChangeResourceRecordSets` chỉ trên zone của env, chỉ bản ghi `TXT` có tên `_acme-challenge.*` (condition `route53:ChangeResourceRecordSetsRecordTypes`, `…NormalizedRecordNames`); `ListResourceRecordSets` trên zone; `GetChange` trên `change/*`; `ListHostedZonesByName` trên `*` tách riêng. Issuer dùng credential ambient (ClusterIssuer) |
 | EBS CSI driver | `kube-system` / `ebs-csi-controller-sa` | `<name>-ebs-csi-driver` | managed `service-role/AmazonEBSCSIDriverPolicy`; association do chính addon tạo (`pod_identity_association`) |
 
 Trust policy của bốn role: `pods.eks.amazonaws.com`, `sts:AssumeRole` + `sts:TagSession`, kèm condition trên session tag mà Pod Identity
@@ -228,7 +228,7 @@ tìm phần sót theo tag:
 | ENI của VPC CNI | `aws-node` trên mỗi node | `cluster.k8s.amazonaws.com/name=<name>`, `node.k8s.amazonaws.com/instance_id`; mô tả `aws-K8S-…`; tìm theo VPC id; tự gỡ khi node xoá, sót thì chặn xoá subnet |
 | Instance, ổ gốc, ENI chính của node | Auto Scaling group của node group (trong state qua node group) | `Project=svp`, `eks:cluster-name=<name>`, `eks:nodegroup-name`, `kubernetes.io/cluster/<name>=owned` |
 | Log group `/aws/eks/<name>/cluster` | EKS khi bật log control plane | module tạo trước (trong state) khi `control_plane_log_types` khác rỗng; sót nếu bật log ngoài Terraform: tìm theo tên |
-| Bản ghi Route 53 (A, TXT owner của ExternalDNS; TXT `_acme-challenge` khi DNS-01 lỗi) | ExternalDNS, cert-manager | bản ghi của zone lab ngoài NS/SOA ở đỉnh zone |
+| Bản ghi Route 53 (A, TXT owner của ExternalDNS; TXT `_acme-challenge` khi DNS-01 lỗi) | ExternalDNS, cert-manager | bản ghi của zone của env ngoài NS/SOA ở đỉnh zone và bản ghi NS uỷ quyền zone con (do `aws/accounts/<env>` tạo) |
 
 ## Kiểm ở buổi AWS
 

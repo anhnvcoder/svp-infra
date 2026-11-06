@@ -153,7 +153,7 @@ variable "node_max_size" {
 }
 
 variable "hosted_zone_id" {
-  description = "ID of the Route 53 hosted zone of the lab (output of aws/bootstrap). ExternalDNS and cert-manager may change records of this zone only."
+  description = "ID of the Route 53 hosted zone of the env, in the env's account (output zone_id of aws/accounts/<env>). ExternalDNS and cert-manager may change records of this zone only."
   type        = string
 
   validation {

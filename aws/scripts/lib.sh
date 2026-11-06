@@ -17,15 +17,16 @@ global_region=us-east-1
 #   name      argument of the scripts; the cluster, the kubectl context and the Terraform roots carry it
 #   profile   AWS profile (IAM Identity Center) of the environment's account, made by the learner with aws configure sso
 #   account   variable with the 12 digits of that account, exported in the session's terminal, never in a file
-#   zone      label of the account's hosted zone under the lab zone (<label>.aws.<domain>); - for the lab zone itself
+#   zone      1 when the account has a hosted zone, named by zone_name of aws/accounts/<name>/<name>.auto.tfvars (env_zone);
+#             - for none
 #   kept      Stack tags of what stays in the account between sessions (sweep.sh), comma-separated
 #   tunnel    local port of the SSM tunnel to a private API endpoint; - when the endpoint is public
 #   teardown  file of aws/envs/<name> that lifts the protections a destroy needs; - for none
 #   ladder    1 when measure.sh runs the k6 ladder after the smoke; - for the smoke and seed alone
 #   session   1 when the environment has the session's two roots, aws/envs/<name> and aws/gitops/<name>
 env_table='mgmt anhnv-sso SVP_AWS_MGMT_ACCOUNT_ID - bootstrap,org - - - -
-stg anhnv-stg SVP_AWS_STG_ACCOUNT_ID stg baseline - - 1 1
-prd anhnv-prd SVP_AWS_PRD_ACCOUNT_ID prd baseline 6443 teardown.tfvars - 1'
+stg anhnv-stg SVP_AWS_STG_ACCOUNT_ID 1 baseline - - 1 1
+prd anhnv-prd SVP_AWS_PRD_ACCOUNT_ID 1 baseline 6443 teardown.tfvars - 1'
 
 scripts_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 infra_root=$(cd "$scripts_dir/../.." && pwd)
@@ -115,8 +116,8 @@ env_arg() {
   esac || fail "usage: $(basename "$0") [--print] $names ... (got '${1:-}')"
   line=$(awk -v e="$1" '$1 == e' <<<"$env_table")
   # shellcheck disable=SC2034 # read by the scripts that source this file
-  read -r env_name profile account_var zone_label kept_stacks tunnel_port teardown ladder _ <<<"$line"
-  [ "$zone_label" != - ] || zone_label=
+  read -r env_name profile account_var has_zone kept_stacks tunnel_port teardown ladder _ <<<"$line"
+  [ "$has_zone" != - ] || has_zone=
   [ "$tunnel_port" != - ] || tunnel_port=
   [ "$teardown" != - ] || teardown=
   [ "$ladder" != - ] || ladder=
@@ -230,30 +231,19 @@ wait_until() {
   done
 }
 
-# lab_zone: the lab's hosted zone, aws.<domain>: SVP_ZONE_NAME, or zone_name of aws/bootstrap/bootstrap.auto.tfvars
-# (the uncommitted file of the bootstrap), read without Terraform so that it works when no state is left.
-lab_zone() {
-  if [ -n "${SVP_ZONE_NAME:-}" ]; then
-    zone=$SVP_ZONE_NAME
-  else
-    local f=$infra_root/aws/bootstrap/bootstrap.auto.tfvars
-    if [ ! -f "$f" ] && printing; then
-      zone='<lab zone aws.domain>'
-      return 0
-    fi
-    [ -f "$f" ] || fail "no $f: set SVP_ZONE_NAME=aws.<domain>, the lab zone of aws/bootstrap"
-    zone=$(sed -n 's/^[[:space:]]*zone_name[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$f" | head -n 1)
-  fi
-  [[ $zone =~ ^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$ ]] ||
-    fail "lab zone '$zone' is not a DNS name such as aws.svp.example (SVP_ZONE_NAME or zone_name of aws/bootstrap/bootstrap.auto.tfvars)"
-}
-
-# env_zone: the hosted zone of the environment's account, in zone: <label>.<lab zone> for a member account (its
-# baseline, aws/accounts/<env>, made it and the lab zone delegates it), the lab zone itself for mgmt; the lab zone in
-# lab.
+# env_zone: the hosted zone of the environment's account, in zone: zone_name of aws/accounts/<env>/<env>.auto.tfvars (the
+# uncommitted file of the baseline that made the zone), read without Terraform so that it works when no state is left.
+# Empty for an account without a hosted zone (zone - in env_table).
 env_zone() {
-  lab_zone
-  # shellcheck disable=SC2034 # read by the scripts that source this file
-  lab=$zone
-  [ -z "$zone_label" ] || zone=$zone_label.$zone
+  zone=
+  [ -n "$has_zone" ] || return 0
+  local f=$infra_root/aws/accounts/$env_name/$env_name.auto.tfvars
+  if [ ! -f "$f" ] && printing; then
+    zone="<zone_name of aws/accounts/$env_name>"
+    return 0
+  fi
+  [ -f "$f" ] || fail "no $f: the file of the baseline aws/accounts/$env_name, whose zone_name is the hosted zone of $env_name"
+  zone=$(sed -n 's/^[[:space:]]*zone_name[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$f" | head -n 1)
+  [[ $zone =~ ^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$ ]] ||
+    fail "zone_name '$zone' of $f is not a DNS name such as aws.svp.example"
 }

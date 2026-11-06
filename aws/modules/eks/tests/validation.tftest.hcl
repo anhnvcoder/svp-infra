@@ -136,6 +136,32 @@ run "prd_values" {
   }
 }
 
+# ExternalDNS writes only the record types it publishes, so the role of the zone that holds a child zone's delegation
+# cannot change that NS record.
+run "external_dns_record_types" {
+  command = plan
+
+  assert {
+    condition = alltrue([for s in data.aws_iam_policy_document.external_dns.statement :
+      !contains(s.actions, "route53:ChangeResourceRecordSets") || (
+        length(s.actions) == 1 &&
+        length(s.condition) == 1 &&
+        one(s.condition).test == "ForAllValues:StringEquals" &&
+        one(s.condition).variable == "route53:ChangeResourceRecordSetsRecordTypes" &&
+        toset(one(s.condition).values) == toset(["A", "AAAA", "CNAME", "TXT"])
+      )
+    ])
+    error_message = "ExternalDNS may change only A, AAAA, CNAME and TXT records (ForAllValues:StringEquals route53:ChangeResourceRecordSetsRecordTypes), never NS."
+  }
+
+  assert {
+    condition = anytrue([for s in data.aws_iam_policy_document.external_dns.statement :
+      contains(s.actions, "route53:ChangeResourceRecordSets") && toset(s.resources) == toset(["arn:aws:route53:::hostedzone/Z0123456789ABCDEFGHIJ"])
+    ])
+    error_message = "ExternalDNS must be allowed to change records of the zone of the env only."
+  }
+}
+
 run "name_uppercase" {
   command = plan
 

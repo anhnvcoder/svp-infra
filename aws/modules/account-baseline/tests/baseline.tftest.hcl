@@ -1,5 +1,5 @@
 # What the baseline of a member account guarantees: who may use the state key, how the state bucket is protected, the
-# name of the zone and the four budget alerts; then one plan per validation rule with a value that only that rule
+# name of the zone, the delegation of child zones and the four budget alerts; then one plan per validation rule with a value that only that rule
 # rejects. The AWS provider is a mock: nothing reaches an account, and data sources return the values below. Policies
 # are asserted through the arguments of their aws_iam_policy_document data sources (the mock returns a fixed JSON for
 # them); the provider still validates arguments, so that JSON must be a policy.
@@ -16,9 +16,12 @@ variables {
   env              = "stg"
   account_id       = "111111111111"
   region           = "ap-southeast-1"
-  lab_zone_name    = "aws.svp.example"
+  zone_name        = "stg.aws.svp.example"
   budget_limit_usd = 20
   budget_emails    = ["you@svp.example"]
+
+  # Four name servers of a child zone, in the form Route 53 gives them.
+  child_servers = ["ns-1.awsdns-00.org", "ns-2.awsdns-01.net", "ns-3.awsdns-02.com", "ns-4.awsdns-03.co.uk"]
 
   # Every action that reads or writes data with a KMS key; none may reach anyone but the SvpAdmin roles.
   crypto_actions = ["kms:Encrypt", "kms:Decrypt", "kms:ReEncrypt*", "kms:ReEncryptFrom", "kms:ReEncryptTo", "kms:GenerateDataKey", "kms:GenerateDataKey*", "kms:GenerateDataKeyWithoutPlaintext", "kms:*"]
@@ -115,7 +118,12 @@ run "stg" {
   # Zone and budget.
   assert {
     condition     = aws_route53_zone.env.name == "stg.aws.svp.example"
-    error_message = "The zone must be <env>.<lab_zone_name>."
+    error_message = "The zone must be named zone_name."
+  }
+
+  assert {
+    condition     = length(aws_route53_record.delegation) == 0
+    error_message = "Without delegated_subdomains the zone must hold no delegation record."
   }
 
   assert {
@@ -140,11 +148,26 @@ run "prd" {
   variables {
     env        = "prd"
     account_id = "222222222222"
+    zone_name  = "aws.svp.example"
+    delegated_subdomains = {
+      "stg.aws.svp.example" = var.child_servers
+    }
   }
 
   assert {
-    condition     = aws_route53_zone.env.name == "prd.aws.svp.example" && aws_s3_bucket.state.bucket == "svp-tfstate-222222222222-ap-southeast-1"
-    error_message = "The names must follow env and account_id."
+    condition     = aws_route53_zone.env.name == "aws.svp.example" && aws_s3_bucket.state.bucket == "svp-tfstate-222222222222-ap-southeast-1"
+    error_message = "The names must follow zone_name and account_id."
+  }
+
+  assert {
+    condition = (
+      length(aws_route53_record.delegation) == 1 &&
+      aws_route53_record.delegation["stg.aws.svp.example"].name == "stg.aws.svp.example" &&
+      aws_route53_record.delegation["stg.aws.svp.example"].type == "NS" &&
+      aws_route53_record.delegation["stg.aws.svp.example"].ttl == 172800 &&
+      toset(aws_route53_record.delegation["stg.aws.svp.example"].records) == toset(var.child_servers)
+    )
+    error_message = "Each entry of delegated_subdomains must become an NS record with TTL 172800 and exactly its four name servers."
   }
 
   assert {
@@ -186,14 +209,66 @@ run "region_uppercase" {
   expect_failures = [var.region]
 }
 
-run "lab_zone_name_trailing_dot" {
+run "zone_name_trailing_dot" {
   command = plan
 
   variables {
-    lab_zone_name = "aws.svp.example."
+    zone_name = "aws.svp.example."
   }
 
-  expect_failures = [var.lab_zone_name]
+  expect_failures = [var.zone_name]
+}
+
+run "delegated_subdomains_zone_itself" {
+  command = plan
+
+  variables {
+    zone_name = "aws.svp.example"
+    delegated_subdomains = {
+      "aws.svp.example" = var.child_servers
+    }
+  }
+
+  expect_failures = [var.delegated_subdomains]
+}
+
+run "delegated_subdomains_outside_zone" {
+  command = plan
+
+  variables {
+    zone_name = "aws.svp.example"
+    delegated_subdomains = {
+      "stg.other.example" = var.child_servers
+    }
+  }
+
+  expect_failures = [var.delegated_subdomains]
+}
+
+run "delegated_subdomains_three_servers" {
+  command = plan
+
+  variables {
+    zone_name = "aws.svp.example"
+    delegated_subdomains = {
+      "stg.aws.svp.example" = ["ns-1.awsdns-00.org", "ns-2.awsdns-01.net", "ns-3.awsdns-02.com"]
+    }
+  }
+
+  expect_failures = [var.delegated_subdomains]
+}
+
+run "delegated_subdomains_repeated_server" {
+  command = plan
+
+  variables {
+    zone_name = "aws.svp.example"
+    delegated_subdomains = {
+      "stg.aws.svp.example" = ["ns-1.awsdns-00.org", "ns-2.awsdns-01.net", "ns-3.awsdns-02.com", "ns-1.awsdns-00.org"]
+    }
+  }
+
+  expect_failures = [var.delegated_subdomains]
 }
 
 run "budget_limit_zero" {

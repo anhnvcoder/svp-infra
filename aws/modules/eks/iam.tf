@@ -66,9 +66,23 @@ resource "aws_iam_role_policy_attachment" "aws_load_balancer_controller" {
 ################################################################################
 
 data "aws_iam_policy_document" "external_dns" {
+  # Writes only the record types ExternalDNS publishes (TXT for its ownership registry), so it can never write the NS
+  # records that delegate a child zone, nor the SOA of the zone.
   statement {
-    sid       = "ChangeRecordsOfTheLabZone"
-    actions   = ["route53:ChangeResourceRecordSets", "route53:ListResourceRecordSets", "route53:ListTagsForResources"]
+    sid       = "ChangeRecordsOfTheEnvZone"
+    actions   = ["route53:ChangeResourceRecordSets"]
+    resources = [local.hosted_zone_arn]
+
+    condition {
+      test     = "ForAllValues:StringEquals"
+      variable = "route53:ChangeResourceRecordSetsRecordTypes"
+      values   = ["A", "AAAA", "CNAME", "TXT"]
+    }
+  }
+
+  statement {
+    sid       = "ReadRecordsOfTheEnvZone"
+    actions   = ["route53:ListResourceRecordSets", "route53:ListTagsForResources"]
     resources = [local.hosted_zone_arn]
   }
 
@@ -87,7 +101,7 @@ resource "aws_iam_role" "external_dns" {
 }
 
 resource "aws_iam_role_policy" "external_dns" {
-  name   = "route53-lab-zone"
+  name   = "route53-env-zone"
   role   = aws_iam_role.external_dns.id
   policy = data.aws_iam_policy_document.external_dns.json
 }
@@ -103,7 +117,7 @@ data "aws_iam_policy_document" "cert_manager" {
     resources = ["arn:${data.aws_partition.current.partition}:route53:::change/*"]
   }
 
-  # DNS-01 writes and removes only the TXT records of _acme-challenge names, in the lab zone only.
+  # DNS-01 writes and removes only the TXT records of _acme-challenge names, in the zone of the env only.
   statement {
     sid       = "ChangeChallengeRecords"
     actions   = ["route53:ChangeResourceRecordSets"]

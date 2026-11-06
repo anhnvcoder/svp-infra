@@ -5,7 +5,7 @@ xoá, WAF, API chỉ qua endpoint private), cài Argo CD và root GitOps qua tun
 đã chạy, đo (thời gian dựng, failover RDS Multi-AZ, mất một node ở một AZ), rồi gỡ sạch trong cùng buổi. Thiết kế:
 [ADR-0048](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0048-prd-aws.md) (§4 truy cập API, §6 bootstrap EKS, §7 ghim revision,
 §8 promote, §9 kết thúc buổi, §10 chi phí), [ADR-0049](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0049-kafka-prd.md) (Kafka
-ba broker).
+ba broker), [ADR-0051](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0051-dns-prd-apex.md) (zone của mỗi env).
 
 Buổi prd đi đúng chuỗi script của buổi stg; khác biệt là dữ liệu (dòng `prd` của `env_table` trong `aws/scripts/lib.sh`: profile `anhnv-prd`,
 biến `SVP_AWS_PRD_ACCOUNT_ID`, tunnel cổng 6443, file `teardown.tfvars`, không thang k6) và các bước tay ở đây. Mọi mục chung (luật chạy lệnh,
@@ -22,7 +22,7 @@ aws/scripts/session.sh --print prd                 # mọi lệnh script của b
 ## Chi phí và giới hạn
 
 - **Trần một buổi C ≈ $6,6** = 4 giờ × (H₀ $0,90 + H_k $0,004)/giờ + O₀ $2,8 + O_k $0,16 (phụ lục ADR-0049, mục "Chi phí"; H₀, O₀ ở phụ lục
-  ADR-0048). **Phí giữ R ≈ $4,6/tháng** giữa các buổi (trail, KMS, zone, bucket state của management và hai baseline), báo riêng, không cộng
+  ADR-0048). **Phí giữ R ≈ $4,6/tháng** giữa các buổi (trail, KMS, bucket state của management; bucket state, KMS key, zone của hai baseline), báo riêng, không cộng
   vào C.
 - **Cả buổi 4 giờ**, từ cổng promote tới hai lượt `sweep.sh` sạch. Quá 3 giờ mà chưa đo xong thì bỏ phần đo còn lại, sang gỡ. Quên gỡ 24
   giờ ≈ $22 (24 × H₀); budget `svp-prd-monthly` và budget tổng của org gửi email ở 50 %, 80 %, 100 %.
@@ -31,8 +31,10 @@ aws/scripts/session.sh --print prd                 # mọi lệnh script của b
 ## Điều kiện trước buổi
 
 1. Root `aws/org` đã apply (account `svp-prd`, SCP, permission set `SvpAdmin` gán vào account đó); profile `anhnv-prd` đã tạo bằng
-   `aws configure sso`; baseline `aws/accounts/prd` đã apply và zone `prd.aws.<domain>` đã được uỷ quyền
-   ([`aws/accounts/README.md`](../../aws/accounts/README.md)).
+   `aws configure sso`; baseline `aws/accounts/prd` đã apply và zone gốc `aws.<domain>` của nó đã được uỷ quyền bằng bốn bản ghi `NS` `aws` ở DNS cha của domain
+   ([`aws/accounts/README.md`](../../aws/accounts/README.md), mục 5); zone `stg.aws.<domain>` là zone con của nó, uỷ quyền bằng
+   `delegated_subdomains` của chính root `aws/accounts/prd`. Đã chuyển từ zone ở management thì buổi prd đầu tiên cần chứng chỉ chỉ bắt đầu
+   sau bước 5 của bảng chuyển trong README đó (chờ 48 giờ sau khi đổi Cloudflare).
 2. Buổi stg ở account `svp-stg` đã chạy xong theo [`session-stg.md`](session-stg.md), và mọi PR của code, `svp-gitops`, repo này đã merge.
 3. **Bằng chứng stg**: commit `svp-gitops` sẽ promote (`stg_ref`) có commit status `argocd/stg` trạng thái `success` (Argo CD Notifications
    của stg ghi khi sync xong commit đó). Job `promote-prd` từ chối commit không có nó. Kiểm:
@@ -54,14 +56,15 @@ aws/scripts/session.sh --print prd                 # mọi lệnh script của b
    [trang loại instance của AWS](https://aws.amazon.com/ec2/instance-types/)); thiếu thì xin tăng và chờ trước buổi.
 5. Trên máy, ngoài các công cụ của stg: Session Manager plugin của AWS CLI (`session-manager-plugin --version`), `nc`, `gh` đã đăng nhập.
 6. `aws/backend-prd.hcl` và `aws/envs/prd/prd.auto.tfvars` như điều kiện 4, 5 của stg (profile `anhnv-prd`, root `aws/accounts/prd`,
-   `domain = "prd.aws.<domain>"`); prd không có `eks_public_access_cidrs` (endpoint công khai tắt):
+   `domain = "aws.<domain>"`: tên zone prd, web ở đỉnh, API ở `api.aws.<domain>`); prd không có `eks_public_access_cidrs` (endpoint công
+   khai tắt):
 
    ```sh
    AWS_PROFILE=anhnv-prd terraform -chdir=aws/accounts/prd output -raw backend_hcl > aws/backend-prd.hcl
    zone=$(AWS_PROFILE=anhnv-prd terraform -chdir=aws/accounts/prd output -raw zone_id)
    cat > aws/envs/prd/prd.auto.tfvars <<EOF
    hosted_zone_id = "$zone"
-   domain         = "prd.aws.<domain>"
+   domain         = "aws.<domain>"
    acme_email     = "<email>"
    EOF
    ```
@@ -132,7 +135,10 @@ Job từ chối (`stg_ref` không có `argocd/stg` `success`, hay không trên `
 
 ## Bước 1–5: account, DNS, root env
 
-Như `session-stg.md` bước 1–5, với `prd`. `check-account.sh prd` phải in account `svp-prd`. Plan của root env đọc `prd.tfvars` (mức prd); đọc
+Như `session-stg.md` bước 1–5, với `prd`. `check-account.sh prd` phải in account `svp-prd`. `check-dns.sh prd` hỏi `NS aws.<domain>` (tên là
+`zone_name` của `aws/accounts/prd/prd.auto.tfvars`) ở `1.1.1.1` và `8.8.8.8` và so với output `name_servers` của `aws/accounts/prd`; `FAIL`
+thì bốn bản ghi `NS` `aws` ở DNS cha chưa lan hay sai: sửa theo `aws/accounts/README.md` (mục 5), không bắt đầu buổi. Zone stg nằm dưới zone
+prd nên `check-dns.sh stg` cũng phải xanh trước buổi stg. Plan của root env đọc `prd.tfvars` (mức prd); đọc
 file text `prd-env-plan.txt`: chỉ `to add`, có WAF (`us-east-1`), bastion SSM, ba NAT gateway, RDS `multi_az = true`. Apply ~35–40 phút.
 
 ## Tunnel tới API (sau bước 5, trước bước 6)
@@ -253,8 +259,9 @@ Theo thứ tự, mỗi bước xong mới sang bước sau:
    ```
 
 3. **`aws/scripts/sweep.sh prd`** (profile `anhnv-prd`): chỉ còn dòng `kept` (`Stack=baseline`: bucket state, KMS key state, zone
-   `prd.aws.<domain>`) và `pending deletion` (KMS key của root env, 7 ngày), exit 0. Còn gì khác: chạy lệnh `delete:` nó in, rồi chạy lại.
-4. **`aws/scripts/sweep.sh mgmt`** (profile `anhnv-sso`): chỉ `Stack=bootstrap|org`, exit 0.
+   `aws.<domain>` cùng bản ghi `NS` uỷ quyền `stg.aws.<domain>` dưới đỉnh của nó) và `pending deletion` (KMS key của root env, 7 ngày), exit 0.
+   Còn gì khác: chạy lệnh `delete:` nó in, rồi chạy lại.
+4. **`aws/scripts/sweep.sh mgmt`** (profile `anhnv-sso`): chỉ `Stack=bootstrap|org` (bucket state, trail), không hosted zone, exit 0.
 
 Một lượt `sweep.sh prd` chạy trước bước 2 được phép exit khác 0 (final snapshot, backup tự động còn đó) và chỉ để xem. **Buổi chỉ xong khi
 lượt `sweep.sh prd` sau bước 2 và lượt `sweep.sh mgmt` cùng exit 0.** AI nhắc tới khi người học xác nhận đủ bốn bước. Sau 24 giờ: Cost

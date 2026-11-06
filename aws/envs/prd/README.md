@@ -15,7 +15,7 @@ Argo CD triển khai từ `svp-gitops`, bootstrap bằng root `aws/gitops/prd`.
 | Biến account | `SVP_AWS_PRD_ACCOUNT_ID`, export trong terminal của buổi; mọi lệnh đặt `TF_VAR_account_id` từ nó (`allowed_account_ids` của cả hai provider) |
 | Backend | `../../backend-prd.hcl` (bucket `svp-tfstate-<account prd>-<region>`, KMS key `alias/svp-tfstate`, lock file S3), sinh từ output `backend_hcl` của `aws/accounts/prd`, dạng ở `backend.hcl.example` |
 | Key của state | `aws/prd/terraform.tfstate`, truyền bằng `-backend-config` thứ hai lúc `init`; khối `backend "s3" {}` trong `versions.tf` trống |
-| Zone | `prd.aws.<domain>` của account prd (output `zone_id` của `aws/accounts/prd`), uỷ quyền từ zone lab của management |
+| Zone | `aws.<domain>` của account prd (output `zone_id` của `aws/accounts/prd`), uỷ quyền từ DNS cha của `<domain>` (bốn bản ghi `NS` `aws`, ngoài Terraform) |
 
 Root chạy được khi baseline `aws/accounts/prd` đã apply và uỷ quyền DNS đã xong ([`aws/accounts/README.md`](../../accounts/README.md)).
 
@@ -56,7 +56,7 @@ Giá trị của `prd.tfvars` ngoài bảng của stg:
 Root không có `validation` ép giá trị prd: test của từng module có một `run` với giá trị prd, `make trivy DIRS=aws/envs/prd` quét với
 `prd.tfvars`.
 
-Giá trị cá nhân (`prd.auto.tfvars` hay `TF_VAR_*`): `hosted_zone_id` (output `zone_id` của `aws/accounts/prd`), `domain` (tên zone prd, web ở
+Giá trị cá nhân (`prd.auto.tfvars` hay `TF_VAR_*`): `hosted_zone_id` (output `zone_id` của `aws/accounts/prd`), `domain` (tên zone prd `aws.<domain>`, web ở
 apex, API ở `api.<tên này>`; plan dừng ở precondition của `cluster_values` nếu tên khác), `acme_email`. Không có IP của máy người học.
 
 ## Tới API: tunnel SSM

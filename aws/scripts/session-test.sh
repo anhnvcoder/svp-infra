@@ -10,8 +10,9 @@
 #     before any kubectl and lifts its protections before the destroy plan
 #   - check-account.sh: each environment passes on its own account with its own profile, refuses the account of each
 #     other one, and refuses when its variable is not exported, naming it, the old single variable included
-#   - check-dns.sh reads the name servers of aws/accounts/<env> and asks the zone of the environment; stops on name
-#     servers that differ or none
+#   - check-dns.sh reads the name servers of aws/accounts/<env> and asks the zone of the environment (zone_name of
+#     aws/accounts/<env>/<env>.auto.tfvars); stops on name servers that differ or none, naming both places of a
+#     delegation; stops naming the file when it is missing or its zone_name is not a DNS name, but not with --print
 #   - tf.sh init: both roots of an environment take the same backend file and their own key, with -reconfigure, even
 #     when .terraform still names another backend; TF_VAR_account_id is the environment's account; plan, show, apply,
 #     plan --teardown, apply --teardown, plan --destroy (--leftovers, --no-cluster) and destroy keep their order rules;
@@ -26,13 +27,15 @@
 #     fails. bootstrap.sh wait runs no kubectl or make while the tunnel of prd is closed; waits on svp-observability,
 #     then GlitchTip, then svp-root; fails after its limit
 #   - pre-destroy.sh against a fake cluster: ApplicationSet and roots first, workloads by wave, Gateway, PVCs, platform
-#     last; on a cluster without Argo CD, no Application call and still the waits; it stops before kubectl when the
-#     account has no such cluster, and still marks pre-destroy-start; a FAIL of step 2 ends with the way out,
-#     --leftovers
+#     last; on a cluster without Argo CD, no Application call and still the waits; prd does not wait on the NS records
+#     delegating stg.aws.svp.example in its zone; it stops before kubectl when the account has no such cluster, and
+#     still marks pre-destroy-start; a FAIL of step 2 ends with the way out, --leftovers
 #   - measure.sh: stg's ladder as before; prd's smoke alone, behind its tunnel
 #   - sweep.sh <env> reads only, needs no state, prints kept and pending-deletion lines, exits 0 on them alone (stg,
-#     prd, mgmt with the delegations of the lab zone), and exits 1 on a leftover volume, a secret scheduled for deletion,
-#     a final snapshot, a retained automated backup, a KMS key not pending deletion or a web ACL, with the delete command
+#     prd with the NS records delegating stg.aws.svp.example, mgmt with no hosted zone and no call to Route 53), and
+#     exits 1 on a leftover volume, a secret scheduled for deletion, a final snapshot, a retained automated backup, a
+#     KMS key not pending deletion, a web ACL or a record of the zone (prd: beside the delegation it keeps), with the
+#     delete command
 #
 # Usage: aws/scripts/session-test.sh
 #
@@ -59,9 +62,14 @@ mkdir -p "$bin" "$state"
 infra_root=$work/infra
 here=$infra_root/aws/scripts
 mkdir -p "$here"
+# The hosted zone of each environment's account: prd holds the root zone of the lab, stg a child zone of it.
+zones='prd aws.svp.example
+stg stg.aws.svp.example'
+zone_of() { awk -v e="$1" '$1 == e { print $2 }' <<<"$zones"; }
 for e in stg prd; do
   mkdir -p "$infra_root/aws/envs/$e" "$infra_root/aws/gitops/$e" "$infra_root/aws/accounts/$e"
-  printf '%s\n' "hosted_zone_id = \"Z0TFVARS\"" "domain         = \"$e.aws.svp.example\"" >"$infra_root/aws/envs/$e/$e.auto.tfvars"
+  printf 'zone_name = "%s"\n' "$(zone_of "$e")" >"$infra_root/aws/accounts/$e/$e.auto.tfvars"
+  printf '%s\n' "hosted_zone_id = \"Z0TFVARS\"" "domain         = \"$(zone_of "$e")\"" >"$infra_root/aws/envs/$e/$e.auto.tfvars"
   printf 'bucket = "svp-tfstate-fake"\n' >"$infra_root/aws/backend-$e.hcl"
 done
 printf 'rds_deletion_protection = false\n' >"$infra_root/aws/envs/prd/teardown.tfvars"
@@ -88,9 +96,9 @@ cat >"$bin/aws" <<'EOF'
 #!/usr/bin/env bash
 echo "aws $*" >>"$FAKE_LOG"
 case ${AWS_PROFILE:-} in
-  anhnv-sso) account=000000000000 zone=aws.svp.example stack=bootstrap ;;
+  anhnv-sso) account=000000000000 zone= stack=bootstrap ;;
   anhnv-stg) account=111111111111 zone=stg.aws.svp.example stack=baseline ;;
-  anhnv-prd) account=222222222222 zone=prd.aws.svp.example stack=baseline ;;
+  anhnv-prd) account=222222222222 zone=aws.svp.example stack=baseline ;;
   *) echo "fake aws: AWS_PROFILE is '${AWS_PROFILE:-}'" >&2; exit 97 ;;
 esac
 echo "$AWS_PROFILE" >>"$FAKE_LOG.profiles"
@@ -99,6 +107,8 @@ account=${FAKE_ACCOUNT:-$account}
 case "$1" in wafv2) want=us-east-1 ;; *) want=ap-southeast-1 ;; esac
 case " $* " in *" --region $want "*) ;; *) echo "fake aws: no --region $want" >&2; exit 97 ;; esac
 left=${FAKE_LEFTOVER:-}
+# The management account has no hosted zone.
+[ "$1" != route53 ] || [ -n "$zone" ] || { echo "fake aws: no hosted zone in account $account" >&2; exit 98; }
 case "$1 $2" in
   "sts get-caller-identity") echo "{\"Account\":\"$account\",\"Arn\":\"arn:aws:sts::$account:assumed-role/AWSReservedSSO_SvpAdmin_0/learner\"}" ;;
   # FAKE_NO_CLUSTER: an account where the cluster was never made.
@@ -119,8 +129,8 @@ case "$1 $2" in
   "route53 list-resource-record-sets")
     {
       printf '{"Name":"%s.","Type":"NS"}\n{"Name":"%s.","Type":"SOA"}\n' "$zone" "$zone"
-      # The lab zone delegates the zone of each member account.
-      [ "$zone" != aws.svp.example ] || printf '{"Name":"stg.aws.svp.example.","Type":"NS"}\n{"Name":"prd.aws.svp.example.","Type":"NS"}\n'
+      # The zone of prd delegates the zone of stg.
+      [ "$zone" != aws.svp.example ] || printf '{"Name":"stg.aws.svp.example.","Type":"NS"}\n'
       [ "$left" != record ] || printf '{"Name":"api.%s.","Type":"A"}\n' "$zone"
     } | jq -s '{ResourceRecordSets: .}' ;;
   "resourcegroupstaggingapi get-resources")
@@ -204,7 +214,8 @@ case "${args#-chdir=* }" in
   "output -json name_servers")
     echo '["ns-1.awsdns-01.org","ns-2.awsdns-02.co.uk","ns-3.awsdns-03.com","ns-4.awsdns-04.net"]' ;;
   "output -json cluster_values")
-    echo "{\"name\":\"svp-$env\",\"domain\":\"$env.aws.svp.example\",\"hostedZoneId\":\"Z0FAKE\",\"acmeEmail\":\"you@svp.example\"}" ;;
+    domain=$(sed -n 's/^domain *= *"\(.*\)"$/\1/p' "$dir/$env.auto.tfvars")
+    echo "{\"name\":\"svp-$env\",\"domain\":\"$domain\",\"hostedZoneId\":\"Z0FAKE\",\"acmeEmail\":\"you@svp.example\"}" ;;
   "output -raw rds_master_user_secret_arn") printf 'arn:aws:secretsmanager:ap-southeast-1:000000000000:secret:rds!db-fake' ;;
   "show -no-color "*.destroy.tfplan) printf '%s\n' 'Terraform will perform the following actions:' '  # aws_vpc.this will be destroyed' \
     'Plan: 0 to add, 0 to change, 3 to destroy.' ;;
@@ -396,7 +407,7 @@ done
 push_clone "$work/gitops"
 
 export PATH="$bin:$PATH" FAKE_LOG=$log FAKE_STATE=$state FAKE_PASSWORD=$password
-export SVP_BACKEND_DIR=$work/backend SVP_GITOPS_DIR=$work/gitops SVP_SESSION_POLL=0 SVP_ZONE_NAME=aws.svp.example
+export SVP_BACKEND_DIR=$work/backend SVP_GITOPS_DIR=$work/gitops SVP_SESSION_POLL=0
 export SVP_AWS_MGMT_ACCOUNT_ID=000000000000 SVP_AWS_STG_ACCOUNT_ID=111111111111 SVP_AWS_PRD_ACCOUNT_ID=222222222222
 unset SVP_SESSION_DIR
 
@@ -509,8 +520,24 @@ expect "check-dns.sh stg reads name_servers of aws/accounts/stg with anhnv-stg" 
   sh -c 'grep -q "^terraform -chdir=.*/aws/accounts/stg output -json name_servers$" "$1" && [ "$(sort -u "$1.profiles")" = anhnv-stg ]' _ "$log"
 expect "check-dns.sh stg asks two public resolvers for stg.aws.svp.example" \
   test "$(grep -cE '^dig NS stg.aws.svp.example .*@(1.1.1.1|8.8.8.8)$' "$log")" -ge 2
-expect "check-dns.sh stops on other name servers" sh -c '! FAKE_DIG=other bash "$1/check-dns.sh" prd >/dev/null 2>&1' _ "$here"
-expect "check-dns.sh stops on no answer" sh -c '! FAKE_DIG=empty bash "$1/check-dns.sh" prd >/dev/null 2>&1' _ "$here"
+clear_log
+expect "check-dns.sh prd asks two public resolvers for its zone aws.svp.example" \
+  sh -c 'bash "$1/check-dns.sh" prd >/dev/null && [ "$(grep -cE "^dig NS aws.svp.example .*@(1.1.1.1|8.8.8.8)$" "$2")" -ge 2 ]' _ "$here" "$log"
+expect "check-dns.sh stops on other name servers, naming both places of a delegation" \
+  sh -c '! FAKE_DIG=other bash "$1/check-dns.sh" prd >"$2" 2>&1 && grep -q "^FAIL  resolver 1.1.1.1 returns NS .* for aws.svp.example, not the hosted zone.s" "$2" &&
+    grep -q "delegated_subdomains of aws/accounts/prd, of the root zone the NS records aws at the parent.s DNS" "$2"' _ "$here" "$work/out"
+expect "check-dns.sh stops on no answer, naming both places of a delegation" \
+  sh -c '! FAKE_DIG=empty bash "$1/check-dns.sh" stg >"$2" 2>&1 && grep -q "^FAIL  resolver 1.1.1.1 returns no NS for stg.aws.svp.example: .*delegated_subdomains of aws/accounts/prd" "$2"' _ "$here" "$work/out"
+mv "$infra_root/aws/accounts/stg/stg.auto.tfvars" "$work/zone.aside"
+clear_log
+expect "check-dns.sh without aws/accounts/stg/stg.auto.tfvars stops before any command, naming the file" \
+  sh -c '! bash "$1/check-dns.sh" stg >"$2" 2>&1 && grep -q "^FAIL  no .*/aws/accounts/stg/stg.auto.tfvars" "$2" && [ ! -s "$3" ]' _ "$here" "$work/out" "$log"
+expect "check-dns.sh --print without that file calls nothing and shows the placeholder of the zone" \
+  sh -c 'bash "$1/check-dns.sh" --print stg >"$2" 2>&1 && grep -q "^+ dig NS .<zone_name of aws/accounts/stg>. " "$2" && [ ! -s "$3" ]' _ "$here" "$work/out" "$log"
+printf 'zone_name = "Stg.aws.svp.example."\n' >"$infra_root/aws/accounts/stg/stg.auto.tfvars"
+expect "check-dns.sh refuses a zone_name that is not a DNS name, naming the file" \
+  sh -c '! bash "$1/check-dns.sh" stg >"$2" 2>&1 && grep -q "^FAIL  zone_name .Stg.aws.svp.example.. of .*/aws/accounts/stg/stg.auto.tfvars is not a DNS name" "$2"' _ "$here" "$work/out"
+mv "$work/zone.aside" "$infra_root/aws/accounts/stg/stg.auto.tfvars"
 expect "check-dns.sh calls no AWS API" test -z "$(grep '^aws ' "$log")"
 expect "check-dns.sh takes no mgmt" sh -c '! bash "$1/check-dns.sh" mgmt >/dev/null 2>&1' _ "$here"
 
@@ -780,6 +807,8 @@ expect "pre-destroy.sh without Argo CD calls nothing of Argo CD or the Gateway" 
 expect "pre-destroy.sh without Argo CD still waits on load balancers, records and volumes" \
   sh -c 'grep -q "get services -A" "$1" && grep -q "route53 list-resource-record-sets" "$1" && grep -q "ec2 describe-volumes" "$1"' _ "$log"
 expect "pre-destroy.sh without Argo CD marks pre-destroy-done" has_mark pre-destroy-done
+expect "pre-destroy.sh prd: the NS records delegating stg.aws.svp.example in its zone are no record to wait for" \
+  grep -q '^ok    no record of ExternalDNS in aws.svp.example$' "$work/pre.out"
 new_session
 expect "pre-destroy.sh prd refuses while the tunnel is closed, before any kubectl to the API" \
   sh -c '! FAKE_TUNNEL=closed bash "$1/pre-destroy.sh" prd >"$2" 2>&1 && grep -q "no tunnel on 127.0.0.1:6443" "$2" && ! grep -q "^kubectl --context" "$3"' _ "$here" "$work/out" "$log"
@@ -811,7 +840,7 @@ expect "pre-destroy.sh red at step 2: the FAIL, then a last line with run again 
 # --- measure.sh ---------------------------------------------------------------------------------------------------
 start_measure() {
   new_session
-  echo "{\"name\":\"svp-$1\",\"domain\":\"$1.aws.svp.example\",\"hostedZoneId\":\"Z0FAKE\"}" >"$SVP_SESSION_DIR/cluster-values.json"
+  echo "{\"name\":\"svp-$1\",\"domain\":\"$(zone_of "$1")\",\"hostedZoneId\":\"Z0FAKE\"}" >"$SVP_SESSION_DIR/cluster-values.json"
   printf '%s\t%s\t%s\n' 2026-10-31T00:00:00Z "${2:-$(date +%s)}" session-start >"$SVP_SESSION_DIR/timeline.tsv"
   rm -f "$state/node-calls" "$state/job-calls"
 }
@@ -868,7 +897,7 @@ expect "measure.sh stops on another account before any other command" \
 start_measure prd
 expect "measure.sh prd runs the smoke alone" bash "$here/measure.sh" prd >"$work/measure.out" 2>&1
 expect "measure.sh prd: smoke through its domain, no seed, no k6" \
-  sh -c 'grep -q "make .* eks-smoke CONTEXT=svp-prd DOMAIN=prd.aws.svp.example" "$1" && ! grep -qE "eks-seed|run\.sh" "$1"' _ "$log"
+  sh -c 'grep -q "make .* eks-smoke CONTEXT=svp-prd DOMAIN=aws.svp.example " "$1" && ! grep -qE "eks-seed|run\.sh" "$1"' _ "$log"
 expect "measure.sh prd --from refuses: no ladder" sh -c '! bash "$1/measure.sh" prd --from 2 >/dev/null 2>&1' _ "$here"
 start_measure prd
 expect "measure.sh prd refuses while the tunnel is closed, before the smoke" \
@@ -877,18 +906,27 @@ expect "measure.sh prd refuses while the tunnel is closed, before the smoke" \
 # --- sweep.sh -----------------------------------------------------------------------------------------------------
 unset SVP_SESSION_DIR
 for e in stg prd mgmt; do
-  case $e in mgmt) p=anhnv-sso a=000000000000 s=bootstrap z=aws.svp.example ;; stg) p=anhnv-stg a=111111111111 s=baseline z=stg.aws.svp.example ;;
-    prd) p=anhnv-prd a=222222222222 s=baseline z=prd.aws.svp.example ;; esac
+  case $e in mgmt) p=anhnv-sso a=000000000000 s=bootstrap ;; stg) p=anhnv-stg a=111111111111 s=baseline ;;
+    prd) p=anhnv-prd a=222222222222 s=baseline ;; esac
+  z=$(zone_of "$e")
   clear_log
   expect "sweep.sh $e passes with what the account keeps alone" bash "$here/sweep.sh" "$e" >"$work/sweep.out" 2>&1
   expect "sweep.sh $e: profile $p alone" profiles_are "$p"
   expect "sweep.sh $e prints the state bucket and its KMS key as kept (Stack=$s)" \
     sh -c 'grep -q "^kept  bucket svp-tfstate-$2-ap-southeast-1 (Stack=$3)$" "$1" && grep -q "^kept  KMS key key-state (Stack=$3)$" "$1"' _ "$work/sweep.out" "$a" "$s"
-  expect "sweep.sh $e prints the zone $z as kept" grep -q "^kept  hosted zone $z " "$work/sweep.out"
+  if [ -n "$z" ]; then
+    expect "sweep.sh $e prints the zone $z as kept" grep -q "^kept  hosted zone $z " "$work/sweep.out"
+  fi
   expect "sweep.sh $e prints the key of a destroyed root as pending deletion" grep -q '^pending deletion  KMS key key-eks, deleted on 2026-11-12' "$work/sweep.out"
   expect "sweep.sh $e reads WAF of CloudFront in us-east-1" grep -q '^aws wafv2 list-web-acls --scope CLOUDFRONT --output json --region us-east-1$' "$log"
 done
-expect "sweep.sh mgmt keeps the NS records delegating stg and prd" grep -q 'NS of stg.aws.svp.example.,prd.aws.svp.example.' "$work/sweep.out"
+expect "sweep.sh mgmt: no hosted zone, no call to Route 53" \
+  sh -c '! grep -q "hosted zone" "$1" && ! grep -q "^aws route53 " "$2"' _ "$work/sweep.out" "$log"
+clear_log
+expect "sweep.sh prd keeps the NS records delegating stg.aws.svp.example and still fails on a leftover A record" \
+  sh -c '! FAKE_LEFTOVER=record bash "$1/sweep.sh" prd >"$2" 2>&1 && grep -q "^FAIL  records of aws.svp.example: 1 left$" "$2" &&
+    grep -q "^        api.aws.svp.example. A$" "$2" && ! grep -q "^        stg.aws.svp.example. NS" "$2" &&
+    grep -q "^kept  hosted zone aws.svp.example .*NS records below it" "$2"' _ "$here" "$work/sweep.out"
 expect "sweep.sh needs no Terraform state" test -z "$(grep '^terraform ' "$log")"
 expect "sweep.sh only reads (describe, list, get)" \
   test -z "$(grep '^aws ' "$log" | awk '{ print $3 }' | grep -vE '^(describe|list|get)-' || true)"

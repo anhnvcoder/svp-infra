@@ -1,15 +1,21 @@
 # `aws/accounts`: baseline của account stg và prd (chạy một lần mỗi account)
 
 Mỗi account thành viên của org (`svp-stg`, `svp-prd`) có một root ở đây, gọi module
-[`account-baseline`](../modules/account-baseline/README.md): bucket state và KMS key của nó, zone `<env>.aws.<domain>`, budget tháng. Mọi
-thứ sống giữa các buổi AWS, mang tag `Stack=baseline` (script quét sót của buổi giữ lại tag này).
+[`account-baseline`](../modules/account-baseline/README.md): bucket state và KMS key của nó, zone DNS của env, budget tháng. Mọi thứ sống
+giữa các buổi AWS, mang tag `Stack=baseline` (script quét sót của buổi giữ lại tag này).
+
+Zone của prd là zone gốc của lab, `aws.<domain>` (web prd ở đỉnh zone, API `api.aws.<domain>`), được DNS của domain cha (Cloudflare) uỷ
+quyền bằng bốn bản ghi `NS` tên `aws`. Zone của stg là `stg.aws.<domain>`, zone con mà zone prd uỷ quyền bằng bản ghi `NS` của biến
+`delegated_subdomains` (chỉ root prd có). Management account không giữ hosted zone nào. Lý do và cái giá (đổi name server của zone stg cần
+`apply` ở account prd): [ADR-0051](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0051-dns-prd-apex.md).
 
 | Root | Profile SSO | Biến account | State |
 | --- | --- | --- | --- |
 | `stg/` | `anhnv-stg` | `SVP_AWS_STG_ACCOUNT_ID` | key `aws/accounts/stg/terraform.tfstate` trong bucket của account stg |
 | `prd/` | `anhnv-prd` | `SVP_AWS_PRD_ACCOUNT_ID` | key `aws/accounts/prd/terraform.tfstate` trong bucket của account prd |
 
-Hai root chỉ khác giá trị: `local.env` (`main.tf`) và `key` của backend (`versions.tf`). Trong bucket của mỗi account còn có state của root
+Hai root chỉ khác `local.env` (`main.tf`), `key` của backend (`versions.tf`), biến `delegated_subdomains` (chỉ prd khai báo và truyền vào
+module) và mô tả của biến, output theo zone của env. Trong bucket của mỗi account còn có state của root
 `aws/envs/<env>` (key `aws/<env>/terraform.tfstate`) và `aws/gitops/<env>` (key `aws/gitops/<env>/terraform.tfstate`), cả hai đọc
 `-backend-config=../../backend-<env>.hcl`.
 
@@ -21,18 +27,18 @@ Mỗi account, trong khi baseline còn:
 | --- | --- | --- |
 | KMS key `alias/svp-tfstate` | $1/tháng (tính theo giờ); xoay vòng tự động cộng $1/tháng ở lần xoay thứ nhất và thứ hai (mỗi năm một lần), từ lần thứ ba không cộng thêm: $1, $2 rồi $3/tháng | [AWS KMS pricing](https://aws.amazon.com/kms/pricing/), đọc 2026-11-05 |
 | Request KMS của state | trong 20 000 request/tháng miễn phí (vài lần `plan`, `apply` mỗi buổi, S3 Bucket Key bật) | như trên; lượng là ước lượng |
-| Hosted zone `<env>.aws.<domain>` | $0,50/tháng (không chia theo ngày) | [Route 53 pricing](https://aws.amazon.com/route53/pricing/), đọc 2026-11-05 |
+| Hosted zone của env (`aws.<domain>` ở prd, `stg.aws.<domain>` ở stg); bản ghi uỷ quyền stg trong zone prd không tính thêm (10 000 bản ghi đầu mỗi zone nằm trong phí zone) | $0,50/tháng (không chia theo ngày) | [Route 53 pricing](https://aws.amazon.com/route53/pricing/), đọc 2026-11-05 |
 | Bucket state | < $0,01/tháng (vài file state, cả version cũ) | ước lượng |
 | Budget `svp-<env>-monthly` | miễn phí (budget không có action) | [AWS Budgets pricing](https://aws.amazon.com/aws-cost-management/aws-budgets/pricing/), đọc 2026-11-05 |
 
 Tổng R mỗi account khoảng $1,51/tháng năm đầu ($3,02 cho hai account), tăng lên $2,51 rồi $3,51 sau mỗi lần xoay key. Key đang chờ xoá
-(`PendingDeletion`) không tính phí.
+(`PendingDeletion`) không tính phí. Management account không còn hosted zone: mỗi account prd, stg đúng một zone, tổng hai zone.
 
 ## Dựng baseline
 
 **Người học chạy mọi lệnh dưới đây** (AI không chạy lệnh nào chạm account). Làm sau khi root `aws/org` đã tạo account và gán permission set
-`SvpAdmin`, trước buổi AWS đầu của env đó. Ví dụ dưới là stg; với prd thay `stg` bằng `prd`, `anhnv-stg` bằng `anhnv-prd`,
-`SVP_AWS_STG_ACCOUNT_ID` bằng `SVP_AWS_PRD_ACCOUNT_ID`.
+`SvpAdmin`, trước buổi AWS đầu của env đó. Dựng mới cả hai env thì prd trước: zone stg được uỷ quyền từ zone prd (mục 5). Ví dụ dưới là
+stg; với prd thay `stg` bằng `prd`, `anhnv-stg` bằng `anhnv-prd`, `SVP_AWS_STG_ACCOUNT_ID` bằng `SVP_AWS_PRD_ACCOUNT_ID`.
 
 Cần: Terraform 1.15, AWS CLI v2, `jq`, `dig`; profile `anhnv-stg` đã tạo bằng `aws configure sso` (permission set `SvpAdmin` của account
 stg) và `aws sso login --profile anhnv-stg`; trong terminal của buổi (không file commit nào) đã `export SVP_AWS_STG_ACCOUNT_ID=<12 số>`.
@@ -55,8 +61,8 @@ bucket ở bước 4.
 cp stg.auto.tfvars.example stg.auto.tfvars
 ```
 
-Sửa `stg.auto.tfvars` (git bỏ qua): `budget_emails`, `lab_zone_name = "aws.<domain>"` (zone lab của management, không dấu chấm cuối),
-`budget_limit_usd` nếu muốn khác $20.
+Sửa `stg.auto.tfvars` (git bỏ qua): `budget_emails`, `zone_name` (không dấu chấm cuối: `stg.aws.<domain>` ở stg, `aws.<domain>` ở prd),
+`budget_limit_usd` nếu muốn khác $20. Ở prd bỏ khối `delegated_subdomains` của file ví dụ cho tới mục 5 (zone stg chưa có).
 
 ### 3. Apply lần đầu, state local
 
@@ -68,7 +74,8 @@ AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform init
 AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform plan -out=stg.tfplan
 ```
 
-Đọc plan: `Plan: 10 to add, 0 to change, 0 to destroy` (KMS key và alias, bucket cùng 5 cấu hình của nó, hosted zone, budget). Rồi:
+Đọc plan: `Plan: 10 to add, 0 to change, 0 to destroy` (KMS key và alias, bucket cùng 5 cấu hình của nó, hosted zone, budget; không bản
+ghi `delegation` nào). Rồi:
 
 ```sh
 AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform apply stg.tfplan
@@ -93,22 +100,185 @@ Ba lệnh đều đúng mong đợi thì xoá state local còn lại: `rm -f ter
 
 ### 5. Uỷ quyền zone của env
 
-Zone `stg.aws.<domain>` chỉ trả lời được khi zone lab ở management account có bản ghi `NS` trỏ về nó: làm theo mục "Uỷ quyền zone con" của
-[`aws/bootstrap/README.md`](../bootstrap/README.md#6-uỷ-quyền-zone-con-của-account-stg-prd), với bốn name server của:
+Zone của env chỉ trả lời được khi zone ở trên có bốn bản ghi `NS` trỏ về bốn name server của nó, theo
+[Route 53: tạo subdomain dùng Route 53 mà không chuyển domain cha](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/CreatingNewSubdomain.html).
+Mỗi buổi AWS bắt đầu bằng phép kiểm uỷ quyền (`aws/scripts/check-dns.sh <env>`); sai thì không `apply`. Output `zone_id` là
+`hosted_zone_id` của root `aws/envs/<env>`.
+
+**prd: DNS của domain cha uỷ quyền `aws.<domain>`.** Lấy bốn name server:
 
 ```sh
+cd infra/aws/accounts/prd
+AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform output -json name_servers | jq -r '.[]'
+```
+
+Trong Cloudflare (DNS đang phục vụ domain): **DNS** → **Records** của `<domain>`, bốn bản ghi **Type** `NS`, **Name** `aws`, mỗi bản ghi
+**Nameserver** một trong bốn tên vừa in (không dấu chấm cuối), **TTL** Auto. Đã có bốn bản ghi `NS` `aws` thì sửa **Nameserver** của chúng,
+không thêm bản ghi thứ năm. Không đổi gì khác của domain (không đổi name server của domain, không xoá bản ghi nào khác).
+
+Kiểm lan truyền (lặp lại tới khi qua; thường vài phút, có thể tới 48 giờ do cache):
+
+```sh
+ns=$(AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform output -json name_servers | jq -r '.[]' | sort)
+for r in 1.1.1.1 8.8.8.8; do
+  diff <(dig NS aws.<domain> +short @"$r" | sed 's/\.$//' | sort) <(echo "$ns") && echo "$r: delegation OK"
+done
+dig NS aws.<domain> +short          # resolver của máy: cũng đúng bốn name server đó
+```
+
+**stg: zone prd uỷ quyền `stg.aws.<domain>`.** Làm sau khi baseline của stg và của prd đã apply. Lấy bốn name server của zone stg:
+
+```sh
+cd infra/aws/accounts/stg
 AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform output -json name_servers | jq -r '.[]'
 ```
 
-Output `zone_id` là `hosted_zone_id` của root `aws/envs/stg`.
+Thêm vào `aws/accounts/prd/prd.auto.tfvars` (git bỏ qua; dạng ở `prd.auto.tfvars.example`), tên zone kết thúc bằng `.<zone_name của prd>`,
+đúng bốn name server:
+
+```hcl
+delegated_subdomains = {
+  "stg.aws.<domain>" = ["<ns 1>", "<ns 2>", "<ns 3>", "<ns 4>"]
+}
+```
+
+Rồi với profile prd:
+
+```sh
+cd ../prd
+AWS_PROFILE=anhnv-prd aws sts get-caller-identity --region ap-southeast-1 --query '{Account:Account,Arn:Arn}' --output table   # Account = $SVP_AWS_PRD_ACCOUNT_ID
+AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform plan -out=prd.tfplan
+```
+
+Đọc plan: `Plan: 1 to add, 0 to change, 0 to destroy`, đúng `module.baseline.aws_route53_record.delegation["stg.aws.<domain>"]`, không gì
+khác. Validation của biến chỉ chạy lúc `plan`: tên không phải con của zone prd hay số name server khác bốn thì dừng ở đó. Rồi:
+
+```sh
+AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform apply prd.tfplan && rm prd.tfplan
+ns=$(cd ../stg && AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform output -json name_servers | jq -r '.[]' | sort)
+for r in 1.1.1.1 8.8.8.8; do
+  diff <(dig NS stg.aws.<domain> +short @"$r" | sed 's/\.$//' | sort) <(echo "$ns") && echo "$r: delegation OK"
+done
+```
+
+Zone stg bị thay (gỡ rồi dựng lại baseline stg) thì có bốn name server mới. Bản ghi `NS` ở zone prd không bao giờ được trỏ tới zone stg đã
+xoá, nên thứ tự là:
+
+1. Bỏ mục `stg.aws.<domain>` khỏi `delegated_subdomains` trong `prd.auto.tfvars`, plan và apply prd như bước 1 của mục
+   [Gỡ baseline](#gỡ-baseline-có-chủ-đích) (mong đợi `0 to add, 0 to change, 1 to destroy`, đúng
+   `module.baseline.aws_route53_record.delegation["stg.aws.<domain>"]`).
+2. Gỡ baseline stg theo các bước còn lại của mục đó, rồi dựng lại từ [Dựng baseline](#dựng-baseline).
+3. Thêm lại mục `stg.aws.<domain>` với bốn name server mới (output `name_servers` của `aws/accounts/stg`) và làm lại các lệnh trên với
+   profile prd (plan mong đợi `1 to add, 0 to change, 0 to destroy`, đúng bản ghi `delegation` đó).
+
+Từ bước 1 tới khi apply ở bước 3 xong, `stg.aws.<domain>` không phân giải.
+
+## Chuyển zone gốc từ management sang prd (một lần)
+
+Khi zone `aws.<domain>` còn ở management account (bản `aws/bootstrap` còn biến `zone_name`, `delegated_subdomains`, uỷ quyền
+`stg.aws.<domain>` và `prd.aws.<domain>`), chuyển nó sang account prd theo đúng thứ tự dưới đây, mỗi bước xong mới sang bước sau. Thứ tự giữ
+hai điều: không bản ghi `NS` nào trỏ tới zone đã xoá (luật ở mục [Gỡ baseline](#gỡ-baseline-có-chủ-đích)), và Cloudflare luôn trỏ tới
+một zone còn trả lời. Bootstrap không được `apply` giữa bước 1 và bước 7 vì lý do nào khác: plan của nó lúc đó có thể gỡ zone cũ quá sớm.
+
+| Bước | Ở đâu | Việc | Đọc gì |
+| --- | --- | --- | --- |
+| 0 | `anhnv-sso`, `aws/bootstrap` bản còn `delegated_subdomains` (trước khi code bỏ zone ở management vào `main`) | bỏ mục `prd.aws.<domain>` khỏi `delegated_subdomains` của `bootstrap.auto.tfvars`, plan, apply | `Plan: 0 to add, 0 to change, 1 to destroy`, đúng `aws_route53_record.delegation["prd.aws.<domain>"]`; mục `stg.aws.<domain>` giữ tới bước 7 |
+| 1 | `anhnv-stg`, `aws/accounts/stg` | `stg.auto.tfvars` có `zone_name = "stg.aws.<domain>"` thay dòng tên zone cũ, plan, apply | `Plan: 0 to add, 1 to change, 0 to destroy`: chỉ `comment` của `module.baseline.aws_route53_zone.env` đổi tại chỗ (`~`), không `forces replacement` |
+| 2 | `anhnv-prd`, `aws/accounts/prd` | zone cũ `prd.aws.<domain>` chỉ còn `NS`, `SOA`; `prd.auto.tfvars` có `zone_name = "aws.<domain>"` và `delegated_subdomains` của stg; plan, apply | `Plan: 2 to add, 0 to change, 1 to destroy`: `module.baseline.aws_route53_zone.env` `must be replaced` (`name` `prd.aws.<domain>` → `aws.<domain>`) và thêm `module.baseline.aws_route53_record.delegation["stg.aws.<domain>"]` |
+| 3 | Cloudflare | sửa bốn bản ghi `NS` `aws` sang `name_servers` mới của prd; ghi lại giờ UTC | bốn tên khớp output |
+| 4 | máy | `dig NS aws.<domain> +short` ở `1.1.1.1` và `8.8.8.8`; `check-dns.sh prd`, `check-dns.sh stg` | đúng bốn name server mới; hai script xanh |
+| 5 | | chờ ít nhất 172800 giây (48 giờ) tính từ bước 3 | |
+| 6 | `anhnv-sso` | zone cũ `aws.<domain>` ở management chỉ còn `NS`, `SOA` ở đỉnh và bản ghi `NS` `stg.aws.<domain>` (bản ghi khác thì xoá trước) | đúng ba dòng đó |
+| 7 | `anhnv-sso`, `aws/bootstrap` trên `main` (code đã bỏ zone ở management) | plan, apply | `Plan: 0 to add, 0 to change, 2 to destroy`, đúng `aws_route53_zone.lab` và `aws_route53_record.delegation["stg.aws.<domain>"]` |
+
+Buổi stg bắt đầu được ngay sau bước 4: zone stg không đổi, đường cũ qua management và đường mới qua prd đều trỏ tới nó tới bước 7. Buổi
+prd đầu tiên cần chứng chỉ chỉ bắt đầu sau bước 5: bản ghi `NS` ở đỉnh zone Route 53 thường có TTL 172800 giây, resolver có thể còn
+giữ name server của zone cũ tới hết thời gian đó
+([Route 53: chuyển hosted zone sang account AWS khác](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/hosted-zones-migrating.html)).
+Plan có gì khác cột "Đọc gì" thì dừng, không `apply`.
+
+**Bước 0.** Trên bản `aws/bootstrap` còn biến `delegated_subdomains`. Trong `bootstrap.auto.tfvars` xoá dòng `"prd.aws.<domain>" = [...]`
+của `delegated_subdomains`, giữ dòng của `stg.aws.<domain>`. Rồi:
+
+```sh
+cd infra/aws/bootstrap
+AWS_PROFILE=anhnv-sso aws sts get-caller-identity --region ap-southeast-1 --query '{Account:Account,Arn:Arn}' --output table   # Account = $SVP_AWS_MGMT_ACCOUNT_ID
+AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform plan -out=bootstrap.tfplan
+AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform apply bootstrap.tfplan && rm bootstrap.tfplan
+```
+
+**Bước 1.** Trong `stg.auto.tfvars` thay dòng tên zone cũ (giá trị `"aws.<domain>"`, tên biến trước `zone_name`) bằng
+`zone_name = "stg.aws.<domain>"`. Rồi:
+
+```sh
+cd infra/aws/accounts/stg
+AWS_PROFILE=anhnv-stg aws sts get-caller-identity --region ap-southeast-1 --query '{Account:Account,Arn:Arn}' --output table   # Account = $SVP_AWS_STG_ACCOUNT_ID
+AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform plan -out=stg.tfplan
+AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform apply stg.tfplan && rm stg.tfplan
+AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform output -json name_servers | jq -r '.[]'   # cho bước 2
+```
+
+**Bước 2.** Bước 0 đã gỡ bản ghi `NS` `prd.aws.<domain>` ở zone management, nên zone cũ của prd bị xoá khi không còn gì trỏ tới nó.
+Kiểm zone cũ của prd rỗng (bản ghi sót của ExternalDNS hay `_acme-challenge` chặn việc xoá zone; xoá chúng trước), cần đúng hai
+dòng `prd.aws.<domain>.` `NS` và `SOA`:
+
+```sh
+cd infra/aws/accounts/prd
+AWS_PROFILE=anhnv-prd aws sts get-caller-identity --region ap-southeast-1 --query '{Account:Account,Arn:Arn}' --output table   # Account = $SVP_AWS_PRD_ACCOUNT_ID
+AWS_PROFILE=anhnv-prd aws route53 list-resource-record-sets --region ap-southeast-1 --hosted-zone-id "$(AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform output -raw zone_id)" --query 'ResourceRecordSets[].[Name,Type]' --output text
+```
+
+Trong `prd.auto.tfvars` thay dòng tên zone cũ như bước 1 bằng `zone_name = "aws.<domain>"` và thêm khối `delegated_subdomains`
+của mục 5 với bốn name server của bước 1. Rồi:
+
+```sh
+AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform plan -out=prd.tfplan
+AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform apply prd.tfplan && rm prd.tfplan
+AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform output -json name_servers | jq -r '.[]'   # cho bước 3
+```
+
+**Bước 3.** Trong Cloudflare sửa **Nameserver** của bốn bản ghi `NS` `aws` sang bốn tên vừa in, như mục 5. Ghi giờ: `date -u`.
+
+**Bước 4.** Lệnh kiểm lan truyền của prd ở mục 5 (lặp lại tới khi cả hai resolver qua), rồi từ `infra/`:
+
+```sh
+aws/scripts/check-dns.sh prd && aws/scripts/check-dns.sh stg
+```
+
+**Bước 5.** Chờ tới giờ ghi ở bước 3 cộng 48 giờ.
+
+**Bước 6.** Kiểm zone cũ ở management, cần đúng ba dòng: `aws.<domain>.` `NS`, `aws.<domain>.` `SOA`, `stg.aws.<domain>.` `NS`. Bản ghi
+khác thì xoá trước trong console Route 53 của management account.
+
+```sh
+zone=$(AWS_PROFILE=anhnv-sso aws route53 list-hosted-zones-by-name --region ap-southeast-1 --dns-name aws.<domain> --query "HostedZones[?Name=='aws.<domain>.'].Id" --output text)
+AWS_PROFILE=anhnv-sso aws route53 list-resource-record-sets --region ap-southeast-1 --hosted-zone-id "$zone" --query 'ResourceRecordSets[].[Name,Type]' --output text
+```
+
+**Bước 7.** Trên `main` (code của `aws/bootstrap` không còn zone). Trong `bootstrap.auto.tfvars` xoá dòng `zone_name` và khối
+`delegated_subdomains`. Rồi:
+
+```sh
+cd infra/aws/bootstrap
+AWS_PROFILE=anhnv-sso aws sts get-caller-identity --region ap-southeast-1 --query '{Account:Account,Arn:Arn}' --output table   # Account = $SVP_AWS_MGMT_ACCOUNT_ID
+AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform plan -out=bootstrap.tfplan
+AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform apply bootstrap.tfplan && rm bootstrap.tfplan
+```
 
 ## Gỡ baseline (có chủ đích)
 
 Chỉ khi bỏ hẳn env đó: bucket giữ state của mọi root của account, key giữ quyền đọc state. Trước hết mọi root của account đã `destroy`
 (`aws/gitops/<env>`, `aws/envs/<env>`), quét sót của buổi sạch.
 
-1. Bỏ uỷ quyền: xoá mục `stg.aws.<domain>` khỏi `delegated_subdomains` trong `aws/bootstrap/bootstrap.auto.tfvars`, rồi `plan`, `apply`
-   của `aws/bootstrap` theo README của nó (mong đợi `1 to destroy`, đúng bản ghi `NS` đó).
+1. Bỏ uỷ quyền trước khi xoá zone: bản ghi `NS` ở zone cha còn trỏ tới name server của zone đã xoá thì người khác tạo zone cùng tên trên
+   các name server đó chiếm được tên (subdomain takeover).
+   - stg: xoá mục `stg.aws.<domain>` khỏi `delegated_subdomains` trong `aws/accounts/prd/prd.auto.tfvars`, rồi từ `aws/accounts/prd`:
+     `AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform plan -out=prd.tfplan` (mong đợi
+     `0 to add, 0 to change, 1 to destroy`, đúng `module.baseline.aws_route53_record.delegation["stg.aws.<domain>"]`), rồi
+     `AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform apply prd.tfplan && rm prd.tfplan` (kiểm account prd
+     bằng `AWS_PROFILE=anhnv-prd aws sts get-caller-identity --region ap-southeast-1` trước).
+   - prd: gỡ stg trước (zone prd chứa uỷ quyền của stg; bước 3 đòi zone chỉ còn `NS`, `SOA` ở đỉnh). Rồi xoá bốn bản ghi `NS` `aws` trong
+     Cloudflare; `dig NS aws.<domain> +short @1.1.1.1` không còn ra name server nào của zone prd (cache có thể giữ tới 48 giờ).
 2. Kiểm account của env trước lệnh đầu tiên bằng profile env (các bước dưới đây ghi vào account đó):
    `AWS_PROFILE=anhnv-stg aws sts get-caller-identity --region ap-southeast-1 --query '[Account,Arn]' --output text`:
    `Account` phải bằng `$SVP_AWS_STG_ACCOUNT_ID`, `Arn` là role SSO `SvpAdmin`. Khác thì dừng.

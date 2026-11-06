@@ -14,9 +14,15 @@ variable "region" {
   default     = "ap-southeast-1"
 }
 
-variable "lab_zone_name" {
-  description = "Name of the lab zone of the management account, aws.<domain>; this root creates <env>.<lab_zone_name>. Set it in an uncommitted *.auto.tfvars or TF_VAR_lab_zone_name."
+variable "zone_name" {
+  description = "Name of the hosted zone of prd, aws.<domain> (no trailing dot): the root zone of the lab, delegated by the NS records aws at the DNS of the parent domain. Set it in an uncommitted *.auto.tfvars or TF_VAR_zone_name."
   type        = string
+}
+
+variable "delegated_subdomains" {
+  description = "Zones of other accounts delegated from the zone of prd: zone name to its four name servers. It holds stg.aws.<domain> mapped to the name_servers output of aws/accounts/stg, so new name servers of the stg zone need an apply of this root. Only prd declares it: stg delegates no zone. Set it in the uncommitted prd.auto.tfvars."
+  type        = map(list(string))
+  default     = {}
 }
 
 variable "budget_limit_usd" {
