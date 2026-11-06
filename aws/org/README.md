@@ -189,9 +189,14 @@ AWS_PROFILE=<anhnv-stg|anhnv-prd> aws service-quotas request-service-quota-incre
   --desired-value <số> --region ap-southeast-1 --query 'RequestedQuota.[QuotaCode,DesiredValue,Status]' --output text
 ```
 
-Account mới chưa dùng được CloudFront tới khi AWS xác minh. Trên console của từng account (AWS access portal, permission set `SvpAdmin`):
-Support Center → Create case → "Account and billing", xin xác minh account để tạo distribution CloudFront. Buổi stg, prd chỉ bắt đầu khi
-quota đã duyệt và case đã xong.
+Mỗi yêu cầu tăng quota thành một case loại "Service limits" trong Support Center của account đó.
+
+Account mới chưa dùng được CloudFront tới khi AWS xác minh. Trên console của từng account (AWS access portal, permission set `SvpAdmin`),
+Support Center mở bằng ô chat với trợ lý AI: gõ yêu cầu, ví dụ "Please verify this new account so it can create Amazon CloudFront
+distributions. It is a member account of organization <o-…> (management account <id>), used for a <staging|production> environment."; trợ lý
+không tự giải quyết được thì hiện form tạo case đã điền sẵn. Kiểm Case type "Account and billing", Service "Account Activation", Category
+"Account Verification", Severity "General question", liên lạc qua Web, rồi Submit; dán số case. Buổi stg, prd chỉ bắt đầu khi quota đã duyệt
+và case đã xong.
 
 ## Gỡ có chủ đích
 
