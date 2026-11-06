@@ -229,7 +229,7 @@ aws/scripts/bootstrap.sh stg wait
 ```
 
 Chờ Application `svp-observability` Healthy (GlitchTip chạy), chạy `make -C ../backend eks-glitchtip-init CONTEXT=svp-stg` (DSN và token của
-GlitchTip vào entry `glitchtip-runtime`, force-sync ba ExternalSecret, restart service cần DSN), rồi chờ `svp-root` Synced và Healthy (Argo CD
+GlitchTip vào entry `glitchtip-runtime`, dựng lại ba ExternalSecret; Secret `svp/sentry` đổi nên Reloader restart service đọc DSN), rồi chờ `svp-root` Synced và Healthy (Argo CD
 báo Healthy khi mọi Application nó tạo Healthy). Mỗi lần chờ tối đa 30 phút. Tìm: `ok every Application Synced and Healthy on svp-stg` và
 mốc `svp-root-healthy`. Đỏ: dán dòng `FAIL` (có trạng thái sync, health) và
 
@@ -472,46 +472,46 @@ AWS_PROFILE=anhnv-stg aws secretsmanager restore-secret --secret-id <name> --reg
 
 ## Đổi một secret của env đang chạy
 
-Sửa `.env` của repo code, rồi theo đúng thứ tự (cùng thứ tự với `make k8s-secrets` trên k3d):
+Sửa `.env` của repo code, rồi một lệnh (cùng thứ tự với `make k8s-secrets` trên k3d); script đọc lại mật khẩu master RDS và chạy
+`make eks-secrets` như bước 6:
 
-1. Một lệnh làm bốn việc đầu: mật khẩu admin Kafka mới vào broker đang chạy trước, ghi lại mọi entry `svp/stg/*` (trừ `glitchtip-runtime`,
-   đã có giá trị), force-sync mọi ExternalSecret, rồi chỉ khi mật khẩu admin Kafka đổi thì rolling restart StatefulSet `redpanda` (từng
-   broker một, chờ Ready rồi sang broker sau): broker và sidecar đọc mật khẩu đó từ environment lúc khởi động, giữ mật khẩu cũ thì probe
-   nhận 401, broker NotReady và sync ở bước 2 không chạy được hook PostSync. Script đọc lại mật khẩu master RDS và chạy `make eks-secrets`
-   như bước 6:
+```sh
+aws/scripts/bootstrap.sh stg secrets
+```
 
-   ```sh
-   aws/scripts/bootstrap.sh stg secrets
-   ```
+`make eks-secrets` tự làm trọn một lượt xoay credential, người học không sync, không restart tay: mật khẩu admin Kafka mới vào broker
+đang chạy trước; ghi lại mọi entry `svp/stg/*` (trừ `glitchtip-runtime`, đã có giá trị); dựng lại các ExternalSecret của `svp-data`; chờ
+mọi broker chạy với mật khẩu admin Kafka mới và Ready (Reloader rolling restart StatefulSet `redpanda` khi Secret của nó đổi: broker và
+sidecar đọc mật khẩu đó từ environment lúc khởi động, giữ mật khẩu cũ thì probe nhận 401, broker NotReady và sync `svp-data` không chạy
+được hook PostSync); một sync của Application `svp-data` (Job init `pg-bootstrap`, `redpanda-init` đặt mật khẩu mới trong Postgres, Kafka),
+chờ đúng lượt đó `Succeeded`; dựng lại mọi ExternalSecret còn lại; Reloader restart workload có Secret đổi (Rollout `gateway`, `web` không
+có revision mới nên không thành canary).
 
-   Tìm `ok statefulset/redpanda restarted one broker at a time` (mật khẩu admin Kafka đổi) hay `skip  restart of Redpanda's brokers` (không
-   đổi) trong `$SVP_SESSION_DIR/eks-secrets.log`.
+Tìm trong `$SVP_SESSION_DIR/eks-secrets.log`, theo thứ tự:
 
-2. Sync Application `svp-data` (Job init đặt mật khẩu mới trong Postgres, Kafka) và chờ đúng lượt sync đó xong, gồm hook PostSync
-   `pg-bootstrap`, `redpanda-init`: restart trước khi Job đặt mật khẩu mới thì pod mới đăng nhập bằng mật khẩu hệ thống chưa có:
+- `ok    ExternalSecrets of the server built again from their source`;
+- `ok    StatefulSet redpanda: each of its <n> pod(s) runs with the RPK_PASS of .env and is Ready`;
+- `ok    init Jobs of svp-data done (sync of Application svp-data Succeeded)`;
+- `ok    ExternalSecrets of the clients built again from their source`;
+- `ok    Reloader restarts each workload whose Secret changed`.
 
-   ```sh
-   before=$(AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n argocd get applications.argoproj.io svp-data -o jsonpath='{.status.operationState.startedAt}')
-   AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n argocd patch applications.argoproj.io svp-data --type merge -p '{"operation":{"sync":{}}}'
-   until s=$(AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n argocd get applications.argoproj.io svp-data \
-       -o jsonpath='{.status.operationState.startedAt} {.status.operationState.phase}') &&
-     [ "${s% *}" != "$before" ] && case "${s#* }" in Succeeded) true ;; Failed | Error) echo "STOP sync $s"; true ;; *) false ;; esac
-   do sleep 5; done; echo "sync: $s"
-   ```
+Một dòng `FAIL` thì không bước nào sau nó chạy:
 
-   Dòng cuối phải là `sync: <thời điểm mới> Succeeded`. In `STOP` thì không sang bước 3: xem Job lỗi
-   (`AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp-data get jobs`), sửa rồi chạy lại bước 2.
+- `FAIL  cluster svp-stg is not ready for a change of credentials: <lý do>`: cluster chưa có Reloader hay StatefulSet `redpanda` chưa
+  opt in, không gì bị ghi; sync Application `svp-apps` tới revision có chúng;
+- `FAIL  StatefulSet svp-data/redpanda: … Reloader did not restart it`: xem
+  `AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n reloader logs deployment/reloader`;
+- `FAIL  sync of Application argocd/svp-data …`: xem Job lỗi (`AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp-data get jobs`);
+  Secret của client chưa đổi.
 
-3. Restart workload có Secret đổi: Deployment bằng `rollout restart`; Rollout `gateway`, `web` bằng `spec.restartAt` (không tạo revision,
-   nên không thành canary):
+Sửa nguyên nhân rồi chạy lại đúng lệnh trên: lượt nào cũng làm đủ các bước, gồm Job init còn thiếu của lượt trước. Theo dõi restart:
 
-   ```sh
-   AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n <namespace> rollout restart deployment/<tên>
-   AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp patch rollout <tên> --type merge -p "{\"spec\":{\"restartAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}}"
-   ```
+```sh
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg get pods -A -w
+```
 
-Đổi thứ tự (Secret đổi trước hệ thống dùng nó) làm service mất đăng nhập tới khi bước 2, 3 chạy. Chi tiết: `docs/reference/eks.md` của repo
-code, mục "Đổi secret của env đang chạy".
+Đổi thứ tự (Secret đổi trước hệ thống dùng nó) làm service mất đăng nhập: `make eks-secrets` giữ thứ tự đó, nên không sửa entry hay
+Secret bằng tay. Chi tiết: `docs/reference/eks.md` của repo code, mục "Đổi secret của env đang chạy".
 
 ## Kết thúc buổi
 
