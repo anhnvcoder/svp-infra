@@ -150,21 +150,41 @@ ngay trên; finding trong module tải từ registry (không comment được) v
 
 **CI** (`.github/workflows/check.yml`): mỗi PR và push `main` chạy đúng `make check` trên `ubuntu-24.04`; job `check` chỉ `contents: read`,
 token của lượt chỉ vào container tflint (giới hạn tải plugin từ GitHub) và container zizmor (audit online, finding thành annotation), không
-secret, không OIDC, không credential AWS; job `infra-ok` là check bắt buộc của ruleset `main`. Job `changes` đọc danh sách file của PR
+secret, không OIDC, không credential AWS; job `infra-ok` là check duy nhất ruleset `main` đòi từ workflow này, nên job khác đổi tên hay thêm mà không đụng ruleset. Job `changes` đọc danh sách file của PR
 qua API: PR chỉ đổi tài liệu (`.md`, `docs/`, `LICENSE`, trừ `README.md` của thư mục Terraform mà terraform-docs viết một phần) bỏ qua
-`make check`; job `docs` (`make docs-check`) luôn chạy; đổi `Makefile` hay `check.yml` và push thì chạy hết (file đổi tên xét cả tên cũ; API liệt kê thiếu file thì cũng chạy hết); `infra-ok` chỉ nhận skip đó. Chỉ action của GitHub, ghim SHA.
+`make check`; job `docs` (`make docs-check`) luôn chạy; đổi `Makefile` hay `check.yml` và push thì chạy hết (file đổi tên xét cả tên cũ; API liệt kê thiếu file thì cũng chạy hết); `infra-ok` chỉ nhận skip đó.
+
+Repo public và PR từ fork chạy workflow với code của fork, nên workflow này theo các luật:
+
+- Không credential AWS nào, không OIDC (không quyền `id-token`), không secret, không environment: `make check` không bao giờ chạm account (`init` chạy
+  với `-backend=false`; không gì gọi `apply` hay AWS CLI; các plan duy nhất là của `terraform test`, trên provider AWS giả, trong container không mạng
+  và không biến AWS).
+- Không `pull_request_target`, không `workflow_run`: PR không bao giờ chạy với token ghi.
+- Job duy nhất chạy code của repo chỉ có `contents: read`.
+- Mọi action của workflow là của GitHub và ghim SHA đầy đủ của commit; terraform, tflint, trivy, shellcheck và zizmor chạy từ image ghim digest trong
+  `Makefile`, nên không tin action bên thứ ba nào ở đây.
+- `actions/checkout` không để token trong `.git/config` (`persist-credentials: false`).
 
 **Tiêu đề PR** (`.github/workflows/pr-title.yml`, check `pr-title`): `main` chỉ nhận squash merge, tiêu đề PR thành tiêu đề commit, nên
 tiêu đề theo [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/): `<type>[(<scope>)][!]: <mô tả>`, `type` là một trong
 `feat fix chore docs refactor test ci build perf revert`, scope tuỳ ý (không danh sách), hoặc `Revert "<tiêu đề>"` của nút Revert. Tiêu đề
-bot qua nguyên dạng (`chore(deps): …`, `fix(deps): …` của Renovate). Sửa tiêu đề chỉ chạy lại `pr-title`, không chạy lại `make check`; job
+bot qua nguyên dạng (`chore(stg): …`, `chore(prd): …` của app promote, `chore(deps): …`, `fix(deps): …` của Renovate). Sửa tiêu đề chỉ chạy lại `pr-title`, không chạy lại `make check`; job
 không quyền, không checkout, tiêu đề vào script qua `env`. Regex và bộ thử dùng chung với ba repo có CI khác
 ([ADR-0041](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0041-github-hardening.md) (h)).
 
 **Scorecard** (`.github/workflows/scorecard.yml`): [OpenSSF Scorecard](https://scorecard.dev/viewer/?uri=github.com/anhnvcoder/svp-infra)
-khi push `main`, mỗi tuần và khi branch protection cổ điển đổi; kết quả công khai (`publish_results`) và lên code scanning. Không chạy trên
-PR. `ossf/scorecard-action` là action duy nhất không của GitHub (API Scorecard chỉ nhận kết quả từ nó), được cho phép theo tên ở cài đặt
-Actions của repo (`github/`).
+khi push `main`, mỗi tuần và khi branch protection cổ điển đổi: kiểm ghim, quyền token, ruleset, mẫu workflow nguy hiểm và các
+[check khác](https://github.com/ossf/scorecard/blob/main/docs/checks.md); kết quả công khai (`publish_results: true`) ở API Scorecard và lên code
+scanning. Không chạy trên PR. Check Branch-Protection đọc ruleset bằng `GITHUB_TOKEN` nên không cần `repo_token`. `ossf/scorecard-action` là
+action duy nhất không của GitHub (API Scorecard chỉ nhận kết quả từ nó), được cho phép theo tên ở cài đặt Actions của repo (`github/`); nó chạy
+trong workflow riêng, không kiểm PR nào và không chạy code của repo.
+
+Publish ràng buộc file này theo "Workflow Restrictions" mà API Scorecard kiểm trước khi nhận kết quả (README của `ossf/scorecard-action`, mã ở
+`api/app/server/verify_workflow.go` của `ossf/scorecard-infra`): không `env` hay `defaults` ở mức workflow và ở job, không quyền ghi ở mức
+workflow, `id-token: write` chỉ ở job Scorecard, không container hay service, một nhãn runner Ubuntu do GitHub host (`ubuntu-latest` hay
+`ubuntu-YY.MM`, 22.04 trở lên), và chỉ `actions/checkout`, `actions/upload-artifact`, `github/codeql-action/upload-sarif`,
+`ossf/scorecard-action`, `step-security/harden-runner` làm step của job đó, mỗi step là một `uses:` (không step `run:`). API nhận hay không thì
+hiện ở log của step Scorecard. Mọi action ghim SHA đầy đủ của commit; checkout không để token trong `.git/config`.
 
 ## Plan và apply
 
