@@ -1,21 +1,21 @@
-################################################################################
-# Rulesets. Required checks are accepted only from the GitHub Actions app (id 15368, gh api apps/github-actions), so a
-# status of the same name posted by any other app or token does not satisfy them.
-#
+# Required checks are accepted only from the GitHub Actions app (id 15368, gh api apps/github-actions), so a status of
+# the same name posted by any other app or token does not satisfy them.
+
 # Every main ruleset keeps history linear, and every pull_request rule allows squash alone, so a merge commit or a
 # rebase stays blocked even if a repository's settings offer it again. No rule requires an approval: one person works
 # the lab, and an author cannot approve their own pull request.
+
 # strict_required_status_checks_policy stays false: true would make every pull request, the bots' own included, update
 # its branch and rebuild its images after each merge, and the merge queue that avoids that exists only for repositories
 # of an organization; the run on main after each merge catches what two pull requests break together.
 # require_extra_approval_for_unattributed_changes (on by GitHub's default) is not exposed by the provider.
-#
-# pr-title is job pr-title of .github/workflows/pr-title.yml: the pull request title, which becomes the squash commit
-# title, follows Conventional Commits. It is required in the main ruleset of svp-backend, svp-frontend, svp-gitops and
-# svp-infra. A repository gets it only once pr-title.yml is on its main and has passed on at least one pull request (a
-# required check that has never run would leave every pull request waiting); bot pull requests (Renovate, the promote
-# Apps) already title themselves in Conventional Commits.
-################################################################################
+
+# pr-title is job pr-title of .github/workflows/pr-title.yml (Conventional Commits for the title that becomes the squash
+# commit title). It is required in the main ruleset of svp-backend, svp-frontend, svp-gitops and svp-infra. A repository
+# gets it only once pr-title.yml is on its main and has passed on a pull request: a required check that has never run
+# would leave every pull request waiting.
+
+# Design notes: github/README.md.
 
 locals {
   github_actions_app_id = 15368

@@ -28,6 +28,7 @@ resource "aws_s3_bucket_versioning" "state" {
 # SSE-S3: encrypted at rest at no cost. A customer managed KMS key (what the finding below asks for) adds $1 a month and
 # a key policy to keep, and draws no line that IAM and the bucket policy do not draw already: only the administrators
 # of the management account reach this bucket, and they are the ones who run its three roots.
+
 # Scope: management account only (aws/bootstrap, aws/org, github/); stg and prd: the state of each environment is in the
 # bucket of its own account, encrypted with a customer managed KMS key whose key policy grants kms:Decrypt only to the
 # SvpAdmin roles (aws/modules/account-baseline), since state holds outputs and attributes that roles allowed only to

@@ -7,9 +7,8 @@ resource "aws_route53_zone" "env" {
 
 # Delegation of each child zone that lives in another account (the stg zone, in the zone of prd), as Route 53's
 # "Creating a subdomain that uses Amazon Route 53 as the DNS service without migrating the parent domain" describes.
-# TTL 172800, the value that guide gives for an NS record
-# (https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/dns-routing-traffic-for-subdomains.html): the name servers
-# of a kept zone do not change. With the map empty, no record exists.
+# TTL 172800, the value that guide gives for an NS record: the name servers of a kept zone do not change. With the map
+# empty, no record exists.
 resource "aws_route53_record" "delegation" {
   for_each = var.delegated_subdomains
 

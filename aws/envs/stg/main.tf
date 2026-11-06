@@ -20,17 +20,19 @@ module "network" {
 }
 
 # Findings of trivy on the cluster the module builds with the values of this root, each a deliberate choice:
-# - AWS-0040: the public endpoint of the Kubernetes API is on, so the learner's machine reaches it without a VPN or a
-#   bastion. It answers only the ranges of eks_public_access_cidrs (the module refuses any range shorter than /8, so
-#   never 0.0.0.0/0), and the private endpoint stays on for nodes and pods.
-#   Scope: stg only; prd: endpoint_public_access = false, the API reached only through the private endpoint (from
-#   inside the VPC, such as an SSM session or a VPN), which clears AWS-0041 as well.
+
+# - AWS-0040: the public endpoint of the Kubernetes API is on, so the learner's machine needs no VPN or bastion. It
+#   answers only eks_public_access_cidrs (the module refuses ranges shorter than /8); the private endpoint stays on for
+#   nodes and pods.
+#   Scope: stg only; prd: endpoint_public_access = false (private endpoint only), which clears AWS-0041 as well.
+
 # - AWS-0041: fires on any public range, a single /32 included; the ranges are the learner's own (an uncommitted
-#   *.auto.tfvars), see AWS-0040 for what limits them.
-#   Scope: stg only; prd: no public range at all, the public endpoint off (see AWS-0040).
-# - AWS-0039: Cluster does not have secret encryption enabled. Kubernetes Secrets of stg stay encrypted with the AWS
-#   owned key of EKS: a key of our own costs a month's fee and outlives a cluster that lives a few hours. The module
-#   holds the same exception with a condition on the attribute, which trivy matches only when it scans the module.
+#   *.auto.tfvars), limited as under AWS-0040.
+#   Scope: stg only; prd: no public range at all, the public endpoint off.
+
+# - AWS-0039: Kubernetes Secrets of stg stay encrypted with the AWS owned key of EKS: a key of our own costs a month's
+#   fee and outlives a cluster that lives a few hours. The module holds the same exception with a condition on the
+#   attribute, which trivy matches only when it scans the module.
 #   Scope: stg only; prd: secrets_kms_encryption = true, Secrets envelope-encrypted with a customer managed KMS key.
 #trivy:ignore:AWS-0039
 #trivy:ignore:AWS-0040

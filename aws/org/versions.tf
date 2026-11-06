@@ -11,8 +11,7 @@ terraform {
   }
 
   # State in the bucket of aws/bootstrap, the management account's: bucket and region come from aws/backend.hcl, which
-  # is not committed (the bucket name is unique per account):
-  # AWS_PROFILE=anhnv-sso terraform init -backend-config=../backend.hcl.
+  # is not committed (the bucket name is unique per account).
   backend "s3" {
     key          = "aws/org/terraform.tfstate"
     encrypt      = true

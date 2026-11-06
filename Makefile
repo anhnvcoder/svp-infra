@@ -1,18 +1,14 @@
-# Static checks of the Terraform of this repository. `make help` lists the targets.
-#
-# No target here reaches an AWS account: init always runs with -backend=false, nothing calls apply or the AWS CLI, and the
-# only plans are those of terraform test (make test), against a mock AWS provider, in a container without network or
-# credentials. Every tool runs from its official image pinned by digest, the same reference on a dev machine and in CI, so
-# nothing is installed and no setup action is trusted; session-test alone runs on the host, as it needs only bash, git
-# and jq, which the Mac and the CI runner both have. Docker runs with DOCKER_DEFAULT_PLATFORM unset: the shell of the
-# dev machine sets it to linux/amd64 for another project, which would run these images under emulation.
-#
-# Parallel runs: `make check DIRS=<dir>` writes only below <dir> (.terraform/tflint.d with the tflint plugins, and the
-# .terraform.lock.hcl of a module); init and validate keep providers and modules in a temporary directory that nothing
-# else shares and the recipe removes, so a .terraform/ the learner made with a backend is never read or written; trivy's
-# and zizmor's caches stay inside their containers, and session-test writes only in a temporary directory of its own,
-# which it removes. No plugin cache is shared between directories, so two runs on two different directories never write
-# the same file.
+# Static checks of the Terraform of this repository. `make help` lists the targets. No target reaches an AWS account:
+# init runs with -backend=false, nothing calls apply or the AWS CLI, and the only plans are those of terraform test,
+# against a mock AWS provider, in a container without network or credentials.
+
+# Every tool runs from its official image pinned by digest, the same reference on a dev machine and in CI; only
+# session-test runs on the host. Docker runs with DOCKER_DEFAULT_PLATFORM unset: the dev machine's shell sets it to
+# linux/amd64 for another project, which would run these images under emulation.
+
+# Parallel runs: `make check DIRS=<dir>` writes only below <dir> (.terraform/tflint.d and the .terraform.lock.hcl of a
+# module), so two runs on two different directories never write the same file.
+# Design notes: README.md.
 
 # renovate: datasource=docker depName=hashicorp/terraform
 TERRAFORM_IMAGE  := hashicorp/terraform:1.15.8@sha256:7ae513256f7ce67879e218ae8593d6fbe216ec9e123abe6c94e4e10704857963
@@ -61,7 +57,7 @@ TF_DATA = $(TF_RUN) -e TF_DATA_DIR=/tfdata -v "$$data:/tfdata" $(TERRAFORM_IMAGE
 NEW_DATA = rm -rf "$$data"; data=$$(mktemp -d) || exit 1
 
 # Prints the directories to check, one per line, or stops with the first DIRS entry that is not a Terraform directory
-# of this repository. Recipes read the list with `dirs=$$($(LIST_DIRS)) || exit 1`.
+# of this repository.
 LIST_DIRS = if [ -z '$(DIRS)' ]; then \
 	  find . -name .git -prune -o -name .terraform -prune -o -name '*.tf' -print | sed 's|/[^/]*$$||; s|^\./||' | sort -u; \
 	else for d in $(DIRS); do \
@@ -122,9 +118,8 @@ tflint: ## tflint --init, then tflint, in each checked directory (.tflint.hcl)
 	  "$$@" --format=compact || { echo "FAIL: tflint $$d" >&2; exit 1; }; \
 	done
 
-# terraform-docs reads the .tf files of a module and never runs Terraform, a provider or the network. tfdocs rewrites the
-# block between the markers of <module>/README.md; tfdocs-check mounts the repository read-only and fails when a README
-# differs from what the .tf files say. Roots have no generated docs: their directories are skipped.
+# terraform-docs reads the .tf files of a module and never runs Terraform, a provider or the network. Roots have no
+# generated docs: their directories are skipped.
 tfdocs: ## terraform-docs, rewriting the generated block of the README of each checked module
 	@dirs=$$($(LIST_DIRS)) || exit 1; \
 	for d in $$dirs; do \
@@ -142,15 +137,13 @@ tfdocs-check: ## terraform-docs --output-check: fails when the generated block o
 	done
 
 # Findings of severity HIGH or CRITICAL fail; deliberate exceptions are in .trivyignore.yaml, each with its reason.
-# --skip-dirs leaves out the examples/ that registry modules ship (Kubernetes manifests and sample roots Terraform never
-# applies), wherever the module is called from, so no exception has to repeat per root.
-# --skip-check-update keeps the checks built into the pinned image: the bundle trivy would fetch otherwise sits behind a
-# moving tag, so new rules could turn the required check red on unchanged code, or drop a rule without anyone noticing.
-# Registry modules are downloaded by trivy itself and scanned with the configuration that calls them.
-# A root is scanned with the values its env runs with: <dir>/<last part of dir>.tfvars (aws/envs/prd/prd.tfvars), when
-# that file exists, goes to --tf-vars, so an exception that holds for one env only (an ignore with an attribute
-# condition, an ignore on a module call of that env's root) never hides a finding of another env. A module, or a root
-# without such a file, is scanned with the defaults of its variables.
+# --skip-dirs leaves out the examples/ that registry modules ship (manifests and sample roots Terraform never applies).
+# --skip-check-update keeps the checks built into the pinned image: the bundle trivy would fetch sits behind a moving
+# tag, so new rules could turn the required check red on unchanged code, or drop a rule without anyone noticing.
+
+# Registry modules are downloaded by trivy itself and scanned with the configuration that calls them. A root is scanned
+# with the values its env runs with (<dir>/<last part of dir>.tfvars to --tf-vars), so an exception that holds for one
+# env only never hides a finding of another env. A module, or a root without such a file, gets the defaults.
 trivy: ## trivy config on each checked directory (HIGH and CRITICAL fail; a root gets its <env>.tfvars)
 	@dirs=$$($(LIST_DIRS)) || exit 1; [ -n "$$dirs" ] || { echo "trivy: no Terraform directory"; exit 0; }; \
 	for d in $$dirs; do \
@@ -166,11 +159,10 @@ shellcheck: ## shellcheck on every *.sh of the repository
 	echo "shellcheck $$(echo $$files | wc -w | tr -d ' ') files"; \
 	env -u DOCKER_DEFAULT_PLATFORM docker run --rm --network none -v "$(CURDIR):/mnt:ro" -w /mnt $(SHELLCHECK_IMAGE) $$files
 
-# Security lint of the workflows: zizmor with the regular persona on the whole repository, the repository mounted
-# read-only. Every finding fails (exit codes 11 to 14); the deliberate ones are left out in .github/zizmor.yml, each with
-# its reason. With GH_TOKEN set (CI passes the job's read-only token) the online audits run too (impostor commits,
-# actions with known vulnerabilities); without it, offline audits only. ZIZMOR_FORMAT=github writes workflow commands
-# (annotations in CI).
+# Security lint of the workflows: zizmor with the regular persona. Every finding fails; the deliberate ones are left out
+# in .github/zizmor.yml, each with its reason. With GH_TOKEN set (CI passes the job's read-only token) the online audits
+# run too (impostor commits, actions with known vulnerabilities); without it, offline audits only.
+# ZIZMOR_FORMAT=github writes workflow commands (annotations in CI).
 ZIZMOR_FORMAT ?= plain
 zizmor: ## Security lint of the workflows with the pinned zizmor (online audits with GH_TOKEN; ZIZMOR_FORMAT=github)
 	@echo "zizmor .github"; \
@@ -178,14 +170,13 @@ zizmor: ## Security lint of the workflows with the pinned zizmor (online audits 
 	$(DOCKER) $$net -v "$(CURDIR):/src:ro" -w /src $(ZIZMOR_IMAGE) --persona=regular --no-progress --color=never \
 	  --cache-dir /tmp/zizmor --format='$(ZIZMOR_FORMAT)' . || { echo "FAIL: zizmor" >&2; exit 1; }
 
-# Static check of the Markdown: markdownlint-cli2 with .markdownlint.yaml (style), then lychee --offline --include-fragments
-# (relative links and heading anchors; links to other sites are not followed: the network is not stable and a check that
-# depends on it fails for reasons outside the change), both without network, the repository mounted read-only at /repo:
-# a relative link that leaves the repository is an error on purpose. DOCS narrows the files (paths or globs, relative to
-# the repository); the default is every Markdown file git tracks plus the new ones it does not track yet, except under
-# .claude/: that is configuration of a coding agent (the skill that draws the AWS diagrams), whose files follow the
-# agent's own format, not documentation of the repository. Both tools always run; the exit code is not 0 when either
-# reports a problem.
+# Markdown check: markdownlint-cli2 with .markdownlint.yaml (style), then lychee --offline --include-fragments (relative
+# links and heading anchors). Links to other sites are not followed: a check that depends on the network fails for
+# reasons outside the change. A relative link that leaves the repository is an error on purpose.
+
+# The default for DOCS is every Markdown file git tracks plus the new ones it does not track yet, except under
+# .claude/: that is configuration of a coding agent, whose files follow the agent's own format, not documentation.
+
 # set -f keeps the globs of DOCS whole: the tools expand them (with **), sh does not and would drop the files at the top.
 DOCS ?=
 docs-check: ## markdownlint-cli2 + lychee --offline on the Markdown (DOCS='<files or globs>' narrows; no network)
@@ -221,26 +212,18 @@ session-test: ## Self-test of the session scripts of aws/scripts with fake comma
 	@echo "session-test aws/scripts"; \
 	bash aws/scripts/session-test.sh >/dev/null || { echo "FAIL: session-test (bash aws/scripts/session-test.sh prints every check)" >&2; exit 1; }
 
-# terraform test of each module (tests/*.tftest.hcl), which the recipe holds to three rules itself instead of trusting
-# whoever wrote the tests:
-# 1. terraform runs from TERRAFORM_IMAGE, pinned by digest; the test container has no network (--network none), so no
-#    provider call can leave the machine. Only init, in a container of its own, downloads providers and registry modules.
-# 2. No credential goes in: env(1) drops every AWS_* variable of the caller before docker starts, no -e passes one,
-#    HOME is /tmp of the container, and only the module directory is mounted (read-only for the test), never ~/.aws,
-#    the repository root or an env directory; a module directory holding .envrc or backend.hcl is refused.
-# 3. TEST_GUARD accepts a test file only when it follows a fixed layout, and refuses anything else, naming the file and
-#    the line, rather than looking for known ways to break the rule (a run without command applies; a mock under an
-#    alias leaves the real provider as the default):
-#    - exactly one `mock_provider "aws" {` line (or `mock_provider "aws" {}`), alone on its line;
-#    - every run block opens with a `run "<name>" {` line (letters, digits, _ and -), and the first non-blank line after
-#      it is `command = plan`;
-#    - no other line, leading blanks aside, starts with run, mock_provider, provider (providers too), override_,
-#      module, command or /*; no line anywhere holds alias, */ (the end of a block comment, comment lines included, as
-#      /* itself can sit in a string such as an origin) or << (a heredoc): the lines of either could pass for the ones
-#      above;
-#    - no symbolic link in the module directory (terraform test reads what it points to), and no *.tftest.json.
-#    Strings cannot span lines in HCL, so with block comments and heredocs refused every line is read here as HCL reads it.
-# test-guard checks the three rules with a fake docker first on PATH, so it starts no container.
+# terraform test of each module (tests/*.tftest.hcl). The recipe holds the tests to three rules itself instead of
+# trusting whoever wrote them: terraform runs from TERRAFORM_IMAGE, pinned by digest, with --network none (only init,
+# in a container of its own, downloads providers and registry modules); no credential goes in; TEST_GUARD accepts a
+# test file only in a fixed layout.
+
+# No credential: env(1) drops every AWS_* variable of the caller before docker starts, no -e passes one, HOME is /tmp
+# of the container, and only the module directory is mounted (read-only for the test), never ~/.aws, the repository
+# root or an env directory. A module directory holding .envrc or backend.hcl is refused.
+
+# TEST_GUARD refuses anything outside the layout, naming the file and the line, rather than looking for known ways to
+# break the rule (a run without command applies; a mock under an alias leaves the real provider as the default).
+# Block comments and heredocs are refused so that every line is read here as HCL reads it.
 NO_AWS_ENV = env $$(env | sed -n 's/^\(AWS_[A-Za-z0-9_]*\)=.*/-u \1/p') -u DOCKER_DEFAULT_PLATFORM
 TEST_RUN = $(NO_AWS_ENV) docker run --rm --user "$$(id -u):$$(id -g)" -e HOME=/tmp -e CHECKPOINT_DISABLE=1 \
 	-e TF_IN_AUTOMATION=1 -e TF_DATA_DIR=/tfdata -v "$$data:/tfdata"

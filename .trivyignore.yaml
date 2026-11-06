@@ -1,24 +1,19 @@
 # Findings of `make trivy` that are deliberate choices. A finding that can be fixed is fixed, not listed here.
-#
 # A finding in this repository's own .tf files is ignored next to the resource, with a `#trivy:ignore:<id>` line and
-# the reason in a comment above it, so the exception moves with the code. This file holds only findings inside
-# modules downloaded from the registry, where no comment can go. trivy matches `paths` against the path it reports,
-# relative to the directory being checked; for a registry module, which trivy downloads itself, that is
-# `<namespace>/<name>/<provider>/<file>` (for example `terraform-aws-modules/eks/aws/main.tf`). Each entry: id, paths
-# (never an id for every file), statement (the reason) and, while the choice is waiting on something, expired_at
-# (yyyy-mm-dd).
-#
+# the reason in a comment above it. This file holds only findings inside modules downloaded from the registry, where
+# no comment can go.
+
+# Each entry: id, paths (never an id for every file), statement (the reason) and, while the choice is waiting on
+# something, expired_at (yyyy-mm-dd). trivy matches `paths` against the path it reports, which for a registry module is
+# `<namespace>/<name>/<provider>/<file>` (for example `terraform-aws-modules/eks/aws/main.tf`).
+
 # Every exception, here or next to a resource, says which environments it holds for, one line per id in its reason:
-# `Scope: every environment.` when the reason holds for prd as well, or `Scope: stg only; prd: <what prd does
-# instead>.` when it rests on stg being a short-lived, one-person, cost-cut environment. Searching for `stg only`
-# lists what the prd root has to decide again.
-#
-# A `Scope: stg only` exception never hides a finding of prd. `make trivy` scans a root with the values of its env
-# (<root>/<env>.tfvars through --tf-vars), and such an exception sits where only stg's values reach it: either on a
-# module call in the stg root, or in a module with a condition on the attribute that differs between the envs, set to
-# the value stg uses (`#trivy:ignore:AWS-0011[web_acl_id=]`), so a module scanned alone stays green and prd, with its
-# own value, gets the finding. trivy matches a condition on a string attribute wherever it scans from; one on a bool
-# or a number only when it scans the module itself, so a root that needs such an exception repeats it on its module
-# call. This file holds no stg-only entry: `paths` cannot tell the envs apart, as both roots call the same registry
-# modules.
+# `Scope: every environment.` when the reason holds for prd as well, or `Scope: stg only; prd: <what prd does instead>.`
+# when it rests on stg being a short-lived, one-person, cost-cut environment. Searching for `stg only` lists what the
+# prd root has to decide again.
+
+# A `Scope: stg only` exception never hides a finding of prd: it sits where only stg's values reach it, either on a
+# module call in the stg root or in a module with a condition on the attribute that differs between the envs. This file
+# holds no stg-only entry: `paths` cannot tell the envs apart, as both roots call the same registry modules.
+# Design notes: README.md.
 misconfigurations: []

@@ -195,8 +195,9 @@ thay vì IMDS (driver tự thử Kubernetes khi IMDS không trả lời); contro
 
 ## Cổng: control plane → node
 
-Với VPC CNI, pod mang IP phụ của ENI node, nên security group node lọc cả lưu lượng tới pod. Rule của module (giữ
-`node_security_group_enable_recommended_rules = true`, ghi lại ở `security-groups.tf`):
+Với VPC CNI, pod mang IP phụ của ENI node, nên security group node lọc cả lưu lượng tới pod; NetworkPolicy (agent network policy của VPC CNI)
+thu hẹp thêm theo từng pod. Rule của module (giữ `node_security_group_enable_recommended_rules = true`, ghi lại ở `security-groups.tf`).
+Module luôn bật: 443 hai chiều giữa node và cluster, 10250, và TCP/UDP 53 giữa node. Phần còn lại, gồm TCP 1025–65535 giữa node và egress, là rule khuyến nghị, giữ bật:
 
 | Hướng | Cổng | Ai cần |
 | --- | --- | --- |
@@ -212,7 +213,21 @@ Với VPC CNI, pod mang IP phụ của ENI node, nên security group node lọc 
 | node → mọi nơi | tất cả | kéo image qua NAT, gọi API AWS (finding trivy `AWS-0104` bỏ qua có lý do ở `cluster.tf`) |
 
 Webhook hay aggregated API ở cổng khác sẽ quá hạn tới khi thêm rule ở `security-groups.tf`. Rule cho lưu lượng và health check của NLB do
-LBC tự thêm vào security group node (security group duy nhất của node có tag `kubernetes.io/cluster/<name>`).
+LBC tự thêm vào security group node (security group duy nhất của node có tag `kubernetes.io/cluster/<name>`; security group chính mà EKS
+tạo cho cluster không gắn vào node).
+
+## Ngoại lệ trivy của module registry
+
+Hai finding trong module registry là lựa chọn có chủ đích, ghi ở `cluster.tf` ngay trên lời gọi module:
+
+- **`AWS-0039`:** không có key KMS do khách hàng quản lý cho Secret khi `secrets_kms_encryption = false`; khi đó EKS mã hoá dữ liệu API của
+  Kubernetes, Secret gồm cả, bằng key do AWS sở hữu. Ngoại lệ chỉ đúng với giá trị đó (`create_kms_key=false`): bật key thì finding hết và
+  không gì bị bỏ qua. Ở trivy 0.76 điều kiện này khớp khi trivy quét chính module, không khớp khi tới module từ một root (điều kiện trên
+  thuộc tính bool hay số không bao giờ khớp ở đó, trên chuỗi thì có), nên root của env để key tắt lặp lại ngoại lệ, không điều kiện, ở lời
+  gọi module. Phạm vi: chỉ stg; prd bật `secrets_kms_encryption = true`, mã hoá phong bì Secret bằng key KMS do khách hàng quản lý, nên đọc
+  Secret cũng cần `kms:Decrypt` trên key đó.
+- **`AWS-0104`:** security group node cho mọi egress. Node kéo image từ registry công khai qua NAT gateway và pod gọi API AWS; egress theo
+  từng pod được NetworkPolicy của các chart thu hẹp. Phạm vi: mọi env.
 
 ## Tài nguyên ngoài state và tag để quét
 

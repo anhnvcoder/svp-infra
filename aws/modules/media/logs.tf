@@ -1,8 +1,6 @@
-# S3 server access logs of the uploads and media buckets (access_logging_enabled): one line per request, with the
-# caller, the key and the result, into a bucket of their own. Off by default: the logs cost requests and storage, and
-# a lab session has CloudTrail and the services' own logs.
-#
-# The log bucket logs nothing itself: logging its own writes would add a line for every line it receives
+# S3 server access logs of the uploads and media buckets (access_logging_enabled), into a bucket of their own. Off by
+# default: the logs cost requests and storage, and a lab session has CloudTrail and the services' own logs.
+# The log bucket logs nothing itself: that would add a line for every line it receives
 # (https://docs.aws.amazon.com/AmazonS3/latest/userguide/enable-server-access-logging.html).
 
 locals {

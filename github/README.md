@@ -5,7 +5,8 @@ review và khôi phục được. Root này
 quản mọi repo trong `local.repositories` của `repositories.tf` (repo của lab và `anhnvcoder/.github`, default community health files của
 account: `CONTRIBUTING.md`, `SECURITY.md`, mẫu PR) bằng provider `integrations/github` ghim `6.13.0` (chính xác,
 trong `versions.tf`; Renovate mở PR khi có bản mới). Giá trị ban đầu là hiện trạng đọc bằng `gh api` GET lúc đưa repo vào quản lý, không "sửa
-cho đẹp"; đổi sau đó đi qua PR ở đây theo ADR. Chỗ khác runbook nằm ở mục "Khác runbook".
+cho đẹp"; đổi sau đó đi qua PR ở đây theo ADR. Mọi repo chỉ merge bằng squash, commit lấy tiêu đề và mô tả của PR, nên mỗi commit trên `main`
+là một PR. Chỗ khác runbook nằm ở mục "Khác runbook".
 
 Root này không có provider AWS: luật `default_tags`, `allowed_account_ids` của root AWS không áp. State vẫn nằm trong bucket state của
 `aws/bootstrap` (key `github/terraform.tfstate`, `use_lockfile`), nên `init`, `plan`, `apply` cần cả đăng nhập AWS lẫn token GitHub.
@@ -19,7 +20,7 @@ Root này không có provider AWS: luật `default_tags`, `allowed_account_ids` 
 | `repositories.tf` | `github_repository_vulnerability_alerts.off`: tắt (như GitHub để mặc định), ngoại lệ trivy `GIT-0003` riêng resource này | repo trong `local.vulnerability_alerts_off` |
 | `repositories.tf` | `github_actions_repository_permissions`: Actions bật, action được phép (của GitHub + danh sách pattern, `ossf/scorecard-action@*` ở bốn repo có CI), ghim SHA bắt buộc; `prevent_destroy` (destroy đưa repo về cho mọi action) | mọi repo trong `local.repositories` |
 | `repositories.tf` | `github_workflow_repository_permissions`: `GITHUB_TOKEN` mặc định chỉ đọc, không "create and approve pull requests" | mọi repo trong `local.repositories` |
-| `rulesets.tf` | `github_repository_ruleset` `main` (cấm xoá, force push, lịch sử thẳng, PR chỉ squash, 0 approval; check bắt buộc kèm `integration_id` 15368 của app GitHub Actions: `ci-ok`, `images-ok` ở backend, frontend, `gitops-ok`, `infra-ok`, `pr-title` (job của `.github/workflows/pr-title.yml`, tiêu đề PR theo Conventional Commits) ở bốn repo đó, `docs` ở `svp-labs`, `.github`; repo mới có `pr-title` bắt buộc theo [ADR-0047](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0047-pr-title-required-condition.md)) | mọi repo trong `local.repositories` |
+| `rulesets.tf` | `github_repository_ruleset` `main` (cấm xoá, force push, lịch sử thẳng, PR chỉ squash, 0 approval; check bắt buộc kèm `integration_id` 15368 của app GitHub Actions: `ci-ok`, `images-ok` ở backend, frontend, `gitops-ok`, `infra-ok`, `pr-title` (job của `.github/workflows/pr-title.yml`, tiêu đề PR theo Conventional Commits) ở bốn repo đó, `docs` ở `svp-labs`, `.github`; repo mới có `pr-title` bắt buộc theo [ADR-0047](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0047-pr-title-required-condition.md): một repo nhận check này chỉ khi `pr-title.yml` đã ở `main` của nó và đã chạy xanh trên một PR, vì check bắt buộc chưa chạy lần nào thì mọi PR đứng chờ; PR của bot (Renovate, các App promote) đã tự đặt tiêu đề theo Conventional Commits) | mọi repo trong `local.repositories` |
 | `rulesets.tf` | `github_repository_ruleset` `owners` (đòi duyệt Code Owner, vai admin bypass chỉ trong PR) | `svp-backend`, `svp-frontend`, `svp-gitops`, `svp-infra` |
 | `rulesets.tf` | `github_repository_ruleset.gitops_tags`: chỉ admin tạo, đổi, xoá tag | `svp-gitops` |
 | `environments.tf` | `github_repository_environment` `promote` (luật nhánh tuỳ chọn; `prevent_destroy`: xoá environment là xoá luôn secret khoá App), `github_repository_environment_deployment_policy` (chỉ `main`), biến `SVP_GITOPS_APP_CLIENT_ID` / `SVP_WEB_APP_CLIENT_ID` | `svp-backend`, `svp-frontend` |
@@ -56,7 +57,7 @@ bằng `make github-app`); `make github-check` đọc lại mọi hàng có API 
 
 ## Lệnh người học chạy (`plan`, `apply`)
 
-AI không chạy lệnh nào dưới đây. Cần: Terraform 1.15 trên máy, `aws/backend.hcl` (bước 3 của `aws/bootstrap/README.md`), `gh` đăng nhập
+AI không chạy lệnh nào dưới đây. Cần: Terraform 1.15 trên máy (khớp Terraform của máy dev, cài bằng Homebrew, và `TERRAFORM_IMAGE` của `Makefile`; `use_lockfile` của backend S3 đòi 1.10 trở lên, khối `import {}` dùng tạm để nhận quản repo đã có đòi 1.5 trở lên), `aws/backend.hcl` (bước 3 của `aws/bootstrap/README.md`), `gh` đăng nhập
 bằng tài khoản admin của mọi repo trong `local.repositories` với scope `repo` (`gh auth status` liệt kê scope), `jq`.
 
 **1. `github.auto.tfvars`** (một lần mỗi máy): ghi thẳng từ biến đang có trên GitHub, không in ra màn hình. Không chép tay client ID từ

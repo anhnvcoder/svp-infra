@@ -4,15 +4,11 @@ data "aws_region" "current" {}
 
 data "aws_caller_identity" "current" {}
 
+# Design notes: aws/modules/external-secrets/README.md.
 locals {
   # The Secrets Manager entries each namespace's SecretStore reads: the remoteRef keys of the ExternalSecrets that chart
   # svp-cluster of the backend repository renders with store aws, a managed object store and Argo CD notifications on.
   # The entries of an in-cluster object store (s3-root, s3-users, pg-backup-s3) are not rendered then, so not here.
-  # Copied from the render of origin/main, the chart extracted with git archive into an empty directory:
-  #   helm template svp-cluster deploy/helm/svp-cluster --namespace svp --show-only templates/external-secrets.yaml \
-  #     --set externalSecrets.enabled=true --set externalSecrets.store=aws --set externalSecrets.prefix=svp/stg/ \
-  #     --set s3.mode=external --set externalSecrets.argocdNotifications=true \
-  #     --set externalSecrets.aws.region=ap-southeast-1 --set externalSecrets.aws.roles.<namespace>=<arn> (each namespace)
   # A Secret added to files/external-secrets.yaml of the chart needs its entry here too, or its ExternalSecret is denied.
   namespace_entries = {
     argocd   = ["argocd-notifications"]

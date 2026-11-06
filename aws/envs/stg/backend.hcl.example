@@ -1,8 +1,8 @@
 # Shape of aws/backend-stg.hcl, the partial backend configuration shared by every root of the stg account (not this
-# directory). It holds no key: each root passes its own at init. It is written from the output of aws/accounts/stg,
-# never by hand:
+# directory). No key: each root passes its own at init. Written from the output of aws/accounts/stg, never by hand:
 #   AWS_PROFILE=anhnv-stg terraform -chdir=../../accounts/stg output -raw backend_hcl > ../../backend-stg.hcl
-# and read with:
+
+# Read with:
 #   AWS_PROFILE=anhnv-stg terraform init -reconfigure -backend-config=../../backend-stg.hcl -backend-config=key=aws/stg/terraform.tfstate
 bucket       = "svp-tfstate-111111111111-ap-southeast-1"
 region       = "ap-southeast-1"

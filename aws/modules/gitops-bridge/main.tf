@@ -1,8 +1,7 @@
 # Values of the GitOps bootstrap of an EKS cluster after the GitOps Bridge pattern: Terraform installs Argo CD and hands
 # it the cluster's metadata as labels and annotations of a cluster Secret, from which an ApplicationSet makes the root
-# Application. This module holds no resource of any provider: it computes what the root aws/gitops/<env> applies
-# (namespaces, the release of Argo CD, AppProjects, the cluster Secret, the ApplicationSet), so terraform test checks
-# every value of it with a mock provider and no cluster.
+# Application. This module holds no resource of any provider: it computes what the root aws/gitops/<env> applies, so
+# terraform test checks every value of it with a mock provider and no cluster.
 
 locals {
   platform = "eks"

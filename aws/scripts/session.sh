@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
 # The whole session in order, as docs/runbooks/session-<env>.md runs it: each step's script with --print, so every
 # command of the session shows up in the order it runs, and nothing runs. The session itself is run step by step from
-# the runbook (each step's output is read before the next, and the runbook adds what no script does: the promote gate
-# and the tunnel of prd, the drills, the final snapshot). The steps are the same for every environment; what differs is
-# data, in env_table of lib.sh.
-#
+# the runbook, which adds what no script does (the promote gate, the tunnel of prd, the drills, the final snapshot).
+
 # Usage: aws/scripts/session.sh --print stg|prd
 set -euo pipefail
 
@@ -15,7 +13,7 @@ shift
 [ $# -eq 1 ] || fail "usage: $(basename "$0") --print $(env_names session)"
 env_arg "$1"
 
-# The steps, one per line: the script and its arguments. The runbook's table of steps lists the same, in this order.
+# The steps, one per line: the script and its arguments, in the order of the runbook's table of steps.
 steps="check-account.sh $env_name
 check-dns.sh $env_name
 tf.sh $env_name env init

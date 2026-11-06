@@ -1,5 +1,6 @@
 # One PostgreSQL instance for every service: each service keeps its own database and roles on it, made by the
 # bootstrap job of the cluster, so nothing here creates a database.
+# Design notes: aws/modules/rds/README.md.
 
 resource "aws_db_subnet_group" "this" {
   name_prefix = "${var.name}-"
@@ -66,19 +67,10 @@ resource "random_id" "final_snapshot" {
   byte_length = 4
 }
 
-# Monitoring of the instance beyond what the cluster's Prometheus reads, each off by default (the lab reads Prometheus
-# and the database's own views; each adds cost, and enhanced monitoring an IAM role):
-# - CloudWatch Database Insights in Standard mode, the mode RDS enables by default and the one without the per-vCPU
-#   fee of Advanced; Performance Insights is optional in it, and its 7 days of history are the free retention
-#   (Advanced needs Performance Insights with at least 465 days). Instance classes: no restriction for PostgreSQL
-#   (the db.t4g.micro and small exclusions apply to MariaDB and MySQL). Sources, read 2026-11-05:
-#   https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_DatabaseInsights.html,
-#   https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_DatabaseInsights.TurningOnStandard.html,
-#   https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_DatabaseInsights.Considerations.html,
-#   https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_DatabaseInsights.Engines.html,
-#   https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_PerfInsights.Overview.cost.html
-# - Enhanced monitoring (OS metrics every monitoring_interval seconds), through the role below.
-# - PostgreSQL logs exported to CloudWatch, into log groups made here (below).
+# Monitoring beyond what the cluster's Prometheus reads, each off by default (each adds cost, and enhanced monitoring
+# an IAM role): CloudWatch Database Insights in Standard mode, the mode RDS enables by default and the one without the
+# per-vCPU fee of Advanced (its 7 days of Performance Insights history are the free retention); enhanced monitoring
+# (OS metrics every monitoring_interval seconds) through the role below; PostgreSQL logs exported to CloudWatch.
 resource "aws_db_instance" "this" {
   identifier     = var.name
   engine         = "postgres"
@@ -138,10 +130,9 @@ resource "aws_cloudwatch_log_group" "this" {
   retention_in_days = var.cloudwatch_logs_retention_days
 }
 
-# The group enhanced monitoring writes OS metrics to, one log stream per instance. Its name is fixed by RDS and the
-# group is shared by every instance of the account and region, so this module expects to be the only one there with
-# monitoring on (one instance per env account). Left to RDS, the group would keep 30 days of metrics after the
-# instance is gone; the RDS guide tells to set the retention on this group
+# The group enhanced monitoring writes OS metrics to, one log stream per instance. RDS fixes its name and shares it
+# across the account and region, so this module expects to be the only one with monitoring on (one instance per env
+# account). Left to RDS, it would keep 30 days of metrics after the instance is gone
 # (https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_Monitoring.OS.html, read 2026-11-05).
 resource "aws_cloudwatch_log_group" "os_metrics" {
   count = var.monitoring_interval > 0 ? 1 : 0

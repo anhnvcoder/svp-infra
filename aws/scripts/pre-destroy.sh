@@ -1,34 +1,36 @@
 #!/usr/bin/env bash
-# What Kubernetes made in the account, removed while the controllers that made it still run, before tf.sh <env>
-# gitops destroy: the NLB and target groups (AWS Load Balancer Controller, from the Service of Envoy's Gateway), the EBS
-# volumes of PVCs (EBS CSI driver) and the DNS records (ExternalDNS). Terraform knows none of them; left behind they
-# block the destroy (ENIs, security groups) or stay billed (volumes). Every wait has a limit, and what is left is printed.
-#   1. The root of GitOps: ApplicationSet svp-bootstrap would make svp-root again, and the auto-sync (prune, self-heal) of
-#      svp-root and svp-apps would make again every child deleted below. Their finalizers and automated sync are
-#      cleared, then the ApplicationSet and both are deleted alone (no finalizer: no cascade, the children stay). The
-#      children's auto-sync is turned off too, so that svp-cluster does not make the Gateway again.
-#   2. Workload Applications, highest sync wave first, one wave at a time (their finalizer deletes what each deployed):
-#      every Application but svp-cluster and the platform controllers (those whose finalizers and webhooks the
-#      workloads' objects need on deletion: KEDA, Kyverno, Argo Rollouts, External Secrets, cert-manager, Envoy
-#      Gateway, LBC, ExternalDNS). Then Gateway svp of svp-edge (svp-cluster's, the source of Envoy's Service). Waits
-#      until no Service of type LoadBalancer, no TargetGroupBinding, no load balancer of the cluster in ELBv2 and no
-#      record of ExternalDNS in the environment's zone are left, with LBC, ExternalDNS and Envoy Gateway still running.
-#   3. Every PVC of every namespace (volumeClaimTemplates: Argo CD never prunes them), with the EBS CSI driver (an EKS
-#      add-on) running and svp-cluster's namespaces and StorageClass still there. Waits until no PVC, no PV of the
-#      driver and no EBS volume the driver made for the cluster are left.
-#   4. svp-cluster and the platform Applications, highest wave first. Waits a few minutes per wave and only notes
-#      what is left: nothing of them is billed outside the cluster, which terraform destroy deletes.
-# A cluster without Argo CD (root gitops never applied, or its apply stopped before Argo CD) has no Application to delete: steps 1, 2 and 4 skip them, and the waits of steps 2 and 3 still check that nothing of
-# Kubernetes is left in the account.
-# Needs no step but the apply that made the cluster: it writes the kubeconfig context itself and reads the zone's id
-# from the root's tfvars, not from the files of bootstrap.sh. So it also runs after an apply that failed once EKS
-# existed (its outputs were not stored, so bootstrap.sh cannot run), and from a new session directory. For an
-# environment whose API endpoint is private, the tunnel must be open (checked before the first kubectl).
+# What Kubernetes made in the account, removed while the controllers that made it still run, before tf.sh <env> gitops
+# destroy: the NLB and target groups (AWS Load Balancer Controller), the EBS volumes of PVCs (EBS CSI driver) and the
+# DNS records (ExternalDNS). Terraform knows none of them; left behind they block the destroy (ENIs, security groups) or
+# stay billed (volumes). Every wait has a limit, and what is left is printed.
+
+# Design notes: README.md.
+
+# 1. The root of GitOps: ApplicationSet svp-bootstrap would make svp-root again, and the auto-sync (prune, self-heal) of
+#    svp-root and svp-apps would make again every child deleted below. Their finalizers and automated sync are cleared,
+#    then the ApplicationSet and both are deleted alone (no cascade: the children stay). The children's auto-sync is
+#    turned off too, so that svp-cluster does not make the Gateway again.
+
+# 2. Workload Applications, highest sync wave first, one wave at a time (their finalizer deletes what each deployed):
+#    every Application but svp-cluster and the platform controllers, whose finalizers and webhooks the workloads'
+#    objects need on deletion. Then Gateway svp of svp-edge. Waits, with LBC, ExternalDNS and Envoy Gateway still
+#    running, until no Service of type LoadBalancer, TargetGroupBinding, load balancer or ExternalDNS record is left.
+
+# 3. Every PVC of every namespace (volumeClaimTemplates: Argo CD never prunes them), with the EBS CSI driver running and
+#    svp-cluster's namespaces and StorageClass still there. Waits until no PVC, no PV of the driver and no EBS volume
+#    the driver made for the cluster are left.
+
+# 4. svp-cluster and the platform Applications, highest wave first. Waits a few minutes per wave and only notes what is
+#    left: nothing of them is billed outside the cluster, which terraform destroy deletes.
+
+# A cluster without Argo CD has no Application to delete: steps 1, 2 and 4 skip them, and the waits of steps 2 and 3
+# still check that nothing of Kubernetes is left in the account.
+
 # Records pre-destroy-start in the timeline once the account is checked, and pre-destroy-done at the end, which tf.sh
 # <env> gitops plan --destroy requires. Run it again after a failure: each step finds what is left. When the session's
-# time is up and step 2 or 3 is still red, tf.sh <env> gitops plan --destroy --leftovers (it needs pre-destroy-start)
-# is the way out.
-#
+# time is up and step 2 or 3 is still red, tf.sh <env> gitops plan --destroy --leftovers (it needs pre-destroy-start) is
+# the way out.
+
 # Usage: aws/scripts/pre-destroy.sh [--print] stg|prd
 set -euo pipefail
 

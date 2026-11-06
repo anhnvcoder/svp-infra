@@ -1,6 +1,6 @@
 terraform {
   # Matches the Terraform of the dev machine (Homebrew) and TERRAFORM_IMAGE of the Makefile. The S3 backend's
-  # use_lockfile needs 1.10 or later; import blocks, used briefly to adopt an existing repository, need 1.5 or later.
+  # use_lockfile needs 1.10 or later.
   required_version = "~> 1.15"
 
   required_providers {
@@ -13,8 +13,7 @@ terraform {
   }
 
   # The state of this root sits in the state bucket of aws/bootstrap under its own key. Bucket and region come from
-  # aws/backend.hcl, which is not committed (the bucket name is unique per account):
-  # AWS_PROFILE=anhnv-sso terraform init -backend-config=../aws/backend.hcl.
+  # aws/backend.hcl, which is not committed (the bucket name is unique per account).
   backend "s3" {
     key          = "github/terraform.tfstate"
     encrypt      = true

@@ -1,9 +1,7 @@
 # A small instance in a private subnet through which the learner's machine reaches the private endpoint of the
-# Kubernetes API: AWS Systems Manager Session Manager forwards a local port to the endpoint's host on 443
-# (document AWS-StartPortForwardingSessionToRemoteHost). The SSM agent of the instance opens the session outward, to
-# the public endpoints of Systems Manager through the NAT gateway, so the instance takes no inbound connection, holds no
-# SSH key and has no public address; who may start a session is decided by IAM, and every session start is in
-# CloudTrail.
+# Kubernetes API: Session Manager forwards a local port to the endpoint's host on 443. The SSM agent opens the session
+# outward through the NAT gateway, so the instance takes no inbound connection, holds no SSH key and has no public
+# address; IAM decides who may start a session, and every session start is in CloudTrail.
 locals {
   # Graviton, the smallest size: the instance only relays the bytes of one tunnel.
   instance_type = "t4g.nano"
@@ -28,10 +26,6 @@ locals {
 data "aws_ssm_parameter" "ami" {
   name = local.ami_parameter
 }
-
-################################################################################
-# Identity: only what the SSM agent needs
-################################################################################
 
 resource "aws_iam_role" "this" {
   name        = "${var.name}-ssm-bastion"
@@ -59,10 +53,6 @@ resource "aws_iam_instance_profile" "this" {
   role = aws_iam_role.this.name
 }
 
-################################################################################
-# Network: no inbound rule, out on 443 only; the API lets the instance in on 443
-################################################################################
-
 # Without an egress block Terraform removes the allow-all egress rule AWS adds to a new security group, so the rule
 # below is the only way out. DNS (the VPC resolver), the instance metadata service and time sync go to link-local
 # addresses that security groups do not filter.
@@ -78,8 +68,7 @@ resource "aws_security_group" "this" {
 
 # AWS-0104: HTTPS to any address. The agent reaches the public endpoints of Systems Manager (ssm, ssmmessages,
 # ec2messages) through the NAT gateway, and AWS publishes no prefix list for them; interface endpoints of those three
-# services would keep the traffic inside the VPC, at an hourly fee per service and per zone. 443 is the only port open
-# either way, and the tunnel's target is the API's private endpoint inside the VPC.
+# services would keep the traffic inside the VPC, at an hourly fee per service and per zone. 443 is the only port open.
 # Scope: every environment.
 #trivy:ignore:AWS-0104
 resource "aws_vpc_security_group_egress_rule" "https" {
@@ -99,10 +88,6 @@ resource "aws_vpc_security_group_ingress_rule" "api_from_bastion" {
   to_port                      = 443
   referenced_security_group_id = aws_security_group.this.id
 }
-
-################################################################################
-# Instance
-################################################################################
 
 resource "aws_instance" "this" {
   ami                         = data.aws_ssm_parameter.ami.insecure_value

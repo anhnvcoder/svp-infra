@@ -1,23 +1,9 @@
 #!/usr/bin/env bash
-# The steps of the bootstrap of the session's EKS cluster around the apply of root aws/gitops/<env>, which installs
-# Argo CD and the root of GitOps (GitOps Bridge). Thin on purpose: the secrets and GlitchTip are the code repository's
-# make targets, Argo CD is Terraform's; this script runs them in order with the account checked and the waits bounded.
-#   secrets  after tf.sh <env> env apply, before root gitops (the sources of the cluster's Secrets exist before Argo CD):
-#     0. the account of the profile, as check-account.sh checks it
-#     1. the code repository's clone on main, clean and equal to origin/main: the entries and keys make eks-secrets
-#        writes come from its chart svp-cluster
-#     2. the kubeconfig context svp-<env> (for a private API endpoint, through the tunnel's local port)
-#     3. output cluster_values of root env into $SVP_SESSION_DIR/cluster-values.json (mode 600: it holds the ACME email)
-#     4. the password field of the RDS master secret into the environment of make alone: never a file (the secret's
-#        JSON goes from aws to jq through a pipe), never printed, never an argument
-#     5. make eks-secrets CONTEXT=svp-<env>: every entry svp/<env>/* of Secrets Manager; its output also in
-#        $SVP_SESSION_DIR/eks-secrets.log
-#   wait     after tf.sh <env> gitops apply:
-#     0. the account; for a private API endpoint, the tunnel open before any command to the API
-#     1. Application svp-observability Healthy (GlitchTip runs)
-#     2. make eks-glitchtip-init CONTEXT=svp-<env>: GlitchTip's DSN and tokens into entry glitchtip-runtime
-#     3. Application svp-root Synced and Healthy, which Argo CD reports once every Application it made is
-#
+# Bootstrap of the session's EKS cluster around the apply of root aws/gitops/<env>, which installs Argo CD and the root
+# of GitOps. Thin on purpose: the secrets and GlitchTip are the code repository's make targets, Argo CD is Terraform's.
+# Runs them in order with the account checked and the waits bounded: secrets before root gitops, wait after it.
+# Design notes: README.md.
+
 # Usage: aws/scripts/bootstrap.sh [--print] stg|prd secrets|wait
 set -euo pipefail
 

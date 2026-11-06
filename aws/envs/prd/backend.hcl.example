@@ -1,8 +1,8 @@
 # Shape of aws/backend-prd.hcl, the partial backend configuration shared by every root of the prd account (not this
-# directory). It holds no key: each root passes its own at init. It is written from the output of aws/accounts/prd,
-# never by hand:
+# directory). No key: each root passes its own at init. Written from the output of aws/accounts/prd, never by hand:
 #   AWS_PROFILE=anhnv-prd terraform -chdir=../../accounts/prd output -raw backend_hcl > ../../backend-prd.hcl
-# and read with:
+
+# Read with:
 #   AWS_PROFILE=anhnv-prd terraform init -reconfigure -backend-config=../../backend-prd.hcl -backend-config=key=aws/prd/terraform.tfstate
 bucket       = "svp-tfstate-222222222222-ap-southeast-1"
 region       = "ap-southeast-1"

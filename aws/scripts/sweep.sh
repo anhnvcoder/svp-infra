@@ -1,23 +1,16 @@
 #!/usr/bin/env bash
 # Last steps of every AWS session, after the destroy of both roots: lists what is left in an account, from the AWS APIs
-# alone, so it works when a destroy stopped half-way or the state is lost. Read only: no command here creates, changes
-# or deletes anything; each leftover comes with the command that deletes it, for the learner to run.
-# Run for the environment's account (stg, prd), then for the management account (mgmt), each with its own profile.
+# alone, so it works when a destroy stopped half-way or the state is lost. Read only: each leftover comes with the
+# command that deletes it, for the learner to run. Run for the environment's account (stg, prd), then for mgmt, each
+# with its own profile. Exit 0 when nothing else is left, 1 when anything is left or a kind could not be read.
+
 # Looks for resources tagged Project=svp, or with a tag Kubernetes components put on what they make
 # (kubernetes.io/cluster/svp-*, elbv2.k8s.aws/cluster, ebs.csi.aws.com/cluster, cluster.k8s.amazonaws.com/name), or
-# named as the lab names them (svp-*):
-#   EKS clusters; EC2 instances, EBS volumes and snapshots, VPCs, NAT gateways, Elastic IPs, network interfaces and
-#   security groups (also any of a VPC of the lab); ELBv2 load balancers and target groups; RDS instances, snapshots and
-#   retained automated backups; S3 buckets; CloudFront distributions, origin access controls and response headers
-#   policies; WAF web ACLs of CloudFront (us-east-1); CloudWatch log groups, also those RDS and EKS make themselves;
-#   Secrets Manager secrets, also those scheduled for deletion (they still hold their name); KMS keys; records of the
-#   account's hosted zone (an account with zone in env_table) but NS and SOA at its apex and the NS records below it
-#   (the delegations of child zones its baseline makes).
-# What stays between sessions is printed, not counted: what is tagged with a Stack of the environment's kept list in
-# env_table of lib.sh (baseline in a member account: state bucket, its KMS key, hosted zone; bootstrap and org in the
-# management account), as "kept", and KMS keys in PendingDeletion, as "pending deletion".
-# Exit 0 when nothing else is left, 1 when anything is left or a kind could not be read.
-#
+# named svp-*. What stays between sessions (a Stack of the environment's kept list in env_table of lib.sh) is printed as
+# "kept", and KMS keys in PendingDeletion as "pending deletion", not counted.
+
+# Design notes: README.md.
+
 # Usage: aws/scripts/sweep.sh [--print] mgmt|stg|prd
 set -euo pipefail
 
@@ -149,8 +142,8 @@ security_groups() {
   done
 }
 
-# elbv2_tagged KIND-ARNS-FILTER AWS-ARGS...: the ARNs of the answer whose tags are the lab's (describe-tags takes 20 at a
-# time).
+# elbv2_tagged KIND-ARNS-FILTER AWS-ARGS...: the ARNs of the answer whose tags are the lab's (describe-tags takes 20 at
+# a time).
 elbv2_tagged() {
   local arns_filter=$1 arns batch
   shift
@@ -234,8 +227,8 @@ secrets() {
     secretsmanager list-secrets --include-planned-deletion
 }
 
-# KMS keys behind an alias of the lab (alias/svp*, alias/eks/svp-*) or tagged Project=svp, each read once: PendingDeletion
-# is "pending deletion", a kept Stack is "kept", anything else is left.
+# KMS keys behind an alias of the lab (alias/svp*, alias/eks/svp-*) or tagged Project=svp, each read once:
+# PendingDeletion is "pending deletion", a kept Stack is "kept", anything else is left.
 kms_keys() {
   local ids id key tags state stack
   ids=$(q '.Aliases[] | select(.AliasName | test("^alias/(svp|eks/svp-)")) | select(.TargetKeyId) | .TargetKeyId' kms list-aliases) || return 1

@@ -179,7 +179,7 @@ run "prd_values" {
   }
 
   # The test guard refuses any line with the word of the update-kubeconfig flag that names the context, so the command
-  # is checked by its start (the cluster and region) and its end (the entry that update-kubeconfig wrote, on the tunnel).
+  # is checked by its start (the cluster and region) and its end (the entry update-kubeconfig wrote, on the tunnel).
   assert {
     condition = (startswith(output.kubeconfig_command, "AWS_PROFILE=anhnv-prd aws eks update-kubeconfig --region ap-southeast-1 --name svp-prd ") &&
     endswith(output.kubeconfig_command, " && kubectl config set-cluster arn:aws:eks:ap-southeast-1:222222222222:cluster/svp-prd --server=https://127.0.0.1:6443 --tls-server-name=0123456789ABCDEF0123456789ABCDEF.gr7.ap-southeast-1.eks.amazonaws.com"))

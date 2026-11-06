@@ -1,10 +1,7 @@
 # Who may read which entry: the plan's IAM policies and Pod Identity association against the map below, then one plan
-# per validation rule with a value that only that rule rejects. The AWS provider is a mock: nothing reaches an account,
-# and data sources return the values below. The policies are asserted through the arguments of their
-# aws_iam_policy_document data sources (the mock returns a fixed JSON for them); the provider still validates
-# arguments, so that JSON must be a policy.
-#
-# expected_entries restates the module's map on purpose: a change to who reads what must change both.
+# per validation rule with a value that only that rule rejects. The AWS provider is a mock: nothing reaches an account.
+# The policies are asserted through the arguments of their aws_iam_policy_document data sources (the mock returns a
+# fixed JSON). expected_entries restates the module's map on purpose: a change to who reads what must change both.
 
 mock_provider "aws" {
   mock_data "aws_partition" {
