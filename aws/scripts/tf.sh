@@ -1,44 +1,23 @@
 #!/usr/bin/env bash
 # Terraform of the two roots of a session, with the account checked before each command and the times of apply and
-# destroy in the session's timeline. ROOT is env (aws/envs/<env>: network, cluster, database, media, entries of Secrets
-# Manager) or gitops (aws/gitops/<env>: Argo CD and the root of GitOps on that cluster, applied after env).
-#   init     terraform init -reconfigure with the account's backend aws/backend-<env>.hcl and the root's own state key
-#            (-backend-config=key=aws/<env>/terraform.tfstate, aws/gitops/<env>/terraform.tfstate): -reconfigure drops
-#            whatever backend .terraform still names and never migrates a state
-#   plan     terraform plan -var-file=<env>.tfvars into <env>.tfplan, then show (below): the plan to be read before apply
-#   plan --teardown
-#            env only: terraform plan with <env>.tfvars and the environment's teardown file (the protections a destroy
-#            needs lifted, aws/envs/prd/teardown.tfvars) into <env>.teardown.tfplan, and its text; an environment
-#            without one has nothing to lift and skips it. The plan targets the resources of the state whose
-#            protection the file lifts (the DB instance, the buckets) and nothing else, so it never creates what an
-#            apply that failed halfway left out; when the state holds none of them there is nothing to lift, and the
-#            step is recorded as env-teardown-applied without a plan
-#   apply [--teardown]
-#            terraform apply of that plan file only (never a plan made on the fly), then the file is removed; with
-#            --teardown, the teardown plan, recorded as env-teardown-applied (a skip once that is recorded and no
-#            teardown plan is left)
-#   plan --destroy [--leftovers|--no-cluster]
-#            terraform plan -destroy into <env>.destroy.tfplan, and its text into <session>/<env>-<root>-destroy-plan.txt,
-#            the plan to be read before destroy.
-#            gitops: refused until pre-destroy.sh has finished in this session (resources Kubernetes made would block
-#            the destroy or stay billed). --leftovers is the way out when the session's time is up and pre-destroy.sh is
-#            still red: accepted only when the timeline holds pre-destroy-start and not pre-destroy-done, it records
-#            pre-destroy-skipped; what Kubernetes made may then be left in the account, and sweep.sh lists it.
-#            env: refused until root gitops is destroyed in this session (gitops-destroy-end), and, for an environment
-#            with a teardown file, until it is applied (env-teardown-applied): the plan takes both var files.
-#            --no-cluster says that no cluster ever ran, so root gitops was never applied; it is checked, not trusted:
-#            the session has no cluster-values.json and terraform state list of the root holds no EKS cluster.
-#   show     terraform show -no-color of <env>.tfplan into <session>/<env>-<root>-plan.txt, the text to read before
-#            apply (the plan file is binary). It names the real domain and IPs, so it goes in the session directory,
-#            never in the repository
-#   destroy  terraform apply of <env>.destroy.tfplan only (no plan made on the fly, no question asked), then the file is
-#            removed
-# TF_VAR_account_id is set from the environment's account variable once the account is checked: the provider refuses
-# any other. Root gitops also takes chart svp-cluster at the revision of envs/<env>/charts.yaml of svp-gitops (git
-# archive of the code repository's clone into the session directory, TF_VAR_svp_cluster_chart) and the Telegram chat
-# of Alertmanager (SVP_ALERT_TELEGRAM_CHAT_ID of the code repository's .env, TF_VAR_telegram_chat_id); for an
-# environment whose API endpoint is private, every command of root gitops but init needs the tunnel open.
-#
+# destroy in the session's timeline. ROOT is env (aws/envs/<env>) or gitops (aws/gitops/<env>: Argo CD and the root of
+# GitOps on that cluster, applied after env). apply and destroy take a saved plan
+# file only, never a plan made on the fly.
+
+# Design notes: README.md.
+
+# plan --teardown (env only) targets the resources of the state whose protection the teardown file lifts (the DB
+# instance, the buckets) and nothing else, so it never creates what an apply that failed halfway left out.
+
+# plan --destroy: gitops is refused until pre-destroy.sh has finished in this session (what Kubernetes made would block
+# the destroy or stay billed); env until root gitops is destroyed and, with a teardown file, that is applied.
+# --leftovers (the session's time is up and pre-destroy.sh still red) and --no-cluster (no cluster ever ran) are checked
+# against the timeline or the state, not trusted.
+
+# TF_VAR_account_id is set from the environment's account variable once the account is checked: the provider refuses any
+# other. The plan texts name the real domain and IPs, so they go in the session directory, never in the repository. For
+# an environment whose API endpoint is private, every command of root gitops but init needs the tunnel open.
+
 # Usage: aws/scripts/tf.sh [--print] stg|prd env|gitops init|plan [--teardown|--destroy [--leftovers|--no-cluster]]|show|apply [--teardown]|destroy
 set -euo pipefail
 

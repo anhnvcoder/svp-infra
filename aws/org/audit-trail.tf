@@ -401,7 +401,7 @@ resource "aws_cloudtrail" "audit" {
   include_global_service_events = true
   enable_log_file_validation    = true
 
-  # Management events, read and write, of every account; no data events (billed per event).
+  # No data events: they are billed per event.
   event_selector {
     read_write_type           = "All"
     include_management_events = true

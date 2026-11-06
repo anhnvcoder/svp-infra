@@ -38,9 +38,12 @@ UP-4…UP-6, WEB-10 của repo code.
 - Origin là bucket `media` qua **OAC** (ký SigV4 mọi request); policy bucket chỉ cho `cloudfront.amazonaws.com` `s3:GetObject` trên
   `media/*` với điều kiện `AWS:SourceArn` là ARN của distribution này; không `ListBucket`, nên key không có trả 403 thay vì 404.
 - Tên mặc định `<id>.cloudfront.net`, chứng chỉ mặc định, viewer chỉ HTTPS (`https-only`), HTTP/2 và HTTP/3, IPv6, price class biến
-  (`PriceClass_200`: gồm Singapore, Việt Nam, bỏ Nam Mỹ, Úc). Không access log của CloudFront.
+  (`PriceClass_200`: gồm Singapore, Việt Nam, bỏ Nam Mỹ, Úc). Không access log của CloudFront. Chứng chỉ `*.cloudfront.net` mặc định để
+  CloudFront quyết policy TLS cho viewer; đặt phiên bản giao thức tối thiểu cần chứng chỉ riêng, trong ACM ở `us-east-1`, với tên riêng:
+  module chưa có.
 - **WAF:** `web_acl_arn` (ARN web ACL scope `CLOUDFRONT` của module `waf`, mức prd) gắn web ACL vào distribution; mặc định `null` không gắn
-  (nội dung HLS công khai, bất biến; web ACL tính phí theo tháng mỗi ACL và rule). Ngoại lệ trivy AWS-0011 chỉ áp khi `web_acl_id` rỗng
+  (nội dung HLS công khai, bất biến, từ origin chỉ đọc; web ACL tính phí theo tháng mỗi ACL và rule, mà lab ngắn hạn không cần luật nào).
+  Ngoại lệ trivy AWS-0011 chỉ áp khi `web_acl_id` rỗng
   (giá trị khi không gắn), nên env có WAF không bị che finding nào.
 - **Cache:** policy managed `Managed-CachingOptimized`: cache key không có query, cookie, header; TTL theo `Cache-Control` của object trong
   khoảng 1 s tới 1 năm (object không gửi header thì 24 giờ). Mọi object của một version HLS mang `max-age=31536000, immutable`, nên edge giữ

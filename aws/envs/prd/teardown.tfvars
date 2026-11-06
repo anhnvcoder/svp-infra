@@ -2,6 +2,7 @@
 # are. The teardown at the end of a session applies, then destroys, with both files:
 #   AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform apply -var-file=prd.tfvars -var-file=teardown.tfvars
 #   AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform destroy -var-file=prd.tfvars -var-file=teardown.tfvars
+
 # rds_skip_final_snapshot stays false, so the destroy still writes the final snapshot of the DB instance, and the
 # automated backups are still kept: the session runbook reads, then deletes, both.
 

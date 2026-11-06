@@ -1,5 +1,6 @@
 # CloudFront in front of the media bucket. The URL of an object is https://<domain>/<key>: the gateway joins
 # MEDIA_PUBLIC_BASE_URL (https://<domain>) with the key, and the key already starts with media/.
+# Design notes: aws/modules/media/README.md.
 
 # Signs every request to the bucket, so the bucket can name this distribution in its policy and stay private.
 resource "aws_cloudfront_origin_access_control" "media" {
@@ -17,11 +18,10 @@ data "aws_cloudfront_cache_policy" "caching_optimized" {
   name = "Managed-CachingOptimized"
 }
 
-# CORS is answered by CloudFront, not by the bucket. The bucket's CORS headers depend on the request's Origin, but the
-# Origin is not in the cache key: a copy cached for a request without Origin (an <img>, curl) would then be served
-# without Access-Control-Allow-Origin to a player that needs it. So the distribution forwards no viewer header to the
-# bucket (no origin request policy), every viewer shares one cached copy, and this policy adds the CORS headers to
-# each answer whose Origin is one of the web's origins. Same methods as the bucket rule: GET and HEAD.
+# CORS is answered by CloudFront, not by the bucket: Origin is not in the cache key, so a copy cached for a request
+# without one (an <img>, curl) would reach a player that needs Access-Control-Allow-Origin without it. The distribution
+# therefore forwards no viewer header to the bucket, and this policy adds the CORS headers for the web's origins.
+# Same methods as the bucket rule: GET and HEAD.
 resource "aws_cloudfront_response_headers_policy" "media_cors" {
   name    = "${local.buckets["media"]}-cors"
   comment = "CORS of the web client for media"
@@ -46,11 +46,9 @@ resource "aws_cloudfront_response_headers_policy" "media_cors" {
 }
 
 # A WAF web ACL only when web_acl_arn is set (the waf module, in us-east-1). Without one (web_acl_id "", the finding
-# below): the distribution serves public, immutable HLS objects from a read-only origin, and a web ACL costs a monthly
-# fee per ACL and per rule for no rule a short-lived lab needs. The exception holds only for that value
-# (web_acl_id=""): with a web ACL the finding is cleared and nothing is ignored. The default *.cloudfront.net
-# certificate leaves the viewer TLS policy to CloudFront; a minimum protocol version needs a certificate of our own,
-# in ACM us-east-1 with a name of our own, which is a later step.
+# below), the distribution serves public, immutable HLS objects from a read-only origin, and a web ACL costs a monthly
+# fee per ACL and per rule for no rule a short-lived lab needs. The exception holds only for web_acl_id="".
+
 # Scope: stg only; prd: web_acl_arn of the waf module (AWS managed rule groups and a rate-based rule per client IP, so
 # a request flood is cut at the edge before it is billed).
 #trivy:ignore:AWS-0011[web_acl_id=]

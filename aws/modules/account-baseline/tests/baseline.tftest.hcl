@@ -1,8 +1,7 @@
 # What the baseline of a member account guarantees: who may use the state key, how the state bucket is protected, the
-# name of the zone, the delegation of child zones and the four budget alerts; then one plan per validation rule with a value that only that rule
-# rejects. The AWS provider is a mock: nothing reaches an account, and data sources return the values below. Policies
-# are asserted through the arguments of their aws_iam_policy_document data sources (the mock returns a fixed JSON for
-# them); the provider still validates arguments, so that JSON must be a policy.
+# name of the zone, the delegation of child zones and the four budget alerts; then one plan per validation rule with a
+# value that only that rule rejects. The AWS provider is a mock: nothing reaches an account. Policies are asserted
+# through the arguments of their aws_iam_policy_document data sources (the mock returns a fixed JSON for them).
 
 mock_provider "aws" {
   mock_data "aws_iam_policy_document" {

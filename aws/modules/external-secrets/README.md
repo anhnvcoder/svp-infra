@@ -15,10 +15,19 @@ Nguồn Secret của cluster EKS một env trong AWS Secrets Manager và quyền
 
 ## Ai đọc entry nào
 
-- Map namespace → entry (`local.namespace_entries` ở `main.tf`) chép từ render chart `svp-cluster` của repo code với store `aws`, object
-  store managed (`s3.mode: external`, nên không có entry của object store trong cluster) và Argo CD notifications bật; lệnh `helm template`
-  ghi ở comment ngay trên map. Thêm Secret vào `files/external-secrets.yaml` của chart thì thêm entry vào map, nếu không ExternalSecret đó bị
-  AWS từ chối.
+- Map namespace → entry (`local.namespace_entries` ở `main.tf`) là các `remoteRef` key của ExternalSecret mà chart `svp-cluster` của repo
+  code render với store `aws`, object store managed (`s3.mode: external`) và Argo CD notifications bật. Khi đó chart không render entry của
+  object store trong cluster (`s3-root`, `s3-users`, `pg-backup-s3`), nên map không có chúng. Map chép từ render của `origin/main`, chart
+  giải nén bằng `git archive` vào một thư mục trống:
+
+  ```sh
+  helm template svp-cluster deploy/helm/svp-cluster --namespace svp --show-only templates/external-secrets.yaml \
+    --set externalSecrets.enabled=true --set externalSecrets.store=aws --set externalSecrets.prefix=svp/stg/ \
+    --set s3.mode=external --set externalSecrets.argocdNotifications=true \
+    --set externalSecrets.aws.region=ap-southeast-1 --set externalSecrets.aws.roles.<namespace>=<arn>   # mỗi namespace
+  ```
+
+  Thêm Secret vào `files/external-secrets.yaml` của chart thì thêm entry vào map, nếu không ExternalSecret đó bị AWS từ chối.
 - Role controller `svp-<env>-external-secrets`: chỉ EKS Pod Identity assume được (principal `pods.eks.amazonaws.com`), trust đòi session
   tag đúng cluster, namespace `external-secrets` và ServiceAccount `external-secrets` (controller của `base/external-secrets.yaml` trong
   `svp-gitops`); association Pod Identity gắn ServiceAccount đó với role. Role không đọc entry nào, chỉ được `sts:AssumeRole` +
@@ -37,6 +46,7 @@ Nguồn Secret của cluster EKS một env trong AWS Secrets Manager và quyền
 `tests/policies.tftest.hcl` (mock provider, chỉ `plan`) chép lại map namespace → entry và kiểm: tên entry, `recovery_window_in_days`, mỗi
 role namespace chỉ `GetSecretValue` đúng entry của mình (không `*`), trust của role namespace chỉ có role controller, trust của role
 controller chỉ Pod Identity với ba session tag, association và quyền assume của controller; một run cho prd và một run mỗi luật validation.
+Map được chép lại ở file test có chủ đích: đổi ai đọc entry nào thì phải đổi cả hai nơi.
 
 <!-- markdownlint-disable MD033 -->
 <!-- BEGIN_TF_DOCS -->

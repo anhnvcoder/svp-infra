@@ -1,10 +1,7 @@
-# What the GitOps bootstrap root applies, from inputs written here: the cluster Secret (labels, annotations), the root
-# ApplicationSet, the release of Argo CD, the AppProjects, the namespaces with their Pod Security labels and the
-# address of the API; then one plan per rule with a value that only that rule rejects. The module holds no resource of
-# any provider; the mock AWS provider is there because make test requires one in every test file.
-#
-# cluster_values below holds every key of the cluster.* contract (the output cluster_values of the env roots), written
-# here on purpose rather than read from another repository: a key added to the contract is added here too.
+# What the GitOps bootstrap root applies: the cluster Secret, the root ApplicationSet, the release of Argo CD, the
+# AppProjects, the namespaces with their Pod Security labels and the address of the API; then one plan per rule with a
+# value that only that rule rejects. cluster_values below holds every key of the cluster.* contract, written here on
+# purpose rather than read from another repository: a key added to the contract is added here too.
 
 mock_provider "aws" {}
 

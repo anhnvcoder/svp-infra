@@ -1,29 +1,17 @@
 # shellcheck shell=bash
-# Helpers of the session scripts of this directory, sourced by each of them. Those scripts reach the AWS account and
-# the EKS cluster of a session: the learner runs them, from a terminal of the Mac (bash 3.2 is enough). Each takes
-# --print as its first argument to show, in order, every command it would run, and then runs none: no aws, kubectl,
-# helm, terraform, make, git, nc or dig is called, nothing is read from the account and nothing is written.
-#
-# Every command that reaches AWS carries the profile and the region in the command itself (AWS_PROFILE=anhnv-stg ...
-# --region ap-southeast-1), never in a shell variable the reader has to look up. Each step prints one line: ok, FAIL
-# (and the script stops), note or skip. No secret value is ever printed or written to a file.
+# Helpers of the session scripts of this directory, sourced by each of them; they run from a terminal of the Mac (bash
+# 3.2). --print as the first argument of each shows, in order, every command it would run, and then runs none. Every
+# command that reaches AWS carries the profile and the region; no secret value is printed or written to a file.
+# Design notes: README.md.
 
 region=ap-southeast-1
 # CloudFront's web ACLs (scope CLOUDFRONT) live in us-east-1 whatever the region of the distribution.
 global_region=us-east-1
 
-# The environments, one line each: the only place where they differ. No script branches on an environment's name;
-# each reads the fields of its line.
-#   name      argument of the scripts; the cluster, the kubectl context and the Terraform roots carry it
-#   profile   AWS profile (IAM Identity Center) of the environment's account, made by the learner with aws configure sso
-#   account   variable with the 12 digits of that account, exported in the session's terminal, never in a file
-#   zone      1 when the account has a hosted zone, named by zone_name of aws/accounts/<name>/<name>.auto.tfvars (env_zone);
-#             - for none
-#   kept      Stack tags of what stays in the account between sessions (sweep.sh), comma-separated
-#   tunnel    local port of the SSM tunnel to a private API endpoint; - when the endpoint is public
-#   teardown  file of aws/envs/<name> that lifts the protections a destroy needs; - for none
-#   ladder    1 when measure.sh runs the k6 ladder after the smoke; - for the smoke and seed alone
-#   session   1 when the environment has the session's two roots, aws/envs/<name> and aws/gitops/<name>
+# The environments, one line each: the only place where they differ; no script branches on an environment's name.
+# Fields, read by env_arg: name, AWS profile, variable with the 12 digits of the account (exported, never in a file),
+# hosted zone 1/- (env_zone), Stack tags kept between sessions (sweep.sh), local port of the SSM tunnel to a private API
+# endpoint, file of aws/envs/<name> that lifts the protections a destroy needs, k6 ladder 1/-, session roots 1/-.
 env_table='mgmt anhnv-sso SVP_AWS_MGMT_ACCOUNT_ID - bootstrap,org - - - -
 stg anhnv-stg SVP_AWS_STG_ACCOUNT_ID 1 baseline - - 1 1
 prd anhnv-prd SVP_AWS_PRD_ACCOUNT_ID 1 baseline 6443 teardown.tfvars - 1'
@@ -161,10 +149,9 @@ mark() {
 }
 
 # check_account: the account of the environment's profile must be the one in its account variable
-# (SVP_AWS_<ENV>_ACCOUNT_ID), which the learner exports in the terminal of the session after reading it on the SSO page
-# (never in a committed file: the repository is public). Every script that reaches the account or the cluster runs it
-# first, so a wrong profile stops before anything else; check-dns.sh alone does not, as it only reads one output of the
-# baseline's state and changes nothing.
+# (SVP_AWS_<ENV>_ACCOUNT_ID), exported in the session's terminal (never in a committed file: the repository is public).
+# Every script that reaches the account or the cluster runs it first, so a wrong profile stops before anything else;
+# check-dns.sh alone does not: it only reads one output of the baseline's state and changes nothing.
 check_account() {
   local id account arn want
   want=${!account_var:-}
@@ -231,9 +218,9 @@ wait_until() {
   done
 }
 
-# env_zone: the hosted zone of the environment's account, in zone: zone_name of aws/accounts/<env>/<env>.auto.tfvars (the
-# uncommitted file of the baseline that made the zone), read without Terraform so that it works when no state is left.
-# Empty for an account without a hosted zone (zone - in env_table).
+# env_zone: the hosted zone of the environment's account, in zone: zone_name of aws/accounts/<env>/<env>.auto.tfvars
+# (the uncommitted file of the baseline that made the zone), read without Terraform so that it works when no state is
+# left. Empty for an account without a hosted zone (zone - in env_table).
 env_zone() {
   zone=
   [ -n "$has_zone" ] || return 0

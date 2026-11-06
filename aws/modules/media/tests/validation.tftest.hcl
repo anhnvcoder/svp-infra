@@ -1,6 +1,7 @@
 # Validation rules of the module's variables: one plan with valid values, then one plan per rule with a value that only
-# that rule rejects; then what the defaults keep, what each new variable adds, and the values of prd. The AWS provider is a mock: nothing reaches an account, and data sources return the values below
-# (the provider still validates arguments, so policies must be JSON).
+# that rule rejects; then what the defaults keep, what each new variable adds, and the values of prd. The AWS provider
+# is a mock: nothing reaches an account, and data sources return the values below (the provider still validates
+# arguments, so policies must be JSON).
 
 mock_provider "aws" {
   mock_data "aws_iam_policy_document" {

@@ -14,7 +14,12 @@ Giám sát ngoài Prometheus của cluster, mỗi thứ tắt mặc định (t�
 - **CloudWatch Database Insights chế độ Standard** (chế độ RDS bật mặc định, không phí theo vCPU như Advanced; module ghi tường minh).
   `performance_insights_enabled` bật Performance Insights trong chế độ đó, `performance_insights_retention_period` mặc định 7 ngày (mức
   miễn phí; Advanced đòi tối thiểu 465 ngày). Với PostgreSQL không giới hạn instance class (ngoại lệ `db.t4g.micro`, `small` chỉ áp cho
-  MariaDB, MySQL). Nguồn ở comment của `main.tf`.
+  MariaDB, MySQL). Nguồn (đọc 2026-11-05):
+  [Database Insights](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_DatabaseInsights.html),
+  [bật chế độ Standard](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_DatabaseInsights.TurningOnStandard.html),
+  [lưu ý](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_DatabaseInsights.Considerations.html),
+  [engine](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_DatabaseInsights.Engines.html),
+  [chi phí Performance Insights](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_PerfInsights.Overview.cost.html).
 - **Enhanced monitoring:** `monitoring_interval` khác 0 thì module tạo role `<name>-rds-monitoring`, trust policy theo hướng dẫn RDS (chỉ
   `monitoring.rds.amazonaws.com`, điều kiện `aws:SourceArn` là ARN của instance này và `aws:SourceAccount` là account này), gắn policy AWS
   quản lý `AmazonRDSEnhancedMonitoringRole`.

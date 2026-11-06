@@ -3,12 +3,10 @@ locals {
   # from there alone (the ACM certificate and the WAF web ACL of CloudFront, IAM Identity Center of this organization).
   allowed_regions = ["ap-southeast-1", "us-east-1"]
 
-  # Global services, and the few global calls of regional services, whose requests carry us-east-1 or another region
-  # no matter where the caller works: denying them by region would break IAM, Organizations, Route 53, CloudFront,
-  # WAF for CloudFront, Budgets, STS, Support, IAM Identity Center and the console. Verbatim the NotAction list of
-  # the AWS example "Deny access to AWS based on the requested AWS Region"
-  # (https://docs.aws.amazon.com/controltower/latest/controlreference/primary-region-deny-policy.html, read
-  # 2026-11-05; the same example is in the AWS Organizations user guide, "Example SCPs: general").
+  # Global services, and the few global calls of regional services, whose requests carry us-east-1 or another region no
+  # matter where the caller works: denying them by region would break IAM, Organizations, Route 53, CloudFront, WAF for
+  # CloudFront, Budgets, STS, Support, IAM Identity Center and the console. Verbatim the NotAction list of
+  # https://docs.aws.amazon.com/controltower/latest/controlreference/primary-region-deny-policy.html
   global_actions = [
     "a4b:*",
     "access-analyzer:*",

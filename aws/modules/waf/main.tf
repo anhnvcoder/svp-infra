@@ -1,12 +1,9 @@
 # An AWS WAF web ACL for a CloudFront distribution. Scope CLOUDFRONT: AWS accepts such a web ACL only in us-east-1, so
 # the root calls this module with a provider of that region (providers = { aws = aws.us_east_1 }) and passes
-# web_acl_arn to the distribution.
-#
-# Requests that no rule blocks are allowed. Rules, in the order WAF evaluates them:
-# 1. a rate-based rule per client IP address, first so a flood is cut before the managed rules are billed for it;
-# 2. AWSManagedRulesCommonRuleSet, the baseline group of AWS (OWASP-style exploits, oversized or malformed requests);
-# 3. AWSManagedRulesKnownBadInputsRuleSet (request patterns of known vulnerabilities, such as Log4j lookups).
-# Each rule and the web ACL itself send CloudWatch metrics and keep sampled requests, which the console shows.
+# web_acl_arn to the distribution. Requests that no rule blocks are allowed. The rate-based rule per client IP is
+# first, so a flood is cut before the managed rules are billed for it.
+
+# Design notes: aws/modules/waf/README.md.
 
 resource "aws_wafv2_web_acl" "this" {
   name        = var.name

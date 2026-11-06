@@ -1,4 +1,4 @@
-# tflint configuration of every directory `make tflint` checks (the Makefile passes --config with this file).
+# tflint configuration shared by every directory `make tflint` checks.
 
 # Local modules are inspected with the values their caller passes; modules from the registry are checked by their
 # authors, and by trivy here.
@@ -6,7 +6,7 @@ config {
   call_module_type = "local"
 }
 
-# Bundled with tflint: syntax and conventions (required versions, unused declarations, deprecated syntax).
+# Bundled with tflint: syntax and conventions.
 plugin "terraform" {
   enabled = true
   preset  = "recommended"

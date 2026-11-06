@@ -5,9 +5,11 @@ Module nội bộ mỏng bọc [`terraform-aws-modules/vpc/aws`](https://registr
 theo `single_nat_gateway`, S3 gateway endpoint trên mọi route table private, security group mặc định không rule nào, flow log tắt mặc
 định. Mức stg và prd chỉ khác ở biến (bảng dưới), một bộ code.
 
-Policy của S3 gateway endpoint: mặc định không có (endpoint cho qua mọi bucket IAM cho phép). `s3_endpoint_restricted = true` (mức prd) đặt
+Policy của S3 gateway endpoint: mặc định không có (endpoint cho qua mọi bucket IAM cho phép, và NetworkPolicy của pod, vốn khớp S3 theo địa
+chỉ, không phân biệt được bucket này với bucket khác). `s3_endpoint_restricted = true` (mức prd) đặt
 policy chỉ cho qua các bucket trong `s3_endpoint_buckets` (bucket `uploads`, `media` của env, root truyền từ output của module `media`) và
-`s3:GetObject` trên bucket layer image của Amazon ECR trong region (`prod-<region>-starport-layer-bucket`). Route của endpoint nhận mọi địa
+`s3:GetObject` trên bucket layer image của Amazon ECR trong region (`prod-<region>-starport-layer-bucket`; xem mục "Minimum Amazon S3 bucket
+permissions for Amazon ECR" của [tài liệu VPC endpoint của ECR](https://docs.aws.amazon.com/AmazonECR/latest/userguide/vpc-endpoints.html)). Route của endpoint nhận mọi địa
 chỉ S3 của region, nên từ subnet private mọi bucket khác của region bị từ chối: credential bị lộ không chép dữ liệu ra bucket của account
 khác được; image nào kéo blob từ bucket S3 khác trong cùng region cũng bị chặn.
 

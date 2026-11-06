@@ -119,7 +119,9 @@ Chạy từ gốc repo, không cần credential AWS, cần Docker và mạng (re
 Chưa có thư mục `*.tf` nào thì sáu phép Terraform in một dòng và qua. Mọi công cụ chạy bằng image ghim digest trong `Makefile`
 (`TERRAFORM_IMAGE` 1.15.8, `TFLINT_IMAGE`, `TRIVY_IMAGE`, `ZIZMOR_IMAGE`, `MARKDOWNLINT_IMAGE` và `LYCHEE_IMAGE` cùng bản ghim của repo code,
 `SHELLCHECK_IMAGE`, `TFDOCS_IMAGE_AMD64` và `TFDOCS_IMAGE_ARM64`:
-terraform-docs chỉ có tag theo kiến trúc nên ghim cả hai cùng bản, `Makefile` chọn theo `uname -m`), qua
+terraform-docs chỉ có tag theo kiến trúc nên ghim cả hai cùng bản, `Makefile` chọn theo `uname -m`), cùng một tham chiếu trên máy dev và trong CI,
+nên không cài gì thêm và không tin action setup nào. Trên máy chủ chạy ba target tự kiểm, không container: `session-test` chỉ cần bash, git và jq
+mà máy Mac và runner CI đều có, `test-guard` chạy với `docker` giả, `github-app-test` dùng python3. Image chạy qua
 `env -u DOCKER_DEFAULT_PLATFORM docker run` (shell của máy đặt `linux/amd64` cho dự án khác), container chạy dưới uid của người gọi.
 Không target nào gọi `apply`, `destroy`, `import`, `state`, `output` hay `aws`; `plan` duy nhất là các `run` của `make test`, trên provider AWS giả
 (`mock_provider`), không mạng, không credential.
@@ -130,7 +132,10 @@ inline HTML trong khối đó; phần viết tay ngoài khối vẫn theo đủ 
 
 **Test của module** (`aws/modules/<module>/tests/*.tftest.hcl`): mỗi rule `validation` trong `variables.tf` có một `run` với giá trị chỉ rule đó
 từ chối và `expect_failures` trỏ biến, mỗi module một `run` giá trị hợp lệ; data source cần giá trị có hình (JSON của policy, ARN, danh sách
-zone) lấy từ `mock_data` của file test vì provider giả vẫn kiểm đối số. Thêm rule `validation` thì thêm `run` trong cùng thay đổi.
+zone) lấy từ `mock_data` của file test vì provider giả vẫn kiểm đối số. Policy IAM được kiểm qua đối số của các data source
+`aws_iam_policy_document` (provider giả trả JSON cố định cho chúng), nên JSON đó phải là một policy. Ví dụ, test của `account-baseline` kiểm
+ai dùng được key state, bucket state được bảo vệ ra sao, tên zone, uỷ quyền zone con và bốn cảnh báo budget, rồi mỗi rule `validation` một
+plan. Thêm rule `validation` thì thêm `run` trong cùng thay đổi.
 
 **Chạy song song trên hai thư mục khác nhau** (`make check DIRS=a` và `make check DIRS=b` cùng lúc) an toàn vì mỗi lượt chỉ ghi dưới
 thư mục nó kiểm:
@@ -138,7 +143,8 @@ thư mục nó kiểm:
 - thư mục tạm của lượt (`TF_DATA_DIR`): provider (bản Linux của container, ~700 MB cho provider AWS) và module tải về, xoá khi lượt kết thúc;
 - plugin tflint ở `<dir>/.terraform/tflint.d/` (`TFLINT_PLUGIN_DIR`, ~70 MB);
 - `<dir>/.terraform.lock.hcl` của module (root chỉ đọc lock của nó; `make lock` thì ghi);
-- cache của trivy, zizmor nằm trong container (`/tmp/trivy`, `/tmp/zizmor`) và mất khi container dừng; shellcheck, `docs-check` không ghi gì.
+- cache của trivy, zizmor nằm trong container (`/tmp/trivy`, `/tmp/zizmor`) và mất khi container dừng; `session-test` chỉ ghi trong một thư mục
+  tạm riêng của nó và xoá thư mục đó; shellcheck, `docs-check` không ghi gì.
 
 Không có cache plugin dùng chung (`TF_PLUGIN_CACHE_DIR` không đặt, không thư mục plugin tflint chung): hai lượt không bao giờ cùng ghi một
 file, đổi lại mỗi lượt tải provider riêng. `.terraform/` mà người học `init` với backend thật không bị `make check` đọc hay ghi (trừ
@@ -146,7 +152,19 @@ file, đổi lại mỗi lượt tải provider riêng. `.terraform/` mà ngư�
 
 **Ngoại lệ của trivy:** finding trong file `.tf` của repo này bỏ qua ngay cạnh resource bằng dòng `#trivy:ignore:<id>`, lý do ở comment
 ngay trên; finding trong module tải từ registry (không comment được) vào `.trivyignore.yaml`, `paths` tương đối với thư mục được kiểm. Sửa
-được thì sửa, không ghi ngoại lệ.
+được thì sửa, không ghi ngoại lệ. Mỗi mục của `.trivyignore.yaml` có `id`, `paths` (không bao giờ một id cho mọi file), `statement` (lý do) và,
+khi quyết định đang chờ việc khác, `expired_at` (yyyy-mm-dd). trivy so `paths` với đường nó báo, với module registry là
+`<namespace>/<name>/<provider>/<file>` (ví dụ `terraform-aws-modules/eks/aws/main.tf`). Luật ghi phạm vi (`Scope:`) trong lý do, và vì sao
+ngoại lệ chỉ-stg không che finding của prd, ở mục "Ngoại lệ trivy" của [`AGENTS.md`](AGENTS.md).
+
+**Cách `make trivy` quét:** finding HIGH hoặc CRITICAL làm đỏ; ngoại lệ có chủ đích nằm ở `.trivyignore.yaml`, mỗi mục kèm lý do.
+`--skip-dirs` bỏ thư mục `examples/` mà module registry kèm theo (manifest Kubernetes và root mẫu mà Terraform không bao giờ apply), dù
+module được gọi từ root nào, nên không ngoại lệ nào phải lặp theo từng root. `--skip-check-update` giữ bộ luật dựng sẵn trong image ghim:
+bộ luật trivy sẽ tải về nằm sau một tag trôi, nên luật mới có thể làm check bắt buộc đỏ trên code không đổi, hay một luật biến mất mà không
+ai hay. Module registry do chính trivy tải về và được quét với cấu hình gọi nó. Mỗi root được quét với giá trị của env nó chạy:
+`<thư mục>/<phần cuối của tên thư mục>.tfvars` (`aws/envs/prd/prd.tfvars`), khi file đó có, đi vào `--tf-vars`, nên ngoại lệ chỉ đúng cho
+một env (ignore có điều kiện thuộc tính, ignore trên lời gọi module trong root của env đó) không bao giờ che finding của env khác. Module,
+hay root không có file đó, được quét với giá trị mặc định của biến.
 
 **CI** (`.github/workflows/check.yml`): mỗi PR và push `main` chạy đúng `make check` trên `ubuntu-24.04`; job `check` chỉ `contents: read`,
 token của lượt chỉ vào container tflint (giới hạn tải plugin từ GitHub) và container zizmor (audit online, finding thành annotation), không
@@ -220,6 +238,33 @@ cần credential thì dùng OIDC, máy khác đặt tên profile khác). Code ch
 Vì mỗi root thuộc một account, không đặt một `AWS_PROFILE` hay `TF_VAR_account_id` chung cho cả thư mục (`.envrc` của direnv, `~/.zshrc`):
 profile và account ghi trong từng lệnh, script buổi lấy chúng từ bảng env của `aws/scripts/lib.sh`.
 
+**Script buổi** (`aws/scripts/`) dùng chung `lib.sh` và chạy từ terminal của máy Mac (bash 3.2 là đủ); các bước theo thứ tự ở runbook
+[`session-stg.md`](docs/runbooks/session-stg.md) và [`session-prd.md`](docs/runbooks/session-prd.md). Mỗi script nhận `--print` làm đối số đầu
+để in, theo thứ tự, mọi lệnh nó sẽ chạy rồi không chạy lệnh nào: không gọi `aws`, `kubectl`, `helm`, `terraform`, `make`, `git`, `nc` hay
+`dig`, không đọc gì từ account và không ghi gì. Mọi lệnh chạm AWS mang profile và region ngay trong lệnh (`AWS_PROFILE=anhnv-stg ... --region
+ap-southeast-1`), không qua biến shell mà người đọc phải tra. Mỗi bước in một dòng: `ok`, `FAIL` (script dừng), `note` hay `skip`. Không giá
+trị bí mật nào được in hay ghi vào file.
+
+Bảng env của `lib.sh` (`env_table`) mỗi env một dòng và là nơi duy nhất các env khác nhau: không script nào rẽ nhánh theo tên env, script
+đọc các trường của dòng:
+
+| Trường | Nghĩa |
+| --- | --- |
+| `name` | đối số của script; cluster, kubectl context và các root Terraform mang tên này |
+| `profile` | AWS profile (IAM Identity Center) của account của env, người học tạo bằng `aws configure sso` |
+| `account` | biến chứa 12 số của account đó, export trong terminal của buổi, không bao giờ ghi vào file |
+| `zone` | `1` khi account có hosted zone, tên là `zone_name` của `aws/accounts/<name>/<name>.auto.tfvars` (`env_zone`); `-` khi không có |
+| `kept` | tag `Stack` của thứ ở lại account giữa các buổi (`sweep.sh`), cách nhau bằng dấu phẩy |
+| `tunnel` | cổng local của tunnel SSM tới endpoint API private; `-` khi endpoint public |
+| `teardown` | file của `aws/envs/<name>` nhấc các bảo vệ mà destroy cần; `-` khi không có |
+| `ladder` | `1` khi `measure.sh` chạy thang k6 sau smoke; `-` khi chỉ có smoke và seed |
+| `session` | `1` khi env có hai root của buổi, `aws/envs/<name>` và `aws/gitops/<name>` |
+
+`bootstrap.sh` mỏng có chủ đích: secret và GlitchTip là target `make` của repo code, Argo CD là của Terraform; script chỉ chạy chúng theo thứ
+tự, có kiểm account và có giới hạn cho mỗi lần chờ. `secrets` chạy sau `tf.sh <env> env apply` và trước root gitops (nguồn của các Secret
+trong cluster có trước Argo CD); `wait` chạy sau `tf.sh <env> gitops apply`. `pre-destroy.sh` để lại tới bước cuối các Application nền tảng,
+vì finalizer và webhook của chúng cần cho việc xoá object của workload.
+
 ## Luật an toàn
 
 - **AI** (Claude, Codex) chỉ chạy `make check` và các phép trong đó (kể cả `make test`: `terraform test` trên provider giả, `--network none`,
@@ -227,6 +272,12 @@ profile và account ghi trong từng lệnh, script buổi lấy chúng từ b�
   `terraform providers lock` (`make lock`). Mọi lệnh chạm account (`terraform test` trần, `plan`, `apply`, `destroy`, `import`, `state`, `output`, `aws` trừ
   `--version`, script dùng SDK) do người học chạy; trước mọi lệnh ghi, `aws sts get-caller-identity` với profile của chính account đó
   (`aws/scripts/check-account.sh mgmt|stg|prd`) và so account. Provider của root ghim account bằng `allowed_account_ids` từ `TF_VAR_account_id`.
+- **`make test` từ chối file test sai khuôn thay vì dò từng cách phá luật** (một `run` không có `command` thì apply; một mock đặt dưới
+  `alias` để provider thật làm mặc định). Chỉ `init`, trong một container riêng, tải provider và module registry; container chạy test có
+  `HOME` là `/tmp` của container và chỉ mount thư mục module (chỉ đọc), không bao giờ `~/.aws`, gốc repo hay thư mục env. Chuỗi trong HCL không
+  xuống dòng, nên khi khối comment và heredoc bị cấm thì mỗi dòng được đọc đúng như HCL đọc nó. Vì thế dòng chứa `*/` (kể cả dòng comment, vì
+  `/*` có thể nằm trong chuỗi như một origin) hay `<<` (heredoc) bị từ chối: dòng của hai thứ đó có thể giả làm dòng khuôn. Khuôn đủ ở
+  [`AGENTS.md`](AGENTS.md); `make test-guard` kiểm ba luật mà không khởi động container nào.
 - **Không commit:** state (`*.tfstate*`), plan (`*.tfplan`), `backend.hcl`, `*.auto.tfvars`, `terraform.tfvars`, override
   (`*_override.tf`), `.terraform/`, thư mục số đo `.session/`. Giá trị cá nhân (account ID, IP được gọi API EKS, email, tên miền thật,
   tên bucket) chỉ qua `*.auto.tfvars` không commit hay `TF_VAR_*`; repo có file `*.example` với `svp.example`, `000000000000`.

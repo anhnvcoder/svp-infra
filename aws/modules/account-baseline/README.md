@@ -8,10 +8,11 @@ Tạo:
 - **KMS key `alias/svp-tfstate`** (xoay vòng tự động, chờ 30 ngày khi xoá, `prevent_destroy`). Key policy theo mẫu của tài liệu KMS
   ([default key policy](https://docs.aws.amazon.com/kms/latest/developerguide/key-policy-default.html)): account quản trị key qua IAM với
   nhóm quyền "key administrators" (không có quyền mã hoá, giải mã), nên admin nào của account (SvpAdmin, `OrganizationAccountAccessRole`)
-  cũng sửa lại được policy, key không bị khoá chết; mã hoá, giải mã chỉ cho role SSO của permission set `SvpAdmin`, khớp bằng `ArnLike`
-  `aws:PrincipalArn` với mẫu `AWSReservedSSO_SvpAdmin_*` (hậu tố ngẫu nhiên thay bằng `*`, đường dẫn có và không có đoạn region) theo
-  [IAM Identity Center](https://docs.aws.amazon.com/singlesignon/latest/userguide/referencingpermissionsets.html). Không statement nào có
-  principal `*`. Hệ quả: role chỉ được đọc hay liệt kê bucket không đọc được state (state chứa output, thuộc tính tài nguyên).
+  cũng sửa lại được policy, key không bị khoá chết dù permission set bị đổi tên hay gỡ; mã hoá, giải mã chỉ cho role SSO của permission set
+  `SvpAdmin`, khớp bằng `ArnLike` `aws:PrincipalArn` với mẫu `AWSReservedSSO_SvpAdmin_*` (hậu tố ngẫu nhiên thay bằng `*`) theo
+  [IAM Identity Center](https://docs.aws.amazon.com/singlesignon/latest/userguide/referencingpermissionsets.html). Đường dẫn của role không
+  có đoạn region khi instance Identity Center ở `us-east-1`, và có đoạn region khi ở region khác; policy liệt kê cả hai dạng nên không phụ
+  thuộc instance nằm đâu. Chỉ IAM Identity Center tạo được role dưới `/aws-reserved/`. Không statement nào có principal `*`. Hệ quả: role chỉ được đọc hay liệt kê bucket không đọc được state (state chứa output, thuộc tính tài nguyên).
 - **Bucket `svp-tfstate-<account>-<region>`**: versioning, mã hoá mặc định SSE-KMS bằng key trên (S3 Bucket Key bật để giảm request KMS),
   chặn public, `BucketOwnerEnforced`, policy từ chối request không TLS, `prevent_destroy`.
 - **Hosted zone `zone_name`** của env: `aws.<domain>` ở prd (zone gốc của lab, DNS của domain cha uỷ quyền bằng bốn bản ghi `NS` tên
@@ -20,6 +21,7 @@ Tạo:
 - **Bản ghi uỷ quyền zone con** (biến `delegated_subdomains`, mặc định rỗng: không bản ghi nào): mỗi mục một bản ghi `NS` TTL 172800 trong
   zone của env, trỏ tới zone ở account khác, theo
   [Route 53: tạo subdomain dùng Route 53 mà không chuyển domain cha](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/CreatingNewSubdomain.html).
+  TTL 172800 là giá trị hướng dẫn đó ghi cho bản ghi `NS`: name server của một zone được giữ không đổi.
   Chỉ root `aws/accounts/prd` truyền biến này (zone `stg.aws.<domain>`). Tên mỗi mục phải là con thật của `zone_name`, đúng bốn name
   server khác nhau. Lý do chọn mô hình này: [ADR-0051](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0051-dns-prd-apex.md).
 - **Budget `svp-<env>-monthly`**: chi phí của riêng account, email ở 50 %, 80 %, 100 % chi phí thực tế và 100 % dự báo (cùng mẫu budget

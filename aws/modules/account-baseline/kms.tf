@@ -1,10 +1,9 @@
+# Design notes: aws/modules/account-baseline/README.md.
 locals {
   # Roles IAM Identity Center creates in this account for the permission set SvpAdmin. The role name ends in a random
-  # suffix, so the policy matches it with a trailing wildcard, the way the IAM Identity Center guide "Referencing
-  # permission sets in resource policies, Amazon EKS cluster configuration maps, and AWS KMS key policies" does
-  # (https://docs.aws.amazon.com/singlesignon/latest/userguide/referencingpermissionsets.html). The path has no region
-  # when the Identity Center instance is in us-east-1 and the region otherwise; both forms are listed, so the policy
-  # does not depend on where the instance lives. Only IAM Identity Center can create roles under /aws-reserved/.
+  # suffix, so the policy matches it with a trailing wildcard, as the IAM Identity Center guide on referencing
+  # permission sets in KMS key policies does. The path has no region when the Identity Center instance is in us-east-1
+  # and the region otherwise; both forms are listed. Only IAM Identity Center can create roles under /aws-reserved/.
   admin_role_arn_patterns = [
     "arn:aws:iam::${var.account_id}:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_SvpAdmin_*",
     "arn:aws:iam::${var.account_id}:role/aws-reserved/sso.amazonaws.com/*/AWSReservedSSO_SvpAdmin_*",
@@ -41,13 +40,10 @@ locals {
   ]
 }
 
-# Key policy of the state key. State holds outputs and resource attributes that a role allowed only to list or read
-# the bucket should not see, so reading the state takes kms:Decrypt, which only the SvpAdmin roles get.
-# - The account administers the key through IAM policies (no kms:Decrypt among those actions): any admin of the account
-#   (SvpAdmin, OrganizationAccountAccessRole) can still fix the key policy, so the key cannot become unmanageable if the
-#   permission set is renamed or removed.
-# - Using the key: the account principal, narrowed by aws:PrincipalArn to the SvpAdmin roles. No statement names the
-#   principal "*".
+# Key policy of the state key. State holds outputs and resource attributes that a role allowed only to list or read the
+# bucket should not see, so reading it takes kms:Decrypt, which only the SvpAdmin roles get (aws:PrincipalArn narrows
+# the use; no statement names the principal "*"). The account administers the key without kms:Decrypt, so any admin of
+# the account can still fix the key policy if the permission set is renamed or removed.
 data "aws_iam_policy_document" "state_key" {
   statement {
     sid       = "AccountAdministersKey"

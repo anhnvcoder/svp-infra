@@ -19,18 +19,16 @@ locals {
   }
 }
 
-# Findings of trivy inside the registry module, each a deliberate choice:
-# - AWS-0039: no customer managed key for Secrets while secrets_kms_encryption is false; EKS then encrypts the
-#   Kubernetes API data, Secrets included, with an AWS owned key. The exception holds only for that value
-#   (create_kms_key=false): with the key on, the finding is cleared and nothing is ignored. trivy (0.76) matches this
-#   condition when it scans this module, but not when it reaches the module from a root (a condition on a bool or a
-#   number never matches there, one on a string does), so the root of an env that keeps the key off repeats the
-#   exception, without condition, on its call of this module.
-#   Scope: stg only; prd: secrets_kms_encryption = true, envelope encryption of Secrets with a customer managed KMS
-#   key, so reading Secrets also needs kms:Decrypt on that key.
-# - AWS-0104: the node security group allows all egress. Nodes pull images from public registries through the NAT
-#   gateway and pods call AWS APIs; egress per pod is narrowed by the NetworkPolicies of the charts.
-#   Scope: every environment.
+# Design notes: aws/modules/eks/README.md.
+
+# AWS-0039: no customer managed key for Secrets while secrets_kms_encryption is false; EKS then encrypts the Kubernetes
+# API data, Secrets included, with an AWS owned key. Holds only for create_kms_key=false. The root of an env that keeps
+# the key off repeats the exception, without condition, on its call of this module.
+# Scope: stg only; prd: secrets_kms_encryption = true (customer managed KMS key; reading Secrets needs kms:Decrypt).
+
+# AWS-0104: the node security group allows all egress. Nodes pull images from public registries through the NAT
+# gateway and pods call AWS APIs; egress per pod is narrowed by the NetworkPolicies of the charts.
+# Scope: every environment.
 #trivy:ignore:AWS-0039[create_kms_key=false]
 #trivy:ignore:AWS-0104
 module "eks" {
@@ -60,8 +58,10 @@ module "eks" {
   # Off: no customer managed KMS key ($1 a month each, and it outlives the cluster for the deletion window); EKS
   # encrypts the Kubernetes API data, Secrets included, with an AWS owned key. On: the registry module creates a key
   # with its default key policy (the account, the identity that runs apply as administrator, the cluster role as
-  # user) and envelope-encrypts Secrets with it. The shortest deletion window AWS allows, 7 days, and an alias that
-  # starts with the cluster name, so the session sweep tells a key pending deletion of this env apart.
+  # user) and envelope-encrypts Secrets with it.
+
+  # The shortest deletion window AWS allows, 7 days, and an alias that starts with the cluster name, so the session
+  # sweep tells a key pending deletion of this env apart.
   create_kms_key                  = local.guards.create_kms_key
   encryption_config               = local.guards.encryption_config
   kms_key_deletion_window_in_days = 7

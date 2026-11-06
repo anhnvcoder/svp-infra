@@ -1,10 +1,7 @@
-################################################################################
 # The repositories of the account listed in local.repositories (the lab repositories and .github, the default community
-# health files of every repository); repository settings, Actions permissions, Dependabot alerts.
-# Values started as what each repository ran when it was adopted (read with gh api GET); a change goes through a pull
-# request here. Every repository merges by squash alone, the commit taking the pull request's title and body, so each
-# commit on main is one pull request.
-################################################################################
+# health files of every repository). Every repository merges by squash alone, the commit taking the pull request's
+# title and body, so each commit on main is one pull request.
+# Design notes: github/README.md.
 
 locals {
   repositories = {

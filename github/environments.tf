@@ -1,9 +1,7 @@
-################################################################################
 # Environments that hold a GitHub App writing to svp-gitops, so only jobs running on main may use them: promote of
 # svp-backend and svp-frontend (stg), and promote-prd of svp-backend, which stops for the learner's approval. Each App
 # private key is a secret of its environment and stays out of Terraform: a secret in a resource would sit in clear in
 # the state.
-################################################################################
 
 locals {
   # Repository => name of the variable that holds its App's client ID. The values stay in a map of their own: a

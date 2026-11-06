@@ -3,40 +3,10 @@
 # git repositories made here as the clones of the code repository and of svp-gitops): no account, cluster or network is
 # reached. Runs on the Mac (bash 3.2) and on Linux; needs git and jq. The fake aws and terraform answer as the account
 # of their profile (anhnv-sso 000000000000, anhnv-stg 111111111111, anhnv-prd 222222222222).
-#   - --print of the whole session (session.sh) of stg and of prd calls no command at all, lists the steps in the
-#     order of the runbook's table of each environment, names the environment's profile in every command (anhnv-sso
-#     for the last sweep alone), destroys root gitops before root env, deletes ApplicationSet svp-bootstrap before any
-#     child, every PVC before the platform Applications and before terraform plan -destroy; prd checks its tunnel
-#     before any kubectl and lifts its protections before the destroy plan
-#   - check-account.sh: each environment passes on its own account with its own profile, refuses the account of each
-#     other one, and refuses when its variable is not exported, naming it, the old single variable included
-#   - check-dns.sh reads the name servers of aws/accounts/<env> and asks the zone of the environment (zone_name of
-#     aws/accounts/<env>/<env>.auto.tfvars); stops on name servers that differ or none, naming both places of a
-#     delegation; stops naming the file when it is missing or its zone_name is not a DNS name, but not with --print
-#   - tf.sh init: both roots of an environment take the same backend file and their own key, with -reconfigure, even
-#     when .terraform still names another backend; TF_VAR_account_id is the environment's account; plan, show, apply,
-#     plan --teardown, apply --teardown, plan --destroy (--leftovers, --no-cluster) and destroy keep their order rules;
-#     the teardown plan of prd targets the DB instance and the buckets of the state alone (after an apply that failed
-#     halfway too), and records that nothing is to lift when the state has none; root gitops takes the chart at the
-#     revision of envs/<env>/charts.yaml and the Telegram chat of .env (plain or in one pair of quotes), and refuses
-#     without the tunnel of prd
-#   - every script of the directory is executable
-#   - bootstrap.sh secrets checks the account first; writes the context (through the tunnel for prd); calls make
-#     eks-secrets with the context, the RDS master password in make's environment only; the secret reaches jq through
-#     a pipe, never a file; no fake secret in any output or file; a password in make's output deletes the log and
-#     fails. bootstrap.sh wait runs no kubectl or make while the tunnel of prd is closed; waits on svp-observability,
-#     then GlitchTip, then svp-root; fails after its limit
-#   - pre-destroy.sh against a fake cluster: ApplicationSet and roots first, workloads by wave, Gateway, PVCs, platform
-#     last; on a cluster without Argo CD, no Application call and still the waits; prd does not wait on the NS records
-#     delegating stg.aws.svp.example in its zone; it stops before kubectl when the account has no such cluster, and
-#     still marks pre-destroy-start; a FAIL of step 2 ends with the way out, --leftovers
-#   - measure.sh: stg's ladder as before; prd's smoke alone, behind its tunnel
-#   - sweep.sh <env> reads only, needs no state, prints kept and pending-deletion lines, exits 0 on them alone (stg,
-#     prd with the NS records delegating stg.aws.svp.example, mgmt with no hosted zone and no call to Route 53), and
-#     exits 1 on a leftover volume, a secret scheduled for deletion, a final snapshot, a retained automated backup, a
-#     KMS key not pending deletion, a web ACL or a record of the zone (prd: beside the delegation it keeps), with the
-#     delete command
-#
+
+# Covers --print of the whole session and each script of the directory: the account and DNS guards, the order rules of
+# tf.sh and pre-destroy.sh, the secret handling of bootstrap.sh, the ladder of measure.sh and the leftovers of sweep.sh.
+
 # Usage: aws/scripts/session-test.sh
 #
 # The checks run sh -c '...' with their values as arguments ($1, $2, ...): expanded by that shell, not this one.

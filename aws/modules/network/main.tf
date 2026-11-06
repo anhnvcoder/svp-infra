@@ -45,8 +45,6 @@ module "vpc" {
   enable_dns_support   = true
   enable_dns_hostnames = true
 
-  # single_nat_gateway = true: one NAT gateway and one private route table. false: one NAT gateway, Elastic IP and
-  # private route table per zone, each private subnet routed to the NAT gateway of its own zone.
   enable_nat_gateway     = true
   single_nat_gateway     = var.single_nat_gateway
   one_nat_gateway_per_az = !var.single_nat_gateway
@@ -71,17 +69,15 @@ module "vpc" {
   vpc_flow_log_iam_policy_name = "${var.name}-vpc-flow-log"
 }
 
-# Gateway endpoint for S3 on every private route table: object traffic of the pods (uploads, HLS output) stays on
-# the AWS network instead of going through the NAT gateway, which bills every GB it processes. Gateway endpoints are
-# free. No interface endpoint: each costs per hour and per zone.
-#
-# Without a policy (s3_endpoint_restricted = false) the endpoint lets through any request to any bucket of the region
-# that IAM allows, and the NetworkPolicies of the pods, which match S3 by address, cannot tell one bucket from
-# another. With it, only the buckets of the env and the bucket Amazon ECR serves image layers from in this region
-# (https://docs.aws.amazon.com/AmazonECR/latest/userguide/vpc-endpoints.html, "Minimum Amazon S3 bucket permissions
-# for Amazon ECR") are reachable through the endpoint: a stolen credential cannot copy data to a bucket of another
-# account from inside the VPC. Every other bucket of the region is then refused from the private subnets, as the
-# endpoint's route takes all S3 addresses of the region.
+# Gateway endpoint for S3 on every private route table: object traffic of the pods (uploads, HLS output) skips the NAT
+# gateway, which bills every GB it processes. Gateway endpoints are free; an interface endpoint costs per hour and per
+# zone. Without a policy (s3_endpoint_restricted = false) the endpoint lets through any bucket of the region that IAM
+# allows, and the pods' NetworkPolicies, which match S3 by address, cannot tell one bucket from another.
+
+# With the policy, only the env's buckets and the bucket ECR serves image layers from in this region
+# (https://docs.aws.amazon.com/AmazonECR/latest/userguide/vpc-endpoints.html) are reachable, so a stolen credential
+# cannot copy data to a bucket of another account from inside the VPC.
+# Design notes: aws/modules/network/README.md.
 locals {
   s3_endpoint_policy = var.s3_endpoint_restricted ? jsonencode({
     Version = "2012-10-17"

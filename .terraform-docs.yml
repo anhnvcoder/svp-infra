@@ -1,6 +1,5 @@
-# terraform-docs for the modules under aws/modules/: the generated block (requirements, providers, modules, resources,
-# inputs, outputs) sits between the two markers of <module>/README.md; everything outside them is hand-written.
-# `make tfdocs` writes it, `make tfdocs-check` fails when a README differs from what the .tf files say.
+# terraform-docs for the modules under aws/modules/: the generated block sits between the two markers of
+# <module>/README.md; everything outside them is hand-written.
 formatter: markdown table
 output:
   file: README.md
