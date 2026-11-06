@@ -1,18 +1,11 @@
-# Static checks of every pull request and of every push to main: make check (terraform fmt and validate, tflint, trivy,
-# shellcheck, the security lint of the workflows with zizmor, the self-test of the session scripts with fake aws,
-# kubectl and terraform, for which the runner's bash, git and jq are all it needs, and terraform test of the modules
-# against a mock AWS provider, in a container without network). Job infra-ok is the only check the ruleset of
-# main requires, so jobs can be added or renamed without touching the ruleset.
-#
-# The repository is public and a pull request from a fork runs this workflow with the fork's code, so:
-# - no AWS credential of any kind, no OIDC (no id-token permission), no secret, no environment: make check never reaches
-#   an account (init runs with -backend=false; nothing calls apply or the AWS CLI; the only plans are those of
-#   terraform test, against a mock AWS provider, in a container with no network and no AWS variable);
-# - no pull_request_target and no workflow_run: a pull request never runs with a write token;
-# - the only job that runs code of the repository has contents: read and nothing else;
-# - every action of this workflow is GitHub's own and pinned to a full commit SHA; terraform, tflint, trivy, shellcheck
-#   and zizmor run from images pinned by digest in the Makefile, so no third-party action is trusted here;
-# - checkout never leaves the token in .git/config (persist-credentials: false).
+# Static checks of every pull request and push to main (make check); infra-ok is the only check the ruleset requires.
+# Public repository, a fork's pull request runs this file with the fork's code, so:
+# - no AWS credential, no OIDC (no id-token), no secret, no environment: make check never reaches an account
+#   (init with -backend=false, no apply, no AWS CLI; terraform test plans against a mock provider with no network);
+# - no pull_request_target, no workflow_run; the only job that runs repository code has contents: read and nothing else;
+# - every action is GitHub's own, pinned to a full commit SHA; tools run from images pinned by digest in the Makefile;
+# - checkout with persist-credentials: false.
+# Design notes: README.md.
 name: check
 
 on:
@@ -29,11 +22,10 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # Whether a pull request changes anything but documentation, so job check skips for a pull request that does not and
-  # infra-ok accepts that skip. Documentation is Markdown, docs/ and LICENSE, but not the README.md of a Terraform
-  # directory (aws/, github/): terraform-docs writes part of it and make check holds it to the code. A change of the
-  # Makefile or of this workflow, and a push, turn the output true: when in doubt, run. The list comes from GitHub's API
-  # for the pull request, not from git, so no history is fetched.
+  # Whether a pull request changes anything but documentation, so job check skips and infra-ok accepts that skip.
+  # Documentation is Markdown, docs/ and LICENSE, but not the README.md of a Terraform directory (aws/, github/):
+  # terraform-docs writes part of it and make check holds it to the code. A change of the Makefile or of this workflow,
+  # and a push, turn the output true: when in doubt, run. The list comes from GitHub's API, so no history is fetched.
   changes:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
