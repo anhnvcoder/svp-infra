@@ -167,9 +167,11 @@ resource "aws_organizations_policy" "this" {
   })
 }
 
+# Keyed by the static map of policies, not by the policies themselves: their keys must be known before any policy exists
+# (a first apply, or an import into the root that calls this module).
 resource "aws_organizations_policy_attachment" "this" {
-  for_each = aws_organizations_policy.this
+  for_each = local.policies
 
-  policy_id = each.value.id
+  policy_id = aws_organizations_policy.this[each.key].id
   target_id = var.target_id
 }
