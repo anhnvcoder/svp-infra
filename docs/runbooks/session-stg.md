@@ -3,8 +3,8 @@
 Một buổi dựng env stg trong account `svp-stg` (`aws/envs/stg`), cài Argo CD và root GitOps lên EKS bằng Terraform (`aws/gitops/stg`, mẫu
 GitOps Bridge), đo (smoke, seed, k6 bậc 1, 2, 4, 8), rồi gỡ sạch trong cùng buổi và quét cả account stg lẫn account management. Thiết kế:
 [ADR-0034](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0034-aws-stage7.md) §13 (tài nguyên ngoài state), §14 (buổi AWS);
-[ADR-0048](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0048-prd-aws.md) §1–§2 (account, state, zone), §5 (secret), §6 (bootstrap
-EKS), §9 (kết thúc buổi). Buổi prd theo [`session-prd.md`](session-prd.md), dùng chung mọi mục chung của file này.
+[ADR-0048](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0048-prd-aws.md) §1–§2 (account, state), §5 (secret), §6 (bootstrap
+EKS), §9 (kết thúc buổi); [ADR-0051](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0051-dns-prd-apex.md) (zone của mỗi env). Buổi prd theo [`session-prd.md`](session-prd.md), dùng chung mọi mục chung của file này.
 
 **Người học chạy mọi lệnh ở đây.** AI không chạy lệnh nào chạm account hay cluster EKS, kể cả lệnh chỉ đọc; AI đọc output người học dán
 lại và nhắc tới khi destroy hai root và hai lượt `sweep.sh` (stg, mgmt) đều đã chạy. Mọi lệnh chạy từ gốc repo này (`infra/`). Mỗi account một
@@ -39,9 +39,11 @@ aws/scripts/session.sh --print stg
 ## Điều kiện trước buổi
 
 1. **Account stg đã có baseline**: root `aws/org` đã tạo account `svp-stg` và gán permission set `SvpAdmin`; profile `anhnv-stg` đã tạo bằng
-   `aws configure sso`; baseline `aws/accounts/stg` đã apply (bucket state, KMS key `alias/svp-tfstate`, zone `stg.aws.<domain>`, budget) và
-   zone đó đã được uỷ quyền bằng `delegated_subdomains` của `aws/bootstrap` ([`aws/accounts/README.md`](../../aws/accounts/README.md)). Bước
-   tay này một lần mỗi account, không nằm trong buổi; `check-dns.sh` đỏ thì quay lại README đó, không bắt đầu buổi.
+   `aws configure sso`; baseline `aws/accounts/stg` đã apply (bucket state, KMS key `alias/svp-tfstate`, zone `stg.aws.<domain>`, budget). Zone đó là zone con của zone
+   `aws.<domain>` của account prd: được uỷ quyền bằng bản ghi `NS` của `delegated_subdomains` ở `aws/accounts/prd`, còn `aws.<domain>` bằng bốn
+   bản ghi `NS` `aws` ở DNS cha của domain ([`aws/accounts/README.md`](../../aws/accounts/README.md), mục 5). Bước tay này một lần, không
+   nằm trong buổi; `check-dns.sh` đỏ thì quay lại README đó, không bắt đầu buổi. Không gỡ baseline stg giữa các buổi: zone stg dựng lại có
+   name server mới, phải `apply` lại `aws/accounts/prd` mới phân giải được.
    Account mới còn phải được AWS xác minh trước khi tạo tài nguyên CloudFront, và quota EC2 đủ cho node của env: chưa xác minh thì `apply` đỏ
    ở `aws_cloudfront_distribution` với `AccessDenied: Your account must be verified before you can add new CloudFront resources`, khi EKS, RDS
    đã chạy và tính tiền. Mở case AWS Support từ account stg (Account and billing, kèm dòng lỗi và RequestID nếu có) và chờ xác nhận trước
@@ -165,10 +167,12 @@ env đó trước một lệnh ghi bằng tay.
 aws/scripts/check-dns.sh stg
 ```
 
-Đọc name server của zone `stg.aws.<domain>` từ output `name_servers` của `aws/accounts/stg` (không gọi API AWS nào khác), hỏi `NS
-stg.aws.<domain>` ở `1.1.1.1` và `8.8.8.8`. Tìm: `ok hosted zone …`, rồi `ok resolver 1.1.1.1 …`, `ok resolver 8.8.8.8 …`. `FAIL … returns no
-NS` hay `returns NS … not the hosted zone's`: uỷ quyền chưa lan hay sai (DNS-01 của Let's Encrypt và ExternalDNS sẽ hỏng): sửa
-`delegated_subdomains` của `aws/bootstrap` theo `aws/accounts/README.md`, **không bắt đầu buổi**.
+Đọc name server của zone `stg.aws.<domain>` (tên là `zone_name` của `aws/accounts/stg/stg.auto.tfvars`) từ output `name_servers` của
+`aws/accounts/stg` (không gọi API AWS nào khác), hỏi `NS stg.aws.<domain>` ở `1.1.1.1` và `8.8.8.8`. Tìm: `ok hosted zone …`, rồi `ok resolver
+1.1.1.1 …`, `ok resolver 8.8.8.8 …`. `FAIL … returns no NS` hay `returns NS … not the hosted zone's`: uỷ quyền chưa lan hay sai (DNS-01 của
+Let's Encrypt và ExternalDNS sẽ hỏng). Lời của script là một câu chung: uỷ quyền zone con nằm ở `delegated_subdomains` của
+`aws/accounts/prd`, zone gốc ở bản ghi `NS` `aws` của DNS cha. Zone stg đi qua cả hai nấc, nên kiểm theo `aws/accounts/README.md` (mục 5) cả
+hai: sửa nấc sai, **không bắt đầu buổi**.
 
 ### 3–5. Root env: init, plan lưu file, đọc, apply file đó
 
@@ -378,11 +382,11 @@ Chỉ đọc, chạy được cả khi state mất hay destroy dở; mỗi lư�
 Kubernetes đặt (`kubernetes.io/cluster/svp-*`, `elbv2.k8s.aws/cluster`, `ebs.csi.aws.com/cluster`, `cluster.k8s.amazonaws.com/name`) hay mang
 tên `svp-*`: EKS, EC2, EBS và snapshot, VPC, NAT, EIP, ENI, security group, ELBv2 và target group, RDS (instance, snapshot, backup tự động giữ
 lại), S3, CloudFront (distribution, OAC, response headers policy), web ACL WAF của CloudFront (`us-east-1`), log group (cả log group EKS, RDS tự
-tạo ngoài state), Secrets Manager (cả secret đang chờ xoá), KMS key, bản ghi của zone của account ngoài NS/SOA ở đỉnh.
+tạo ngoài state), Secrets Manager (cả secret đang chờ xoá), KMS key, bản ghi của zone của account ngoài `NS`, `SOA` ở đỉnh và ngoài mọi `NS`
+dưới đỉnh (uỷ quyền zone con của baseline).
 
 Được giữ, in thành dòng riêng, không đếm: tài nguyên tag `Stack=baseline` ở account stg (bucket state, KMS key state, zone `stg.aws.<domain>`)
-và `Stack=bootstrap|org` ở management (bucket state, zone lab cùng bản ghi `NS` uỷ quyền zone của stg, prd, bucket và KMS key của trail) là
-`kept`; KMS key ở trạng thái `PendingDeletion` (key của root env sau destroy, tối thiểu 7 ngày) là `pending deletion`. Tìm: `ok nothing left
+và `Stack=bootstrap|org` ở management (bucket state, bucket và KMS key của trail; management không có hosted zone) là `kept`; KMS key ở trạng thái `PendingDeletion` (key của root env sau destroy, tối thiểu 7 ngày) là `pending deletion`. Tìm: `ok nothing left
 in account … but what it keeps` (exit 0) ở **cả hai lượt**. Có dòng `FAIL <loại>: N left`: dưới mỗi tài nguyên sót là dòng `delete:` với lệnh
 xoá đủ profile và region (hay trỏ mục dưới khi một lệnh không đủ); chạy, rồi chạy lại lượt đó tới khi sạch. **Buổi chỉ xong khi hai lượt cùng
 exit 0.**
@@ -451,15 +455,16 @@ sau này và có thể trỏ tên tới IP người khác nhận lại. Dựng l
 ```sh
 zone=stg.aws.<domain>; zone_id=$(AWS_PROFILE=anhnv-stg terraform -chdir=aws/accounts/stg output -raw zone_id)
 AWS_PROFILE=anhnv-stg aws route53 list-resource-record-sets --hosted-zone-id "$zone_id" --region ap-southeast-1 --output json |
-  jq --arg apex "$zone." '{Changes: [.ResourceRecordSets[] | select((.Name == $apex and (.Type == "NS" or .Type == "SOA")) | not)
+  jq --arg apex "$zone." '{Changes: [.ResourceRecordSets[]
+    | select(((.Name == $apex and .Type == "SOA") or (.Type == "NS" and (.Name == $apex or (.Name | endswith("." + $apex))))) | not)
     | {Action: "DELETE", ResourceRecordSet: .}]}' > /tmp/svp-records.json
-jq -r '.Changes[].ResourceRecordSet | "\(.Name) \(.Type)"' /tmp/svp-records.json      # chỉ bản ghi sót, không NS/SOA ở đỉnh
+jq -r '.Changes[].ResourceRecordSet | "\(.Name) \(.Type)"' /tmp/svp-records.json      # chỉ bản ghi sót, không NS/SOA ở đỉnh, không NS uỷ quyền bên dưới
 AWS_PROFILE=anhnv-stg aws route53 change-resource-record-sets --hosted-zone-id "$zone_id" \
   --change-batch file:///tmp/svp-records.json --region ap-southeast-1
 ```
 
-Ở zone lab (lượt `mgmt`): cùng khối với `AWS_PROFILE=anhnv-sso`, `zone=aws.<domain>`, `zone_id` từ output `zone_id` của `aws/bootstrap`, và
-thêm điều kiện bỏ bản ghi `NS` của `stg.aws.<domain>.`, `prd.aws.<domain>.` vào `select` (chúng là uỷ quyền của baseline, phải giữ).
+Bản ghi `NS` dưới đỉnh là uỷ quyền do baseline tạo (ở zone prd: `stg.aws.<domain>.`), phải giữ: khối trên bỏ qua chúng. Ở zone prd dùng cùng
+khối với `AWS_PROFILE=anhnv-prd`, `zone=aws.<domain>`, `aws/accounts/prd`. Management không có zone nên lượt `mgmt` không có bản ghi nào để xoá.
 
 **Secret Secrets Manager đang chờ xoá** (dòng `scheduled for deletion since …`): vẫn giữ tên tới hết thời gian chờ (7–30 ngày), nên
 **chặn tạo lại secret cùng tên** ở buổi sau (entry `svp/stg/*` do Terraform tạo với `recovery_window_in_days = 0` nên xoá ngay; dòng này là
@@ -517,6 +522,9 @@ Secret bằng tay. Chi tiết: `docs/reference/eks.md` của repo code, mục "�
 
 1. Thứ tự gỡ, mỗi bước xong mới sang bước sau: destroy root `aws/gitops/stg` rồi `aws/envs/stg` (bước 13–18); `sweep.sh stg`; `sweep.sh mgmt`.
    Hai lượt cùng exit 0 (dán output cho AI). AI nhắc tới khi người học xác nhận đã chạy cả hai destroy và hai lượt sweep.
-2. Giữ `$SVP_SESSION_DIR` (máy local, không commit): `timeline.tsv`, `k6-levels.tsv`, `k6-<n>/` là số đo cho cột Kết quả của ADR-0034
+2. Cái ở lại giữa các buổi: ở account stg là baseline (`Stack=baseline`: bucket state, KMS key state, zone `stg.aws.<domain>`); ở account prd là
+   baseline của nó, gồm zone `aws.<domain>` và bản ghi `NS` uỷ quyền `stg.aws.<domain>` trong đó (`sweep.sh` in chúng là `kept`); management chỉ
+   còn `Stack=bootstrap|org`, không hosted zone. `destroy` của hai root env không đụng zone nào (zone thuộc root `aws/accounts/<env>`).
+3. Giữ `$SVP_SESSION_DIR` (máy local, không commit): `timeline.tsv`, `k6-levels.tsv`, `k6-<n>/` là số đo cho cột Kết quả của ADR-0034
    "Kiểm chứng sau" và roadmap.
-3. Sau 24 giờ: Cost Explorer theo dịch vụ (account stg, hay management cho cả org), so với ước lượng (ADR-0034 §12, ±50 %).
+4. Sau 24 giờ: Cost Explorer theo dịch vụ (account stg, hay management cho cả org), so với ước lượng (ADR-0034 §12, ±50 %).

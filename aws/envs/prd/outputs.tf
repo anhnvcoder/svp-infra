@@ -27,7 +27,7 @@ output "cluster_values" {
 
   precondition {
     condition     = var.domain == local.zone_name || endswith(var.domain, ".${local.zone_name}")
-    error_message = "domain must be the name of the zone given by hosted_zone_id (e.g. stg.aws.svp.example, the web at the apex) or a name inside it (e.g. www.stg.aws.svp.example)."
+    error_message = "domain must be the name of the zone given by hosted_zone_id (e.g. stg.aws.svp.example for stg, aws.svp.example for prd, the web at the apex) or a name inside it (e.g. www.stg.aws.svp.example)."
   }
 }
 

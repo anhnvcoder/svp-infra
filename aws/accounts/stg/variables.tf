@@ -14,8 +14,8 @@ variable "region" {
   default     = "ap-southeast-1"
 }
 
-variable "lab_zone_name" {
-  description = "Name of the lab zone of the management account, aws.<domain>; this root creates <env>.<lab_zone_name>. Set it in an uncommitted *.auto.tfvars or TF_VAR_lab_zone_name."
+variable "zone_name" {
+  description = "Name of the hosted zone of stg, stg.aws.<domain> (no trailing dot). The zone of prd delegates it with NS records (delegated_subdomains of aws/accounts/prd). Set it in an uncommitted *.auto.tfvars or TF_VAR_zone_name."
   type        = string
 }
 

@@ -12,7 +12,7 @@
 #      workloads' objects need on deletion: KEDA, Kyverno, Argo Rollouts, External Secrets, cert-manager, Envoy
 #      Gateway, LBC, ExternalDNS). Then Gateway svp of svp-edge (svp-cluster's, the source of Envoy's Service). Waits
 #      until no Service of type LoadBalancer, no TargetGroupBinding, no load balancer of the cluster in ELBv2 and no
-#      record of ExternalDNS in the lab zone are left, with LBC, ExternalDNS and Envoy Gateway still running.
+#      record of ExternalDNS in the environment's zone are left, with LBC, ExternalDNS and Envoy Gateway still running.
 #   3. Every PVC of every namespace (volumeClaimTemplates: Argo CD never prunes them), with the EBS CSI driver (an EKS
 #      add-on) running and svp-cluster's namespaces and StorageClass still there. Waits until no PVC, no PV of the
 #      driver and no EBS volume the driver made for the cluster are left.
@@ -53,7 +53,7 @@ if printing; then
   zone_id="<hosted_zone_id of aws/envs/$env_name/$env_name.auto.tfvars>"
   zone="<zone of $env_name>"
 else
-  [ -f "$tfvars" ] || fail "no $tfvars: the file tf.sh $env_name plan read, with the hosted_zone_id of the lab zone"
+  [ -f "$tfvars" ] || fail "no $tfvars: the file tf.sh $env_name plan read, with the hosted_zone_id of the zone of $env_name"
   zone_id=$(sed -n 's/^[[:space:]]*hosted_zone_id[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$tfvars" | head -n 1)
   [[ $zone_id =~ ^Z[A-Z0-9]{1,31}$ ]] ||
     fail "hosted_zone_id of $tfvars is '$zone_id', not a hosted zone id such as Z0123456789ABCDEFGHIJ"
@@ -114,14 +114,16 @@ elb_gone() {
   [ "$(jq '.ResourceTagMappingList | length' <<<"$out")" = 0 ]
 }
 
-# Records of the lab zone but NS and SOA at its apex and the TXT of an ACME challenge (cert-manager's, which the
-# sweep reports): ExternalDNS's A and TXT records of the cluster's names.
+# Records of the environment's zone but NS and SOA at its apex, the NS records below it (delegations of child zones,
+# which the baseline makes) and the TXT of an ACME challenge (cert-manager's, which the sweep reports): ExternalDNS's A
+# and TXT records of the cluster's names.
 dns_records() {
   local out
   out=$(aws_ route53 list-resource-record-sets --hosted-zone-id "$zone_id" --output json) || return 1
   printing && return 0
   jq -r --arg apex "$zone." '.ResourceRecordSets[]
-    | select((.Name == $apex and (.Type == "NS" or .Type == "SOA")) | not)
+    | select((.Name == $apex and .Type == "SOA") | not)
+    | select((.Type == "NS" and (.Name == $apex or (.Name | endswith("." + $apex)))) | not)
     | select((.Type == "TXT" and (.Name | startswith("_acme-challenge."))) | not)
     | "\(.Name) \(.Type)"' <<<"$out"
 }

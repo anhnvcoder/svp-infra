@@ -23,7 +23,7 @@ variable "region" {
 ################################################################################
 
 variable "hosted_zone_id" {
-  description = "ID of the Route 53 hosted zone of the env, in the env's account: output zone_id of aws/accounts/<env>. ExternalDNS and cert-manager may change records of this zone only, and domain must be its name or a name inside it."
+  description = "ID of the Route 53 hosted zone of the env, in the env's account: output zone_id of aws/accounts/<env> (stg.aws.svp.example for stg, aws.svp.example for prd). ExternalDNS and cert-manager may change records of this zone only, and domain must be its name or a name inside it."
   type        = string
 
   validation {
@@ -33,12 +33,12 @@ variable "hosted_zone_id" {
 }
 
 variable "domain" {
-  description = "Host name of the web client of this env: the name of the zone of hosted_zone_id (e.g. stg.aws.svp.example) or a name inside it; the API is api.<domain>. Origin of the CORS rules of both buckets and of CloudFront."
+  description = "Host name of the web client of this env: the name of the zone of hosted_zone_id (e.g. stg.aws.svp.example for stg, aws.svp.example for prd) or a name inside it; the API is api.<domain>. Origin of the CORS rules of both buckets and of CloudFront."
   type        = string
 
   validation {
     condition     = can(regex("^([a-z0-9]([a-z0-9-]*[a-z0-9])?\\.)+[a-z]{2,}$", var.domain))
-    error_message = "domain must be a lowercase DNS name without a trailing dot, e.g. stg.aws.svp.example."
+    error_message = "domain must be a lowercase DNS name without a trailing dot, e.g. stg.aws.svp.example or aws.svp.example."
   }
 }
 

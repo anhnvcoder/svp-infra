@@ -63,9 +63,9 @@ renovate.json                 provider, module, ruleset tflint, image ghim của
 .github/workflows/scorecard.yml push main và lịch tuần: OpenSSF Scorecard, kết quả công khai và lên code scanning
 .github/zizmor.yml            ngoại lệ của zizmor, mỗi mục một lý do (tạo khi có ngoại lệ đầu tiên)
 aws/
-  bootstrap/                  management account, một lần, giữ giữa các buổi: bucket state, budget của org, zone lab aws.<domain> và bản ghi NS uỷ quyền zone của mỗi account thành viên
+  bootstrap/                  management account, một lần, giữ giữa các buổi: bucket state, budget của org; không hosted zone nào
   org/                        management account: Organizations, OU Workloads, account svp-stg và svp-prd, SCP, IAM Identity Center (SvpAdmin), organization trail
-  accounts/<env>/             baseline của mỗi account thành viên (stg, prd), giữ giữa các buổi: bucket state, KMS key của nó, zone <env>.aws.<domain>, budget
+  accounts/<env>/             baseline của mỗi account thành viên (stg, prd), giữ giữa các buổi: bucket state, KMS key của nó, zone của env (prd aws.<domain>, giữ cả bản ghi NS uỷ quyền stg.aws.<domain>; stg stg.aws.<domain>), budget
   envs/<env>/                 cấu hình gốc của mỗi env (stg, prd: cùng module, cùng đối số, khác ở <env>.tfvars; prd thêm WAF, bastion SSM, teardown.tfvars)
   gitops/<env>/               bootstrap GitOps của cluster EKS của env (GitOps Bridge): namespace, Argo CD, AppProject, cluster Secret, ApplicationSet svp-bootstrap
   modules/                    module nội bộ; lock file không commit
@@ -75,7 +75,7 @@ aws/
     external-secrets          vỏ entry Secrets Manager svp/<env>/*, role của External Secrets theo namespace, Pod Identity
     gitops-bridge             giá trị của bootstrap GitOps (không resource): cluster Secret, values Argo CD, root
     org-policies              ba SCP của OU Workloads
-    account-baseline          bucket state, KMS key, zone, budget của một account thành viên
+    account-baseline          bucket state, KMS key, zone (cùng bản ghi NS uỷ quyền zone con, chỉ prd dùng), budget của một account thành viên
   backend.hcl                 backend của management (bucket của aws/bootstrap; không commit, sinh từ output backend_hcl)
   backend-<env>.hcl           backend của account stg, prd (bucket, region, KMS; không key, mỗi root truyền key riêng; không commit, sinh từ output của accounts/<env>)
   scripts/                    script buổi AWS theo bảng env (mgmt, stg, prd) của lib.sh: kiểm account, DNS, Terraform hai root, secret và chờ Argo CD, đo, pre-destroy, sweep
@@ -170,9 +170,10 @@ Actions của repo (`github/`).
 
 Hai đường vào:
 
-- **Một lần ở management account:** [`aws/bootstrap/README.md`](aws/bootstrap/README.md) (bucket state, budget, zone lab), rồi
+- **Một lần ở management account:** [`aws/bootstrap/README.md`](aws/bootstrap/README.md) (bucket state, budget của org), rồi
   [`aws/org/README.md`](aws/org/README.md) (tổ chức, account stg và prd, SCP, Identity Center, trail).
-- **Một lần mỗi account thành viên:** [`aws/accounts/README.md`](aws/accounts/README.md) (baseline, uỷ quyền zone của env).
+- **Một lần mỗi account thành viên:** [`aws/accounts/README.md`](aws/accounts/README.md) (baseline, uỷ quyền zone của env: zone gốc `aws.<domain>`
+  của prd ở DNS cha, zone `stg.aws.<domain>` ở zone prd).
 - **Cài đặt GitHub** (thêm repo hay App): runbook [`docs/runbooks/github-setup.md`](docs/runbooks/github-setup.md).
 - **Mỗi buổi dựng, đo, gỡ một env:** runbook [`docs/runbooks/session-stg.md`](docs/runbooks/session-stg.md) (stg, cùng mọi mục chung) và
   [`docs/runbooks/session-prd.md`](docs/runbooks/session-prd.md) (prd: cổng promote, tunnel tới API, diễn tập, final snapshot). Xem trước

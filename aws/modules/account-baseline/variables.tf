@@ -1,5 +1,5 @@
 variable "env" {
-  description = "Environment the account runs (stg, prd): names the hosted zone <env>.<lab_zone_name> and the budget svp-<env>-monthly."
+  description = "Environment the account runs (stg, prd): names the budget svp-<env>-monthly and appears in the comment of the hosted zone."
   type        = string
 
   validation {
@@ -29,13 +29,26 @@ variable "region" {
   }
 }
 
-variable "lab_zone_name" {
-  description = "Name of the lab zone of the management account, aws.<domain>. The baseline creates <env>.<lab_zone_name>, which the management account delegates with NS records (delegated_subdomains of aws/bootstrap)."
+variable "zone_name" {
+  description = "Name of the environment's hosted zone, e.g. aws.svp.example or stg.aws.svp.example. The zone above it delegates it with NS records to the name_servers output."
   type        = string
 
   validation {
-    condition     = can(regex("^([a-z0-9]([a-z0-9-]*[a-z0-9])?\\.)+[a-z]{2,}$", var.lab_zone_name))
-    error_message = "lab_zone_name must be a lowercase DNS name without a trailing dot, e.g. aws.svp.example."
+    condition     = can(regex("^([a-z0-9]([a-z0-9-]*[a-z0-9])?\\.)+[a-z]{2,}$", var.zone_name))
+    error_message = "zone_name must be a lowercase DNS name without a trailing dot, e.g. aws.svp.example."
+  }
+}
+
+variable "delegated_subdomains" {
+  description = "Child zones of other accounts to delegate from this zone: zone name (ending in .<zone_name>) to its four name servers, the name_servers output of the child's baseline. Each entry becomes an NS record in this zone."
+  type        = map(list(string))
+  default     = {}
+
+  validation {
+    condition = alltrue([for name, servers in var.delegated_subdomains :
+      endswith(name, ".${var.zone_name}") && length(servers) == 4 && length(distinct(servers)) == 4
+    ])
+    error_message = "Each key of delegated_subdomains must end in \".\" followed by zone_name, and each value must hold exactly four distinct name servers."
   }
 }
 

@@ -11,8 +11,8 @@
 #   retained automated backups; S3 buckets; CloudFront distributions, origin access controls and response headers
 #   policies; WAF web ACLs of CloudFront (us-east-1); CloudWatch log groups, also those RDS and EKS make themselves;
 #   Secrets Manager secrets, also those scheduled for deletion (they still hold their name); KMS keys; records of the
-#   account's hosted zone but NS and SOA at its apex (and, in the lab zone, the NS records delegating the zone of each
-#   member account).
+#   account's hosted zone (an account with zone in env_table) but NS and SOA at its apex and the NS records below it
+#   (the delegations of child zones its baseline makes).
 # What stays between sessions is printed, not counted: what is tagged with a Stack of the environment's kept list in
 # env_table of lib.sh (baseline in a member account: state bucket, its KMS key, hosted zone; bootstrap and org in the
 # management account), as "kept", and KMS keys in PendingDeletion, as "pending deletion".
@@ -260,24 +260,21 @@ $(q '.ResourceTagMappingList[].ResourceARN | sub("^.*:key/"; "")' resourcegroups
   done
 }
 
-# Records of the account's hosted zone but NS and SOA at its apex; in the lab zone (mgmt), also the NS records that
-# delegate the zone of a member account (delegated_subdomains of aws/bootstrap), which stay with it.
+# Records of the account's hosted zone but NS and SOA at its apex and the NS records below it, which delegate a child
+# zone (delegated_subdomains of the baseline) and stay with the zone: ExternalDNS and cert-manager never write NS.
 records() {
-  local ids id delegated
-  delegated=$(awk -v lab="$lab" '$4 != "-" { printf "%s%s.%s.", sep, $4, lab; sep = "," }' <<<"$env_table")
-  # Only the zone that is this account's own: the lab zone holds none of its delegates' records.
-  [ "$zone" = "$lab" ] || delegated=
-  export SVP_SWEEP_ZONE=$zone SVP_SWEEP_DELEGATED=$delegated
+  local ids id
+  export SVP_SWEEP_ZONE=$zone
   # shellcheck disable=SC2016 # $ENV is jq's, not the shell's
   ids=$(q '.HostedZones[] | select(.Name == ($ENV.SVP_SWEEP_ZONE + ".")) | .Id' route53 list-hosted-zones-by-name --dns-name "$zone.") ||
     return 1
   printing && ids='<id-of-the-zone>'
   for id in $ids; do
-    keep "kept  hosted zone $zone ($id), NS and SOA at its apex${delegated:+, NS of $delegated}"
+    keep "kept  hosted zone $zone ($id), NS and SOA at its apex, NS records below it"
     # shellcheck disable=SC2016 # $ENV is jq's, not the shell's
-    q '.ResourceRecordSets[]
-      | select((.Name == ($ENV.SVP_SWEEP_ZONE + ".") and (.Type == "NS" or .Type == "SOA")) | not)
-      | select((.Type == "NS" and (.Name | IN($ENV.SVP_SWEEP_DELEGATED | split(",")[]))) | not)
+    q '($ENV.SVP_SWEEP_ZONE + ".") as $apex | .ResourceRecordSets[]
+      | select((.Name == $apex and .Type == "SOA") | not)
+      | select((.Type == "NS" and (.Name == $apex or (.Name | endswith("." + $apex)))) | not)
       | "\(.Name) \(.Type)"' route53 list-resource-record-sets --hosted-zone-id "$id" || return 1
   done
 }
@@ -318,7 +315,7 @@ sweep_kind "CloudWatch log groups" log_groups "aws logs delete-log-group --log-g
 sweep_kind "Secrets Manager secrets (scheduled for deletion included)" secrets \
   "aws secretsmanager delete-secret --secret-id {} --force-delete-without-recovery"
 sweep_kind "KMS keys" kms_keys "aws kms schedule-key-deletion --key-id {} --pending-window-in-days 7"
-sweep_kind "records of $zone" records "$runbook (change-resource-record-sets DELETE)"
+[ -z "$zone" ] || sweep_kind "records of $zone" records "$runbook (change-resource-record-sets DELETE)"
 
 printing && exit 0
 while IFS= read -r line; do

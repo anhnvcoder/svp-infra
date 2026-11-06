@@ -14,6 +14,6 @@ output "zone_id" {
 }
 
 output "name_servers" {
-  description = "The four name servers of the environment's zone, for delegated_subdomains of aws/bootstrap."
+  description = "The four name servers of the prd zone, aws.<domain>: the values of the four NS records aws at the DNS of the parent domain. The zone of prd delegates the stg zone (delegated_subdomains)."
   value       = module.baseline.name_servers
 }
