@@ -33,8 +33,7 @@ aws/scripts/session.sh --print prd                 # mọi lệnh script của b
 1. Root `aws/org` đã apply (account `svp-prd`, SCP, permission set `SvpAdmin` gán vào account đó); profile `anhnv-prd` đã tạo bằng
    `aws configure sso`; baseline `aws/accounts/prd` đã apply và zone gốc `aws.<domain>` của nó đã được uỷ quyền bằng bốn bản ghi `NS` `aws` ở DNS cha của domain
    ([`aws/accounts/README.md`](../../aws/accounts/README.md), mục 5); zone `stg.aws.<domain>` là zone con của nó, uỷ quyền bằng
-   `delegated_subdomains` của chính root `aws/accounts/prd`. Đã chuyển từ zone ở management thì buổi prd đầu tiên cần chứng chỉ chỉ bắt đầu
-   sau bước 5 của bảng chuyển trong README đó (chờ 48 giờ sau khi đổi Cloudflare).
+   `delegated_subdomains` của chính root `aws/accounts/prd`.
 2. Buổi stg ở account `svp-stg` đã chạy xong theo [`session-stg.md`](session-stg.md), và mọi PR của code, `svp-gitops`, repo này đã merge.
 3. **Bằng chứng stg**: commit `svp-gitops` sẽ promote (`stg_ref`) có commit status `argocd/stg` trạng thái `success` (Argo CD Notifications
    của stg ghi khi sync xong commit đó). Job `promote-prd` từ chối commit không có nó. Kiểm:

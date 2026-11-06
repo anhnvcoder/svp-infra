@@ -80,27 +80,6 @@ AWS_PROFILE=anhnv-sso aws s3api head-object --region ap-southeast-1 \
 Ba lệnh đều đúng mong đợi thì xoá state local còn lại: `rm -f terraform.tfstate terraform.tfstate.backup`. Từ đây mọi lệnh của root này
 đọc state trong bucket.
 
-## State còn hosted zone (bản trước)
-
-State dựng từ bản trước của root này còn zone lab `aws.<domain>` (`aws_route53_zone.lab`) và bản ghi `NS` uỷ quyền
-(`aws_route53_record.delegation`). Code không còn chúng, nên `plan` xoá đúng `aws_route53_zone.lab` cùng mỗi
-`aws_route53_record.delegation["<tên zone>"]` còn trong state: `Plan: 0 to add, 0 to change, 2 to destroy` khi chỉ còn
-`aws_route53_record.delegation["stg.aws.<domain>"]`. Tên resource hay số khác thì dừng, không `apply`.
-
-Chỉ `apply` plan đó ở bước 7 của
-[Chuyển zone gốc từ management sang prd](../accounts/README.md#chuyển-zone-gốc-từ-management-sang-prd-một-lần), theo đúng thứ tự của mục
-đó; trước bước 7 không `apply` root này vì lý do nào khác (đổi budget cũng vậy), vì mọi plan lúc đó đều xoá zone. Trước `plan`, xoá dòng
-`zone_name` và khối `delegated_subdomains` khỏi `bootstrap.auto.tfvars`.
-
-Zone còn bản ghi ngoài `NS`, `SOA` ở đỉnh và các `NS` uỷ quyền nói trên (bản ghi sót của ExternalDNS hay `_acme-challenge`) thì
-`DeleteHostedZone` lỗi `HostedZoneNotEmpty`. Liệt kê bản ghi của zone (tìm zone theo tên, không còn output `zone_id`), bản ghi khác thì xoá
-trước trong console Route 53 của management account:
-
-```sh
-zone=$(AWS_PROFILE=anhnv-sso aws route53 list-hosted-zones-by-name --region ap-southeast-1 --dns-name aws.<domain> --query "HostedZones[?Name=='aws.<domain>.'].Id" --output text)
-AWS_PROFILE=anhnv-sso aws route53 list-resource-record-sets --region ap-southeast-1 --hosted-zone-id "$zone" --query 'ResourceRecordSets[].[Name,Type]' --output text
-```
-
 ## Xoá bootstrap (khi lab kết thúc)
 
 Chỉ khi không còn root nào dùng bucket (mọi env đã `destroy`, script quét sót sạch):
