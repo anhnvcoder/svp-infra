@@ -14,13 +14,23 @@ output "azs" {
 }
 
 output "private_subnet_ids" {
-  description = "IDs of the private subnets, one per zone, in the order of azs: nodes, pods, database."
+  description = "IDs of the private subnets, one per zone, in the order of azs: nodes and pods."
   value       = module.vpc.private_subnets
 }
 
 output "private_subnet_cidrs" {
-  description = "IPv4 ranges of the private subnets, in the order of azs; network policies that allow traffic to a database in these subnets use them."
+  description = "IPv4 ranges of the private subnets, in the order of azs."
   value       = module.vpc.private_subnets_cidr_blocks
+}
+
+output "database_subnet_ids" {
+  description = "IDs of the database subnets, one per zone, in the order of azs: RDS, MSK and ElastiCache. Their route table holds only the local route."
+  value       = module.vpc.database_subnets
+}
+
+output "database_subnet_cidrs" {
+  description = "IPv4 ranges of the database subnets, in the order of azs; network policies that allow traffic to a database use them."
+  value       = module.vpc.database_subnets_cidr_blocks
 }
 
 output "public_subnet_ids" {

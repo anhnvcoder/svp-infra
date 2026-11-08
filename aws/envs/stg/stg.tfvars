@@ -25,5 +25,16 @@ rds_delete_automated_backups = true
 rds_deletion_protection      = false
 rds_skip_final_snapshot      = true
 
+# msk: one small broker per zone, every topic on both brokers, writes accepted with one of them down (stg does not
+# promise to keep them through the loss of a zone), no broker log.
+msk_broker_instance_type = "kafka.t3.small"
+msk_replication_factor   = 2
+msk_min_insync_replicas  = 1
+msk_broker_logs_enabled  = false
+
+# valkey: one micro node, no replica and no failover.
+valkey_node_type  = "cache.t4g.micro"
+valkey_node_count = 1
+
 # media: destroy empties and deletes both buckets.
 media_force_destroy = true

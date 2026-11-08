@@ -42,7 +42,7 @@ Giá trị của `prd.tfvars` ngoài bảng của stg:
 
 | Biến | prd | Vì sao |
 | --- | --- | --- |
-| `flow_log_retention_days`, `control_plane_log_retention_days`, `rds_cloudwatch_logs_retention_days` | `30` | log của env production đọc lại được sau sự cố |
+| `flow_log_retention_days`, `control_plane_log_retention_days`, `rds_cloudwatch_logs_retention_days`, `msk_broker_logs_retention_days` | `30` | log của env production đọc lại được sau sự cố |
 | `s3_endpoint_restricted`, `s3_endpoint_extra_buckets` | `true`, `["prod-registry-k8s-io-ap-southeast-1"]` | endpoint S3 chỉ cho qua bucket `uploads`, `media` của env, bucket layer ECR của region (module thêm) và bucket mà `registry.k8s.io` chuyển hướng client trong AWS tới; thiếu bucket đó thì image của registry này (ExternalDNS…) không kéo được từ subnet private |
 | `eks_public_access_cidrs` | `[]` | endpoint công khai tắt |
 | `eks_secrets_kms_encryption` | `true` | Secret của Kubernetes mã hoá bằng KMS key riêng |
@@ -50,6 +50,8 @@ Giá trị của `prd.tfvars` ngoài bảng của stg:
 | `rds_performance_insights_enabled`, `_retention_period` | `true`, `7` | Database Insights Standard, mức miễn phí |
 | `rds_monitoring_interval`, `rds_cloudwatch_logs_exports` | `60`, `["postgresql", "upgrade"]` | enhanced monitoring, log PostgreSQL vào CloudWatch |
 | `media_versioning_enabled`, `media_access_logging_enabled` | `true`, `true` | bản cũ giữ 30 ngày, access log S3 vào bucket log của env |
+| `msk_replication_factor`, `msk_min_insync_replicas` | `3`, `2` | mất một AZ (một broker) không mất ghi đã `acks=all` và vẫn ghi được (ADR-0053 §6) |
+| `valkey_node_count` | `2` | replica ở AZ khác, Multi-AZ, failover tự động |
 
 Root không có `validation` ép giá trị prd: test của từng module có một `run` với giá trị prd, `make trivy DIRS=aws/envs/prd` quét với
 `prd.tfvars`.
@@ -109,8 +111,10 @@ AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform dest
 ```
 
 `teardown.tfvars` chỉ đặt `rds_deletion_protection = false` (RDS từ chối xoá instance còn bảo vệ) và `media_force_destroy = true` (bucket có
-versioning không bao giờ rỗng); không đổi cỡ, log hay mã hoá. `rds_skip_final_snapshot` vẫn `false`, backup tự động vẫn giữ: destroy vẫn tạo
-final snapshot. Sau đó runbook đọc final snapshot và backup tự động được giữ, xoá chúng, rồi chạy lệnh quét tài nguyên sót.
+versioning không bao giờ rỗng); không đổi cỡ, log hay mã hoá. MSK và ElastiCache không có bảo vệ xoá nào để nhấc: `destroy` gỡ chúng
+cùng secret `AmazonMSK_*` (xoá ngay, không cửa sổ khôi phục) và để KMS key của MSK ở `PendingDeletion`. `rds_skip_final_snapshot`
+vẫn `false`, backup tự động vẫn giữ: destroy vẫn tạo final snapshot. Sau đó runbook đọc final snapshot và backup tự động được giữ, xoá
+chúng, rồi chạy lệnh quét tài nguyên sót.
 
 ## Output
 
@@ -129,5 +133,6 @@ về `true` thì quét đỏ ở `AWS-0040`.
 
 ## Chi phí
 
-Trần một buổi và phí giữa các buổi ở phụ lục ADR-0048, ADR-0049 (NAT mỗi AZ, RDS Multi-AZ, node on-demand, bastion). CloudFront của media
+Trần một buổi và phí giữa các buổi ở phụ lục ADR-0048 và ADR-0053 §16 (NAT mỗi AZ, RDS Multi-AZ, node on-demand, bastion, ba broker
+MSK, hai node Valkey): ~$11 một buổi. CloudFront của media
 và web ACL WAF nằm trong gói flat-rate Free: $0 ([ADR-0052](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0052-cloudfront-flat-rate-free.md)).

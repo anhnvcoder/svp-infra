@@ -6,24 +6,27 @@ Nguồn Secret của cluster EKS một env trong AWS Secrets Manager và quyền
 
 ## Entry
 
-- Module chỉ tạo vỏ entry (`aws_secretsmanager_secret`), không có `aws_secretsmanager_secret_version`: giá trị do người học ghi bằng script
-  `make eks-secrets` của repo code sau khi apply root env, không đi qua Terraform, không nằm trong plan hay state.
+- Module chỉ tạo vỏ entry (`aws_secretsmanager_secret`), không có `aws_secretsmanager_secret_version`. Giá trị của `kafka-admin`,
+  `kafka-users` do module [`msk`](../msk/README.md), của `valkey-users` do module [`elasticache`](../elasticache/README.md) ghi trong cùng
+  apply với mật khẩu chúng đặt cho user, qua đối số write-only (root truyền ARN entry từ output `secret_arns`); giá trị của entry khác do
+  người học ghi bằng script `make eks-secrets` của repo code sau khi apply root env. Không giá trị nào nằm trong plan hay state.
 - Mã hoá bằng key AWS quản lý của Secrets Manager: mọi người đọc đều là role của module này, key do khách hàng quản lý không vạch thêm ranh
   giới nào mà thêm key policy và phí hằng tháng.
 - `recovery_window_in_days = 0`: `destroy` xoá entry ngay. Ngoại lệ của lab: env dựng lại mỗi buổi với cùng tên entry, entry còn chờ hết hạn
-  khôi phục sẽ chặn lần apply sau; giá trị được ghi lại từ `.env`.
+  khôi phục sẽ chặn lần apply sau; giá trị được ghi lại ở buổi sau.
 
 ## Ai đọc entry nào
 
 - Map namespace → entry (`local.namespace_entries` ở `main.tf`) là các `remoteRef` key của ExternalSecret mà chart `svp-cluster` của repo
-  code render với store `aws`, object store managed (`s3.mode: external`) và Argo CD notifications bật. Khi đó chart không render entry của
-  object store trong cluster (`s3-root`, `s3-users`, `pg-backup-s3`), nên map không có chúng. Map chép từ render của `origin/main`, chart
-  giải nén bằng `git archive` vào một thư mục trống:
+  code render với store `aws`, object store managed (`s3.mode: external`), Kafka và Valkey ngoài cluster
+  (`externalSecrets.localKafkaValkey: false`) và Argo CD notifications bật. Khi đó chart không render entry của object store trong
+  cluster (`s3-root`, `s3-users`, `pg-backup-s3`) hay của CA local (`local-ca`, `local-tls`), nên map không có chúng. Map chép từ render
+  của `origin/main`, chart giải nén bằng `git archive` vào một thư mục trống:
 
   ```sh
   helm template svp-cluster deploy/helm/svp-cluster --namespace svp --show-only templates/external-secrets.yaml \
     --set externalSecrets.enabled=true --set externalSecrets.store=aws --set externalSecrets.prefix=svp/stg/ \
-    --set s3.mode=external --set externalSecrets.argocdNotifications=true \
+    --set s3.mode=external --set externalSecrets.argocdNotifications=true --set externalSecrets.localKafkaValkey=false \
     --set externalSecrets.aws.region=ap-southeast-1 --set externalSecrets.aws.roles.<namespace>=<arn>   # mỗi namespace
   ```
 

@@ -16,15 +16,25 @@ locals {
 
   # The VPC range splits into eight equal blocks. Blocks 0 to 5 are the private subnets, one per zone: the largest
   # ones, because every pod takes a VPC address from them (VPC CNI, with /28 prefixes per node when prefix
-  # delegation is on). Block 7 splits again into 32 small public subnets, one per zone: only the NAT gateways and
-  # the network load balancers live there. Block 6 stays free for later use (database or intra subnets).
-  private_subnets = [for i in range(var.az_count) : cidrsubnet(var.cidr, 3, i)]
-  public_subnets  = [for i in range(var.az_count) : cidrsubnet(cidrsubnet(var.cidr, 3, 7), 5, i)]
+  # delegation is on). Block 6 splits eight ways for the database subnets, one per zone (RDS, MSK, ElastiCache). Block 7
+  # splits again into 32 small public subnets, one per zone: only the NAT gateways and the load balancers live there.
+  private_subnets  = [for i in range(var.az_count) : cidrsubnet(var.cidr, 3, i)]
+  database_subnets = [for i in range(var.az_count) : cidrsubnet(cidrsubnet(var.cidr, 3, 6), 3, i)]
+  public_subnets   = [for i in range(var.az_count) : cidrsubnet(cidrsubnet(var.cidr, 3, 7), 5, i)]
 
   # Subnet discovery of the AWS Load Balancer Controller: an internet-facing load balancer goes to the subnets
   # tagged role/elb, an internal one to those tagged role/internal-elb. "shared" lets other clusters use them too
   # and tells the controller the subnets are not its to delete.
   cluster_tag = { "kubernetes.io/cluster/${var.cluster_name}" = "shared" }
+
+  # The data tier gets a route table of its own with only the local route: no path to the internet either way. With
+  # own_route_table false the vpc module attaches the database subnets to the private route tables, whose 0.0.0.0/0
+  # goes to the NAT gateway. Kept in a local because route table IDs are unknown at plan time, so tests read this.
+  database_routes = {
+    own_route_table        = true
+    nat_gateway_route      = false
+    internet_gateway_route = false
+  }
 }
 
 module "vpc" {
@@ -35,8 +45,15 @@ module "vpc" {
   cidr = var.cidr
   azs  = local.azs
 
-  private_subnets = local.private_subnets
-  public_subnets  = local.public_subnets
+  private_subnets  = local.private_subnets
+  database_subnets = local.database_subnets
+  public_subnets   = local.public_subnets
+
+  create_database_subnet_route_table     = local.database_routes.own_route_table
+  create_database_nat_gateway_route      = local.database_routes.nat_gateway_route
+  create_database_internet_gateway_route = local.database_routes.internet_gateway_route
+  # The rds module makes the subnet group of its instance; a second one here would go unused.
+  create_database_subnet_group = false
 
   # Nothing in a public subnet gets a public address by itself: nodes run in the private subnets, and the NAT
   # gateways and load balancers get their addresses explicitly.

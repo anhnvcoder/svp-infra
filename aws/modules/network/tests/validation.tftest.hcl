@@ -168,3 +168,86 @@ run "prd_values" {
     error_message = "The S3 endpoint policy of prd must hold exactly the two statements."
   }
 }
+
+
+# The data tier with the defaults (two zones, a /16): one database subnet per zone in block 6 of the range (the
+# private subnets hold blocks 0 to 5, the public ones block 7), a route table of its own with no route out, and no
+# subnet discovery tag of the Load Balancer Controller.
+run "database_subnets" {
+  command = plan
+
+  assert {
+    condition     = length(module.vpc.database_subnets) == 2
+    error_message = "Each zone must get one database subnet."
+  }
+
+  assert {
+    condition     = module.vpc.database_subnets_cidr_blocks == tolist(["10.0.192.0/22", "10.0.196.0/22"])
+    error_message = "The database subnets must split block 6 (10.0.192.0/19) of the VPC range."
+  }
+
+  assert {
+    condition     = module.vpc.private_subnets_cidr_blocks == tolist(["10.0.0.0/19", "10.0.32.0/19"]) && module.vpc.public_subnets_cidr_blocks == tolist(["10.0.224.0/24", "10.0.225.0/24"])
+    error_message = "The database subnets must leave the private and public subnets where they were."
+  }
+
+  assert {
+    condition     = local.database_routes.own_route_table && length(module.vpc.database_route_table_ids) >= 1
+    error_message = "The database subnets must have a route table of their own, not the private one that routes to the NAT gateway."
+  }
+
+  assert {
+    condition     = length(module.vpc.database_nat_gateway_route_ids) == 0 && module.vpc.database_internet_gateway_route_id == null && module.vpc.database_ipv6_egress_route_id == null
+    error_message = "The database route table must hold no route to a NAT gateway or the internet gateway (no 0.0.0.0/0)."
+  }
+
+  assert {
+    condition     = alltrue([for s in module.vpc.database_subnet_objects : length([for k in keys(s.tags) : k if startswith(k, "kubernetes.io/")]) == 0])
+    error_message = "The database subnets must carry no tag the Load Balancer Controller reads to pick subnets."
+  }
+
+  assert {
+    condition     = module.vpc.database_subnet_group == null
+    error_message = "The network module must not make a DB subnet group: the rds module makes its own."
+  }
+}
+
+# Three zones (prd) and the most zones on the smallest range: the database subnets still fill only block 6, between
+# the last private subnet and the first public one.
+run "database_subnets_prd" {
+  command = plan
+
+  variables {
+    az_count           = 3
+    single_nat_gateway = false
+  }
+
+  assert {
+    condition     = module.vpc.database_subnets_cidr_blocks == tolist(["10.0.192.0/22", "10.0.196.0/22", "10.0.200.0/22"])
+    error_message = "prd must get one database subnet per zone in block 6 of the VPC range."
+  }
+
+  assert {
+    condition     = length(module.vpc.database_route_table_ids) == 3 && length(module.vpc.database_nat_gateway_route_ids) == 0 && module.vpc.database_internet_gateway_route_id == null
+    error_message = "With one NAT gateway per zone the database route tables must still hold no route out."
+  }
+}
+
+run "database_subnets_six_zones" {
+  command = plan
+
+  variables {
+    cidr     = "10.0.0.0/20"
+    az_count = 6
+  }
+
+  assert {
+    condition     = module.vpc.database_subnets_cidr_blocks == tolist(["10.0.12.0/26", "10.0.12.64/26", "10.0.12.128/26", "10.0.12.192/26", "10.0.13.0/26", "10.0.13.64/26"])
+    error_message = "Six zones on a /20 must get six database subnets inside block 6 (10.0.12.0/23)."
+  }
+
+  assert {
+    condition     = module.vpc.private_subnets_cidr_blocks[5] == "10.0.10.0/23" && module.vpc.public_subnets_cidr_blocks[0] == "10.0.14.0/28"
+    error_message = "The private subnets must end below block 6 and the public ones start above it."
+  }
+}

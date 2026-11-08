@@ -16,7 +16,7 @@ variable "vpc_id" {
 }
 
 variable "subnet_ids" {
-  description = "Private subnets of the DB subnet group, in at least two availability zones (RDS requires two even for a single-AZ instance, and a Multi-AZ standby goes in the other one)."
+  description = "Database subnets of the DB subnet group (the tier of the VPC with no route to the internet), in at least two availability zones (RDS requires two even for a single-AZ instance, and a Multi-AZ standby goes in the other one)."
   type        = list(string)
 
   validation {

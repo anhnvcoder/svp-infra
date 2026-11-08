@@ -6,16 +6,16 @@ data "aws_caller_identity" "current" {}
 
 # Design notes: aws/modules/external-secrets/README.md.
 locals {
-  # The Secrets Manager entries each namespace's SecretStore reads: the remoteRef keys of the ExternalSecrets that chart
-  # svp-cluster of the backend repository renders with store aws, a managed object store and Argo CD notifications on.
-  # The entries of an in-cluster object store (s3-root, s3-users, pg-backup-s3) are not rendered then, so not here.
-  # A Secret added to files/external-secrets.yaml of the chart needs its entry here too, or its ExternalSecret is denied.
+  # The remoteRef keys of the ExternalSecrets chart svp-cluster of the backend repository renders on eks: store aws,
+  # managed object store, Kafka and Valkey outside the cluster, Argo CD notifications on. Entries of in-cluster ones
+  # (s3-root, s3-users, pg-backup-s3, local-ca, local-tls) are not rendered then. A Secret added to
+  # files/external-secrets.yaml of the chart needs its entry here too, or its ExternalSecret is denied.
   namespace_entries = {
     argocd   = ["argocd-notifications"]
     keda     = ["kafka-users"]
-    svp      = ["glitchtip-runtime", "jwt-signing", "jwt-verify", "kafka-users", "pg-roles", "web"]
-    svp-data = ["kafka-admin", "kafka-users", "pg-roles", "pg-superuser"]
-    svp-obs  = ["glitchtip-runtime", "obs", "pg-roles"]
+    svp      = ["glitchtip-runtime", "jwt-signing", "jwt-verify", "kafka-users", "pg-roles", "valkey-users", "web"]
+    svp-data = ["kafka-admin", "pg-roles", "pg-superuser", "valkey-users"]
+    svp-obs  = ["glitchtip-runtime", "kafka-users", "obs", "pg-roles"]
   }
   entries = toset(flatten(values(local.namespace_entries)))
 
@@ -41,15 +41,16 @@ locals {
 # Entries
 ################################################################################
 
-# Only the entries: the values are written by the learner's script after apply and never pass through Terraform, plan
-# or state. Encrypted with the AWS managed key of Secrets Manager.
+# Only the entries. The values of kafka-admin, kafka-users and valkey-users are written write-only by the msk and
+# elasticache modules in the same apply as the passwords they set; every other value by the learner's script after
+# apply. None is in plan or state. Encrypted with the AWS managed key of Secrets Manager.
 resource "aws_secretsmanager_secret" "this" {
   for_each = local.entries
 
   name        = "svp/${var.env}/${each.key}"
   description = "Source of External Secrets entry ${each.key} of env ${var.env}"
   # Deleted at once on destroy: each lab session builds the env again with the same names, which a secret waiting out a
-  # recovery window would block. The values are written again from .env by the learner's script.
+  # recovery window would block. The values are written again in the next session.
   recovery_window_in_days = 0
 }
 

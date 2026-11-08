@@ -5,7 +5,10 @@ GitOps Bridge), đo (smoke, seed, k6 bậc 1, 2, 4, 8), rồi gỡ sạch trong 
 [ADR-0034](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0034-aws-stage7.md) §13 (tài nguyên ngoài state), §14 (buổi AWS);
 [ADR-0048](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0048-prd-aws.md) §1–§2 (account, state), §5 (secret), §6 (bootstrap
 EKS), §9 (kết thúc buổi); [ADR-0051](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0051-dns-prd-apex.md) (zone của mỗi env);
-[ADR-0052](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0052-cloudfront-flat-rate-free.md) (gói CloudFront flat-rate Free, web ACL WAF). Buổi prd theo [`session-prd.md`](session-prd.md), dùng chung mọi mục chung của file này.
+[ADR-0052](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0052-cloudfront-flat-rate-free.md) (gói CloudFront flat-rate Free, web ACL WAF);
+[ADR-0053](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0053-msk-elasticache-valkey.md) (Kafka là Amazon MSK, Valkey là
+ElastiCache, dựng cùng apply với EKS, mật khẩu do Terraform sinh). Buổi prd theo [`session-prd.md`](session-prd.md), dùng chung mọi mục chung
+của file này.
 
 **Người học chạy mọi lệnh ở đây.** AI không chạy lệnh nào chạm account hay cluster EKS, kể cả lệnh chỉ đọc; AI đọc output người học dán
 lại và nhắc tới khi destroy hai root và hai lượt `sweep.sh` (stg, mgmt) đều đã chạy. Mọi lệnh chạy từ gốc repo này (`infra/`). Mỗi account một
@@ -30,8 +33,12 @@ aws/scripts/session.sh --print stg
 
 - **Cả buổi 4 giờ**, từ `check-account.sh` (mốc `session-start`) tới hai lượt `sweep.sh` sạch. **Quá 3 giờ mà chưa đo xong thì bỏ phần đo
   còn lại, sang gỡ**: `measure.sh` tự bỏ bậc k6 nào sẽ kết thúc sau mốc 3 giờ (dòng `skip`).
-- Chi phí ước tính ~$2,2–2,4 một buổi 4 giờ với node Spot, trần $5 (ADR-0034 §12). Quên destroy 24 giờ ≈ $9–12; budget `svp-stg-monthly` của
-  account stg và budget tổng của org ở management gửi email ở 50 %, 80 %, 100 %.
+- Chi phí ước tính ~$3,0 một buổi 4 giờ với node Spot (~$3,7 khi node on-demand), trần $5: ~$2,4 của ADR-0034 §12 cộng MSK (2 broker
+  `kafka.t3.small`) và ElastiCache (1 node `cache.t4g.micro`), H_k ~$0,144 mỗi giờ, O_k ~$0,06 (ADR-0053 §16). Quên destroy 24 giờ ≈ $12,5–15,5
+  ($9–12 cộng 24 × H_k); budget `svp-stg-monthly` của account stg và budget tổng của org ở management gửi email ở 50 %, 80 %, 100 %.
+- MSK và ElastiCache dựng, gỡ lâu: tài liệu AWS không ghi thời gian, ADR-0053 §16 giả định MSK dựng ≤ 45, gỡ ≤ 30 phút, ElastiCache ≤ 20,
+  ≤ 15 phút, song song với EKS trong apply của root env (buổi dài thêm ~30 phút apply, ~20 phút destroy); buổi stg đo số thật (phép kiểm (a)
+  ở bước 11).
 - CloudFront và web ACL WAF của media nằm trong gói flat-rate Free ($0 mỗi tháng, 1 triệu request và 100 GB, không tính phí vượt; ADR-0052
   §1). Vài phút trước khi gói có hiệu lực và sau khi huỷ lúc destroy tính pay-as-you-go; web ACL sót lại sau khi gói huỷ tính ~$5 mỗi ACL
   cộng $1 mỗi luật mỗi tháng, theo giờ, nên `sweep.sh` bắt nó.
@@ -143,7 +150,7 @@ Rồi chạy tiếp từ bước sau mốc cuối (hay chạy lại bước đan
 | 2 | `aws/scripts/check-dns.sh stg` | 2 phút | ba dòng `ok` hay dòng `FAIL` |
 | 3 | `aws/scripts/tf.sh stg env init` | 5 phút | dòng cuối |
 | 4 | `aws/scripts/tf.sh stg env plan` | 5 phút | dòng `Plan: N to add, 0 to change, 0 to destroy` và đường dẫn file text của plan |
-| 5 | `aws/scripts/tf.sh stg env apply` | 35 phút | dòng `Apply complete! …` và hai dòng `mark` |
+| 5 | `aws/scripts/tf.sh stg env apply` | 65 phút | dòng `Apply complete! …`, hai dòng `mark` và hai dòng `Creation complete after …` của `module.msk.aws_msk_cluster.this`, `module.elasticache.aws_elasticache_replication_group.this` |
 | 6 | `aws/scripts/bootstrap.sh stg secrets` | 5 phút | mọi dòng `ok`/`FAIL` |
 | 7 | `aws/scripts/tf.sh stg gitops init` | 2 phút | dòng cuối |
 | 8 | `aws/scripts/tf.sh stg gitops plan` | 5 phút | dòng `ok chart svp-cluster at …`, dòng `Plan: …` và đường dẫn file text của plan |
@@ -156,11 +163,12 @@ Rồi chạy tiếp từ bước sau mốc cuối (hay chạy lại bước đan
 | 15 | `aws/scripts/tf.sh stg env plan --teardown` | 1 phút | dòng `skip` (stg không có bảo vệ cần nhấc) |
 | 16 | `aws/scripts/tf.sh stg env apply --teardown` | 1 phút | dòng `skip` |
 | 17 | `aws/scripts/tf.sh stg env plan --destroy` | 5 phút | dòng `Plan: 0 to add, 0 to change, N to destroy` và đường dẫn file text của plan |
-| 18 | `aws/scripts/tf.sh stg env destroy` | 30 phút | dòng `Apply complete! Resources: 0 added, 0 changed, N destroyed.` |
+| 18 | `aws/scripts/tf.sh stg env destroy` | 50 phút | dòng `Apply complete! Resources: 0 added, 0 changed, N destroyed.` và hai dòng `Destruction complete after …` của cluster MSK, replication group ElastiCache |
 | 19 | `aws/scripts/sweep.sh stg` | 5 phút | toàn bộ output |
 | 20 | `aws/scripts/sweep.sh mgmt` | 5 phút | toàn bộ output |
 
-Dự trù: apply root env xong ~T+40 phút, mọi Application Healthy ~T+1 giờ 25, đo tới muộn nhất T+3 giờ, gỡ và quét xong trước T+4 giờ.
+Dự trù: apply root env xong ~T+70 phút (MSK là phần dài nhất), mọi Application Healthy ~T+1 giờ 55, đo tới muộn nhất T+3 giờ, gỡ và quét
+xong trước T+4 giờ khi gỡ đúng số giả định của ADR-0053 §16; buổi stg đầu tiên đo hai mốc đó và ghi vào phụ lục của ADR.
 Một bước đỏ: đọc dòng `FAIL`, sửa nguyên nhân, chạy lại **đúng bước đó** (mọi script chạy lại được). Không đi tiếp qua một bước đỏ, trừ
 bước 11 (đo): đo hỏng thì vẫn sang bước 12. Bước 15, 16 không làm gì ở stg (không có `teardown.tfvars`); chúng nằm trong bảng để stg và prd
 chạy cùng một chuỗi bước.
@@ -207,17 +215,32 @@ buổi, git bỏ qua: plan có tên miền và IP thật nên không vào cây r
 hiện có: `aws/scripts/tf.sh stg env show`. **Đọc file text đó trước khi apply**: lần đầu mỗi buổi chỉ `to add`, `0 to change, 0 to destroy`; có
 `destroy` hay `change` là state còn tài nguyên của buổi trước (destroy dở): dừng, dán plan cho AI. Plan có web ACL
 `module.waf.aws_wafv2_web_acl.this` (provider `us-east-1`) và gói `module.media.aws_pricingplanmanager_subscription.media` với
-`plan_tier = "FREE"` (phép kiểm (b) của ADR-0052). `apply` chỉ nhận file plan đó (không plan
-lại tại chỗ), rồi xoá nó. Thời gian: EKS ~10–15 phút, RDS ~10 phút, CloudFront ~5 phút, song song; gói Free chờ tới `ACTIVE` (vài phút tới hơn nửa giờ). Root này cũng tạo vỏ các entry
-`svp/stg/*` của Secrets Manager (chưa có giá trị). `apply` đỏ giữa chừng: đọc lỗi, `plan` lại, `apply` lại; muốn bỏ buổi thì sang bước 12
-(`pre-destroy.sh` tự ghi context `svp-stg` và đọc `hosted_zone_id` từ `stg.auto.tfvars`, nên chạy được cả khi apply đỏ sau khi cluster EKS đã
-có), hay bước 17 với `--no-cluster` khi apply đỏ trước khi tạo cluster EKS (điều kiện ở bước 17).
+`plan_tier = "FREE"` (phép kiểm (b) của ADR-0052). Plan có cluster `module.msk.aws_msk_cluster.this` (`kafka_version = "4.1.x.kraft"`,
+`kafka.t3.small`, 2 broker), tám secret `AmazonMSK_svp-stg-*`, replication group `module.elasticache.aws_elasticache_replication_group.this`
+(`engine = "valkey"`, `engine_version = "9.1"`) và bốn `aws_elasticache_user`; mật khẩu của chúng là đối số write-only, plan chỉ in
+`(write-only attribute)`, không giá trị. `apply` chỉ nhận file plan đó (không plan lại tại chỗ), rồi xoá nó. Thời gian: EKS ~10–15 phút,
+RDS ~10 phút, CloudFront ~5 phút, MSK ≤ 45 phút, ElastiCache ≤ 20 phút (giả định của ADR-0053 §16), song song; gói Free chờ tới `ACTIVE` (vài
+phút tới hơn nửa giờ). Ghi lại hai dòng `Creation complete after …` của cluster MSK và replication group ElastiCache trong output (phút
+dựng, phép kiểm (a) của ADR-0053). Root này cũng tạo các entry `svp/stg/*` của Secrets Manager: `kafka-admin`, `kafka-users`, `valkey-users`
+có giá trị ngay trong apply này (Terraform sinh mật khẩu, ghi cùng một giá trị vào secret `AmazonMSK_*`, user ElastiCache và entry; không
+vào plan hay state), các entry khác còn rỗng tới bước 6. `apply` đỏ giữa chừng: đọc lỗi, `plan` lại, `apply` lại. Ngoại lệ là khi output của
+lượt đỏ đã có `Creation complete` hay `Modifications complete` của một tài nguyên mang mật khẩu: `aws_secretsmanager_secret_version` hay
+`aws_elasticache_user` dưới `module.msk` (nhóm Kafka) hay `module.elasticache` (nhóm Valkey). Mật khẩu là write-only: phần đã ghi giữ mật
+khẩu của lượt đỏ, `plan` lại không thấy lệch (in `No changes` cho chúng), còn phần chưa ghi nhận mật khẩu mới của lượt sau, nên user và
+entry lệch nhau (`WRONGPASS` ở phép kiểm (d) của ADR-0053 ở bước 11, MSK từ chối đăng nhập). Khi đó tăng version của nhóm đó trước khi
+`plan` lại, đúng cách của mục [Đổi một secret của env đang chạy](#đổi-một-secret-của-env-đang-chạy) (`msk_password_version`,
+`valkey_password_version` trong `stg.auto.tfvars`): apply với version mới ghi lại mọi mật khẩu của nhóm từ cùng một giá trị; rồi đi tiếp
+bước 6 (`bootstrap.sh stg secrets`, lệnh kết thúc lượt xoay đó). Lỗi nằm ở chính access string của user ElastiCache thì không apply lại
+(bảng dưới). Muốn bỏ buổi thì sang bước 12 (`pre-destroy.sh` tự ghi context `svp-stg` và đọc `hosted_zone_id` từ `stg.auto.tfvars`, nên chạy
+được cả khi apply đỏ sau khi cluster EKS đã có), hay bước 17 với `--no-cluster` khi apply đỏ trước khi tạo cluster EKS (điều kiện ở bước
+17).
 
 Lỗi apply đã biết, không sửa bằng `plan` lại:
 
 | Lỗi | Nguyên nhân | Cách xử lý |
 | --- | --- | --- |
 | `AccessDenied: Your account must be verified before you can add new CloudFront resources` ở `aws_cloudfront_distribution` | account chưa được AWS xác minh cho CloudFront | gỡ buổi như trên, rồi case AWS Support của điều kiện 1 |
+| lỗi ở `module.elasticache.aws_elasticache_user.this[…]` về `access_string` (ElastiCache không nhận một luật của chuỗi) | access string của ADR-0053 §9 chưa qua phép kiểm (a) của buổi stg; `plan` lại, version mới đều gửi lại đúng chuỗi đó | không apply lại; gỡ buổi như trên, dán lỗi cho AI: sửa chuỗi bằng PR (ADR-0053 §9, module `elasticache`, aclfile local cùng chuỗi), rồi buổi mới |
 | `ServiceQuotaExceededException` ở `aws_pricingplanmanager_subscription.media` (câu của mô hình API: "You have reached the maximum number of subscriptions allowed for your account"; câu lúc chạy có thể khác, nhận theo tên lỗi) | account đã dùng hết 3 gói Free; tài liệu AWS không nói gói đã huỷ có bị đếm hay không (ADR-0052, Hệ quả) | không apply lại; gỡ buổi như trên, rồi mở case AWS Support từ account đó kèm dòng lỗi và RequestID |
 
 ### 6. Giá trị secret
@@ -228,10 +251,12 @@ aws/scripts/bootstrap.sh stg secrets
 
 Theo thứ tự: kiểm account; repo code ở `main` = `origin/main`, sạch; `aws eks update-kubeconfig --alias svp-stg`; ghi `cluster-values.json`;
 đọc **mật khẩu** master của RDS (trường `password` của secret mà RDS giữ, username luôn `postgres`) vào môi trường của đúng lệnh `make`
-(không ra file, không in), rồi `make -C ../backend eks-secrets CONTEXT=svp-stg` với `AWS_PROFILE=anhnv-stg`: ghi mọi entry `svp/stg/*` từ
+(không ra file, không in), rồi `make -C ../backend eks-secrets CONTEXT=svp-stg` với `AWS_PROFILE=anhnv-stg`: ghi các entry `svp/stg/*` từ
 `.env` (mỗi entry một `put-secret-value --secret-string file://…`, giá trị không qua đối số hay output); `glitchtip-runtime` ba key rỗng chỉ
-khi chưa có giá trị. Nguồn của mọi Secret trên EKS có trước Argo CD. Tìm: `ok entries svp/stg/* written` và mốc `secrets-written`. Đỏ: dán
-~30 dòng cuối của `$SVP_SESSION_DIR/eks-secrets.log` (script nêu tên biến thiếu, không in giá trị).
+khi chưa có giá trị. Ba entry của Kafka và Valkey (`kafka-admin`, `kafka-users`, `valkey-users`) Terraform đã ghi ở bước 5: `make eks-secrets`
+chỉ kiểm chúng có, không ghi, không đọc mật khẩu Kafka, Valkey của `.env` (mật khẩu của stack local). Nguồn của mọi Secret trên EKS có trước
+Argo CD. Tìm: `ok entries svp/stg/* written (kafka-admin, kafka-users, valkey-users by the apply of aws/envs/stg)` và mốc `secrets-written`.
+Đỏ: dán ~30 dòng cuối của `$SVP_SESSION_DIR/eks-secrets.log` (script nêu tên biến thiếu, không in giá trị).
 
 ### 7–9. Root gitops: Argo CD và root GitOps
 
@@ -277,7 +302,7 @@ aws/scripts/measure.sh stg
 2. `make eks-seed`: ≥ 30 video `READY` trong `GET /feed/explore` (k6 profile `cloud` đọc chúng).
 3. k6 (`deploy/k6/cloud/run.sh` của repo code) bậc **1, 2, 4, 8 pod**, mỗi pod một phần tải của thiết kế 20 pod, lên 2 phút, giữ 10 phút;
    **trước mỗi bậc `make eks-rl-reset CONTEXT=svp-stg`** (pod bậc sau có thể nhận lại IP của pod bậc trước, burst đăng ký theo IP sẽ cạn;
-   **LOCAL LAB ONLY**: xoá khoá `svp:gw:rl:register:*` ở Valkey db 10 của cluster). Bậc đầu tiên trượt (threshold, iteration bị bỏ, 429,
+   **LOCAL LAB ONLY**: xoá khoá `svp:gw:rl:register:*` ở db 10 của ElastiCache, qua `svp-valkey` của Deployment `svp-ops`). Bậc đầu tiên trượt (threshold, iteration bị bỏ, 429,
    pod thiếu summary) kết thúc thang đo. Mỗi bậc ghi `k6-<n>/`: `nodes.tsv` (số node Ready theo thời gian), `top-nodes.tsv`,
    `top-pods.tsv` (`kubectl top` mỗi lần chờ), `summaries/` (summary của từng pod), `logs.txt`, `node-events.json`.
 
@@ -350,6 +375,81 @@ curl -sI -H "Origin: https://$(jq -r .domain "$values")" "https://$(jq -r .media
 
 Mong `HTTP/2 200` và `access-control-allow-origin: *`; rồi mở `https://<domain>` trên trình duyệt, đăng nhập và phát một video của feed.
 Thiếu header hay video không phát: dán output và lỗi ở console của trình duyệt cho AI.
+
+#### Kafka và Valkey managed
+
+Phép kiểm (a)–(e) của mục "Xác nhận" của
+[ADR-0053](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0053-msk-elasticache-valkey.md#xác-nhận); (b) là smoke của
+`measure.sh` (service ghi, đọc Kafka qua SASL/SCRAM-SHA-512 trên TLS), (f) là hai lượt `sweep.sh` cuối buổi. Lệnh và output có thời điểm UTC
+vào phụ lục, một dòng kết luận mỗi env vào "Xác nhận". Buổi prd chạy đúng các lệnh này với `anhnv-prd`, `svp-prd`.
+
+Mọi lệnh chạm Kafka, Valkey đi qua CLI vận hành (ADR-0053 §13): `svp-kafka` (đăng nhập `svp-admin`), `svp-valkey` (đăng nhập `svp-ops`) trong
+Deployment `svp-data/svp-ops`, không `kubectl run`, không công cụ trên máy. Thử quyền của một user thường: `SVP_AS_USER=<user>`, mật khẩu là
+dòng đầu của stdin, lấy từ Secret của chính client đó (`svp/<service>-env`), không qua đối số, không in ra.
+
+(a) MSK `ACTIVE` với cấu hình của ADR-0053 §2, ElastiCache `available`; phút dựng là hai dòng `Creation complete after …` của bước 5, phút gỡ
+là hai dòng `Destruction complete after …` của bước 18; plan lần hai `No changes` là phép (c) của mục trên:
+
+```sh
+AWS_PROFILE=anhnv-stg aws kafka list-clusters-v2 --cluster-name-filter svp-stg --region ap-southeast-1 --output text \
+  --query 'ClusterInfoList[].[State,Provisioned.CurrentBrokerSoftwareInfo.KafkaVersion,Provisioned.BrokerNodeGroupInfo.InstanceType,Provisioned.NumberOfBrokerNodes]'
+AWS_PROFILE=anhnv-stg aws kafka list-clusters-v2 --cluster-name-filter svp-stg --region ap-southeast-1 --output text \
+  --query 'ClusterInfoList[].Provisioned.[ClientAuthentication.Sasl.Scram.Enabled,ClientAuthentication.Sasl.Iam.Enabled,EncryptionInfo.EncryptionInTransit.ClientBroker]'
+AWS_PROFILE=anhnv-stg aws elasticache describe-replication-groups --replication-group-id svp-stg --region ap-southeast-1 --output text \
+  --query 'ReplicationGroups[].[Status,TransitEncryptionMode,AtRestEncryptionEnabled,length(MemberClusters)]'
+AWS_PROFILE=anhnv-stg aws elasticache describe-users --region ap-southeast-1 --output text \
+  --query "Users[?starts_with(UserId, 'svp-stg-')].[UserName,Status,AccessString]"
+```
+
+Mong `ACTIVE`, `4.1.x.kraft`, `kafka.t3.small`, `2`; `True`, `False`, `TLS`; `available`, `required`, `True`, `1`; bốn user `active` với
+access string đúng nguyên văn ADR-0053 §9 (ElastiCache viết lại một chuỗi là mục "Xem lại khi" của ADR: dán cho AI). Dán lại cả bốn output.
+
+(c) Topic, ACL, và một service bị từ chối trên topic không có ACL của nó. Topic thử `svp-acl-check` tạo bằng `svp-admin` rồi xoá ngay:
+
+```sh
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp-data exec deploy/svp-ops -c kafka -- /opt/svp/bin/svp-kafka topics --list --exclude-internal
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp-data exec deploy/svp-ops -c kafka -- /opt/svp/bin/svp-kafka acls --list --principal User:svp-feed-service
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp-data exec deploy/svp-ops -c kafka -- /opt/svp/bin/svp-kafka topics --create --topic svp-acl-check --partitions 1
+pw=$(AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp get secret feed-service-env -o jsonpath='{.data.KAFKA_SASL_PASSWORD}' | base64 --decode)
+printf '%s\nprobe\n' "$pw" | AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp-data exec -i deploy/svp-ops -c kafka -- \
+  env SVP_AS_USER=svp-feed-service /opt/svp/bin/svp-kafka console-producer --topic svp-acl-check --producer-property max.block.ms=15000 2>&1 |
+  grep -m 1 -oE '(TopicAuthorization|SaslAuthentication)Exception[^\[]*(\[[^]]*\])?'
+unset pw
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp-data exec deploy/svp-ops -c kafka -- /opt/svp/bin/svp-kafka topics --delete --topic svp-acl-check
+```
+
+Mong tám topic (`video.lifecycle.v1`, `media.transcodes.v1`, `user.follows.v1`, `engagement.views.v1` và bốn topic `.dlq` của chúng); ACL của
+`svp-feed-service` chỉ Read trên `user.follows.v1`, `video.lifecycle.v1`, Write trên `user.follows.v1.dlq`, `video.lifecycle.v1.dlq`, Read trên
+group `feed-service`; dòng `TopicAuthorizationException: Not authorized to access topics: [svp-acl-check]`. `SaslAuthenticationException` là
+mật khẩu của Secret không khớp secret `AmazonMSK_svp-stg-svp-feed-service` (MSK đồng bộ tới 10 phút sau apply): đọc lại sau 10 phút, còn thì dán cho AI.
+
+(d) ACL Valkey chặn db và tiền tố khoá của service khác (mật khẩu là phần giữa `:` và `@` của `REDIS_URL` trong Secret của service):
+
+```sh
+pw=$(AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp get secret feed-service-env -o jsonpath='{.data.REDIS_URL}' | base64 --decode |
+  sed -E 's#^rediss://[^:]+:([A-Za-z0-9]+)@.*#\1#')
+printf '%s\nSELECT 10\nSELECT 14\n' "$pw" | AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp-data exec -i deploy/svp-ops -c valkey -- \
+  env SVP_AS_USER=svp-feed-service /opt/svp/bin/svp-valkey
+pw=$(AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp get secret gateway-env -o jsonpath='{.data.REDIS_URL}' | base64 --decode |
+  sed -E 's#^rediss://[^:]+:([A-Za-z0-9]+)@.*#\1#')
+printf '%s\nGET svp:feed:explore:check\nGET svp:gw:check\n' "$pw" | AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp-data exec -i deploy/svp-ops -c valkey -- \
+  env SVP_AS_USER=svp-gateway /opt/svp/bin/svp-valkey -n 10
+unset pw
+```
+
+Mong, theo thứ tự: một dòng `NOPERM …` (`svp-feed-service` không vào db 10) rồi `OK` (db 14 của nó); một dòng `NOPERM …` (`svp-gateway` không
+đọc `svp:feed:*`) rồi một dòng trống (khoá `svp:gw:check` không có, đọc được). `WRONGPASS` hay lỗi TLS: dán cho AI.
+
+(e) Lag hiện trên dashboard: trong lúc giữ tải, Grafana (port-forward ở trên) dashboard "SVP — Kafka and pipeline", panel "Consumer lag by
+group (max over partitions)" có đường của bốn group `video-service`, `engagement-service`, `feed-service`, `media-worker` (receiver
+`kafkametrics` của Collector, user `svp-otelcol`). Đối chiếu với broker:
+
+```sh
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp-data exec deploy/svp-ops -c kafka -- /opt/svp/bin/svp-kafka consumer-groups --describe --all-groups
+```
+
+Mong cột `LAG` của mỗi group cùng cỡ với panel. Panel trống: dán lỗi của receiver
+(`AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp-obs logs deploy/otel-collector --tail=50 | grep -i kafka`) cho AI.
 
 ### 12. Gỡ trong cluster trước destroy
 
@@ -438,14 +538,16 @@ aws/scripts/sweep.sh mgmt
 Chỉ đọc, chạy được cả khi state mất hay destroy dở; mỗi lượt với profile của account đó. Liệt kê mọi tài nguyên tag `Project=svp` hay tag
 Kubernetes đặt (`kubernetes.io/cluster/svp-*`, `elbv2.k8s.aws/cluster`, `ebs.csi.aws.com/cluster`, `cluster.k8s.amazonaws.com/name`) hay mang
 tên `svp-*`: EKS, EC2, EBS và snapshot, VPC, NAT, EIP, ENI, security group, ELBv2 và target group, RDS (instance, snapshot, backup tự động giữ
-lại), S3, gói CloudFront flat-rate (loại `CloudFront pricing plan subscriptions`, `us-east-1`, đọc trước distribution), CloudFront
-(distribution, OAC, response headers policy), web ACL WAF của CloudFront (`us-east-1`), log group (cả log group EKS, RDS tự
-tạo ngoài state), Secrets Manager (cả secret đang chờ xoá), KMS key, bản ghi của zone của account ngoài `NS`, `SOA` ở đỉnh và ngoài mọi `NS`
-dưới đỉnh (uỷ quyền zone con của baseline).
+lại), MSK (cluster, rồi configuration), ElastiCache (replication group, rồi user group, user, subnet group, parameter group; user `default`
+và nhóm `default.*` của AWS không tính), S3, gói CloudFront flat-rate (loại `CloudFront pricing plan subscriptions`, `us-east-1`, đọc trước
+distribution), CloudFront (distribution, OAC, response headers policy), web ACL WAF của CloudFront (`us-east-1`), log group (cả log group
+EKS, RDS tự tạo ngoài state và log broker `/aws/msk/svp-*`), Secrets Manager (cả secret đang chờ xoá và secret SCRAM `AmazonMSK_svp-*`), KMS
+key, bản ghi của zone của account ngoài `NS`, `SOA` ở đỉnh và ngoài mọi `NS` dưới đỉnh (uỷ quyền zone con của baseline). Mỗi loại in theo thứ
+tự AWS cho xoá (cluster trước configuration, replication group trước user group, user group trước user).
 
 Được giữ, in thành dòng riêng, không đếm: tài nguyên tag `Stack=baseline` ở account stg (bucket state, KMS key state, zone `stg.aws.<domain>`)
 và `Stack=bootstrap|org` ở management (bucket state, bucket và KMS key của trail; management không có hosted zone) là `kept`, gói đã có
-lịch huỷ (`scheduledChange.changeType` `CANCELLATION`, chỉ gói trả phí; gói Free huỷ ngay) cũng là `kept`; KMS key ở trạng thái `PendingDeletion` (key của root env sau destroy, tối thiểu 7 ngày) là `pending deletion`. Tìm: `ok nothing left
+lịch huỷ (`scheduledChange.changeType` `CANCELLATION`, chỉ gói trả phí; gói Free huỷ ngay) cũng là `kept`; KMS key ở trạng thái `PendingDeletion` (key của root env sau destroy: key của MSK, ở prd thêm key Secrets của EKS, tối thiểu 7 ngày) là `pending deletion`. Tìm: `ok nothing left
 in account … but what it keeps` (exit 0) ở **cả hai lượt**. Có dòng `FAIL <loại>: N left`: dưới mỗi tài nguyên sót là dòng `delete:` với lệnh
 xoá đủ profile và region (hay trỏ mục dưới khi một lệnh không đủ); chạy, rồi chạy lại lượt đó tới khi sạch. **Buổi chỉ xong khi hai lượt cùng
 exit 0.**
@@ -464,13 +566,15 @@ exit 0.**
 | `BucketNotEmpty` | stg đặt `media_force_destroy = true` nên không nên gặp; object ghi giữa lúc destroy | destroy lại; còn thì xoá tay (lệnh dưới) |
 | RDS báo deletion protection | `rds_deletion_protection` của `stg.tfvars` phải `false` (prd: `teardown.tfvars`) | sửa biến, `tf.sh stg env plan`, `apply`, rồi destroy lại |
 | Node group xoá lâu | Spot, node drain | chờ tới hạn bước 18 |
+| `DependencyViolation` khi xoá subnet database hay security group của MSK, ElastiCache | ENI của broker MSK hay node ElastiCache còn trong subnet: cluster, replication group đang xoá (destroy quá hạn của provider trong khi AWS vẫn gỡ) | chờ `sweep.sh stg` không còn dòng `MSK clusters`, `ElastiCache replication groups` (đọc lại mỗi 5 phút), rồi destroy lại; không xoá ENI của dịch vụ managed bằng tay |
+| Destroy đỏ ở `aws_msk_configuration` (`BadRequestException`, configuration đang được dùng) | cluster còn `DELETING` | như dòng trên: chờ cluster mất, destroy lại |
 | Destroy root gitops kẹt ở namespace `Terminating` | Application còn finalizer mà Argo CD đã gỡ (sau `--leftovers`) | `AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n argocd patch applications.argoproj.io <tên> --type merge -p '{"metadata":{"finalizers":null}}'` từng cái còn lại, rồi destroy lại |
 
 ## Lệnh xoá tay theo loại
 
 `sweep.sh` in lệnh xoá dưới từng tài nguyên sót. Mục này cho loại mà một lệnh không đủ, và cho thu hồi rule security group. Mọi lệnh ghi;
 người học chạy sau khi `check-account.sh stg` đúng account, thay `<…>` bằng id `sweep.sh` in ra. Ưu tiên destroy lại cho thứ Terraform quản
-(VPC, NAT, EIP, EKS, RDS, bucket, gói, CloudFront, web ACL); lệnh tay cho thứ ngoài state hay khi state mất. Tài nguyên sót ở management (lượt `sweep.sh
+(VPC, NAT, EIP, EKS, RDS, MSK, ElastiCache, bucket, gói, CloudFront, web ACL); lệnh tay cho thứ ngoài state hay khi state mất. Tài nguyên sót ở management (lượt `sweep.sh
 mgmt`): cùng lệnh với `AWS_PROFILE=anhnv-sso`.
 
 Security group: rule nơi khác tham chiếu nó, thu hồi từng rule, rồi xoá:
@@ -533,6 +637,45 @@ AWS_PROFILE=anhnv-stg aws wafv2 get-web-acl --scope CLOUDFRONT --name <svp-stg-�
 AWS_PROFILE=anhnv-stg aws wafv2 delete-web-acl --scope CLOUDFRONT --name <svp-stg-…> --id <id> --lock-token <token> --region us-east-1
 ```
 
+MSK (khi state mất), theo thứ tự: cluster (gỡ ENI của broker trong subnet database), chờ nó biến mất khỏi danh sách, rồi configuration
+(AWS từ chối xoá configuration khi cluster còn dùng nó), rồi secret SCRAM và KMS key của module (mục dưới):
+
+```sh
+aws/scripts/check-account.sh stg
+AWS_PROFILE=anhnv-stg aws kafka delete-cluster --cluster-arn <arn cluster> --region ap-southeast-1 --query State --output text
+AWS_PROFILE=anhnv-stg aws kafka list-clusters-v2 --cluster-name-filter svp-stg --region ap-southeast-1 --query 'ClusterInfoList[].[ClusterName,State]' --output text
+AWS_PROFILE=anhnv-stg aws kafka delete-configuration --arn <arn configuration> --region ap-southeast-1 --query State --output text
+```
+
+Lệnh thứ ba in `svp-stg DELETING` trong lúc gỡ (≤ 30 phút, giả định của ADR-0053 §16); đọc lại tới khi không in gì, rồi lệnh cuối.
+
+ElastiCache (khi state mất), theo thứ tự AWS cho xoá: replication group (chờ xoá xong), user group, từng user `svp-stg-*` (không bao giờ
+`default`), subnet group, parameter group:
+
+```sh
+aws/scripts/check-account.sh stg
+AWS_PROFILE=anhnv-stg aws elasticache delete-replication-group --replication-group-id svp-stg --region ap-southeast-1 --query ReplicationGroup.Status --output text
+AWS_PROFILE=anhnv-stg aws elasticache wait replication-group-deleted --replication-group-id svp-stg --region ap-southeast-1
+AWS_PROFILE=anhnv-stg aws elasticache delete-user-group --user-group-id svp-stg --region ap-southeast-1 --query Status --output text
+AWS_PROFILE=anhnv-stg aws elasticache describe-user-groups --region ap-southeast-1 --query "UserGroups[?UserGroupId=='svp-stg'].Status" --output text
+AWS_PROFILE=anhnv-stg aws elasticache delete-user --user-id <svp-stg-…> --region ap-southeast-1 --query Status --output text
+AWS_PROFILE=anhnv-stg aws elasticache delete-cache-subnet-group --cache-subnet-group-name svp-stg --region ap-southeast-1
+AWS_PROFILE=anhnv-stg aws elasticache delete-cache-parameter-group --cache-parameter-group-name <svp-stg-valkey9> --region ap-southeast-1
+```
+
+User group `deleting` chặn xoá user của nó: đọc lại (lệnh thứ năm) tới khi không in gì, rồi xoá từng user `sweep.sh` liệt kê.
+
+Secret SCRAM `AmazonMSK_svp-stg-*` (module tạo với `recovery_window_in_days = 0`, nên chỉ sót khi state mất) xoá bằng lệnh `delete:` của
+`sweep.sh` (`--force-delete-without-recovery`). KMS key của module MSK (alias `alias/svp-stg-msk-scram`) mà `sweep.sh` in `Enabled` (không
+phải `pending deletion`): lên lịch xoá, sớm nhất 7 ngày, rồi xoá alias của nó. Key ở `PendingDeletion` không tính tiền, `sweep.sh` không đếm
+nó; alias thì vẫn giữ tên tới khi bị xoá, nên buổi sau tạo lại alias đó lỗi `AlreadyExists` tới hết 7 ngày: `sweep.sh` đếm alias còn trỏ key
+`PendingDeletion` (mục `KMS aliases on keys pending deletion`, lệnh `delete:` là lệnh thứ hai dưới đây):
+
+```sh
+AWS_PROFILE=anhnv-stg aws kms schedule-key-deletion --key-id <key id> --pending-window-in-days 7 --region ap-southeast-1 --query KeyState --output text
+AWS_PROFILE=anhnv-stg aws kms delete-alias --alias-name alias/svp-stg-msk-scram --region ap-southeast-1
+```
+
 Bản ghi sót của zone `stg.aws.<domain>` (A, TXT của ExternalDNS; TXT `_acme-challenge` khi DNS-01 lỗi): không tính tiền nhưng chặn việc xoá zone
 sau này và có thể trỏ tên tới IP người khác nhận lại. Dựng lô xoá từ chính bản ghi, đọc lại, rồi gửi:
 
@@ -561,46 +704,66 @@ AWS_PROFILE=anhnv-stg aws secretsmanager restore-secret --secret-id <name> --reg
 
 ## Đổi một secret của env đang chạy
 
-Sửa `.env` của repo code, rồi một lệnh (cùng thứ tự với `make k8s-secrets` trên k3d); script đọc lại mật khẩu master RDS và chạy
-`make eks-secrets` như bước 6:
+Hai nguồn, hai đường: mật khẩu Kafka và Valkey do Terraform sinh (entry `kafka-admin`, `kafka-users`, `valkey-users`); mọi entry khác từ
+`.env` của repo code. Cả hai kết thúc bằng cùng một lệnh, `bootstrap.sh stg secrets`, chạy `make eks-secrets` (đọc lại mật khẩu master RDS
+như bước 6), làm trọn một lượt xoay theo thứ tự của `make k8s-secrets` trên k3d, người học không sync, không restart tay:
+
+1. ghi lại các entry từ `.env` (trừ ba entry của Terraform và `glitchtip-runtime`, đã có giá trị);
+2. dựng lại (force-sync) các ExternalSecret của `svp-data` (`kafka-admin`, `svp-ops`, `pg-*`) từ entry;
+3. một sync của Application `svp-data`, chờ đúng lượt đó `Succeeded`: Job `pg-bootstrap` đặt mật khẩu mới trong Postgres, Job `kafka-init`
+   đăng nhập MSK bằng `svp-admin` với mật khẩu của entry (thử lại ít nhất 10 phút) và đặt lại topic, ACL;
+4. dựng lại mọi ExternalSecret còn lại (`svp/<service>-env` có `KAFKA_SASL_PASSWORD`, `REDIS_URL`; `keda/keda-kafka`; `svp-obs/otelcol-kafka`);
+   Reloader restart workload có Secret đổi (Rollout `gateway`, `web` không có revision mới nên không thành canary).
+
+**Mật khẩu từ `.env`** (Postgres của service, khoá API…): sửa `.env` của repo code, rồi `aws/scripts/bootstrap.sh stg secrets`.
+
+**Mật khẩu Kafka hay Valkey** (ADR-0053 §12): tăng version write-only của nhóm đó trong `aws/envs/stg/stg.auto.tfvars` (git bỏ qua; giữ giá
+trị mới tới hết buổi và các buổi sau: apply với version khác lại sinh mật khẩu mới), plan, đọc, apply, rồi một lượt như trên. Mỗi version đổi
+mọi user của nhóm cùng lúc (một entry chung). Đọc version đang có (không có dòng của nhóm: version là 1, mặc định của biến), rồi sửa
+trong editor đúng dòng đó thành số lớn hơn (`msk_password_version` cho Kafka, `valkey_password_version` cho Valkey); file chưa có dòng của
+nhóm thì thêm một dòng `msk_password_version = 2` (hay `valkey_password_version = 2`). Không nối thêm dòng cùng tên: Terraform từ chối file
+có một biến hai lần (`Attribute redefined`) ngay ở plan:
 
 ```sh
+grep -E '^(msk|valkey)_password_version' aws/envs/stg/stg.auto.tfvars
+aws/scripts/tf.sh stg env plan
+aws/scripts/tf.sh stg env apply
 aws/scripts/bootstrap.sh stg secrets
 ```
 
-`make eks-secrets` tự làm trọn một lượt xoay credential, người học không sync, không restart tay: mật khẩu admin Kafka mới vào broker
-đang chạy trước; ghi lại mọi entry `svp/stg/*` (trừ `glitchtip-runtime`, đã có giá trị); dựng lại các ExternalSecret của `svp-data`; chờ
-mọi broker chạy với mật khẩu admin Kafka mới và Ready (Reloader rolling restart StatefulSet `redpanda` khi Secret của nó đổi: broker và
-sidecar đọc mật khẩu đó từ environment lúc khởi động, giữ mật khẩu cũ thì probe nhận 401, broker NotReady và sync `svp-data` không chạy
-được hook PostSync); một sync của Application `svp-data` (Job init `pg-bootstrap`, `redpanda-init` đặt mật khẩu mới trong Postgres, Kafka),
-chờ đúng lượt đó `Succeeded`; dựng lại mọi ExternalSecret còn lại; Reloader restart workload có Secret đổi (Rollout `gateway`, `web` không
-có revision mới nên không thành canary).
+Plan chỉ đổi phiên bản của secret, `aws_secretsmanager_secret_version` (tám secret `AmazonMSK_*` và hai entry `kafka-*`, hay entry
+`valkey-users`), và với Valkey bốn `aws_elasticache_user` tại chỗ; thấy cluster MSK, replication group, user group hay chính secret bị
+`replace`, `destroy`: dừng, dán plan cho AI. Kafka: chờ 10 phút giữa
+`apply` và `bootstrap.sh` (MSK đồng bộ secret SCRAM tới broker trong tối đa 10 phút; Job `kafka-init` của bước 3 là chốt, nó chỉ xanh khi
+broker nhận mật khẩu mới). Valkey: ElastiCache đổi mật khẩu của user ngay khi apply xong, nên chạy `bootstrap.sh` ngay; tới khi Reloader
+restart xong, kết nối mới của pod còn mật khẩu cũ bị từ chối (kết nối đang mở vẫn chạy): ADR-0053 chấp nhận khoảng này.
 
-Tìm trong `$SVP_SESSION_DIR/eks-secrets.log`, theo thứ tự:
+Tìm trong output và `$SVP_SESSION_DIR/eks-secrets.log`, theo thứ tự:
 
-- `ok    ExternalSecrets of the server built again from their source`;
-- `ok    StatefulSet redpanda: each of its <n> pod(s) runs with the RPK_PASS of .env and is Ready`;
-- `ok    init Jobs of svp-data done (sync of Application svp-data Succeeded)`;
-- `ok    ExternalSecrets of the clients built again from their source`;
-- `ok    Reloader restarts each workload whose Secret changed`.
+- `ok    entries of svp/stg/ written: … kafka-admin kafka-users valkey-users left to the infrastructure repository`;
+- `ok    ExternalSecrets of the server built again from their source: …`;
+- `ok    init Jobs of svp-data done (sync of Application svp-data Succeeded): the servers take the new passwords`;
+- `ok    ExternalSecrets of the clients built again from their source: …`;
+- `ok    Reloader restarts each workload whose Secret changed …`.
 
 Một dòng `FAIL` thì không bước nào sau nó chạy:
 
-- `FAIL  cluster svp-stg is not ready for a change of credentials: <lý do>`: cluster chưa có Reloader hay StatefulSet `redpanda` chưa
-  opt in, không gì bị ghi; sync Application `svp-apps` tới revision có chúng;
-- `FAIL  StatefulSet svp-data/redpanda: … Reloader did not restart it`: xem
-  `AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n reloader logs deployment/reloader`;
-- `FAIL  sync of Application argocd/svp-data …`: xem Job lỗi (`AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp-data get jobs`);
-  Secret của client chưa đổi.
+- `FAIL  cluster svp-stg is not ready for a change of credentials: <lý do>`: cluster chưa có Reloader chạy, không gì bị ghi; sync Application
+  `svp-apps` tới revision có nó;
+- `FAIL  sync of Application argocd/svp-data …`: xem Job lỗi (`AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp-data get jobs`,
+  `… logs job/kafka-init`); Job `kafka-init` lỗi đăng nhập ngay sau khi đổi mật khẩu Kafka là MSK chưa đồng bộ: chờ rồi chạy lại. Secret của
+  client chưa đổi.
 
-Sửa nguyên nhân rồi chạy lại đúng lệnh trên: lượt nào cũng làm đủ các bước, gồm Job init còn thiếu của lượt trước. Theo dõi restart:
+Sửa nguyên nhân rồi chạy lại đúng `aws/scripts/bootstrap.sh stg secrets`: lượt nào cũng làm đủ các bước, gồm Job init còn thiếu của lượt
+trước. Theo dõi restart:
 
 ```sh
 AWS_PROFILE=anhnv-stg kubectl --context svp-stg get pods -A -w
 ```
 
-Đổi thứ tự (Secret đổi trước hệ thống dùng nó) làm service mất đăng nhập: `make eks-secrets` giữ thứ tự đó, nên không sửa entry hay
-Secret bằng tay. Chi tiết: `docs/reference/eks.md` của repo code, mục "Đổi secret của env đang chạy".
+Không sửa entry hay Secret bằng tay, không ghi mật khẩu Kafka, Valkey vào entry bằng `put-secret-value`: Terraform là nơi duy nhất ghi ba entry
+đó cùng secret SCRAM và user ElastiCache, ghi tay làm hai bên lệch. Chi tiết: `docs/reference/eks.md` của repo code, mục "Đổi secret của env
+đang chạy".
 
 ## Kết thúc buổi
 
@@ -612,9 +775,12 @@ Secret bằng tay. Chi tiết: `docs/reference/eks.md` của repo code, mục "�
    AWS_PROFILE=anhnv-stg aws pricing-plan-manager list-subscriptions --region us-east-1 --query 'subscriptionSummaries[].[arn,planTier,status]' --output json
    ```
 
+   Phép kiểm (f) của ADR-0053 là cùng hai lượt sweep sạch: không còn dòng MSK, ElastiCache, `AmazonMSK_*` nào; KMS key của MSK chỉ ở
+   `pending deletion`.
 2. Cái ở lại giữa các buổi: ở account stg là baseline (`Stack=baseline`: bucket state, KMS key state, zone `stg.aws.<domain>`); ở account prd là
    baseline của nó, gồm zone `aws.<domain>` và bản ghi `NS` uỷ quyền `stg.aws.<domain>` trong đó (`sweep.sh` in chúng là `kept`); management chỉ
    còn `Stack=bootstrap|org`, không hosted zone. `destroy` của hai root env không đụng zone nào (zone thuộc root `aws/accounts/<env>`).
 3. Giữ `$SVP_SESSION_DIR` (máy local, không commit): `timeline.tsv`, `k6-levels.tsv`, `k6-<n>/` là số đo cho cột Kết quả của ADR-0034
    "Kiểm chứng sau" và roadmap.
-4. Sau 24 giờ: Cost Explorer theo dịch vụ (account stg, hay management cho cả org), so với ước lượng (ADR-0034 §12, ±50 %).
+4. Sau 24 giờ: Cost Explorer theo dịch vụ (account stg, hay management cho cả org), so với ước lượng (ADR-0034 §12 cộng MSK, ElastiCache
+   của ADR-0053 §16, ±50 %).

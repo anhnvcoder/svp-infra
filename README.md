@@ -69,7 +69,9 @@ aws/
   envs/<env>/                 cấu hình gốc của mỗi env (stg, prd: cùng module, cùng đối số, khác ở <env>.tfvars; prd thêm bastion SSM, teardown.tfvars)
   gitops/<env>/               bootstrap GitOps của cluster EKS của env (GitOps Bridge): namespace, Argo CD, AppProject, cluster Secret, ApplicationSet svp-bootstrap
   modules/                    module nội bộ; lock file không commit
-    network, eks, rds, media  nền của mỗi env
+    network, eks, rds, media  nền của mỗi env (network: ba tầng subnet mỗi AZ, public, private, database)
+    msk                       Kafka của env: Amazon MSK provisioned, một broker mỗi AZ ở subnet database, SASL/SCRAM-SHA-512 trên TLS 9096
+    elasticache               Valkey của env: ElastiCache for Valkey, cluster mode tắt, ở subnet database, TLS 6379, user RBAC theo db và tiền tố
     waf                       web ACL của CloudFront (cả hai root env gọi, provider us-east-1; gói flat-rate Free của media đòi nó)
     ssm-bastion               bastion SSM tới endpoint private của API EKS (prd)
     external-secrets          vỏ entry Secrets Manager svp/<env>/*, role của External Secrets theo namespace, Pod Identity
@@ -86,8 +88,9 @@ docs/diagrams/                sơ đồ AWS svp-aws.drawio (trang stg, prd, flow
 
 **Sơ đồ** ([`docs/diagrams/svp-aws.pdf`](docs/diagrams/svp-aws.pdf)): sinh bằng
 `python3 .claude/skills/aws-drawio-diagram/scripts/build_svp.py --pdf --docs`, không sửa tay trong draw.io. Cỡ của mỗi trang env đọc từ
-`aws/envs/stg/stg.tfvars` và cột prd của bảng biến trong README module, nên đổi cỡ thì build lại. Kiểm trước khi commit:
-`check_diagram.py docs/diagrams/svp-aws.drawio` (hình học) và `check_svp_counts.py` (số AZ, subnet, NAT, node group, RDS khớp cỡ của env),
+`aws/envs/<env>/<env>.tfvars` cộng mặc định ở `variables.tf` của root đó, nên đổi cỡ thì build lại. Kiểm trước khi commit:
+`check_diagram.py docs/diagrams/svp-aws.drawio` (hình học) và `check_svp_counts.py` (số AZ, subnet, NAT, node group, RDS, broker MSK, node
+ElastiCache khớp cỡ của env),
 cả hai chạy offline, không cần credential. Xuất PDF, PNG cần CLI draw.io (`brew install --cask drawio`, hay biến `DRAWIO`).
 
 **Root và module:** thư mục nằm dưới một thư mục `modules/` là module, mọi thư mục `*.tf` khác là cấu hình gốc (root). Root commit
@@ -215,7 +218,9 @@ Hai đường vào:
 - **Cài đặt GitHub** (thêm repo hay App): runbook [`docs/runbooks/github-setup.md`](docs/runbooks/github-setup.md).
 - **Mỗi buổi dựng, đo, gỡ một env:** runbook [`docs/runbooks/session-stg.md`](docs/runbooks/session-stg.md) (stg, cùng mọi mục chung) và
   [`docs/runbooks/session-prd.md`](docs/runbooks/session-prd.md) (prd: cổng promote, tunnel tới API, diễn tập, final snapshot). Xem trước
-  toàn bộ lệnh của buổi, không chạy gì và không cần credential: `aws/scripts/session.sh --print stg` (hay `prd`).
+  toàn bộ lệnh của buổi, không chạy gì và không cần credential: `aws/scripts/session.sh --print stg` (hay `prd`). Chi phí một buổi 4 giờ
+  ([ADR-0053](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0053-msk-elasticache-valkey.md) §16, giá `ap-southeast-1`): stg
+  ~$3,0 với node Spot (~$3,7 on-demand), trần $5; prd ~$11,0. MSK và ElastiCache chiếm H_k ~$0,144 mỗi giờ ở stg, ~$1,09 ở prd.
 
 Chỉ người học chạy, từ máy, bằng SSO, theo script và runbook của repo. Mỗi account một profile và một biến chứa 12 số của account (export
 trong terminal của buổi, không ghi vào file nào); mọi lệnh viết sẵn ghi profile ngay trong lệnh, `TF_VAR_account_id` từ biến của account đó
@@ -262,7 +267,15 @@ Bảng env của `lib.sh` (`env_table`) mỗi env một dòng và là nơi duy n
 
 `bootstrap.sh` mỏng có chủ đích: secret và GlitchTip là target `make` của repo code, Argo CD là của Terraform; script chỉ chạy chúng theo thứ
 tự, có kiểm account và có giới hạn cho mỗi lần chờ. `secrets` chạy sau `tf.sh <env> env apply` và trước root gitops (nguồn của các Secret
-trong cluster có trước Argo CD); `wait` chạy sau `tf.sh <env> gitops apply`. `pre-destroy.sh` để lại tới bước cuối các Application nền tảng,
+trong cluster có trước Argo CD); `wait` chạy sau `tf.sh <env> gitops apply`.
+
+**Luồng secret** của một env: root `aws/envs/<env>` (module `external-secrets`) tạo các entry `svp/<env>/*` của Secrets Manager. Mật khẩu
+Kafka và Valkey do chính apply đó sinh (ephemeral `random_password`, 32 chữ và số) và ghi bằng đối số write-only, không vào plan hay state,
+cùng một giá trị vào secret SCRAM `AmazonMSK_svp-<env>-<user>` (module `msk`, khoá KMS của module) và entry `kafka-admin`, `kafka-users`, vào
+user ElastiCache và entry `valkey-users` (module `elasticache`); đổi bằng cách tăng `msk_password_version`, `valkey_password_version` rồi
+apply. Mọi entry khác `bootstrap.sh <env> secrets` ghi từ `.env` của repo code (`make eks-secrets`, chỉ kiểm ba entry kia có). External
+Secrets Operator dựng Secret trong cluster từ entry; Reloader restart pod khi Secret đổi. Bước, lệnh và cách đổi một secret: runbook
+[`session-stg.md`](docs/runbooks/session-stg.md#đổi-một-secret-của-env-đang-chạy). `pre-destroy.sh` để lại tới bước cuối các Application nền tảng,
 vì finalizer và webhook của chúng cần cho việc xoá object của workload.
 
 ## Luật an toàn

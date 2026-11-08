@@ -6,8 +6,9 @@
 
 # Looks for resources tagged Project=svp, or with a tag Kubernetes components put on what they make
 # (kubernetes.io/cluster/svp-*, elbv2.k8s.aws/cluster, ebs.csi.aws.com/cluster, cluster.k8s.amazonaws.com/name), or
-# named svp-*. What stays between sessions (a Stack of the environment's kept list in env_table of lib.sh) is printed as
-# "kept", and KMS keys in PendingDeletion as "pending deletion", not counted.
+# named svp-* (AmazonMSK_svp-* for the SCRAM secrets). What stays between sessions (a Stack of the environment's kept
+# list in env_table of lib.sh) is printed as "kept", and KMS keys in PendingDeletion as "pending deletion", not counted;
+# an alias of the lab still on such a key is counted: it keeps its name, so the next session cannot make it again.
 
 # Design notes: README.md.
 
@@ -177,6 +178,26 @@ rds_backups() {
     rds describe-db-instance-automated-backups
 }
 
+# MSK refuses to delete a configuration while a cluster uses it: the clusters are listed, and deleted, first.
+msk_clusters() { q '.ClusterInfoList[] | select(.ClusterName | startswith("svp-")) | "\(.ClusterArn) \(.State)"' kafka list-clusters-v2; }
+msk_configurations() { q '.Configurations[] | select(.Name | startswith("svp-")) | "\(.Arn) \(.State)"' kafka list-configurations; }
+
+# ElastiCache: the replication group first, then what it used (its user group, then the users, the subnet and
+# parameter groups), in the order AWS lets them go. ElastiCache's own user default and default.* groups are not svp-*.
+replication_groups() {
+  q '.ReplicationGroups[] | select(.ReplicationGroupId | startswith("svp-")) | "\(.ReplicationGroupId) \(.Status)"' \
+    elasticache describe-replication-groups
+}
+cache_user_groups() { q '.UserGroups[] | select(.UserGroupId | startswith("svp-")) | "\(.UserGroupId) \(.Status)"' elasticache describe-user-groups; }
+cache_users() { q '.Users[] | select(.UserId | startswith("svp-")) | "\(.UserId) \(.Status) \(.UserName)"' elasticache describe-users; }
+cache_subnet_groups() {
+  q '.CacheSubnetGroups[] | select(.CacheSubnetGroupName | startswith("svp-")) | .CacheSubnetGroupName' elasticache describe-cache-subnet-groups
+}
+cache_parameter_groups() {
+  q '.CacheParameterGroups[] | select(.CacheParameterGroupName | startswith("svp-")) | "\(.CacheParameterGroupName) \(.CacheParameterGroupFamily)"' \
+    elasticache describe-cache-parameter-groups
+}
+
 # Buckets named svp-*; those tagged with a kept Stack go to the kept list.
 buckets() {
   local names b tags
@@ -193,10 +214,10 @@ buckets() {
   done
 }
 
-# The plans of the account (CloudFront flat-rate and any other: the account holds only the lab, and a plan made by hand in
-# the console is a leftover too), in us-east-1 whatever the region of the environment. A distribution with a plan cannot
-# be deleted, so this kind is read before the distributions. A plan with a cancellation already scheduled (paid tiers;
-# a Free plan is cancelled at once) is "kept", not counted. The answer is read whole: the CLI pages by itself.
+# The plans of the account (CloudFront flat-rate and any other: the account holds only the lab, so a plan made by hand
+# in the console is a leftover too), in us-east-1 whatever the region of the environment. A distribution with a plan
+# cannot be deleted, so this kind is read before the distributions. A plan with a cancellation already scheduled (paid
+# tiers; a Free plan is cancelled at once) is "kept", not counted. The answer is read whole: the CLI pages by itself.
 subscriptions() {
   local out line
   out=$(aws_global_ pricing-plan-manager list-subscriptions --output json) || return 1
@@ -224,20 +245,21 @@ web_acls() {
 }
 
 # Log groups EKS or RDS make under the lab's names (untagged: they write them outside Terraform's state, and again
-# after a destroy while the last logs arrive), RDS's Enhanced Monitoring group, and any tagged Project=svp but with a
-# kept Stack (the VPC flow log, the groups the rds module makes).
+# after a destroy while the last logs arrive), the broker log group of MSK by name as well, RDS's Enhanced Monitoring
+# group, and any tagged Project=svp but with a kept Stack (the VPC flow log, the groups the rds module makes).
 log_groups() {
-  q '.logGroups[].logGroupName | select(test("^/aws/eks/svp-|^/aws/rds/instance/svp-|^RDSOSMetrics$"))' logs describe-log-groups || return 1
+  q '.logGroups[].logGroupName | select(test("^/aws/eks/svp-|^/aws/rds/instance/svp-|^/aws/msk/svp-|^RDSOSMetrics$"))' logs describe-log-groups || return 1
   # shellcheck disable=SC2016 # $ENV is jq's, not the shell's
   q '.ResourceTagMappingList[] | select(any(.Tags[]?; .Key == "Stack" and (.Value | IN($ENV.KEPT | fromjson[]))) | not)
     | .ResourceARN | sub("^arn:aws:logs:[^:]*:[^:]*:log-group:"; "") | sub(":\\*$"; "")' \
     resourcegroupstaggingapi get-resources --resource-type-filters logs:log-group --tag-filters Key=Project,Values=svp
 }
 
-# Secrets of the lab, and the master secret RDS keeps for an instance svp-* (tag aws:rds:primaryDBInstanceArn); one
-# scheduled for deletion is listed with its date: until then no secret of that name can be made.
+# Secrets of the lab (the SCRAM secrets of MSK included), and the master secret RDS keeps for an instance svp-* (tag
+# aws:rds:primaryDBInstanceArn); one scheduled for deletion is listed with its date: until then no secret of that name
+# can be made.
 secrets() {
-  q '.SecretList[] | select((.Name | startswith("svp")) or any(.Tags[]?; (.Key == "Project" and .Value == "svp")
+  q '.SecretList[] | select((.Name | startswith("svp")) or (.Name | startswith("AmazonMSK_svp-")) or any(.Tags[]?; (.Key == "Project" and .Value == "svp")
       or (.Key == "aws:rds:primaryDBInstanceArn" and (.Value | test(":db:svp-")))))
     | "\(.Name)\(if .DeletedDate then " (scheduled for deletion since \(.DeletedDate))" else "" end)"' \
     secretsmanager list-secrets --include-planned-deletion
@@ -267,6 +289,21 @@ $(q '.ResourceTagMappingList[].ResourceARN | sub("^.*:key/"; "")' resourcegroups
       echo "$id $state${stack:+ Stack=$stack}"
     fi
   done
+}
+
+# Aliases of the lab on a key in PendingDeletion: a destroy deletes them with the key, so one left here follows a key
+# scheduled by hand after a lost state, and the next session's alias of that name fails with AlreadyExists.
+kms_aliases() {
+  local lines name id key
+  lines=$(q '.Aliases[] | select(.AliasName | test("^alias/(svp|eks/svp-)")) | select(.TargetKeyId) | "\(.AliasName) \(.TargetKeyId)"' \
+    kms list-aliases) || return 1
+  printing && lines='<each-alias-above> <its-key>'
+  while read -r name id; do
+    [ -n "$name" ] || continue
+    key=$(aws_ kms describe-key --key-id "$id" --output json) || return 1
+    printing && continue
+    [ "$(jq -r '.KeyMetadata.KeyState' <<<"$key")" != PendingDeletion ] || echo "$name on key $id pending deletion"
+  done <<<"$lines"
 }
 
 # Records of the account's hosted zone but NS and SOA at its apex and the NS records below it, which delegate a child
@@ -316,6 +353,14 @@ sweep_kind "RDS instances" rds_instances \
   "aws rds delete-db-instance --db-instance-identifier {} --skip-final-snapshot --delete-automated-backups"
 sweep_kind "RDS snapshots" rds_snapshots "aws rds delete-db-snapshot --db-snapshot-identifier {}"
 sweep_kind "RDS automated backups" rds_backups "aws rds delete-db-instance-automated-backup --db-instance-automated-backups-arn {}"
+sweep_kind "MSK clusters" msk_clusters "aws kafka delete-cluster --cluster-arn {}"
+sweep_kind "MSK configurations" msk_configurations "aws kafka delete-configuration --arn {}"
+sweep_kind "ElastiCache replication groups" replication_groups "aws elasticache delete-replication-group --replication-group-id {}"
+sweep_kind "ElastiCache user groups" cache_user_groups "aws elasticache delete-user-group --user-group-id {}"
+sweep_kind "ElastiCache users" cache_users "aws elasticache delete-user --user-id {}"
+sweep_kind "ElastiCache subnet groups" cache_subnet_groups "aws elasticache delete-cache-subnet-group --cache-subnet-group-name {}"
+sweep_kind "ElastiCache parameter groups" cache_parameter_groups \
+  "aws elasticache delete-cache-parameter-group --cache-parameter-group-name {}"
 sweep_kind "S3 buckets" buckets "$runbook (versioned: every version first)"
 sweep_kind "CloudFront pricing plan subscriptions" subscriptions \
   "$runbook (cancel the plan first: cancel-subscription takes the eTag of get-subscription, both in us-east-1)"
@@ -326,6 +371,7 @@ sweep_kind "CloudWatch log groups" log_groups "aws logs delete-log-group --log-g
 sweep_kind "Secrets Manager secrets (scheduled for deletion included)" secrets \
   "aws secretsmanager delete-secret --secret-id {} --force-delete-without-recovery"
 sweep_kind "KMS keys" kms_keys "aws kms schedule-key-deletion --key-id {} --pending-window-in-days 7"
+sweep_kind "KMS aliases on keys pending deletion" kms_aliases "aws kms delete-alias --alias-name {}"
 [ -z "$zone" ] || sweep_kind "records of $zone" records "$runbook (change-resource-record-sets DELETE)"
 
 printing && exit 0

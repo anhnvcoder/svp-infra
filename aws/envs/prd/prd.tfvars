@@ -43,6 +43,18 @@ rds_monitoring_interval                   = 60
 rds_cloudwatch_logs_exports               = ["postgresql", "upgrade"]
 rds_cloudwatch_logs_retention_days        = 30
 
+# msk: one Graviton broker per zone, every topic on three brokers with two in sync, so a write acknowledged with
+# acks=all survives the loss of a zone and writes go on; broker logs kept 30 days.
+msk_broker_instance_type       = "kafka.m7g.large"
+msk_replication_factor         = 3
+msk_min_insync_replicas        = 2
+msk_broker_logs_enabled        = true
+msk_broker_logs_retention_days = 30
+
+# valkey: a primary and a replica in another zone, Multi-AZ with automatic failover.
+valkey_node_type  = "cache.m7g.large"
+valkey_node_count = 2
+
 # media: destroy stops at a bucket that holds objects; earlier versions kept 30 days, S3 access logs in a log bucket of
 # the env, the web ACL of waf.tf in front of CloudFront.
 media_force_destroy          = false

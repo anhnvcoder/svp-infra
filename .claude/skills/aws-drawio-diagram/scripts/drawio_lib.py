@@ -1,4 +1,6 @@
 # copied from templates/terraform-base/.claude/skills/aws-drawio-diagram/scripts/drawio_lib.py (ecc4349); changed: export() finds the draw.io CLI through $DRAWIO, PATH, then the macOS app; Page.k8s() draws Kubernetes icons; edge(label_pos=…)
+# also changed: the AWS Account and Region groups (ACCOUNT, REGION) and the analytics color ANA
+# also changed: export() lowers the scale of a PNG past what draw.io draws in full (PNG_MAX_PIXELS)
 """drawio_lib — generates `.drawio` files (plus PDF/PNG) in the terraform-base AWS infrastructure diagram style.
 
 Usage: write a short Python spec file that calls `Page` and then `write()`; see `build_terraform_base.py` for an example.
@@ -15,9 +17,12 @@ The library enforces only the multiple-of-40 and icon-size rules; `check_diagram
 """
 from __future__ import annotations
 
+import math
 import os
 import shutil
+import struct
 import subprocess
+import sys
 from pathlib import Path
 from xml.sax.saxutils import quoteattr
 
@@ -26,6 +31,9 @@ ICON = 80         # icon, 2×2 major cells
 BADGE = 40        # small attached icon (WAF…), 1 major cell
 GRID = 10         # minor cell — waypoints snap to it
 DRAWIO_APP = Path("/Applications/draw.io.app/Contents/MacOS/draw.io")   # macOS app, last resort of drawio_cli()
+# draw.io (32.6) renders a PNG in an offscreen window at device scale 2 and draws only its first 2**27 device pixels:
+# past that the bottom of the image stays blank. Measured: a 6789×4917 page comes out whole, 6807×4930 cut.
+PNG_MAX_PIXELS = 2**25
 
 # ---------------------------------------------------------------- style (kept verbatim from terraform-base.drawio)
 _PTS = "points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];"
@@ -59,6 +67,7 @@ NET = ("#5A30B5", "#945DF2")      # networking (Route 53, ALB, CloudFront)
 SEC = ("#C7131F", "#F54749")      # security / management (WAF, SSM, CloudWatch, SNS alarm)
 COMP = ("#D05C17", "#F78E04")     # compute / containers (EC2, ECS, Lambda, ECR)
 DB = ("#3334B9", "#4D72F3")       # database (RDS, ElastiCache)
+ANA = ("#4D27AA", "#945DF2")      # analytics (MSK)
 STO = ("#277116", "#60A337")      # storage (S3)
 INTEG = ("#BC1356", "#F34482")    # app integration (SQS, SES, SNS, EventBridge)
 DEV = ("#3334B9", "#4D72F3")      # developer tools (CodeDeploy, git)
@@ -71,6 +80,10 @@ STROKE = {"net": "#5A30B5", "sec": "#C7131F", "comp": "#232F3E", "db": "#3334B9"
 
 # common containers: (grIcon, stroke, fill, font, dashed, grstroke)
 CLOUD = dict(gr="group_aws_cloud_alt", stroke="#232F3E")
+# AWS Account and Region: the styles of draw.io's AWS / Groups palette. The Region border is dashed like an AZ's, so it
+# keeps grstroke on as well (see AZ below).
+ACCOUNT = dict(gr="group_account", stroke="#CD2264")
+REGION = dict(gr="group_region", stroke="#00A4A6", font="#147EBA", dashed=1)
 VPC = dict(gr="group_vpc2", stroke="#8C4FFF", font="#AAB7B8")
 PUBLIC = dict(gr="group_security_group", stroke="#7AA116", fill="#F2F6E8", font="#248814", grstroke=False)
 PRIVATE = dict(gr="group_security_group", stroke="#00A4A6", fill="#E6F6F7", font="#147EBA", grstroke=False)
@@ -216,8 +229,17 @@ def drawio_cli() -> str:
     raise RuntimeError(f"draw.io CLI not found: set DRAWIO, put `drawio` on PATH or install the app at {DRAWIO_APP}")
 
 
+def png_size(path: Path) -> tuple[int, int]:
+    """Width and height of a PNG, read from its IHDR chunk (always the first, right after the 8-byte signature)."""
+    with open(path, "rb") as f:
+        head = f.read(24)
+    w, h = struct.unpack(">II", head[16:24])
+    return w, h
+
+
 def export(drawio: Path, fmt="pdf", out: Path | None = None, page: int | None = None, scale=1) -> Path:
-    """Export with the draw.io CLI. PDF: all pages, cropped to the drawing. PNG: one page (`page` is 1-based) — for visual inspection."""
+    """Export with the draw.io CLI. PDF: all pages, cropped to the drawing. PNG: one page (`page` is 1-based) at
+    `scale`, or at the largest scale (2 decimals) whose image stays within PNG_MAX_PIXELS."""
     drawio = Path(drawio)
     out = Path(out) if out else drawio.with_suffix("." + fmt)
     cli = drawio_cli()
@@ -228,4 +250,12 @@ def export(drawio: Path, fmt="pdf", out: Path | None = None, page: int | None = 
     if not out.exists():
         # A Homebrew wrapper on PATH can outlive the app it points to; its own error then names the missing path.
         raise RuntimeError(f"draw.io export failed ({cli}, exit {r.returncode}): " + (r.stdout + r.stderr)[-300:])
+    if fmt == "png":
+        w, h = png_size(out)
+        if w * h > PNG_MAX_PIXELS:
+            # The image keeps its full size but its bottom is blank; area grows with the square of the scale.
+            fit = math.floor(scale * math.sqrt(PNG_MAX_PIXELS / (w * h)) * 100) / 100
+            print(f"  {out.name}: {w}×{h} px at scale {scale} is past what draw.io draws in full; scale {fit}",
+                  file=sys.stderr)
+            return export(drawio, fmt, out, page, fit)
     return out

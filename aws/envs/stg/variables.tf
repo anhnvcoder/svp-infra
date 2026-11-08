@@ -63,7 +63,7 @@ variable "eks_public_access_cidrs" {
 ################################################################################
 
 variable "az_count" {
-  description = "Number of availability zones of the VPC (and of the nodes and the DB subnet group)."
+  description = "Number of availability zones of the VPC (and of the nodes, the database subnets and the Kafka brokers, one per zone)."
   type        = number
 }
 
@@ -207,6 +207,42 @@ variable "rds_cloudwatch_logs_retention_days" {
   default     = 1
 }
 
+variable "msk_broker_instance_type" {
+  description = "Instance type of the Kafka brokers (kafka.t3.small, kafka.m7g.large)."
+  type        = string
+}
+
+variable "msk_replication_factor" {
+  description = "Replication factor of every topic and of the internal topics of offsets and transactions, at most az_count."
+  type        = number
+}
+
+variable "msk_min_insync_replicas" {
+  description = "Replicas that must hold a write acknowledged with acks=all: below msk_replication_factor, so that losing one broker still accepts writes (1 when the factor is 1)."
+  type        = number
+}
+
+variable "msk_broker_logs_enabled" {
+  description = "Send the broker logs to the CloudWatch log group /aws/msk/svp-<env>."
+  type        = bool
+}
+
+variable "msk_broker_logs_retention_days" {
+  description = "Days CloudWatch keeps the broker logs when msk_broker_logs_enabled is true."
+  type        = number
+  default     = 1
+}
+
+variable "valkey_node_type" {
+  description = "Node type of the Valkey nodes (cache.t4g.micro, cache.m7g.large)."
+  type        = string
+}
+
+variable "valkey_node_count" {
+  description = "Valkey nodes, the primary included: 1 has no replica; 2 or more run Multi-AZ with automatic failover."
+  type        = number
+}
+
 variable "media_force_destroy" {
   description = "Let destroy delete both buckets with every object in them."
   type        = bool
@@ -222,4 +258,20 @@ variable "media_access_logging_enabled" {
   description = "Write S3 server access logs of both buckets to a log bucket of the env."
   type        = bool
   default     = false
+}
+
+################################################################################
+# Passwords Terraform makes (Kafka and Valkey users): raise to rotate
+################################################################################
+
+variable "msk_password_version" {
+  description = "Version of the Kafka passwords: an apply with a new value writes new passwords to the SCRAM secrets and the entries kafka-admin, kafka-users. Raise it for the rest of the session (TF_VAR_msk_password_version or the uncommitted <env>.auto.tfvars): an apply at another value writes new ones again."
+  type        = number
+  default     = 1
+}
+
+variable "valkey_password_version" {
+  description = "Version of the Valkey passwords: an apply with a new value writes new passwords to the ElastiCache users and the entry valkey-users. Raise it for the rest of the session (TF_VAR_valkey_password_version or the uncommitted <env>.auto.tfvars): an apply at another value writes new ones again."
+  type        = number
+  default     = 1
 }

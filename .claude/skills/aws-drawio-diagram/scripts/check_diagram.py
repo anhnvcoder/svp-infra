@@ -1,4 +1,7 @@
-# copied from templates/terraform-base/.claude/skills/aws-drawio-diagram/scripts/check_diagram.py (ecc4349); changed: any ELB load balancer may straddle; Kubernetes icons are icons; --counts and kind_counts(); subnet kind = fill and height
+# copied from templates/terraform-base/.claude/skills/aws-drawio-diagram/scripts/check_diagram.py (ecc4349);
+# changed: any ELB load balancer may straddle; Kubernetes icons are icons; --counts and kind_counts();
+# subnet kind = fill and height
+# also changed: subnet kind adds the tier (the word before "subnet"); kind_counts() counts Region and AWS Account groups
 """Geometry check for draw.io files — catches the mistakes you would otherwise only spot by looking at the picture,
 before hand-over. Read-only; never modifies the file.
 
@@ -20,10 +23,11 @@ Checks (the reason behind each rule: SKILL.md):
  10. An icon sits at least one major cell (40px) from the edge of every container enclosing it: touching the border still
      passes check 4 but looks stuck to the frame; if space is needed, widen the container instead of pushing the icon to
      the edge. The straddling ALB is exempt.
- 11. Subnet boxes of the same kind (same fill and height) must have the same width: a box with few resources must not be
-     narrower than one with many, so the grid looks even. Subnet boxes are recognised by a label containing "subnet";
-     public and private boxes (different fills) are different kinds even in one AZ row, and so is a double-height public
-     box (ALB straddling).
+ 11. Subnet boxes of the same kind (same tier, fill and height) must have the same width: a box with few resources must
+     not be narrower than one with many, so the grid looks even. Subnet boxes are recognised by a label containing
+     "subnet", their tier by the word before it ("Public", "Private", "Database"); public and private boxes are different
+     kinds even in one AZ row, a database box (the private style, as AWS draws it) is another, and so is a
+     double-height public box (ALB straddling).
 
     python3 .claude/skills/aws-drawio-diagram/scripts/check_diagram.py [--counts] docs/diagrams/terraform-base.drawio
 Exits 1 on any error. --counts also prints, per page, how many of each kind `kind_counts()` finds (icon shapes, AZ and
@@ -36,8 +40,8 @@ import sys
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-# Every AWS icon except containers: resourceIcon (with resIcon=…) and flat icons (nat_gateway, internet_gateway, users…);
-# Kubernetes icons (mxgraph.kubernetes) obey the same placement rules.
+# Every AWS icon except containers: resourceIcon (with resIcon=…) and flat icons (nat_gateway, internet_gateway,
+# users…); Kubernetes icons (mxgraph.kubernetes) obey the same placement rules.
 ICON_RE = re.compile(r"shape=mxgraph\.(aws4\.(?!group)|kubernetes\.)")
 # Load balancer shapes that may straddle two public subnet boxes: ELB manages one node per subnet for every kind.
 ELB_RE = re.compile(r"mxgraph\.aws4\.(elastic_load_balancing|application_load_balancer|network_load_balancer|gateway_load_balancer)\b")
@@ -111,9 +115,9 @@ def check_page(pg) -> list[str]:
 
     # 4. an icon lies fully inside every container it intersects (being fully inside Cloud/VPC does not hide a problem
     #    with a child box). The only exception: a load balancer straddling two touching boxes whose union fully covers
-    #    the icon — the way AWS draws one ALB or NLB spanning several public subnets (ELB-managed nodes, invisible to the
-    #    user): two public boxes side by side, or two touching AZ rows, the icon bridging their public boxes across the
-    #    shared AZ border. Nothing else may straddle.
+    #    the icon — the way AWS draws one ALB or NLB spanning several public subnets (ELB-managed nodes, invisible to
+    #    the user): two public boxes side by side, or two touching AZ rows, the icon bridging their public boxes across
+    #    the shared AZ border. Nothing else may straddle.
     icons = {cid: c for cid, c in verts.items() if ICON_RE.search(c.get("style") or "") and c.get("parent") == "1"}
     groups = [c for c in verts.values() if "mxgraph.aws4.group" in (c.get("style") or "") and c.get("parent") == "1"]
     inside = lambda x, y, gg: gg["x"] <= x <= gg["x"] + gg["w"] and gg["y"] <= y <= gg["y"] + gg["h"]
@@ -129,8 +133,8 @@ def check_page(pg) -> list[str]:
         if not straddle:
             bad.append(f"{name}: icon '{c.get('value', '')[:20]}' overflows a container edge (not fully inside; only a load balancer may straddle two touching containers)")
 
-    # 10. an icon sits at least one major cell from the edge of every container fully enclosing it — touching the border
-    #     looks stuck to the frame even though check 4 passes.
+    # 10. an icon sits at least one major cell from the edge of every container fully enclosing it — touching the
+    #     border looks stuck to the frame even though check 4 passes.
     for cid, c in icons.items():
         g = geo(c)
         for grp in groups:
@@ -141,23 +145,25 @@ def check_page(pg) -> list[str]:
             if d < major - 0.5:
                 bad.append(f"{name}: icon '{c.get('value', '')[:20]}' is {d:g}px from the edge of container '{grp.get('value', '')[:20]}', needs ≥ {major}px")
 
-    # 11. subnet boxes of the same kind (same fill and height) must have the same width — a box with few resources must
-    #     not be narrower than one with many, so the grid looks even. Subnet boxes are recognised by a label containing
-    #     "subnet"; the fill tells public from private (both can sit in one AZ row at one height), the height a double-height
-    #     public box (ALB straddling) from the boxes in the AZ.
+    # 11. subnet boxes of the same kind (tier, fill, height) have one width, so the grid looks even whatever they hold.
+    #     A subnet box has "subnet" in its label; the word before it tells a database box from a private one of the same
+    #     style, the fill tells public from private, the height a double-height public box (ALB straddling) from the
+    #     others of the AZ.
     subnet_widths: dict[tuple, dict[float, str]] = {}
     for grp in groups:
-        if "subnet" not in (grp.get("value") or "").lower():
+        label = (grp.get("value") or "").lower()
+        if "subnet" not in label:
             continue
         gg = geo(grp)
         fill = re.search(r"fillColor=([^;]*)", grp.get("style") or "")
-        subnet_widths.setdefault((fill.group(1) if fill else "", gg["h"]), {}).setdefault(gg["w"], grp.get("value", "")[:20])
-    for (fill, h), widths in subnet_widths.items():
+        tier = label.split("subnet")[0].split()[-1:] or [""]
+        subnet_widths.setdefault((tier[0], fill.group(1) if fill else "", gg["h"]), {}).setdefault(gg["w"], grp.get("value", "")[:20])
+    for (tier, fill, h), widths in subnet_widths.items():
         if len(widths) > 1:
-            bad.append(f"{name}: subnet boxes of fill {fill} and height {h:g} have several widths {sorted(widths)} ({', '.join(widths.values())}) — subnet boxes of the same kind must have the same width")
+            bad.append(f"{name}: {tier} subnet boxes of fill {fill} and height {h:g} have several widths {sorted(widths)} ({', '.join(widths.values())}) — subnet boxes of the same kind must have the same width")
 
-    # 8. drawing order: an icon must come after every container that intersects it in the file — draw.io paints in file
-    #    order, so a filled container created later paints over the icon.
+    # 8. drawing order: an icon must come after every container that intersects it in the file — draw.io paints in
+    #    file order, so a filled container created later paints over the icon.
     order = {c.get("id"): i for i, c in enumerate(cells)}
     for cid, c in icons.items():
         g = geo(c)
@@ -222,8 +228,9 @@ def check_page(pg) -> list[str]:
 
 def kind_counts(pg) -> dict[str, int]:
     """Count per kind on one page: an icon by its aws4 shape (resIcon of a resourceIcon, otherwise the flat shape name:
-    `rds`, `nat_gateway`, `elastic_load_balancing`…), a Kubernetes icon as `k8s_<prIcon>` (`k8s_ns`, `k8s_deploy`…); `az` for a dashed container without fill (the AZ style); `subnet`
-    for a container whose label contains "subnet" (the label rule of check 11)."""
+    `rds`, `nat_gateway`, `elastic_load_balancing`…), a Kubernetes icon as `k8s_<prIcon>` (`k8s_ns`, `k8s_deploy`…); `region`
+    and `account` for the Region and AWS Account groups; `az` for any other dashed container without fill (the AZ style);
+    `subnet` for a container whose label contains "subnet" (the label rule of check 11)."""
     counts: dict[str, int] = {}
     model = pg.find("mxGraphModel")
     for c in model.find("root").findall("mxCell") if model is not None else []:
@@ -231,7 +238,10 @@ def kind_counts(pg) -> dict[str, int]:
         if c.get("vertex") != "1" or c.get("parent") != "1":
             continue
         if "mxgraph.aws4.group" in st:
-            kinds = (["az"] if "dashed=1" in st and "fillColor=none" in st else []) + (["subnet"] if "subnet" in (c.get("value") or "").lower() else [])
+            if "grIcon=mxgraph.aws4.group_region;" in st or "grIcon=mxgraph.aws4.group_account;" in st:
+                kinds = [re.search(r"grIcon=mxgraph\.aws4\.group_(\w+);", st).group(1)]
+            else:
+                kinds = (["az"] if "dashed=1" in st and "fillColor=none" in st else []) + (["subnet"] if "subnet" in (c.get("value") or "").lower() else [])
         else:
             m = re.search(r"resIcon=mxgraph\.aws4\.(\w+)", st) or re.search(r"shape=mxgraph\.aws4\.(\w+)", st)
             k = "mxgraph.kubernetes." in st and re.search(r"prIcon=(\w+)", st)
