@@ -33,16 +33,16 @@ variable "cluster_values" {
   validation {
     condition = try(toset(keys(var.cluster_values)) == toset([
       "name", "region", "vpcId", "vpcCidr", "serviceCidr", "dbCidrs", "domain", "hostedZoneId", "acmeEmail", "rdsAddress",
-      "uploadsBucket", "mediaBucket", "mediaDomain", "s3Cidrs", "externalSecretsRoles",
+      "kafkaBrokers", "valkeyHost", "uploadsBucket", "mediaBucket", "mediaDomain", "s3Cidrs", "externalSecretsRoles",
     ]), false)
-    error_message = "cluster_values must hold exactly the keys name, region, vpcId, vpcCidr, serviceCidr, dbCidrs, domain, hostedZoneId, acmeEmail, rdsAddress, uploadsBucket, mediaBucket, mediaDomain, s3Cidrs and externalSecretsRoles."
+    error_message = "cluster_values must hold exactly the keys name, region, vpcId, vpcCidr, serviceCidr, dbCidrs, domain, hostedZoneId, acmeEmail, rdsAddress, kafkaBrokers, valkeyHost, uploadsBucket, mediaBucket, mediaDomain, s3Cidrs and externalSecretsRoles."
   }
 
   validation {
     condition = try(alltrue(concat(
       [for k in [
         "name", "region", "vpcId", "vpcCidr", "serviceCidr", "domain", "hostedZoneId", "acmeEmail", "rdsAddress",
-        "uploadsBucket", "mediaBucket", "mediaDomain",
+        "kafkaBrokers", "valkeyHost", "uploadsBucket", "mediaBucket", "mediaDomain",
       ] : startswith(jsonencode(var.cluster_values[k]), "\"")],
       [for k in ["dbCidrs", "s3Cidrs"] :
         startswith(jsonencode(var.cluster_values[k]), "[") &&

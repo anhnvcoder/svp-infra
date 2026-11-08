@@ -26,7 +26,8 @@ resource hay data source của provider nào: nó chỉ tính những gì root [
   `svp.io/telegram-chat-id`. `cluster_values` là biến `sensitive` (có `acmeEmail`), nên annotation ở output `sensitive` riêng.
 - **`cluster_values`** phải có đúng các khoá của hợp đồng `cluster.*` (output `cluster_values` của hai root env), mỗi khoá đúng loại: chuỗi,
   `dbCidrs`, `s3Cidrs` là danh sách chuỗi, `externalSecretsRoles` là map chuỗi của đúng năm namespace `svp`, `svp-data`, `svp-obs`, `keda`,
-  `argocd`. Biến không khai kiểu object: đổi sang kiểu object sẽ âm thầm bỏ khoá thừa và báo khoá thiếu bằng lỗi kiểu thay vì luật kiểm.
+  `argocd`; `kafkaBrokers` là một chuỗi `host:9096,host:9096,…` như MSK trả, không phải danh sách. Biến không khai kiểu object: đổi sang
+  kiểu object sẽ âm thầm bỏ khoá thừa và báo khoá thiếu bằng lỗi kiểu thay vì luật kiểm.
 - **ApplicationSet `svp-bootstrap`:** cluster generator chọn Secret có label `svp.io/env`, `goTemplate` với `missingkey=error`; tạo
   `svp-root` (project `svp`, label `svp.io/notify: root`, annotation `argocd.argoproj.io/compare-options: ServerSideDiff=false`, chart
   `argocd/root` của `svp-gitops` ở `refs/heads/main`); `templatePatch` đặt `env`, `platform`, `nodeArch` từ label, `cluster` từ annotation,

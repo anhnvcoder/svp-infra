@@ -22,7 +22,7 @@ variable "cidr" {
 }
 
 variable "az_count" {
-  description = "Number of availability zones, taken in order from the zones of the region that need no opt-in. Each zone gets one public and one private subnet. EKS needs subnets in at least two zones."
+  description = "Number of availability zones, taken in order from the zones of the region that need no opt-in. Each zone gets one public, one private and one database subnet. EKS needs subnets in at least two zones."
   type        = number
   default     = 2
 

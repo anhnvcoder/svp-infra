@@ -92,6 +92,9 @@ case "$1 $2" in
   "secretsmanager list-secrets")
     if [ "$left" = secret ]; then
       echo '{"SecretList":[{"Name":"svp/stg/web","DeletedDate":"2026-10-30T10:00:00Z","Tags":[{"Key":"Project","Value":"svp"}]}]}'
+    elif [ "$left" = msk-secret ]; then
+      # A SCRAM secret of MSK whose tags are gone: found by its name alone.
+      echo '{"SecretList":[{"Name":"AmazonMSK_svp-stg-svp-admin","Tags":[]}]}'
     else
       echo '{"SecretList":[{"Name":"other-project","Tags":[]}]}'
     fi ;;
@@ -105,14 +108,26 @@ case "$1 $2" in
     } | jq -s '{ResourceRecordSets: .}' ;;
   "resourcegroupstaggingapi get-resources")
     case " $* " in
-      *" kms:key "*) echo "{\"ResourceTagMappingList\":[{\"ResourceARN\":\"arn:aws:kms:ap-southeast-1:$account:key/key-eks\",\"Tags\":[{\"Key\":\"Project\",\"Value\":\"svp\"}]}]}" ;;
+      *" kms:key "*)
+        for k in key-eks key-msk; do printf '{"ResourceARN":"arn:aws:kms:ap-southeast-1:%s:key/%s","Tags":[{"Key":"Project","Value":"svp"}]}\n' "$account" "$k"; done |
+          jq -s '{ResourceTagMappingList: .}' ;;
       *) echo '{"ResourceTagMappingList":[]}' ;;
     esac ;;
-  "kms list-aliases") echo '{"Aliases":[{"AliasName":"alias/aws/ebs","TargetKeyId":"key-aws"},{"AliasName":"alias/svp-tfstate","TargetKeyId":"key-state"},{"AliasName":"alias/svp-prd-eks-secrets","TargetKeyId":"key-eks"}]}' ;;
+  # A destroy deletes the alias of a root's key; it is left with the key (FAKE_LEFTOVER=kms, msk-kms), or alone on a key
+  # scheduled for deletion by hand after a lost state (msk-alias).
+  "kms list-aliases")
+    {
+      printf '{"AliasName":"alias/aws/ebs","TargetKeyId":"key-aws"}\n{"AliasName":"alias/svp-tfstate","TargetKeyId":"key-state"}\n'
+      [ "$left" != kms ] || printf '{"AliasName":"alias/svp-prd-eks-secrets","TargetKeyId":"key-eks"}\n'
+      case $left in msk-kms | msk-alias) printf '{"AliasName":"alias/svp-prd-msk-scram","TargetKeyId":"key-msk"}\n' ;; esac
+    } | jq -s '{Aliases: .}' ;;
   "kms describe-key")
-    # key-eks: the key of the cluster's Secrets, PendingDeletion after a destroy (FAKE_LEFTOVER=kms: still Enabled).
+    # key-eks: the key of the cluster's Secrets, key-msk: the key of MSK (SCRAM secrets and broker volumes), each
+    # PendingDeletion after a destroy (FAKE_LEFTOVER=kms, msk-kms: still Enabled).
     if [ "$4" = key-eks ] && [ "$left" != kms ]; then
       echo '{"KeyMetadata":{"KeyId":"key-eks","KeyState":"PendingDeletion","KeyManager":"CUSTOMER","DeletionDate":"2026-11-12T00:00:00Z"}}'
+    elif [ "$4" = key-msk ] && [ "$left" != msk-kms ]; then
+      echo '{"KeyMetadata":{"KeyId":"key-msk","KeyState":"PendingDeletion","KeyManager":"CUSTOMER","DeletionDate":"2026-11-15T00:00:00Z"}}'
     else
       echo "{\"KeyMetadata\":{\"KeyId\":\"$4\",\"KeyState\":\"Enabled\",\"KeyManager\":\"CUSTOMER\"}}"
     fi ;;
@@ -121,7 +136,7 @@ case "$1 $2" in
     else echo '{"Tags":[{"TagKey":"Project","TagValue":"svp"},{"TagKey":"Stack","TagValue":"prd"}]}'; fi ;;
   "ec2 describe-volumes")
     if [ "$left" = volume ] && [[ "$*" == *tag:Project* ]]; then
-      echo '{"Volumes":[{"VolumeId":"vol-0fake","State":"available","Size":10,"Tags":[{"Key":"kubernetes.io/created-for/pvc/name","Value":"data-redpanda-0"}]}]}'
+      echo '{"Volumes":[{"VolumeId":"vol-0fake","State":"available","Size":10,"Tags":[{"Key":"kubernetes.io/created-for/pvc/name","Value":"storage-loki-0"}]}]}'
     else
       echo '{"Volumes":[]}'
     fi ;;
@@ -163,7 +178,37 @@ case "$1 $2" in
       cancellation) echo "{\"subscriptionSummaries\":[{\"arn\":\"arn:aws:pricingplanmanager::$account:subscription/sub-paid\",\"planFamily\":\"CloudFront\",\"planTier\":\"PRO\",\"status\":\"ACTIVE\",\"resourceArns\":[],\"scheduledChange\":{\"changeType\":\"CANCELLATION\",\"effectiveDate\":\"2026-12-01T00:00:00Z\"},\"eTag\":\"e2\"}]}" ;;
       *) echo '{"subscriptionSummaries":[]}' ;;
     esac ;;
-  "logs describe-log-groups") echo '{"logGroups":[]}' ;;
+  "logs describe-log-groups")
+    if [ "$left" = msk-log ]; then echo '{"logGroups":[{"logGroupName":"/aws/msk/svp-prd"}]}'; else echo '{"logGroups":[]}'; fi ;;
+  # FAKE_LEFTOVER=msk: a cluster and its configuration; elasticache: a replication group and what it used.
+  "kafka list-clusters-v2")
+    if [ "$left" = msk ]; then
+      echo "{\"ClusterInfoList\":[{\"ClusterName\":\"svp-stg\",\"ClusterArn\":\"arn:aws:kafka:ap-southeast-1:$account:cluster/svp-stg/c-fake\",\"State\":\"DELETING\"},{\"ClusterName\":\"other\",\"ClusterArn\":\"arn:other\",\"State\":\"ACTIVE\"}]}"
+    else
+      echo '{"ClusterInfoList":[]}'
+    fi ;;
+  "kafka list-configurations")
+    if [ "$left" = msk ]; then
+      echo "{\"Configurations\":[{\"Name\":\"svp-stg-4-1-x-kraft\",\"Arn\":\"arn:aws:kafka:ap-southeast-1:$account:configuration/svp-stg-4-1-x-kraft/cfg-fake\",\"State\":\"ACTIVE\"}]}"
+    else
+      echo '{"Configurations":[]}'
+    fi ;;
+  "elasticache describe-replication-groups")
+    if [ "$left" = elasticache ]; then echo '{"ReplicationGroups":[{"ReplicationGroupId":"svp-stg","Status":"available"}]}'
+    else echo '{"ReplicationGroups":[]}'; fi ;;
+  "elasticache describe-user-groups")
+    if [ "$left" = elasticache ]; then echo '{"UserGroups":[{"UserGroupId":"svp-stg","Status":"active"}]}'
+    else echo '{"UserGroups":[]}'; fi ;;
+  "elasticache describe-users")
+    # ElastiCache's own user default is always there and never a leftover.
+    if [ "$left" = elasticache ]; then echo '{"Users":[{"UserId":"default","UserName":"default","Status":"active"},{"UserId":"svp-stg-gateway","UserName":"svp-gateway","Status":"active"}]}'
+    else echo '{"Users":[{"UserId":"default","UserName":"default","Status":"active"}]}'; fi ;;
+  "elasticache describe-cache-subnet-groups")
+    if [ "$left" = elasticache ]; then echo '{"CacheSubnetGroups":[{"CacheSubnetGroupName":"svp-stg"},{"CacheSubnetGroupName":"default"}]}'
+    else echo '{"CacheSubnetGroups":[{"CacheSubnetGroupName":"default"}]}'; fi ;;
+  "elasticache describe-cache-parameter-groups")
+    if [ "$left" = elasticache ]; then echo '{"CacheParameterGroups":[{"CacheParameterGroupName":"svp-stg-valkey9","CacheParameterGroupFamily":"valkey9"},{"CacheParameterGroupName":"default.valkey9","CacheParameterGroupFamily":"valkey9"}]}'
+    else echo '{"CacheParameterGroups":[{"CacheParameterGroupName":"default.valkey9","CacheParameterGroupFamily":"valkey9"}]}'; fi ;;
   *) echo "fake aws: unexpected $1 $2" >&2; exit 98 ;;
 esac
 EOF
@@ -243,7 +288,9 @@ cat >"$bin/make" <<'EOF'
 #!/usr/bin/env bash
 # Logs whether the password reached make's environment, never the value.
 if [ "${SVP_RDS_MASTER_PASSWORD:-}" = "$FAKE_PASSWORD" ]; then pw=match; elif [ -n "${SVP_RDS_MASTER_PASSWORD:-}" ]; then pw=other; else pw=none; fi
-echo "make $* password=$pw profile=${AWS_PROFILE:-}" >>"$FAKE_LOG"
+# kv: the names of the Kafka and Valkey password variables in make's environment (Terraform writes those passwords).
+kv=$(env | grep -oE '^SVP_(KAFKA|VALKEY)_[A-Z_]*_PASSWORD=' | sort | tr -d '=' | tr '\n' ',' || true)
+echo "make $* password=$pw profile=${AWS_PROFILE:-} kv=${kv:-none}" >>"$FAKE_LOG"
 echo "ok    entries written (fake make)"
 # FAKE_MAKE_LEAK: a target that prints the password, which bootstrap.sh must catch in its log.
 [ -z "${FAKE_MAKE_LEAK:-}" ] || echo "debug: password $SVP_RDS_MASTER_PASSWORD"
@@ -695,6 +742,10 @@ expect "tf.sh env plan --destroy --no-cluster refuses when the session has clust
 expect "tf.sh env plan --destroy --no-cluster refused: terraform plan -destroy never ran" test -z "$(grep '^terraform .* plan -destroy' "$log")"
 
 # --- bootstrap.sh -------------------------------------------------------------------------------------------------
+# The Kafka and Valkey passwords of the local stack are in .env too: the apply of the root writes those of EKS, so no
+# session script reads them.
+kafka_pw=kafkalocal0000000000000000000001 valkey_pw=valkeylocal000000000000000000001
+printf 'SVP_KAFKA_ADMIN_PASSWORD=%s\nSVP_VALKEY_OPS_PASSWORD=%s\n' "$kafka_pw" "$valkey_pw" >>"$work/backend/.env"
 for e in stg prd; do
   new_session
   bash "$here/bootstrap.sh" "$e" secrets >"$work/boot.out" 2>&1 || bad "bootstrap.sh $e secrets exits 0 ($(tail -n 3 "$work/boot.out"))"
@@ -710,6 +761,12 @@ for e in stg prd; do
     sh -c '! grep -rqF -- "$1" "$2" "$3" "$4"' _ "$password" "$work/boot.out" "$log" "$SVP_SESSION_DIR"
   expect "bootstrap.sh $e secrets: the RDS secret reaches jq through a pipe, never a file" test -z "$(grep 'stdin=file' "$log")"
   expect "bootstrap.sh $e secrets marks secrets-written" has_mark secrets-written
+  expect "bootstrap.sh $e secrets passes no Kafka or Valkey password to make eks-secrets" \
+    grep -qF "make -C $work/backend eks-secrets CONTEXT=svp-$e password=match profile=anhnv-$e kv=none" "$log"
+  expect "bootstrap.sh $e secrets: the local Kafka and Valkey passwords of .env are in no output, log or session file" \
+    sh -c '! grep -rqF -e "$1" -e "$2" "$3" "$4" "$5"' _ "$kafka_pw" "$valkey_pw" "$work/boot.out" "$log" "$SVP_SESSION_DIR"
+  expect "bootstrap.sh $e secrets says the apply of the root wrote the Kafka and Valkey entries" \
+    grep -q "kafka-admin, kafka-users, valkey-users by the apply of aws/envs/$e" "$work/boot.out"
 done
 expect "bootstrap.sh prd secrets points the context at the tunnel, TLS server name the endpoint's host" \
   grep -q '^kubectl config set-cluster arn:aws:eks:ap-southeast-1:222222222222:cluster/svp-prd --server=https://127.0.0.1:6443 --tls-server-name=0123ABCD.gr7.ap-southeast-1.eks.amazonaws.com$' "$log"
@@ -747,10 +804,10 @@ expect "bootstrap.sh wait: no svp-root-healthy when it fails" no_mark svp-root-h
 # --- pre-destroy.sh ----------------------------------------------------------------------------------------------
 new_session
 printf '%s\n' "0 cert-manager" "0 envoy-gateway" "0 external-secrets" "1 svp-cluster" "1 aws-load-balancer-controller" \
-  "2 keda" "2 external-dns" "2 argo-rollouts" "2 kyverno" "2 kube-prometheus-stack" "3 svp-policy" "3 redpanda" "3 loki" \
+  "2 keda" "2 external-dns" "2 argo-rollouts" "2 kyverno" "2 kube-prometheus-stack" "3 svp-policy" "3 loki" \
   "4 svp-data" "5 svp-observability" "6 otel-collector" "7 gateway" "7 web" >"$state/apps"
 touch "$state/appset" "$state/root" "$state/svp-apps" "$state/lb"
-printf '%s\n' "svp-data data-redpanda-0" "svp-obs prometheus-db-0" >"$state/pvcs"
+printf '%s\n' "svp-data data-0" "svp-obs prometheus-db-0" >"$state/pvcs"
 bash "$here/pre-destroy.sh" stg >"$work/pre.out" 2>&1 || bad "pre-destroy.sh stg exits 0 ($(tail -n 3 "$work/pre.out"))"
 expect "pre-destroy.sh: sync and finalizers of svp-root and svp-apps cleared before the ApplicationSet is deleted" \
   sh -c 'b() { a=$(grep -nE -- "$2" "$1" | head -n 1 | cut -d: -f1); c=$(grep -nE -- "$3" "$1" | head -n 1 | cut -d: -f1); [ -n "$a" ] && [ -n "$c" ] && [ "$a" -lt "$c" ]; }
@@ -761,7 +818,7 @@ expect "pre-destroy.sh: ApplicationSet, then svp-apps, before any child" \
 expect "pre-destroy.sh: auto-sync of svp-cluster off before the first child is deleted" \
   before "$log" 'patch application svp-cluster .*automated' 'delete application [a-z-]+ --wait=false'
 expect "pre-destroy.sh: wave 7 before wave 3, workloads before the Gateway" \
-  sh -c '[ "$(grep -n "delete application gateway " "$1" | cut -d: -f1)" -lt "$(grep -n "delete application redpanda " "$1" | cut -d: -f1)" ]' _ "$log"
+  sh -c '[ "$(grep -n "delete application gateway " "$1" | cut -d: -f1)" -lt "$(grep -n "delete application loki " "$1" | cut -d: -f1)" ]' _ "$log"
 expect "pre-destroy.sh: last workload (kube-prometheus-stack) before the Gateway" before "$log" 'delete application kube-prometheus-stack ' 'delete gateway svp'
 expect "pre-destroy.sh: Gateway before the PVCs" before "$log" 'delete gateway svp' 'delete pvc --all'
 expect "pre-destroy.sh: PVCs before every platform Application" before "$log" 'delete pvc --all' 'delete application (svp-cluster|keda|kyverno|external-dns|aws-load-balancer-controller) '
@@ -914,7 +971,7 @@ expect "sweep.sh needs no Terraform state" test -z "$(grep '^terraform ' "$log")
 expect "sweep.sh only reads (describe, list, get)" \
   test -z "$(grep '^aws ' "$log" | awk '{ print $3 }' | grep -vE '^(describe|list|get)-' || true)"
 expect "sweep.sh fails on a leftover EBS volume, names it and the command that deletes it" \
-  sh -c '! FAKE_LEFTOVER=volume bash "$1/sweep.sh" stg >"$2" 2>&1 && grep -q "vol-0fake available 10 GiB data-redpanda-0" "$2" &&
+  sh -c '! FAKE_LEFTOVER=volume bash "$1/sweep.sh" stg >"$2" 2>&1 && grep -q "vol-0fake available 10 GiB storage-loki-0" "$2" &&
     grep -q "delete: AWS_PROFILE=anhnv-stg aws ec2 delete-volume --volume-id vol-0fake --region ap-southeast-1$" "$2"' _ "$here" "$work/sweep.out"
 expect "sweep.sh fails on a secret scheduled for deletion, and says so" \
   sh -c '! FAKE_LEFTOVER=secret bash "$1/sweep.sh" stg >"$2" 2>&1 && grep -q "svp/stg/web (scheduled for deletion since" "$2"' _ "$here" "$work/sweep.out"
@@ -925,6 +982,44 @@ expect "sweep.sh prd fails on a retained automated backup" \
   sh -c '! FAKE_LEFTOVER=backup bash "$1/sweep.sh" prd >"$2" 2>&1 && grep -q "^FAIL  RDS automated backups: 1 left" "$2"' _ "$here" "$work/sweep.out"
 expect "sweep.sh prd fails on a KMS key of the root not pending deletion" \
   sh -c '! FAKE_LEFTOVER=kms bash "$1/sweep.sh" prd >"$2" 2>&1 && grep -q "^FAIL  KMS keys: 1 left" "$2" && grep -q "key-eks Enabled Stack=prd" "$2"' _ "$here" "$work/sweep.out"
+expect "sweep.sh prd prints the key of MSK as pending deletion, not counted" \
+  sh -c 'bash "$1/sweep.sh" prd >"$2" 2>&1 && grep -q "^pending deletion  KMS key key-msk, deleted on 2026-11-15" "$2"' _ "$here" "$work/sweep.out"
+expect "sweep.sh prd fails on the key of MSK not pending deletion" \
+  sh -c '! FAKE_LEFTOVER=msk-kms bash "$1/sweep.sh" prd >"$2" 2>&1 && grep -q "^FAIL  KMS keys: 1 left" "$2" && grep -q "key-msk Enabled Stack=prd" "$2"' _ "$here" "$work/sweep.out"
+expect "sweep.sh prd fails on the alias of MSK left on its key pending deletion, with the delete-alias command" \
+  sh -c '! FAKE_LEFTOVER=msk-alias bash "$1/sweep.sh" prd >"$2" 2>&1 && grep -q "^FAIL  KMS aliases on keys pending deletion: 1 left" "$2" &&
+    grep -q "^        alias/svp-prd-msk-scram on key key-msk pending deletion$" "$2" &&
+    grep -q "delete: AWS_PROFILE=anhnv-prd aws kms delete-alias --alias-name alias/svp-prd-msk-scram --region ap-southeast-1$" "$2" &&
+    grep -q "^ok    KMS keys: none" "$2"' _ "$here" "$work/sweep.out"
+expect "sweep.sh prd counts no alias on a key not pending deletion" \
+  sh -c '! FAKE_LEFTOVER=msk-kms bash "$1/sweep.sh" prd >"$2" 2>&1 && grep -q "^ok    KMS aliases on keys pending deletion: none" "$2"' _ "$here" "$work/sweep.out"
+expect "sweep.sh stg fails on an MSK cluster and its configuration, the cluster first, each with its delete command" \
+  sh -c '! FAKE_LEFTOVER=msk bash "$1/sweep.sh" stg >"$2" 2>&1 && grep -q "^FAIL  MSK clusters: 1 left" "$2" && grep -q "^FAIL  MSK configurations: 1 left" "$2" &&
+    grep -q "delete: AWS_PROFILE=anhnv-stg aws kafka delete-cluster --cluster-arn arn:aws:kafka:ap-southeast-1:111111111111:cluster/svp-stg/c-fake --region ap-southeast-1$" "$2" &&
+    grep -q "delete: AWS_PROFILE=anhnv-stg aws kafka delete-configuration --arn arn:aws:kafka:ap-southeast-1:111111111111:configuration/svp-stg-4-1-x-kraft/cfg-fake --region ap-southeast-1$" "$2" &&
+    ! grep -q "arn:other" "$2"' _ "$here" "$work/sweep.out"
+expect "sweep.sh stg fails on an ElastiCache replication group, user group, user, subnet and parameter group, leaves AWS's own" \
+  sh -c '! FAKE_LEFTOVER=elasticache bash "$1/sweep.sh" stg >"$2" 2>&1 &&
+    grep -q "^FAIL  ElastiCache replication groups: 1 left" "$2" && grep -q "^FAIL  ElastiCache user groups: 1 left" "$2" &&
+    grep -q "^FAIL  ElastiCache users: 1 left" "$2" && grep -q "^FAIL  ElastiCache subnet groups: 1 left" "$2" &&
+    grep -q "^FAIL  ElastiCache parameter groups: 1 left" "$2" &&
+    grep -q "delete: AWS_PROFILE=anhnv-stg aws elasticache delete-replication-group --replication-group-id svp-stg --region ap-southeast-1$" "$2" &&
+    grep -q "delete: AWS_PROFILE=anhnv-stg aws elasticache delete-user --user-id svp-stg-gateway --region ap-southeast-1$" "$2" &&
+    grep -q "delete: AWS_PROFILE=anhnv-stg aws elasticache delete-cache-parameter-group --cache-parameter-group-name svp-stg-valkey9 --region ap-southeast-1$" "$2" &&
+    ! grep -qE "^        (default|default\.valkey9)( |$)" "$2"' _ "$here" "$work/sweep.out"
+# AWS refuses to delete what is in use: the list follows the order the deletes must run in.
+expect "sweep.sh --print stg runs" sh -c 'bash "$1/sweep.sh" --print stg >"$2" 2>&1' _ "$here" "$work/sweep.out"
+expect "sweep.sh --print stg lists the MSK clusters before their configurations" \
+  before "$work/sweep.out" ' aws kafka list-clusters-v2 ' ' aws kafka list-configurations '
+expect "sweep.sh --print stg lists the replication groups before the user groups" \
+  before "$work/sweep.out" ' elasticache describe-replication-groups ' ' elasticache describe-user-groups '
+expect "sweep.sh --print stg lists the user groups before the users" \
+  before "$work/sweep.out" ' elasticache describe-user-groups ' ' elasticache describe-users '
+expect "sweep.sh stg fails on a SCRAM secret of MSK found by its name, with the delete that skips recovery" \
+  sh -c '! FAKE_LEFTOVER=msk-secret bash "$1/sweep.sh" stg >"$2" 2>&1 && grep -q "^        AmazonMSK_svp-stg-svp-admin$" "$2" &&
+    grep -q "delete: AWS_PROFILE=anhnv-stg aws secretsmanager delete-secret --secret-id AmazonMSK_svp-stg-svp-admin --force-delete-without-recovery --region ap-southeast-1$" "$2"' _ "$here" "$work/sweep.out"
+expect "sweep.sh prd fails on the broker log group of MSK" \
+  sh -c '! FAKE_LEFTOVER=msk-log bash "$1/sweep.sh" prd >"$2" 2>&1 && grep -q "^FAIL  CloudWatch log groups: 1 left" "$2" && grep -q "^        /aws/msk/svp-prd$" "$2"' _ "$here" "$work/sweep.out"
 expect "sweep.sh prd fails on a web ACL left in us-east-1" \
   sh -c '! FAKE_LEFTOVER=waf bash "$1/sweep.sh" prd >"$2" 2>&1 && grep -q "^FAIL  WAF web ACLs of CloudFront: 1 left" "$2" &&
     grep -q "^          delete: docs/runbooks/session-stg.md#lệnh-xoá-tay-theo-loại (delete-web-acl takes the lock token" "$2"' _ "$here" "$work/sweep.out"

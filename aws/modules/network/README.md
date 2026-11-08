@@ -1,8 +1,8 @@
 # `aws/modules/network`: VPC của một env
 
 Module nội bộ mỏng bọc [`terraform-aws-modules/vpc/aws`](https://registry.terraform.io/modules/terraform-aws-modules/vpc/aws/6.7.3)
-**6.7.3** (ghim chính xác): VPC, subnet public và private trên `az_count` AZ, Internet Gateway, route table, NAT gateway và Elastic IP
-theo `single_nat_gateway`, S3 gateway endpoint trên mọi route table private, security group mặc định không rule nào, flow log tắt mặc
+**6.7.3** (ghim chính xác): VPC ba tầng trên `az_count` AZ (subnet public, private và database), Internet Gateway, route table, NAT
+gateway và Elastic IP theo `single_nat_gateway`, S3 gateway endpoint trên mọi route table private, security group mặc định không rule nào, flow log tắt mặc
 định. Mức stg và prd chỉ khác ở biến (bảng dưới), một bộ code.
 
 Policy của S3 gateway endpoint: mặc định không có (endpoint cho qua mọi bucket IAM cho phép, và NetworkPolicy của pod, vốn khớp S3 theo địa
@@ -61,7 +61,7 @@ module "network" {
 
 | Name | Description | Type | Default | Required |
 | ---- | ----------- | ---- | ------- | :------: |
-| az\_count | Number of availability zones, taken in order from the zones of the region that need no opt-in. Each zone gets one public and one private subnet. EKS needs subnets in at least two zones. | `number` | `2` | no |
+| az\_count | Number of availability zones, taken in order from the zones of the region that need no opt-in. Each zone gets one public, one private and one database subnet. EKS needs subnets in at least two zones. | `number` | `2` | no |
 | cidr | IPv4 range of the VPC, a /16 to /20. Pods take their addresses from the private subnets (VPC CNI), so the range must not overlap any network the cluster talks to. | `string` | `"10.0.0.0/16"` | no |
 | cluster\_name | Name of the EKS cluster that runs in this VPC. The subnets get the tag kubernetes.io/cluster/<name> = shared, which the AWS Load Balancer Controller reads to pick subnets. | `string` | n/a | yes |
 | flow\_log\_enabled | Send VPC flow logs (accepted and rejected traffic) to a CloudWatch log group that this module creates, with the IAM role that writes it. Off by default: ingestion is billed per GB. | `bool` | `false` | no |
@@ -76,9 +76,11 @@ module "network" {
 | Name | Description |
 | ---- | ----------- |
 | azs | Availability zones of the subnets, in the order of the subnet lists. |
+| database\_subnet\_cidrs | IPv4 ranges of the database subnets, in the order of azs; network policies that allow traffic to a database use them. |
+| database\_subnet\_ids | IDs of the database subnets, one per zone, in the order of azs: RDS, MSK and ElastiCache. Their route table holds only the local route. |
 | nat\_public\_ips | Public IPv4 addresses of the NAT gateways: every connection from the nodes and pods to the internet leaves from one of them. |
-| private\_subnet\_cidrs | IPv4 ranges of the private subnets, in the order of azs; network policies that allow traffic to a database in these subnets use them. |
-| private\_subnet\_ids | IDs of the private subnets, one per zone, in the order of azs: nodes, pods, database. |
+| private\_subnet\_cidrs | IPv4 ranges of the private subnets, in the order of azs. |
+| private\_subnet\_ids | IDs of the private subnets, one per zone, in the order of azs: nodes and pods. |
 | public\_subnet\_ids | IDs of the public subnets, one per zone, in the order of azs: NAT gateways and internet-facing load balancers. |
 | vpc\_cidr | IPv4 range of the VPC. |
 | vpc\_id | ID of the VPC. |
@@ -99,8 +101,16 @@ module "network" {
 
 **Chia dải** (`cidr` chia 8 khối bằng nhau): khối 0–5 là subnet private, mỗi AZ một khối (`/19` với `/16`: 8 192 địa chỉ, vì VPC CNI cấp
 IP pod từ subnet private, prefix delegation lấy từng `/28` cho mỗi node); khối 7 chia tiếp 32 phần, mỗi AZ một subnet public (`/24` với
-`/16`: chỉ NAT gateway và NLB nằm đây); khối 6 để trống cho subnet database hay intra sau này. Với mặc định và 2 AZ: private `10.0.0.0/19`,
-`10.0.32.0/19`; public `10.0.224.0/24`, `10.0.225.0/24`.
+`/16`: chỉ NAT gateway và NLB nằm đây); khối 6 chia tiếp 8 phần, mỗi AZ một subnet database (`/22` với `/16`) cho RDS, MSK và ElastiCache. Với mặc định và 2 AZ: private
+`10.0.0.0/19`, `10.0.32.0/19`; database `10.0.192.0/22`, `10.0.196.0/22`; public `10.0.224.0/24`, `10.0.225.0/24`.
+
+**Tầng database** ([ADR-0054](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0054-data-subnet-tier.md)): subnet
+database có route table riêng chỉ với route `local` của VPC (`create_database_subnet_route_table = true`, không route NAT, không route
+Internet Gateway), nên không đi ra Internet được dù qua NAT, và không gì từ Internet vào được. Mặc định của module `vpc` là gắn subnet
+database vào route table private (có `0.0.0.0/0` tới NAT); module đặt rõ ba cờ trong local `database_routes`, vì id route table chỉ biết
+sau apply nên test đọc local đó. Subnet database không có tag `kubernetes.io/*`: Load Balancer Controller không đặt load balancer ở đó.
+Module không tạo DB subnet group (`create_database_subnet_group = false`): module `rds` đã tạo của nó. Root đặt RDS, MSK, ElastiCache vào
+`database_subnet_ids` và dùng `database_subnet_cidrs` cho egress của NetworkPolicy tới database.
 
 ## Tài nguyên trong state
 
@@ -110,9 +120,10 @@ IP pod từ subnet private, prefix delegation lấy từng `/28` cho mỗi node)
 | --- | --- | --- |
 | `aws_vpc` | 1 | DNS support và DNS hostnames bật (EKS cần) |
 | `aws_internet_gateway` | 1 | |
-| `aws_subnet` public / private | `az_count` mỗi loại | public: không tự cấp IP công khai (`map_public_ip_on_launch = false`) |
+| `aws_subnet` public / private / database | `az_count` mỗi loại | public: không tự cấp IP công khai (`map_public_ip_on_launch = false`) |
 | `aws_route_table` public | 1 | route `0.0.0.0/0` tới Internet Gateway |
 | `aws_route_table` private | 1 (stg) hay `az_count` (prd) | route `0.0.0.0/0` tới NAT (cùng AZ ở prd); mỗi subnet private một association |
+| `aws_route_table` database | 1 (stg) hay `az_count` (prd) | chỉ route `local`, không `0.0.0.0/0`; mỗi subnet database một association |
 | `aws_eip`, `aws_nat_gateway` | 1 (stg) hay `az_count` (prd) | NAT nằm ở subnet public cùng AZ |
 | `aws_vpc_endpoint` `s3` | 1 | loại Gateway, gắn mọi route table private: dữ liệu S3 không qua NAT (NAT tính tiền theo GB); miễn phí; không interface endpoint nào (tính tiền theo giờ và AZ) |
 | `aws_default_security_group` | 1 | module nhận quản lý và xoá mọi rule: tài nguyên tạo mà quên gán security group không nhận, không gửi được gì |

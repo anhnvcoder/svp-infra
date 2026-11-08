@@ -86,7 +86,7 @@ if [ "$2" = secrets ]; then
     [ "$rc" -eq 0 ] || fail "make eks-secrets (exit $rc; output in $log)"
   fi
   mark secrets-written
-  ok "entries svp/$env_name/* written; next: aws/scripts/tf.sh $env_name gitops init, plan, apply"
+  ok "entries svp/$env_name/* written (kafka-admin, kafka-users, valkey-users by the apply of aws/envs/$env_name); next: aws/scripts/tf.sh $env_name gitops init, plan, apply"
   exit 0
 fi
 

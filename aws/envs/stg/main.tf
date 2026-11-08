@@ -63,7 +63,7 @@ module "rds" {
 
   name       = local.name
   vpc_id     = module.network.vpc_id
-  subnet_ids = module.network.private_subnet_ids
+  subnet_ids = module.network.database_subnet_ids
 
   # Pods carry addresses of their node's network interfaces (VPC CNI), so they connect with the node security group.
   # The cluster security group EKS creates sits on the control plane's network interfaces, and EKS also gives it to
@@ -88,6 +88,53 @@ module "rds" {
   cloudwatch_logs_retention_days        = var.rds_cloudwatch_logs_retention_days
 }
 
+# Kafka of the env: one broker per zone, reached on 9096 (SASL/SCRAM over TLS) by the pods like RDS. The module writes
+# the passwords of its users into the entries kafka-admin and kafka-users of External Secrets.
+module "msk" {
+  source = "../../modules/msk"
+
+  name       = local.name
+  vpc_id     = module.network.vpc_id
+  subnet_ids = module.network.database_subnet_ids
+
+  allowed_security_groups = {
+    node    = module.eks.node_security_group_id
+    cluster = module.eks.cluster_primary_security_group_id
+  }
+
+  broker_count               = var.az_count
+  broker_instance_type       = var.msk_broker_instance_type
+  replication_factor         = var.msk_replication_factor
+  min_insync_replicas        = var.msk_min_insync_replicas
+  broker_logs_enabled        = var.msk_broker_logs_enabled
+  broker_logs_retention_days = var.msk_broker_logs_retention_days
+  password_version           = var.msk_password_version
+
+  kafka_admin_secret_id = module.external_secrets.secret_arns["kafka-admin"]
+  kafka_users_secret_id = module.external_secrets.secret_arns["kafka-users"]
+}
+
+# Valkey of the env, reached on 6379 over TLS by the same security groups; the module writes the passwords of its users
+# into the entry valkey-users of External Secrets.
+module "elasticache" {
+  source = "../../modules/elasticache"
+
+  name       = local.name
+  vpc_id     = module.network.vpc_id
+  subnet_ids = module.network.database_subnet_ids
+
+  allowed_security_groups = {
+    node    = module.eks.node_security_group_id
+    cluster = module.eks.cluster_primary_security_group_id
+  }
+
+  node_type        = var.valkey_node_type
+  node_count       = var.valkey_node_count
+  password_version = var.valkey_password_version
+
+  valkey_users_secret_id = module.external_secrets.secret_arns["valkey-users"]
+}
+
 module "media" {
   source = "../../modules/media"
 
@@ -103,7 +150,8 @@ module "media" {
 }
 
 # Secrets Manager entries of the env and the roles the SecretStores of the cluster read them with (External Secrets
-# Operator); the values are written by the learner after apply, never by Terraform.
+# Operator). The modules msk and elasticache write the Kafka and Valkey passwords, write-only; the learner's script
+# writes every other value after apply.
 module "external_secrets" {
   source = "../../modules/external-secrets"
 

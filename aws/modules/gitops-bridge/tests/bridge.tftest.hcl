@@ -16,11 +16,13 @@ variables {
     vpcId         = "vpc-00000000000000000"
     vpcCidr       = "10.0.0.0/16"
     serviceCidr   = "172.20.0.0/16"
-    dbCidrs       = ["10.0.48.0/24", "10.0.49.0/24"]
+    dbCidrs       = ["10.0.192.0/22", "10.0.196.0/22"]
     domain        = "stg.aws.svp.example"
     hostedZoneId  = "Z0123456789ABCDEFGHIJ"
     acmeEmail     = "acme@svp.example"
     rdsAddress    = "svp-stg.000000000000.ap-southeast-1.rds.amazonaws.com"
+    kafkaBrokers  = "b-1.svpstg.abc123.c2.kafka.ap-southeast-1.amazonaws.com:9096,b-2.svpstg.abc123.c2.kafka.ap-southeast-1.amazonaws.com:9096"
+    valkeyHost    = "master.svp-stg.abc123.apse1.cache.amazonaws.com"
     uploadsBucket = "svp-stg-uploads-111111111111-ap-southeast-1"
     mediaBucket   = "svp-stg-media-111111111111-ap-southeast-1"
     mediaDomain   = "d000000000000.cloudfront.net"
@@ -334,7 +336,7 @@ run "cluster_value_wrong_kind" {
   command = plan
 
   variables {
-    cluster_values = merge(var.cluster_values, { dbCidrs = "10.0.48.0/24" })
+    cluster_values = merge(var.cluster_values, { dbCidrs = "10.0.192.0/22" })
   }
 
   expect_failures = [var.cluster_values]
@@ -345,6 +347,27 @@ run "cluster_value_number" {
 
   variables {
     cluster_values = merge(var.cluster_values, { region = 1 })
+  }
+
+  expect_failures = [var.cluster_values]
+}
+
+# The brokers are one string, host:9096 joined by commas, as MSK gives them: a list is refused.
+run "cluster_value_kafka_brokers_list" {
+  command = plan
+
+  variables {
+    cluster_values = merge(var.cluster_values, { kafkaBrokers = split(",", var.cluster_values.kafkaBrokers) })
+  }
+
+  expect_failures = [var.cluster_values]
+}
+
+run "cluster_value_valkey_host_missing" {
+  command = plan
+
+  variables {
+    cluster_values = { for k, v in var.cluster_values : k => v if k != "valkeyHost" }
   }
 
   expect_failures = [var.cluster_values]

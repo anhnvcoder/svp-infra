@@ -38,9 +38,9 @@ variables {
   expected_entries = {
     argocd   = ["argocd-notifications"]
     keda     = ["kafka-users"]
-    svp      = ["glitchtip-runtime", "jwt-signing", "jwt-verify", "kafka-users", "pg-roles", "web"]
-    svp-data = ["kafka-admin", "kafka-users", "pg-roles", "pg-superuser"]
-    svp-obs  = ["glitchtip-runtime", "obs", "pg-roles"]
+    svp      = ["glitchtip-runtime", "jwt-signing", "jwt-verify", "kafka-users", "pg-roles", "valkey-users", "web"]
+    svp-data = ["kafka-admin", "pg-roles", "pg-superuser", "valkey-users"]
+    svp-obs  = ["glitchtip-runtime", "kafka-users", "obs", "pg-roles"]
   }
 }
 

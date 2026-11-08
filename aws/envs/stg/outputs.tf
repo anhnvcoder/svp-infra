@@ -12,11 +12,13 @@ output "cluster_values" {
     vpcId         = module.network.vpc_id
     vpcCidr       = module.network.vpc_cidr
     serviceCidr   = module.eks.cluster_service_cidr
-    dbCidrs       = module.network.private_subnet_cidrs
+    dbCidrs       = module.network.database_subnet_cidrs
     domain        = var.domain
     hostedZoneId  = var.hosted_zone_id
     acmeEmail     = var.acme_email
     rdsAddress    = module.rds.address
+    kafkaBrokers  = module.msk.bootstrap_brokers
+    valkeyHost    = module.elasticache.primary_endpoint_address
     uploadsBucket = module.media.uploads_bucket
     mediaBucket   = module.media.media_bucket
     mediaDomain   = module.media.media_domain

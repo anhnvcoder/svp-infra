@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Icon count of each env page of `docs/diagrams/svp-aws.drawio` against the sizes of the Terraform: AZ and subnet boxes,
-NAT gateways, node group icons (one per AZ), RDS (1, or 2 with Multi-AZ) and every other kind on the page. Offline: the
-sizes come from aws/envs/stg/stg.tfvars and the prd column of the module READMEs (build_svp.envs()), never from a plan.
+"""Icon count of each env page of `docs/diagrams/svp-aws.drawio` against the sizes of the Terraform: AZ and subnet boxes
+(three per AZ), NAT gateways, node group icons and MSK brokers (one per AZ), RDS (1, or 2 with Multi-AZ), ElastiCache nodes
+and every other kind on the page. Offline: the sizes come from aws/envs/<env>/<env>.tfvars and the defaults of the root's
+variables.tf (build_svp.envs()), never from a plan.
 The drawing is read back from the file, so a spec that draws the wrong number fails here even though it read the right size.
 
     python3 .claude/skills/aws-drawio-diagram/scripts/check_svp_counts.py [docs/diagrams/svp-aws.drawio]
@@ -34,7 +35,7 @@ def main() -> int:
             print(f"  ✘ {env.name}: {k} drawn {g}, expected {w}")
         bad += len(diff)
         print(f"  {path.name} [{env.name}]: {env.az_count} AZs, {len(env.nat_rows)} NAT, {expected(env)['rds']} RDS, "
-              f"{env.capacity} → {len(diff)} mismatches")
+              f"{env.az_count} MSK, {env.cache_nodes} ElastiCache, {env.capacity} → {len(diff)} mismatches")
     print(f"\nTotal: {bad} mismatches")
     return 1 if bad else 0
 

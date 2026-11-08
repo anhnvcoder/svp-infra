@@ -4,10 +4,11 @@ Một instance RDS PostgreSQL cho mọi service của một env (mỗi service v
 tạo; module không tạo database nào). Thiết kế: [ADR-0034](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0034-aws-stage7.md)
 mục 9 và 11.
 
-Tạo: DB subnet group (subnet private), security group chỉ nhận TCP 5432 từ các security group truyền vào (không rule egress), parameter group
-`postgres<major>` với `rds.force_ssl = 1` (kết nối không TLS bị từ chối), instance gp3 mã hoá bằng key AWS quản lý của RDS, không public,
-master username cố định `postgres`, mật khẩu master do RDS tạo và giữ ở Secrets Manager (`manage_master_user_password`: không đi qua
-Terraform, không có trong plan hay state). Minor tự nâng trong cửa sổ bảo trì, major không bao giờ tự nâng.
+Tạo: DB subnet group (subnet database của VPC, không route ra Internet), security group chỉ nhận TCP 5432 từ các security group
+truyền vào (không rule egress), parameter group `postgres<major>` với `rds.force_ssl = 1` (kết nối không TLS bị từ chối), instance gp3
+mã hoá bằng key AWS quản lý của RDS, không public, master username cố định `postgres`, mật khẩu master do RDS tạo và giữ ở Secrets
+Manager (`manage_master_user_password`: không đi qua Terraform, không có trong plan hay state). Minor tự nâng trong cửa sổ bảo trì, major
+không bao giờ tự nâng.
 
 Giám sát ngoài Prometheus của cluster, mỗi thứ tắt mặc định (tốn tiền; lab đọc Prometheus), prd bật qua biến:
 
@@ -80,7 +81,7 @@ Giám sát ngoài Prometheus của cluster, mỗi thứ tắt mặc định (t�
 | performance\_insights\_enabled | Turn on Performance Insights (database load by wait event, SQL and host) within Database Insights in Standard mode. Off by default: the lab reads the cluster's Prometheus. | `bool` | `false` | no |
 | performance\_insights\_retention\_period | Days of Performance Insights history when performance\_insights\_enabled is true: 7 (the free retention), a multiple of 31 up to 713 (months), or 731. | `number` | `7` | no |
 | skip\_final\_snapshot | Delete the instance without a last manual snapshot. A final snapshot outlives the instance, is billed as backup storage and must be deleted by hand; skip it only where the data is disposable. | `bool` | n/a | yes |
-| subnet\_ids | Private subnets of the DB subnet group, in at least two availability zones (RDS requires two even for a single-AZ instance, and a Multi-AZ standby goes in the other one). | `list(string)` | n/a | yes |
+| subnet\_ids | Database subnets of the DB subnet group (the tier of the VPC with no route to the internet), in at least two availability zones (RDS requires two even for a single-AZ instance, and a Multi-AZ standby goes in the other one). | `list(string)` | n/a | yes |
 | vpc\_id | VPC of the instance and of its security group. | `string` | n/a | yes |
 
 ## Outputs
@@ -100,7 +101,7 @@ Giám sát ngoài Prometheus của cluster, mỗi thứ tắt mặc định (t�
 | --- | --- | --- |
 | `name` | `svp-stg` | `svp-prd` |
 | `vpc_id` | VPC của module `network` | như stg |
-| `subnet_ids` | subnet private, ≥ 2 AZ | subnet private, 3 AZ |
+| `subnet_ids` | subnet database, ≥ 2 AZ | subnet database, 3 AZ |
 | `allowed_security_groups` | `{ node = …, cluster = … }` của EKS | như stg |
 | `engine_major_version` | `"15"` | `"15"` |
 | `instance_class` | `db.t4g.small` | theo số đo khi dựng prd |

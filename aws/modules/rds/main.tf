@@ -4,7 +4,7 @@
 
 resource "aws_db_subnet_group" "this" {
   name_prefix = "${var.name}-"
-  description = "Private subnets of ${var.name}"
+  description = "Database subnets of ${var.name}"
   subnet_ids  = var.subnet_ids
 
   tags = {
