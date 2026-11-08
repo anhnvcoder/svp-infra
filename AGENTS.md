@@ -27,8 +27,8 @@ quyết định chung của lab nằm ở `docs/` của repo code (bản clone `
   `SVP_AWS_MGMT_ACCOUNT_ID` (`aws/bootstrap`, `aws/org`, `github/`), stg `anhnv-stg` + `SVP_AWS_STG_ACCOUNT_ID`, prd `anhnv-prd` +
   `SVP_AWS_PRD_ACCOUNT_ID` (`aws/accounts/<env>`, `aws/envs/<env>`, `aws/gitops/<env>`). Lệnh viết sẵn ghi profile của đúng account đó ngay
   trong lệnh, `TF_VAR_account_id` từ biến của account đó, và `--region` (`ap-southeast-1` cho dịch vụ theo region và STS, `us-east-1` cho
-  Organizations và WAF của CloudFront, region của Identity Center cho `sso-admin`, `identitystore`); không dựa vào region của profile, không
-  một `AWS_PROFILE` chung cho cả repo. Trước mọi lệnh ghi: `aws sts get-caller-identity` với **cùng profile** (`aws/scripts/check-account.sh
+  Organizations, WAF của CloudFront, Pricing Plan Manager và API Free Tier, region của Identity Center cho `sso-admin`, `identitystore`);
+  không dựa vào region của profile, không một `AWS_PROFILE` chung cho cả repo. Trước mọi lệnh ghi: `aws sts get-caller-identity` với **cùng profile** (`aws/scripts/check-account.sh
   mgmt|stg|prd`), hai bên cùng đọc account. Script buổi lấy profile và biến từ bảng env của `aws/scripts/lib.sh`. Buổi tạo tài nguyên kết
   thúc bằng lệnh destroy và lệnh quét sót (`sweep.sh <env>` rồi `sweep.sh mgmt`); AI nhắc tới khi người học xác nhận đã chạy cả hai.
 - CI (`check.yml`) không có credential AWS, secret, OIDC hay environment nào; thêm thì phải có ADR trước.
@@ -52,9 +52,10 @@ Quy ước chung (ngôn ngữ, tài liệu timeless, ADR, comment, Git, repo pub
   ngay trên resource, lý do ở comment; finding trong module registry vào `.trivyignore.yaml` (`paths` không bao giờ là mọi file). Mỗi ngoại lệ
   ghi phạm vi trong lý do, một dòng mỗi id: `Scope: every environment.` hay `Scope: stg only; prd: <prd làm gì thay>.`. `make trivy` quét
   mỗi root với giá trị của env (`<root>/<env>.tfvars`), và ngoại lệ chỉ-stg không bao giờ che finding của prd: nó nằm ở lời gọi module trong
-  root stg, hay trong module với điều kiện trên thuộc tính khác nhau giữa hai env, đặt đúng giá trị của stg (`#trivy:ignore:AWS-0011[web_acl_id=]`).
-  trivy khớp điều kiện trên thuộc tính chuỗi ở mọi nơi quét, còn trên bool hay số chỉ khi quét chính module, nên root cần ngoại lệ như vậy
-  lặp lại nó ở lời gọi module. `.trivyignore.yaml` không có mục chỉ-stg nào (`paths` không phân biệt được env).
+  root stg, hay trong module với điều kiện trên thuộc tính khác nhau giữa hai env, đặt đúng giá trị của stg
+  (`#trivy:ignore:AWS-0039[create_kms_key=false]` của `aws/modules/eks/cluster.tf`). trivy khớp điều kiện trên thuộc tính chuỗi ở mọi nơi quét,
+  còn trên bool hay số chỉ khi quét chính module, nên root cần ngoại lệ như vậy lặp lại nó ở lời gọi module (`aws/envs/stg/main.tf` lặp
+  `#trivy:ignore:AWS-0039` trên `module "eks"`). `.trivyignore.yaml` không có mục chỉ-stg nào (`paths` không phân biệt được env).
 - **Docker** chỉ qua `Makefile` (`env -u DOCKER_DEFAULT_PLATFORM docker run …`, image ghim digest có dòng `# renovate:` ngay trên).
 - **Card chạy song song** kiểm bằng `make check DIRS=<thư mục của mình>`: mỗi lượt chỉ ghi dưới thư mục đó, không có cache dùng chung.
 - **Git:** mọi thay đổi vào `main` qua PR có `infra-ok` xanh (từ khi bật ruleset), squash merge.

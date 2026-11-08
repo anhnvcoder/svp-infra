@@ -4,7 +4,8 @@ Một buổi dựng env stg trong account `svp-stg` (`aws/envs/stg`), cài Argo 
 GitOps Bridge), đo (smoke, seed, k6 bậc 1, 2, 4, 8), rồi gỡ sạch trong cùng buổi và quét cả account stg lẫn account management. Thiết kế:
 [ADR-0034](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0034-aws-stage7.md) §13 (tài nguyên ngoài state), §14 (buổi AWS);
 [ADR-0048](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0048-prd-aws.md) §1–§2 (account, state), §5 (secret), §6 (bootstrap
-EKS), §9 (kết thúc buổi); [ADR-0051](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0051-dns-prd-apex.md) (zone của mỗi env). Buổi prd theo [`session-prd.md`](session-prd.md), dùng chung mọi mục chung của file này.
+EKS), §9 (kết thúc buổi); [ADR-0051](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0051-dns-prd-apex.md) (zone của mỗi env);
+[ADR-0052](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0052-cloudfront-flat-rate-free.md) (gói CloudFront flat-rate Free, web ACL WAF). Buổi prd theo [`session-prd.md`](session-prd.md), dùng chung mọi mục chung của file này.
 
 **Người học chạy mọi lệnh ở đây.** AI không chạy lệnh nào chạm account hay cluster EKS, kể cả lệnh chỉ đọc; AI đọc output người học dán
 lại và nhắc tới khi destroy hai root và hai lượt `sweep.sh` (stg, mgmt) đều đã chạy. Mọi lệnh chạy từ gốc repo này (`infra/`). Mỗi account một
@@ -16,7 +17,7 @@ profile và một biến account, script tự lấy theo env từ bảng `env_ta
 | `prd` | `svp-prd` | `anhnv-prd` | `SVP_AWS_PRD_ACCOUNT_ID` |
 | `mgmt` | management (account sandbox cũ) | `anhnv-sso` | `SVP_AWS_MGMT_ACCOUNT_ID` |
 
-Profile và region `ap-southeast-1` (`us-east-1` cho WAF của CloudFront) ghi sẵn trong từng lệnh của script. Script in mỗi bước một dòng
+Profile và region `ap-southeast-1` (`us-east-1` cho WAF của CloudFront, Pricing Plan Manager và API Free Tier) ghi sẵn trong từng lệnh của script. Script in mỗi bước một dòng
 `ok`, `FAIL` (dừng), `note` hay `skip`, không in giá trị bí mật nào.
 
 Xem trước toàn bộ lệnh của buổi, theo đúng thứ tự, không chạy gì (an toàn, không cần credential):
@@ -31,6 +32,9 @@ aws/scripts/session.sh --print stg
   còn lại, sang gỡ**: `measure.sh` tự bỏ bậc k6 nào sẽ kết thúc sau mốc 3 giờ (dòng `skip`).
 - Chi phí ước tính ~$2,2–2,4 một buổi 4 giờ với node Spot, trần $5 (ADR-0034 §12). Quên destroy 24 giờ ≈ $9–12; budget `svp-stg-monthly` của
   account stg và budget tổng của org ở management gửi email ở 50 %, 80 %, 100 %.
+- CloudFront và web ACL WAF của media nằm trong gói flat-rate Free ($0 mỗi tháng, 1 triệu request và 100 GB, không tính phí vượt; ADR-0052
+  §1). Vài phút trước khi gói có hiệu lực và sau khi huỷ lúc destroy tính pay-as-you-go; web ACL sót lại sau khi gói huỷ tính ~$5 mỗi ACL
+  cộng $1 mỗi luật mỗi tháng, theo giờ, nên `sweep.sh` bắt nó.
 - Chứng chỉ: buổi đo dùng ACME **production** của Let's Encrypt (`platforms/eks/svp-cluster.yaml` của `svp-gitops`): chứng chỉ staging
   không được `eks-smoke` lẫn pod k6 của `run.sh` tin. Giới hạn của Let's Encrypt (letsencrypt.org/docs/rate-limits, đọc 2026-10-31): 5
   chứng chỉ mỗi bộ tên y hệt mỗi 7 ngày (nạp lại 1 mỗi 34 giờ, không xin nâng được), 50 mỗi registered domain mỗi 7 ngày. Mỗi buổi xin hai
@@ -48,6 +52,17 @@ aws/scripts/session.sh --print stg
    ở `aws_cloudfront_distribution` với `AccessDenied: Your account must be verified before you can add new CloudFront resources`, khi EKS, RDS
    đã chạy và tính tiền. Mở case AWS Support từ account stg (Account and billing, kèm dòng lỗi và RequestID nếu có) và chờ xác nhận trước
    buổi đầu.
+   Distribution media đăng ký gói CloudFront flat-rate Free: account đang dùng AWS Free Tier không đăng ký được, và mỗi account tối đa 3 gói
+   Free, không tăng được. Mỗi buổi, trước bước 3, đọc gói của account và loại account (chỉ đọc; phép kiểm (a) của ADR-0052):
+
+   ```sh
+   AWS_PROFILE=anhnv-stg aws pricing-plan-manager list-subscriptions --region us-east-1 --query 'subscriptionSummaries[].[arn,planTier,status]' --output json
+   AWS_PROFILE=anhnv-stg aws freetier get-account-plan-state --region us-east-1 --query accountPlanType --output text
+   ```
+
+   Mong `[]` và `PAID`; dán lại cả hai. Còn gói (sót của buổi trước, hay của lần thử ở console): nó giữ một suất và distribution của nó,
+   huỷ theo mục **Lệnh xoá tay theo loại** (CloudFront) rồi đọc lại. `FREE`: account còn ở AWS Free Tier, apply sẽ đỏ ở gói: không bắt đầu
+   buổi, dán output cho AI.
 2. Code đã merge: repo code ở `main` có `make eks-secrets`, `make eks-glitchtip-init`; `svp-gitops` ở `main` có `argocd/root`,
    `argocd/bootstrap.json`, lớp `platforms/eks`; repo này có `aws/envs/stg`, `aws/gitops/stg` và script buổi. Kiểm:
 
@@ -190,11 +205,20 @@ mới, `.terraform` vẫn trỏ bucket của management) và **không bao giờ 
 `plan` ghi `aws/envs/stg/stg.tfplan` (nhị phân, git bỏ qua) và ngay sau đó bản text của nó vào `$SVP_SESSION_DIR/stg-env-plan.txt` (thư mục
 buổi, git bỏ qua: plan có tên miền và IP thật nên không vào cây repo); `ok` cuối của `plan` nêu đường dẫn file text. Ghi lại bản text từ plan
 hiện có: `aws/scripts/tf.sh stg env show`. **Đọc file text đó trước khi apply**: lần đầu mỗi buổi chỉ `to add`, `0 to change, 0 to destroy`; có
-`destroy` hay `change` là state còn tài nguyên của buổi trước (destroy dở): dừng, dán plan cho AI. `apply` chỉ nhận file plan đó (không plan
-lại tại chỗ), rồi xoá nó. Thời gian: EKS ~10–15 phút, RDS ~10 phút, CloudFront ~5 phút, song song. Root này cũng tạo vỏ các entry
+`destroy` hay `change` là state còn tài nguyên của buổi trước (destroy dở): dừng, dán plan cho AI. Plan có web ACL
+`module.waf.aws_wafv2_web_acl.this` (provider `us-east-1`) và gói `module.media.aws_pricingplanmanager_subscription.media` với
+`plan_tier = "FREE"` (phép kiểm (b) của ADR-0052). `apply` chỉ nhận file plan đó (không plan
+lại tại chỗ), rồi xoá nó. Thời gian: EKS ~10–15 phút, RDS ~10 phút, CloudFront ~5 phút, song song; gói Free chờ tới `ACTIVE` (vài phút tới hơn nửa giờ). Root này cũng tạo vỏ các entry
 `svp/stg/*` của Secrets Manager (chưa có giá trị). `apply` đỏ giữa chừng: đọc lỗi, `plan` lại, `apply` lại; muốn bỏ buổi thì sang bước 12
 (`pre-destroy.sh` tự ghi context `svp-stg` và đọc `hosted_zone_id` từ `stg.auto.tfvars`, nên chạy được cả khi apply đỏ sau khi cluster EKS đã
 có), hay bước 17 với `--no-cluster` khi apply đỏ trước khi tạo cluster EKS (điều kiện ở bước 17).
+
+Lỗi apply đã biết, không sửa bằng `plan` lại:
+
+| Lỗi | Nguyên nhân | Cách xử lý |
+| --- | --- | --- |
+| `AccessDenied: Your account must be verified before you can add new CloudFront resources` ở `aws_cloudfront_distribution` | account chưa được AWS xác minh cho CloudFront | gỡ buổi như trên, rồi case AWS Support của điều kiện 1 |
+| `ServiceQuotaExceededException` ở `aws_pricingplanmanager_subscription.media` (câu của mô hình API: "You have reached the maximum number of subscriptions allowed for your account"; câu lúc chạy có thể khác, nhận theo tên lỗi) | account đã dùng hết 3 gói Free; tài liệu AWS không nói gói đã huỷ có bị đếm hay không (ADR-0052, Hệ quả) | không apply lại; gỡ buổi như trên, rồi mở case AWS Support từ account đó kèm dòng lỗi và RequestID |
 
 ### 6. Giá trị secret
 
@@ -294,6 +318,39 @@ gh api "repos/anhnvcoder/svp-gitops/commits/<sha trên>/statuses" --jq '.[] | se
 
 Mong `success`; dán lại cả hai dòng.
 
+#### Gói Free và CORS của media
+
+Hai phép tay sau smoke, (c) và (d) của ADR-0052; lệnh và output có thời điểm UTC vào phụ lục, một dòng kết luận vào mục "Xác nhận" của
+[ADR-0052](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0052-cloudfront-flat-rate-free.md#xác-nhận). Buổi prd chạy đúng các
+lệnh này với `anhnv-prd`, `prd`.
+
+(c) Gói đã có hiệu lực trên đúng hai tài nguyên, rồi plan lần hai không còn gì để đổi:
+
+```sh
+AWS_PROFILE=anhnv-stg aws pricing-plan-manager list-subscriptions --region us-east-1 --query 'subscriptionSummaries[].arn' --output text
+AWS_PROFILE=anhnv-stg aws pricing-plan-manager get-subscription --arn <arn trên> --region us-east-1 --query '[subscription.status,subscription.planTier]' --output text
+AWS_PROFILE=anhnv-stg aws pricing-plan-manager get-subscription --arn <arn trên> --region us-east-1 --query 'subscription.resourceArns' --output json
+aws/scripts/tf.sh stg env plan
+```
+
+Mong một ARN; `ACTIVE FREE`; hai ARN là distribution media (`arn:aws:cloudfront::<12 số>:distribution/<E…>`) và web ACL
+(`arn:aws:wafv2:us-east-1:<12 số>:global/webacl/svp-stg-media/<id>`): AWS nhận giá trị enum, số luật của web ACL và tên `*.cloudfront.net`.
+Plan lần hai (sau apply, `aws/envs/stg`) phải cho `No changes`: dòng `ok plan text in …: No changes.` (AWS không đổi gì trên distribution khi
+gói có hiệu lực, `price_class` khớp). Nó ghi đè `stg-env-plan.txt` của bước 4 và để lại `stg.tfplan` không thay đổi gì, không cần apply. Có
+`change`: không apply, dán file text cho AI. `PENDING_APPROVAL`, `SYNC_IN_PROGRESS`: đọc lại sau vài phút; `FAILED`: dán output cho AI.
+
+(d) CloudFront trả header CORS của policy managed `Managed-SimpleCORS` cho playlist của một video đã seed:
+
+```sh
+values=$SVP_SESSION_DIR/cluster-values.json
+key=$(AWS_PROFILE=anhnv-stg aws s3api list-objects-v2 --bucket "$(jq -r .mediaBucket "$values")" --prefix media/ --region ap-southeast-1 \
+  --query "Contents[?ends_with(Key, 'master.m3u8')].Key | [0]" --output text)
+curl -sI -H "Origin: https://$(jq -r .domain "$values")" "https://$(jq -r .mediaDomain "$values")/$key" | grep -i -E '^(HTTP|access-control-allow-origin)'
+```
+
+Mong `HTTP/2 200` và `access-control-allow-origin: *`; rồi mở `https://<domain>` trên trình duyệt, đăng nhập và phát một video của feed.
+Thiếu header hay video không phát: dán output và lỗi ở console của trình duyệt cho AI.
+
 ### 12. Gỡ trong cluster trước destroy
 
 ```sh
@@ -381,12 +438,14 @@ aws/scripts/sweep.sh mgmt
 Chỉ đọc, chạy được cả khi state mất hay destroy dở; mỗi lượt với profile của account đó. Liệt kê mọi tài nguyên tag `Project=svp` hay tag
 Kubernetes đặt (`kubernetes.io/cluster/svp-*`, `elbv2.k8s.aws/cluster`, `ebs.csi.aws.com/cluster`, `cluster.k8s.amazonaws.com/name`) hay mang
 tên `svp-*`: EKS, EC2, EBS và snapshot, VPC, NAT, EIP, ENI, security group, ELBv2 và target group, RDS (instance, snapshot, backup tự động giữ
-lại), S3, CloudFront (distribution, OAC, response headers policy), web ACL WAF của CloudFront (`us-east-1`), log group (cả log group EKS, RDS tự
+lại), S3, gói CloudFront flat-rate (loại `CloudFront pricing plan subscriptions`, `us-east-1`, đọc trước distribution), CloudFront
+(distribution, OAC, response headers policy), web ACL WAF của CloudFront (`us-east-1`), log group (cả log group EKS, RDS tự
 tạo ngoài state), Secrets Manager (cả secret đang chờ xoá), KMS key, bản ghi của zone của account ngoài `NS`, `SOA` ở đỉnh và ngoài mọi `NS`
 dưới đỉnh (uỷ quyền zone con của baseline).
 
 Được giữ, in thành dòng riêng, không đếm: tài nguyên tag `Stack=baseline` ở account stg (bucket state, KMS key state, zone `stg.aws.<domain>`)
-và `Stack=bootstrap|org` ở management (bucket state, bucket và KMS key của trail; management không có hosted zone) là `kept`; KMS key ở trạng thái `PendingDeletion` (key của root env sau destroy, tối thiểu 7 ngày) là `pending deletion`. Tìm: `ok nothing left
+và `Stack=bootstrap|org` ở management (bucket state, bucket và KMS key của trail; management không có hosted zone) là `kept`, gói đã có
+lịch huỷ (`scheduledChange.changeType` `CANCELLATION`, chỉ gói trả phí; gói Free huỷ ngay) cũng là `kept`; KMS key ở trạng thái `PendingDeletion` (key của root env sau destroy, tối thiểu 7 ngày) là `pending deletion`. Tìm: `ok nothing left
 in account … but what it keeps` (exit 0) ở **cả hai lượt**. Có dòng `FAIL <loại>: N left`: dưới mỗi tài nguyên sót là dòng `delete:` với lệnh
 xoá đủ profile và region (hay trỏ mục dưới khi một lệnh không đủ); chạy, rồi chạy lại lượt đó tới khi sạch. **Buổi chỉ xong khi hai lượt cùng
 exit 0.**
@@ -400,6 +459,7 @@ exit 0.**
 | --- | --- | --- |
 | `DependencyViolation` khi xoá subnet, security group hay VPC | ENI còn gắn: ENI phụ của VPC CNI (`aws-K8S-<instance>`, `available` sau khi node mất) hay ENI của NLB (`ELB net/k8s-…`) mà bước 12 chưa gỡ | `sweep.sh stg` liệt kê ENI theo VPC; ENI `available`: xoá ENI; ENI của NLB: xoá NLB (ENI tự mất), rồi destroy lại |
 | Security group `k8s-…` của LBC không xoá được | security group node còn rule tham chiếu nó (LBC thêm rule cho NLB) | thu hồi các rule tham chiếu (lệnh dưới), xoá security group, destroy lại |
+| Destroy đỏ ở `aws_cloudfront_distribution`, hay `delete-distribution` bị từ chối, vì distribution còn gói flat-rate | gói không nằm trong state (destroy dở, state mất, gói tạo ở console) nên Terraform không huỷ nó trước; hay gói vừa huỷ còn đang đồng bộ (provider huỷ gói rồi trả về ngay, không chờ) | huỷ gói theo mục CloudFront của **Lệnh xoá tay theo loại**, chờ `list-subscriptions` không còn ARN đó, rồi destroy lại |
 | Destroy chờ lâu hay quá hạn ở `aws_cloudfront_distribution` | Terraform phải tắt distribution và chờ `Deployed` (vài phút tới ~15 phút) trước khi xoá | destroy lại (Terraform chờ tiếp); vẫn kẹt thì tắt và xoá tay (lệnh dưới) |
 | `BucketNotEmpty` | stg đặt `media_force_destroy = true` nên không nên gặp; object ghi giữa lúc destroy | destroy lại; còn thì xoá tay (lệnh dưới) |
 | RDS báo deletion protection | `rds_deletion_protection` của `stg.tfvars` phải `false` (prd: `teardown.tfvars`) | sửa biến, `tf.sh stg env plan`, `apply`, rồi destroy lại |
@@ -410,7 +470,7 @@ exit 0.**
 
 `sweep.sh` in lệnh xoá dưới từng tài nguyên sót. Mục này cho loại mà một lệnh không đủ, và cho thu hồi rule security group. Mọi lệnh ghi;
 người học chạy sau khi `check-account.sh stg` đúng account, thay `<…>` bằng id `sweep.sh` in ra. Ưu tiên destroy lại cho thứ Terraform quản
-(VPC, NAT, EIP, EKS, RDS, bucket, CloudFront); lệnh tay cho thứ ngoài state hay khi state mất. Tài nguyên sót ở management (lượt `sweep.sh
+(VPC, NAT, EIP, EKS, RDS, bucket, gói, CloudFront, web ACL); lệnh tay cho thứ ngoài state hay khi state mất. Tài nguyên sót ở management (lượt `sweep.sh
 mgmt`): cùng lệnh với `AWS_PROFILE=anhnv-sso`.
 
 Security group: rule nơi khác tham chiếu nó, thu hồi từng rule, rồi xoá:
@@ -433,7 +493,21 @@ AWS_PROFILE=anhnv-stg aws s3api delete-objects --bucket <svp-…> --delete file:
 AWS_PROFILE=anhnv-stg aws s3api delete-bucket --bucket <svp-…> --region ap-southeast-1
 ```
 
-CloudFront: tắt, chờ `Deployed`, rồi xoá (OAC và response headers policy xoá sau distribution, cũng bằng `ETag`):
+CloudFront, theo thứ tự: huỷ gói flat-rate trước (AWS không tắt gói khỏi distribution, không xoá distribution còn gói), rồi tắt distribution, chờ
+`Deployed`, xoá; OAC và response headers policy tự viết (khi `sweep.sh` liệt kê) xoá sau distribution, cũng bằng `ETag`; web ACL sau cùng
+(khối dưới). Huỷ gói: `--if-match` là `eTag` của `get-subscription`:
+
+```sh
+aws/scripts/check-account.sh stg
+AWS_PROFILE=anhnv-stg aws pricing-plan-manager list-subscriptions --region us-east-1 --query 'subscriptionSummaries[].[arn,planTier,status,resourceArns]' --output json
+AWS_PROFILE=anhnv-stg aws pricing-plan-manager get-subscription --arn <arn> --region us-east-1 --query eTag --output text
+AWS_PROFILE=anhnv-stg aws pricing-plan-manager cancel-subscription --arn <arn> --if-match <eTag trên> --region us-east-1 --query '[subscription.status,subscription.scheduledChange.changeType]' --output text
+AWS_PROFILE=anhnv-stg aws pricing-plan-manager list-subscriptions --region us-east-1 --query 'subscriptionSummaries[].arn' --output text
+```
+
+Lệnh cuối không còn in ARN đó thì gói đã gỡ (gói Free huỷ ngay; `get-subscription` của ARN đã gỡ trả lỗi, không phải rỗng). Còn in: chờ một
+phút rồi đọc lại; **không tắt, không xoá distribution khi gói còn**. Gói có `scheduledChange.changeType` `CANCELLATION` (gói trả phí, huỷ
+theo lịch) chỉ gỡ ở `effectiveDate` của nó; tới đó distribution ở yên. Rồi distribution:
 
 ```sh
 AWS_PROFILE=anhnv-stg aws cloudfront get-distribution-config --id <E…> --region ap-southeast-1 --output json > /tmp/svp-cf.json
@@ -447,6 +521,16 @@ AWS_PROFILE=anhnv-stg aws cloudfront delete-origin-access-control --id <id> --re
   --if-match "$(AWS_PROFILE=anhnv-stg aws cloudfront get-origin-access-control --id <id> --query ETag --output text --region ap-southeast-1)"
 AWS_PROFILE=anhnv-stg aws cloudfront delete-response-headers-policy --id <id> --region ap-southeast-1 \
   --if-match "$(AWS_PROFILE=anhnv-stg aws cloudfront get-response-headers-policy --id <id> --query ETag --output text --region ap-southeast-1)"
+```
+
+Web ACL WAF của CloudFront (cả hai env; prd với `AWS_PROFILE=anhnv-prd`, `check-account.sh prd`, tên `svp-prd-…`): scope `CLOUDFRONT` nằm ở
+`us-east-1`; xoá sau khi gói đã huỷ và distribution không còn dùng nó, bằng lock token hiện tại. Web ACL sót lại sau khi gói huỷ tính
+pay-as-you-go theo giờ:
+
+```sh
+aws/scripts/check-account.sh stg
+AWS_PROFILE=anhnv-stg aws wafv2 get-web-acl --scope CLOUDFRONT --name <svp-stg-…> --id <id> --region us-east-1 --query LockToken --output text
+AWS_PROFILE=anhnv-stg aws wafv2 delete-web-acl --scope CLOUDFRONT --name <svp-stg-…> --id <id> --lock-token <token> --region us-east-1
 ```
 
 Bản ghi sót của zone `stg.aws.<domain>` (A, TXT của ExternalDNS; TXT `_acme-challenge` khi DNS-01 lỗi): không tính tiền nhưng chặn việc xoá zone
@@ -521,7 +605,13 @@ Secret bằng tay. Chi tiết: `docs/reference/eks.md` của repo code, mục "�
 ## Kết thúc buổi
 
 1. Thứ tự gỡ, mỗi bước xong mới sang bước sau: destroy root `aws/gitops/stg` rồi `aws/envs/stg` (bước 13–18); `sweep.sh stg`; `sweep.sh mgmt`.
-   Hai lượt cùng exit 0 (dán output cho AI). AI nhắc tới khi người học xác nhận đã chạy cả hai destroy và hai lượt sweep.
+   Hai lượt cùng exit 0 (dán output cho AI). AI nhắc tới khi người học xác nhận đã chạy cả hai destroy và hai lượt sweep. Phép kiểm (e) của
+   ADR-0052 (output vào phụ lục của nó, kết luận vào "Xác nhận"): sau destroy, gói của account rỗng (mong `[]`), cùng lượt `sweep.sh stg` sạch:
+
+   ```sh
+   AWS_PROFILE=anhnv-stg aws pricing-plan-manager list-subscriptions --region us-east-1 --query 'subscriptionSummaries[].[arn,planTier,status]' --output json
+   ```
+
 2. Cái ở lại giữa các buổi: ở account stg là baseline (`Stack=baseline`: bucket state, KMS key state, zone `stg.aws.<domain>`); ở account prd là
    baseline của nó, gồm zone `aws.<domain>` và bản ghi `NS` uỷ quyền `stg.aws.<domain>` trong đó (`sweep.sh` in chúng là `kept`); management chỉ
    còn `Stack=bootstrap|org`, không hosted zone. `destroy` của hai root env không đụng zone nào (zone thuộc root `aws/accounts/<env>`).

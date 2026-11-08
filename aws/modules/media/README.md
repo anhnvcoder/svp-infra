@@ -1,8 +1,9 @@
 # Module `media`
 
-Hai bucket S3 `uploads`, `media` và CloudFront trước `media`, cộng hai policy IAM (JSON) cho video-service và media-worker. Thiết kế:
-[ADR-0034](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0034-aws-stage7.md) mục 9 và 11; ngưỡng an toàn theo threat model
-UP-4…UP-6, WEB-10 của repo code.
+Hai bucket S3 `uploads`, `media` và CloudFront trước `media` (đăng ký gói flat-rate Free), cộng hai policy IAM (JSON) cho video-service và
+media-worker. Thiết kế: [ADR-0034](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0034-aws-stage7.md) mục 9 và 11,
+[ADR-0052](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0052-cloudfront-flat-rate-free.md) (gói Free, WAF, CORS của
+CloudFront); ngưỡng an toàn theo threat model UP-4…UP-6, WEB-10 của repo code.
 
 ## Bucket
 
@@ -20,7 +21,8 @@ UP-4…UP-6, WEB-10 của repo code.
 - **Key giữ tiền tố:** bucket `uploads` chứa `uploads/<video_id>`, bucket `media` chứa `media/<video_id>/<version>/…` (như object store local,
   `internal/objstore` chọn bucket theo tiền tố), nên key, policy và URL giống nhau ở mọi nền tảng.
 - **CORS theo bucket như local:** `uploads` chỉ `POST` (form presigned của web, expose `Retry-After`), `media` chỉ `GET`, `HEAD`; origin là
-  `cors_allowed_origins` (origin trơn, không `*`, không path).
+  `cors_allowed_origins` (origin trơn, không `*`, không path). Rule của bucket `media` chỉ trả lời request gửi thẳng tới bucket; viewer đi qua
+  CloudFront nhận CORS của distribution (mục dưới).
 - **Lifecycle:** `uploads/` 30 ngày ở lớp chuẩn → Glacier Deep Archive, xoá sau 365 ngày (sau 30 ngày không transcode lại được nếu chưa
   restore, restore tới 48 giờ); multipart dở bị huỷ sau 1 ngày ở cả hai bucket. Hôm nay không service nào ghi bằng multipart (mỗi file một
   `PutObject`, form của trình duyệt là một POST), nhưng `s3:PutObject` cho phép bắt đầu một lần multipart mà không service nào được abort,
@@ -37,22 +39,35 @@ UP-4…UP-6, WEB-10 của repo code.
 
 - Origin là bucket `media` qua **OAC** (ký SigV4 mọi request); policy bucket chỉ cho `cloudfront.amazonaws.com` `s3:GetObject` trên
   `media/*` với điều kiện `AWS:SourceArn` là ARN của distribution này; không `ListBucket`, nên key không có trả 403 thay vì 404.
-- Tên mặc định `<id>.cloudfront.net`, chứng chỉ mặc định, viewer chỉ HTTPS (`https-only`), HTTP/2 và HTTP/3, IPv6, price class biến
-  (`PriceClass_200`: gồm Singapore, Việt Nam, bỏ Nam Mỹ, Úc). Không access log của CloudFront. Chứng chỉ `*.cloudfront.net` mặc định để
-  CloudFront quyết policy TLS cho viewer; đặt phiên bản giao thức tối thiểu cần chứng chỉ riêng, trong ACM ở `us-east-1`, với tên riêng:
-  module chưa có.
-- **WAF:** `web_acl_arn` (ARN web ACL scope `CLOUDFRONT` của module `waf`, mức prd) gắn web ACL vào distribution; mặc định `null` không gắn
-  (nội dung HLS công khai, bất biến, từ origin chỉ đọc; web ACL tính phí theo tháng mỗi ACL và rule, mà lab ngắn hạn không cần luật nào).
-  Ngoại lệ trivy AWS-0011 chỉ áp khi `web_acl_id` rỗng
-  (giá trị khi không gắn), nên env có WAF không bị che finding nào.
+- Tên mặc định `<id>.cloudfront.net`, chứng chỉ mặc định, viewer chỉ HTTPS (`https-only`), HTTP/2 và HTTP/3, IPv6, price class cố định
+  `PriceClass_All`. Không access log của CloudFront (gói Free không có standard log). Chứng chỉ `*.cloudfront.net` mặc định để CloudFront
+  quyết policy TLS cho viewer; đặt phiên bản giao thức tối thiểu cần chứng chỉ riêng, trong ACM ở `us-east-1`, với tên riêng: module chưa có.
+- **Gói flat-rate Free:** `aws_pricingplanmanager_subscription.media` (`plan_family = "CloudFront"`, `plan_tier = "FREE"`, `resource_arns` là
+  distribution và web ACL; không đặt `approval_mode`, mặc định của AWS cho `FREE` là kích hoạt ngay). $0 mỗi tháng thay pay-as-you-go: 1 triệu
+  request và 100 GB mỗi tháng, không phải trần cứng, không tính phí vượt (vượt kéo dài thì AWS có thể điều chỉnh giao hàng). Gói đòi
+  distribution chỉ dùng tính năng của nó: cache policy managed (`Managed-CachingOptimized`), response headers policy managed, OAC; không
+  `ForwardedValues`, OAI, real-time log, field-level encryption, continuous deployment, dedicated IP; tối đa 5 cache behavior. Mỗi account
+  tối đa 3 gói Free, mỗi gói một distribution; account còn ở AWS Free Tier không đăng ký được. Khi đăng ký, AWS tự chuyển distribution sang
+  mọi edge location (quan sát ở một dự án khác: Terraform phải đặt `PriceClass_All` thì `plan` sau apply mới `No changes`), nên module cố
+  định giá trị đó; giá của gói không đổi theo vùng.
+- **WAF bắt buộc:** gói đòi đúng một web ACL, nên `web_acl_arn` (ARN web ACL scope `CLOUDFRONT` của module `waf`, ở `us-east-1`) là biến bắt
+  buộc ở mọi env. Web ACL, luật tự viết, AWS Managed Rules và phí request của web ACL gắn distribution có gói nằm trong gói (CAPTCHA qua
+  JavaScript API và giao log WAF tính riêng); gói Free nhận tối đa 5 luật. Khi còn gói, AWS không cho gỡ hay thay web ACL của distribution:
+  đổi `name` của module `waf` (thay web ACL) phải huỷ gói trước (destroy root, hay huỷ tay theo runbook buổi).
+- **Thứ tự gỡ:** subscription tham chiếu ARN của distribution và web ACL, nên `terraform destroy` huỷ gói trước (gói Free huỷ có hiệu lực
+  ngay), rồi mới tắt, xoá distribution và web ACL; AWS không xoá distribution còn gói. Vài phút giữa lúc distribution, web ACL được tạo và
+  lúc gói có hiệu lực (và ngược lại lúc destroy) tính pay-as-you-go.
 - **Cache:** policy managed `Managed-CachingOptimized`: cache key không có query, cookie, header; TTL theo `Cache-Control` của object trong
   khoảng 1 s tới 1 năm (object không gửi header thì 24 giờ). Mọi object của một version HLS mang `max-age=31536000, immutable`, nên edge giữ
   một năm.
 - **CORS ở CloudFront, không ở bucket:** header CORS của S3 phụ thuộc `Origin` của request, mà `Origin` không nằm trong cache key; bản cache
   của request không `Origin` (thẻ `<img>`, curl) sẽ trả cho player cần nó mà không có `Access-Control-Allow-Origin`. Nên distribution không
   chuyển header nào của viewer tới bucket (không origin request policy: S3 không bao giờ thấy `Origin`, mọi viewer dùng chung một bản cache),
-  còn response headers policy `<bucket media>-cors` thêm header CORS (`GET`, `HEAD`, origin của web, `origin_override`) vào mỗi câu trả lời
-  có `Origin` thuộc danh sách. Request của player không mang header nào cần preflight, nên distribution chỉ nhận `GET`, `HEAD`.
+  còn response headers policy managed `Managed-SimpleCORS` thêm `Access-Control-Allow-Origin: *` vào câu trả lời. Gói Free chỉ nhận policy
+  managed (policy tự viết chỉ có ở gói Business, Premium), nên CloudFront không lọc theo origin của web. Cái giá: trang nào cũng đọc được
+  media cross-origin, kể cả nhúng lại video của nền tảng; chấp nhận vì object media công khai (ai có URL cũng tải được), bất biến, và player
+  không gửi credential nên `*` không lộ gì thêm. Request của player không mang header nào cần preflight, nên distribution chỉ nhận `GET`,
+  `HEAD`.
 - **Đường của một object:** gateway ghép `MEDIA_PUBLIC_BASE_URL` = `https://<media_domain>` với key, key đã có `media/`. Ví dụ segment:
   `https://d111111abcdef8.cloudfront.net/media/<video_id>/<version>/<attempt>/<rendition>/seg_000.ts` là object
   `media/<video_id>/<version>/<attempt>/<rendition>/seg_000.ts` của bucket `media`; master là `…/media/<video_id>/<version>/master.m3u8`.
@@ -89,13 +104,13 @@ Root của env gắn mỗi JSON vào role của Pod Identity association `svp/vi
 | Name | Version |
 | ---- | ------- |
 | terraform | ~> 1.15 |
-| aws | ~> 6.0 |
+| aws | ~> 6.69 |
 
 ## Providers
 
 | Name | Version |
 | ---- | ------- |
-| aws | ~> 6.0 |
+| aws | ~> 6.69 |
 
 ## Resources
 
@@ -103,7 +118,7 @@ Root của env gắn mỗi JSON vào role của Pod Identity association `svp/vi
 | ---- | ---- |
 | [aws_cloudfront_distribution.media](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudfront_distribution) | resource |
 | [aws_cloudfront_origin_access_control.media](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudfront_origin_access_control) | resource |
-| [aws_cloudfront_response_headers_policy.media_cors](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudfront_response_headers_policy) | resource |
+| [aws_pricingplanmanager_subscription.media](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/pricingplanmanager_subscription) | resource |
 | [aws_s3_bucket.logs](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket) | resource |
 | [aws_s3_bucket.this](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket) | resource |
 | [aws_s3_bucket_cors_configuration.media](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket_cors_configuration) | resource |
@@ -123,6 +138,7 @@ Root của env gắn mỗi JSON vào role của Pod Identity association `svp/vi
 | [aws_s3_bucket_server_side_encryption_configuration.this](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket_server_side_encryption_configuration) | resource |
 | [aws_s3_bucket_versioning.this](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket_versioning) | resource |
 | [aws_cloudfront_cache_policy.caching_optimized](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/cloudfront_cache_policy) | data source |
+| [aws_cloudfront_response_headers_policy.simple_cors](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/cloudfront_response_headers_policy) | data source |
 | [aws_iam_policy_document.logs](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
 | [aws_iam_policy_document.media](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
 | [aws_iam_policy_document.media_worker](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
@@ -135,13 +151,12 @@ Root của env gắn mỗi JSON vào role của Pod Identity association `svp/vi
 | ---- | ----------- | ---- | ------- | :------: |
 | access\_logging\_enabled | Write S3 server access logs of both buckets to a third bucket, <name\_prefix>-logs-<account\_id>-<region>, which this module creates (private, TLS only, SSE-S3, logs deleted after 90 days). Off by default. | `bool` | `false` | no |
 | account\_id | The AWS account of the buckets (12 digits), part of their names. The root passes its own account\_id, which never goes into a committed file. | `string` | n/a | yes |
-| cors\_allowed\_origins | Origins of the web client (https://<domain>) that may post upload forms to the uploads bucket and read playlists, segments and thumbnails of media cross-origin. | `list(string)` | n/a | yes |
+| cors\_allowed\_origins | Origins of the web client (https://<domain>) that the CORS rules of the two buckets allow: POST of upload forms to the uploads bucket, GET and HEAD on the media bucket. The distribution answers CORS for media itself, for every origin. | `list(string)` | n/a | yes |
 | force\_destroy | Let terraform destroy delete both buckets with every object in them. Without it destroy fails on a bucket that is not empty. | `bool` | n/a | yes |
 | name\_prefix | Fixed start of every name (svp-stg, svp-prd): buckets are <name\_prefix>-uploads-<account\_id>-<region> and <name\_prefix>-media-<account\_id>-<region>. | `string` | n/a | yes |
-| price\_class | Edge locations of the CloudFront distribution. PriceClass\_200 serves Asia, Singapore and Vietnam included, from nearby edges, and leaves out the dearest regions (South America, Australia). | `string` | `"PriceClass_200"` | no |
 | region | Region of the buckets, part of their names; the root passes the region of its provider. | `string` | n/a | yes |
 | versioning\_enabled | Keep earlier versions of overwritten and deleted objects in both buckets, each for 30 days after it was replaced (a lifecycle rule then deletes it). Off by default: objects are written once, and kept versions keep deleted bytes billed. | `bool` | `false` | no |
-| web\_acl\_arn | ARN of an AWS WAF web ACL of scope CLOUDFRONT (in us-east-1, output web\_acl\_arn of the waf module) to put in front of the distribution. null (the default) attaches none. | `string` | `null` | no |
+| web\_acl\_arn | ARN of the AWS WAF web ACL of scope CLOUDFRONT (in us-east-1, output web\_acl\_arn of the waf module) in front of the distribution. The flat-rate plan of the distribution requires one and covers it; AWS refuses to detach or replace it while the plan lasts. | `string` | n/a | yes |
 
 ## Outputs
 
@@ -165,7 +180,7 @@ Root của env gắn mỗi JSON vào role của Pod Identity association `svp/vi
 | `region` | `var.region` của root | `var.region` của root |
 | `cors_allowed_origins` | `["https://<domain của stg>"]` | `["https://<domain của prd>"]` |
 | `force_destroy` | `true` | `false` |
-| `price_class` | `PriceClass_200` | `PriceClass_200` |
+| `web_acl_arn` | `module.waf.web_acl_arn` (`svp-stg-media`) | `module.waf.web_acl_arn` (`svp-prd-media`) |
 
 ## Chi phí theo giờ (`ap-southeast-1`, giá đọc 2026-10-31, nguồn ở ADR-0034 [N9], [N10])
 
@@ -173,7 +188,8 @@ Root của env gắn mỗi JSON vào role của Pod Identity association `svp/vi
 | --- | --- | --- |
 | S3 lớp chuẩn | $0,025/GB-tháng (50 TB đầu); PUT/POST $0,005/1 000, GET $0,004/10 000 | ~$0 (vài GB, vài chục nghìn request) |
 | S3 Glacier Deep Archive | theo trang giá [N9] (chưa ghi số ở đây); chỉ object `uploads/` quá 30 ngày, buổi stg xoá bucket trước đó | $0 |
-| CloudFront pay-as-you-go | 1 TB ra Internet và 10 triệu request HTTP(S) mỗi tháng miễn phí; vượt thì nhóm có Singapore $0,120/GB | $0 |
+| CloudFront theo gói flat-rate Free | $0 mỗi tháng: 1 triệu request và 100 GB, không tính phí vượt ([trang giá CloudFront](https://aws.amazon.com/cloudfront/pricing/), đọc 2026-11-07) | $0 |
+| WAF (web ACL, luật, request) | trong gói; web ACL sót sau khi gói huỷ thì pay-as-you-go (~$5 mỗi ACL + $1 mỗi luật mỗi tháng, theo giờ) | $0 |
 | OAC, cache policy, response headers policy, CORS, lifecycle | Không tính tiền | $0 |
 
 S3 tới từ cluster đi qua gateway endpoint của VPC (module `network`), không qua NAT. Tạo và xoá distribution mỗi lần mất vài phút
@@ -182,6 +198,9 @@ S3 tới từ cluster đi qua gateway endpoint của VPC (module `network`), kh�
 ## Có thể sót sau destroy
 
 - **Bucket còn object khi `force_destroy = false`** (prd): destroy dừng ở bucket, cố ý. stg đặt `true` nên không sót.
-- **Bucket, distribution của một `apply` hay `destroy` dở:** bucket mang tag `Project=svp` của root (quét theo tag); distribution, OAC,
-  response headers policy tìm theo tên hay comment có `name_prefix` (OAC và response headers policy không có tag).
+- **Bucket, distribution của một `apply` hay `destroy` dở:** bucket mang tag `Project=svp` của root (quét theo tag); distribution, OAC tìm
+  theo tên hay comment có `name_prefix` (OAC không có tag).
+- **Subscription của gói:** destroy dừng giữa chừng có thể để lại gói còn hiệu lực (`sweep.sh` liệt kê ở loại `CloudFront pricing plan
+  subscriptions`, `us-east-1`), mà AWS không cho xoá distribution hay gỡ web ACL còn trong gói: huỷ gói trước, rồi mới xoá distribution,
+  OAC, web ACL (runbook buổi stg, mục xoá tay).
 - Distribution đã tắt mà chưa xoá không tính tiền request nhưng vẫn là tài nguyên sót; xoá sau khi trạng thái `Deployed`.

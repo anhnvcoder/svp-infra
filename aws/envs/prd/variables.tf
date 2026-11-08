@@ -212,11 +212,6 @@ variable "media_force_destroy" {
   type        = bool
 }
 
-variable "media_price_class" {
-  description = "Edge locations of the CloudFront distribution of the media bucket."
-  type        = string
-}
-
 variable "media_versioning_enabled" {
   description = "Keep earlier versions of overwritten and deleted objects in both buckets for 30 days."
   type        = bool

@@ -27,4 +27,3 @@ rds_skip_final_snapshot      = true
 
 # media: destroy empties and deletes both buckets.
 media_force_destroy = true
-media_price_class   = "PriceClass_200"

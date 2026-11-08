@@ -31,7 +31,7 @@ variable "region" {
 }
 
 variable "cors_allowed_origins" {
-  description = "Origins of the web client (https://<domain>) that may post upload forms to the uploads bucket and read playlists, segments and thumbnails of media cross-origin."
+  description = "Origins of the web client (https://<domain>) that the CORS rules of the two buckets allow: POST of upload forms to the uploads bucket, GET and HEAD on the media bucket. The distribution answers CORS for media itself, for every origin."
   type        = list(string)
 
   validation {
@@ -48,17 +48,6 @@ variable "force_destroy" {
   type        = bool
 }
 
-variable "price_class" {
-  description = "Edge locations of the CloudFront distribution. PriceClass_200 serves Asia, Singapore and Vietnam included, from nearby edges, and leaves out the dearest regions (South America, Australia)."
-  type        = string
-  default     = "PriceClass_200"
-
-  validation {
-    condition     = contains(["PriceClass_100", "PriceClass_200", "PriceClass_All"], var.price_class)
-    error_message = "price_class must be PriceClass_100, PriceClass_200 or PriceClass_All."
-  }
-}
-
 variable "versioning_enabled" {
   description = "Keep earlier versions of overwritten and deleted objects in both buckets, each for 30 days after it was replaced (a lifecycle rule then deletes it). Off by default: objects are written once, and kept versions keep deleted bytes billed."
   type        = bool
@@ -72,12 +61,12 @@ variable "access_logging_enabled" {
 }
 
 variable "web_acl_arn" {
-  description = "ARN of an AWS WAF web ACL of scope CLOUDFRONT (in us-east-1, output web_acl_arn of the waf module) to put in front of the distribution. null (the default) attaches none."
+  description = "ARN of the AWS WAF web ACL of scope CLOUDFRONT (in us-east-1, output web_acl_arn of the waf module) in front of the distribution. The flat-rate plan of the distribution requires one and covers it; AWS refuses to detach or replace it while the plan lasts."
   type        = string
-  default     = null
+  nullable    = false
 
   validation {
-    condition     = var.web_acl_arn == null || can(regex("^arn:aws[a-z-]*:wafv2:us-east-1:[0-9]{12}:global/webacl/[A-Za-z0-9_-]+/[0-9a-f-]+$", var.web_acl_arn))
+    condition     = can(regex("^arn:aws[a-z-]*:wafv2:us-east-1:[0-9]{12}:global/webacl/[A-Za-z0-9_-]+/[0-9a-f-]+$", var.web_acl_arn))
     error_message = "web_acl_arn must be the ARN of a WAF web ACL of scope CLOUDFRONT, arn:aws:wafv2:us-east-1:<account>:global/webacl/<name>/<id>."
   }
 }

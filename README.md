@@ -66,11 +66,11 @@ aws/
   bootstrap/                  management account, một lần, giữ giữa các buổi: bucket state, budget của org; không hosted zone nào
   org/                        management account: Organizations, OU Workloads, account svp-stg và svp-prd, SCP, IAM Identity Center (SvpAdmin), organization trail
   accounts/<env>/             baseline của mỗi account thành viên (stg, prd), giữ giữa các buổi: bucket state, KMS key của nó, zone của env (prd aws.<domain>, giữ cả bản ghi NS uỷ quyền stg.aws.<domain>; stg stg.aws.<domain>), budget
-  envs/<env>/                 cấu hình gốc của mỗi env (stg, prd: cùng module, cùng đối số, khác ở <env>.tfvars; prd thêm WAF, bastion SSM, teardown.tfvars)
+  envs/<env>/                 cấu hình gốc của mỗi env (stg, prd: cùng module, cùng đối số, khác ở <env>.tfvars; prd thêm bastion SSM, teardown.tfvars)
   gitops/<env>/               bootstrap GitOps của cluster EKS của env (GitOps Bridge): namespace, Argo CD, AppProject, cluster Secret, ApplicationSet svp-bootstrap
   modules/                    module nội bộ; lock file không commit
     network, eks, rds, media  nền của mỗi env
-    waf                       web ACL của CloudFront (chỉ prd gọi, provider us-east-1)
+    waf                       web ACL của CloudFront (cả hai root env gọi, provider us-east-1; gói flat-rate Free của media đòi nó)
     ssm-bastion               bastion SSM tới endpoint private của API EKS (prd)
     external-secrets          vỏ entry Secrets Manager svp/<env>/*, role của External Secrets theo namespace, Pod Identity
     gitops-bridge             giá trị của bootstrap GitOps (không resource): cluster Secret, values Argo CD, root
@@ -227,8 +227,8 @@ và `--region`:
 | `svp-stg` | `anhnv-stg` | `SVP_AWS_STG_ACCOUNT_ID` | `aws/accounts/stg`, `aws/envs/stg`, `aws/gitops/stg` |
 | `svp-prd` | `anhnv-prd` | `SVP_AWS_PRD_ACCOUNT_ID` | `aws/accounts/prd`, `aws/envs/prd`, `aws/gitops/prd` |
 
-Region `ap-southeast-1` cho dịch vụ theo region và STS, `us-east-1` cho Organizations và WAF của CloudFront, region của instance Identity
-Center cho `sso-admin`, `identitystore`. Terraform của máy (Homebrew) phải nằm trong `required_version` của root (`~> 1.15`). Backend S3,
+Region `ap-southeast-1` cho dịch vụ theo region và STS, `us-east-1` cho Organizations, WAF của CloudFront, Pricing Plan Manager và API Free
+Tier, region của instance Identity Center cho `sso-admin`, `identitystore`. Terraform của máy (Homebrew) phải nằm trong `required_version` của root (`~> 1.15`). Backend S3,
 khoá bằng lock file native của S3 (`use_lockfile`): root của management đọc `aws/backend.hcl` (sinh từ output của `aws/bootstrap`); root
 của account thành viên đọc `aws/backend-<env>.hcl` (sinh từ output `backend_hcl` của `aws/accounts/<env>`, không có `key`) cộng một
 `-backend-config=key=<key của root>` thứ hai, `init -reconfigure` (script buổi `tf.sh` làm vậy). Không file nào trong hai loại được commit.

@@ -6,8 +6,8 @@ terraform {
   required_providers {
     aws = {
       source = "hashicorp/aws"
-      # terraform-aws-modules/eks 21.29.0 (inside modules/eks) needs 6.59 or later; the exact version is in the lock file.
-      version = "~> 6.59"
+      # aws_pricingplanmanager_subscription (modules/media) needs 6.69 or later; the exact version is in the lock file.
+      version = "~> 6.69"
     }
   }
 

@@ -40,6 +40,11 @@ run "defaults" {
     condition     = one([for r in aws_wafv2_web_acl.this.rule : r.statement[0].rate_based_statement[0].limit if r.name == "rate-limit-per-ip"]) == 2000
     error_message = "The default rate limit must be 2000 requests per IP in 5 minutes."
   }
+
+  assert {
+    condition     = length(aws_wafv2_web_acl.this.rule) <= 5
+    error_message = "The web ACL may hold at most 5 rules, the limit of the CloudFront flat-rate Free plan; counting each AWS managed rule group as one rule is an assumption, checked on the first session."
+  }
 }
 
 # Values of the prd root: the rules that cut a flood and known attacks at the edge.

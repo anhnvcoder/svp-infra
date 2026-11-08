@@ -193,6 +193,22 @@ buckets() {
   done
 }
 
+# The plans of the account (CloudFront flat-rate and any other: the account holds only the lab, and a plan made by hand in
+# the console is a leftover too), in us-east-1 whatever the region of the environment. A distribution with a plan cannot
+# be deleted, so this kind is read before the distributions. A plan with a cancellation already scheduled (paid tiers;
+# a Free plan is cancelled at once) is "kept", not counted. The answer is read whole: the CLI pages by itself.
+subscriptions() {
+  local out line
+  out=$(aws_global_ pricing-plan-manager list-subscriptions --output json) || return 1
+  printing && return 0
+  jq -r '.subscriptionSummaries[]? | select(.scheduledChange.changeType != "CANCELLATION")
+    | "\(.arn) \(.planFamily) \(.planTier) \(.status) \((.resourceArns // []) | join(","))"' <<<"$out"
+  while IFS= read -r line; do
+    keep "$line"
+  done < <(jq -r '.subscriptionSummaries[]? | select(.scheduledChange.changeType == "CANCELLATION")
+    | "kept  pricing plan \(.arn) (\(.planFamily) \(.planTier)): cancellation scheduled \(.scheduledChange.effectiveDate // "?")"' <<<"$out")
+}
+
 distributions() {
   q '.DistributionList.Items[]? | select(((.Comment // "") | startswith("Media of svp-")) or any(.Origins.Items[]?; .DomainName | startswith("svp-")))
     | "\(.Id) \(.Status) enabled=\(.Enabled) \(.DomainName)"' cloudfront list-distributions
@@ -301,9 +317,11 @@ sweep_kind "RDS instances" rds_instances \
 sweep_kind "RDS snapshots" rds_snapshots "aws rds delete-db-snapshot --db-snapshot-identifier {}"
 sweep_kind "RDS automated backups" rds_backups "aws rds delete-db-instance-automated-backup --db-instance-automated-backups-arn {}"
 sweep_kind "S3 buckets" buckets "$runbook (versioned: every version first)"
+sweep_kind "CloudFront pricing plan subscriptions" subscriptions \
+  "$runbook (cancel the plan first: cancel-subscription takes the eTag of get-subscription, both in us-east-1)"
 sweep_kind "CloudFront distributions" distributions "$runbook (disable, wait, then delete)"
 sweep_kind "CloudFront origin access controls and response headers policies" cloudfront_policies "$runbook"
-sweep_kind "WAF web ACLs of CloudFront" web_acls "docs/runbooks/session-prd.md#web-acl-waf-sót (delete-web-acl takes the lock token of get-web-acl)"
+sweep_kind "WAF web ACLs of CloudFront" web_acls "$runbook (delete-web-acl takes the lock token of get-web-acl)"
 sweep_kind "CloudWatch log groups" log_groups "aws logs delete-log-group --log-group-name {}"
 sweep_kind "Secrets Manager secrets (scheduled for deletion included)" secrets \
   "aws secretsmanager delete-secret --secret-id {} --force-delete-without-recovery"
