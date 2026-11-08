@@ -1,12 +1,18 @@
 # Validation rules of the module's variables: one plan with valid values, then one plan per rule with a value that only
 # that rule rejects; then what the defaults keep, what each new variable adds, and the values of prd. The AWS provider
 # is a mock: nothing reaches an account, and data sources return the values below (the provider still validates
-# arguments, so policies must be JSON).
+# arguments, so policies must be JSON). The plan cannot prove that AWS accepts the plan tier or the managed policy.
 
 mock_provider "aws" {
   mock_data "aws_iam_policy_document" {
     defaults = {
       json = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"sts:GetCallerIdentity\",\"Resource\":\"*\"}]}"
+    }
+  }
+
+  mock_data "aws_cloudfront_response_headers_policy" {
+    defaults = {
+      id = "60669652-455b-4ae9-85a4-c4c02393f86c"
     }
   }
 }
@@ -17,6 +23,7 @@ variables {
   region               = "ap-southeast-1"
   cors_allowed_origins = ["https://svp.example"]
   force_destroy        = true
+  web_acl_arn          = "arn:aws:wafv2:us-east-1:000000000000:global/webacl/svp-stg-media/a1b2c3d4-5678-90ab-cdef-111111111111"
 }
 
 run "valid" {
@@ -63,16 +70,6 @@ run "cors_allowed_origins_with_path" {
   expect_failures = [var.cors_allowed_origins]
 }
 
-run "price_class_unknown" {
-  command = plan
-
-  variables {
-    price_class = "PriceClass_300"
-  }
-
-  expect_failures = [var.price_class]
-}
-
 run "web_acl_arn_regional" {
   command = plan
 
@@ -83,8 +80,7 @@ run "web_acl_arn_regional" {
   expect_failures = [var.web_acl_arn]
 }
 
-# The defaults keep the buckets and the distribution as they were: no versioning, no access log and no log bucket,
-# no web ACL.
+# The defaults keep the buckets as they were: no versioning, no access log and no log bucket.
 run "defaults" {
   command = plan
 
@@ -98,9 +94,39 @@ run "defaults" {
     error_message = "By default the module must create no log bucket and write no access log."
   }
 
+}
+
+# What the flat-rate Free plan requires of the distribution, in every env: the plan covers it and the web ACL, and
+# the distribution uses only features of the plan (a managed response headers policy, every edge location).
+run "flat_rate_plan" {
+  command = plan
+
   assert {
-    condition     = aws_cloudfront_distribution.media.web_acl_id == ""
-    error_message = "By default the distribution must carry no web ACL."
+    condition = (aws_pricingplanmanager_subscription.media.plan_family == "CloudFront" &&
+      aws_pricingplanmanager_subscription.media.plan_tier == "FREE" &&
+    aws_pricingplanmanager_subscription.media.approval_mode == null)
+    error_message = "The distribution must be subscribed to the CloudFront flat-rate Free plan, with the default approval mode."
+  }
+
+  assert {
+    condition     = anytrue([for a in aws_pricingplanmanager_subscription.media.resource_arns : a == var.web_acl_arn])
+    error_message = "The plan must cover the web ACL of the distribution."
+  }
+
+  assert {
+    condition     = aws_cloudfront_distribution.media.web_acl_id == var.web_acl_arn
+    error_message = "The distribution must carry the web ACL."
+  }
+
+  assert {
+    condition = (data.aws_cloudfront_response_headers_policy.simple_cors.name == "Managed-SimpleCORS" &&
+    aws_cloudfront_distribution.media.default_cache_behavior[0].response_headers_policy_id == "60669652-455b-4ae9-85a4-c4c02393f86c")
+    error_message = "The distribution must answer CORS with the managed policy Managed-SimpleCORS, the only kind the Free plan takes."
+  }
+
+  assert {
+    condition     = aws_cloudfront_distribution.media.price_class == "PriceClass_All"
+    error_message = "The distribution must use every edge location, the price class a flat-rate plan sets."
   }
 }
 
@@ -168,7 +194,6 @@ run "prd_values" {
     versioning_enabled     = true
     access_logging_enabled = true
     web_acl_arn            = "arn:aws:wafv2:us-east-1:222222222222:global/webacl/svp-prd-media/a1b2c3d4-5678-90ab-cdef-111111111111"
-    price_class            = "PriceClass_200"
   }
 
   assert {
@@ -187,7 +212,7 @@ run "prd_values" {
   }
 
   assert {
-    condition     = aws_cloudfront_distribution.media.price_class == "PriceClass_200" && aws_cloudfront_distribution.media.default_cache_behavior[0].viewer_protocol_policy == "https-only"
-    error_message = "prd must serve media over HTTPS only from the edges of PriceClass_200."
+    condition     = aws_cloudfront_distribution.media.default_cache_behavior[0].viewer_protocol_policy == "https-only"
+    error_message = "prd must serve media over HTTPS only."
   }
 }

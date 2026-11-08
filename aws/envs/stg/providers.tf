@@ -16,3 +16,21 @@ provider "aws" {
     }
   }
 }
+
+# CloudFront takes a web ACL of AWS WAF only from us-east-1: the waf module runs with this provider, same account,
+# same tags.
+provider "aws" {
+  alias  = "us_east_1"
+  region = "us-east-1"
+
+  allowed_account_ids = [var.account_id]
+
+  default_tags {
+    tags = {
+      Project   = "svp"
+      Env       = local.env
+      ManagedBy = "terraform"
+      Stack     = local.env
+    }
+  }
+}

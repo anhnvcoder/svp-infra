@@ -61,7 +61,7 @@ expect() {
 
 # --- fakes -------------------------------------------------------------------------------------------------------
 # Each fake logs its call to $FAKE_LOG. aws and terraform answer as the account of their profile, and log the profile
-# to $FAKE_LOG.profiles; aws checks the region (us-east-1 for WAF of CloudFront).
+# to $FAKE_LOG.profiles; aws checks the region (us-east-1 for WAF of CloudFront and the Pricing Plan Manager).
 cat >"$bin/aws" <<'EOF'
 #!/usr/bin/env bash
 echo "aws $*" >>"$FAKE_LOG"
@@ -74,7 +74,7 @@ esac
 echo "$AWS_PROFILE" >>"$FAKE_LOG.profiles"
 # FAKE_ACCOUNT: the profile signs in to another account (a profile pointing at the wrong account).
 account=${FAKE_ACCOUNT:-$account}
-case "$1" in wafv2) want=us-east-1 ;; *) want=ap-southeast-1 ;; esac
+case "$1" in wafv2 | pricing-plan-manager) want=us-east-1 ;; *) want=ap-southeast-1 ;; esac
 case " $* " in *" --region $want "*) ;; *) echo "fake aws: no --region $want" >&2; exit 97 ;; esac
 left=${FAKE_LEFTOVER:-}
 # The management account has no hosted zone.
@@ -154,6 +154,15 @@ case "$1 $2" in
   "cloudfront list-response-headers-policies") echo '{"ResponseHeadersPolicyList":{"Items":[]}}' ;;
   "wafv2 list-web-acls")
     if [ "$left" = waf ]; then echo '{"WebACLs":[{"Name":"svp-prd-media","Id":"waf-fake"}]}'; else echo '{"WebACLs":[]}'; fi ;;
+  # FAKE_LEFTOVER=subscription: a Free plan left; cancellation: a paid plan whose cancellation is scheduled;
+  # subscription-error: the API answers with an error.
+  "pricing-plan-manager list-subscriptions")
+    case $left in
+      subscription-error) echo "fake aws: AccessDeniedException on list-subscriptions" >&2; exit 254 ;;
+      subscription) echo "{\"subscriptionSummaries\":[{\"arn\":\"arn:aws:pricingplanmanager::$account:subscription/sub-fake\",\"planFamily\":\"CloudFront\",\"planTier\":\"FREE\",\"status\":\"ACTIVE\",\"resourceArns\":[\"arn:aws:cloudfront::$account:distribution/EFAKE\",\"arn:aws:wafv2:us-east-1:$account:global/webacl/svp-prd-media/waf-fake\"],\"scheduledChange\":null,\"eTag\":\"e1\"}]}" ;;
+      cancellation) echo "{\"subscriptionSummaries\":[{\"arn\":\"arn:aws:pricingplanmanager::$account:subscription/sub-paid\",\"planFamily\":\"CloudFront\",\"planTier\":\"PRO\",\"status\":\"ACTIVE\",\"resourceArns\":[],\"scheduledChange\":{\"changeType\":\"CANCELLATION\",\"effectiveDate\":\"2026-12-01T00:00:00Z\"},\"eTag\":\"e2\"}]}" ;;
+      *) echo '{"subscriptionSummaries":[]}' ;;
+    esac ;;
   "logs describe-log-groups") echo '{"logGroups":[]}' ;;
   *) echo "fake aws: unexpected $1 $2" >&2; exit 98 ;;
 esac
@@ -889,6 +898,10 @@ for e in stg prd mgmt; do
   fi
   expect "sweep.sh $e prints the key of a destroyed root as pending deletion" grep -q '^pending deletion  KMS key key-eks, deleted on 2026-11-12' "$work/sweep.out"
   expect "sweep.sh $e reads WAF of CloudFront in us-east-1" grep -q '^aws wafv2 list-web-acls --scope CLOUDFRONT --output json --region us-east-1$' "$log"
+  expect "sweep.sh $e reads the pricing plan subscriptions in us-east-1" \
+    sh -c 'grep -q "^aws pricing-plan-manager list-subscriptions --output json --region us-east-1$" "$1"' _ "$log"
+  expect "sweep.sh $e lists the pricing plan subscriptions before the CloudFront distributions" \
+    before "$log" '^aws pricing-plan-manager list-subscriptions ' '^aws cloudfront list-distributions '
 done
 expect "sweep.sh mgmt: no hosted zone, no call to Route 53" \
   sh -c '! grep -q "hosted zone" "$1" && ! grep -q "^aws route53 " "$2"' _ "$work/sweep.out" "$log"
@@ -913,7 +926,22 @@ expect "sweep.sh prd fails on a retained automated backup" \
 expect "sweep.sh prd fails on a KMS key of the root not pending deletion" \
   sh -c '! FAKE_LEFTOVER=kms bash "$1/sweep.sh" prd >"$2" 2>&1 && grep -q "^FAIL  KMS keys: 1 left" "$2" && grep -q "key-eks Enabled Stack=prd" "$2"' _ "$here" "$work/sweep.out"
 expect "sweep.sh prd fails on a web ACL left in us-east-1" \
-  sh -c '! FAKE_LEFTOVER=waf bash "$1/sweep.sh" prd >"$2" 2>&1 && grep -q "^FAIL  WAF web ACLs of CloudFront: 1 left" "$2"' _ "$here" "$work/sweep.out"
+  sh -c '! FAKE_LEFTOVER=waf bash "$1/sweep.sh" prd >"$2" 2>&1 && grep -q "^FAIL  WAF web ACLs of CloudFront: 1 left" "$2" &&
+    grep -q "^          delete: docs/runbooks/session-stg.md#lệnh-xoá-tay-theo-loại (delete-web-acl takes the lock token" "$2"' _ "$here" "$work/sweep.out"
+expect "sweep.sh stg fails on a pricing plan subscription, with its resources and the runbook's manual deletion" \
+  sh -c '! FAKE_LEFTOVER=subscription bash "$1/sweep.sh" stg >"$2" 2>&1 && grep -q "^FAIL  CloudFront pricing plan subscriptions: 1 left" "$2" &&
+    grep -q "^        arn:aws:pricingplanmanager::111111111111:subscription/sub-fake CloudFront FREE ACTIVE arn:aws:cloudfront::111111111111:distribution/EFAKE,arn:aws:wafv2:" "$2" &&
+    grep -q "^          delete: docs/runbooks/session-stg.md#lệnh-xoá-tay-theo-loại (cancel the plan first" "$2"' _ "$here" "$work/sweep.out"
+expect "sweep.sh stg does not fail on a plan whose cancellation is scheduled, and prints it as kept" \
+  sh -c 'FAKE_LEFTOVER=cancellation bash "$1/sweep.sh" stg >"$2" 2>&1 && grep -q "^ok    CloudFront pricing plan subscriptions: none" "$2" &&
+    grep -q "^kept  pricing plan arn:aws:pricingplanmanager::111111111111:subscription/sub-paid (CloudFront PRO): cancellation scheduled 2026-12-01T00:00:00Z$" "$2"' _ "$here" "$work/sweep.out"
+expect "sweep.sh stg does not call a clean answer from a pricing plan API that failed: could not be read, not none" \
+  sh -c '! FAKE_LEFTOVER=subscription-error bash "$1/sweep.sh" stg >"$2" 2>&1 && grep -q "^FAIL  CloudFront pricing plan subscriptions: could not be read" "$2" &&
+    ! grep -q "CloudFront pricing plan subscriptions: none" "$2"' _ "$here" "$work/sweep.out"
+expect "sweep.sh --print stg shows list-subscriptions with --region us-east-1" \
+  sh -c 'bash "$1/sweep.sh" --print stg >"$2" 2>&1 && grep -q "^+ AWS_PROFILE=anhnv-stg aws pricing-plan-manager list-subscriptions --output json --region us-east-1$" "$2"' _ "$here" "$work/sweep.out"
+expect "sweep.sh --print stg prints list-subscriptions before list-distributions" \
+  before "$work/sweep.out" '^\+ AWS_PROFILE=anhnv-stg aws pricing-plan-manager list-subscriptions ' '^\+ AWS_PROFILE=anhnv-stg aws cloudfront list-distributions '
 expect "sweep.sh stg fails on a record of its zone" \
   sh -c '! FAKE_LEFTOVER=record bash "$1/sweep.sh" stg >"$2" 2>&1 && grep -q "api.stg.aws.svp.example. A" "$2"' _ "$here" "$work/sweep.out"
 expect "sweep.sh stops on another account before any other command" \

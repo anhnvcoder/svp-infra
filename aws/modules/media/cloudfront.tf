@@ -19,47 +19,21 @@ data "aws_cloudfront_cache_policy" "caching_optimized" {
 }
 
 # CORS is answered by CloudFront, not by the bucket: Origin is not in the cache key, so a copy cached for a request
-# without one (an <img>, curl) would reach a player that needs Access-Control-Allow-Origin without it. The distribution
-# therefore forwards no viewer header to the bucket, and this policy adds the CORS headers for the web's origins.
-# Same methods as the bucket rule: GET and HEAD.
-resource "aws_cloudfront_response_headers_policy" "media_cors" {
-  name    = "${local.buckets["media"]}-cors"
-  comment = "CORS of the web client for media"
-
-  cors_config {
-    access_control_allow_credentials = false
-    access_control_max_age_sec       = 600
-    origin_override                  = true
-
-    access_control_allow_headers {
-      items = ["*"]
-    }
-
-    access_control_allow_methods {
-      items = ["GET", "HEAD"]
-    }
-
-    access_control_allow_origins {
-      items = var.cors_allowed_origins
-    }
-  }
+# without one (an <img>, curl) would reach a player that needs Access-Control-Allow-Origin without it. The flat-rate
+# Free plan takes only managed response headers policies; this one sends Access-Control-Allow-Origin: *, enough for
+# public, immutable objects that the player fetches without credentials.
+data "aws_cloudfront_response_headers_policy" "simple_cors" {
+  name = "Managed-SimpleCORS"
 }
 
-# A WAF web ACL only when web_acl_arn is set (the waf module, in us-east-1). Without one (web_acl_id "", the finding
-# below), the distribution serves public, immutable HLS objects from a read-only origin, and a web ACL costs a monthly
-# fee per ACL and per rule for no rule a short-lived lab needs. The exception holds only for web_acl_id="".
-
-# Scope: stg only; prd: web_acl_arn of the waf module (AWS managed rule groups and a rate-based rule per client IP, so
-# a request flood is cut at the edge before it is billed).
-#trivy:ignore:AWS-0011[web_acl_id=]
 resource "aws_cloudfront_distribution" "media" {
-  enabled         = true
-  comment         = "Media of ${var.name_prefix}"
-  price_class     = var.price_class
+  enabled = true
+  comment = "Media of ${var.name_prefix}"
+  # Subscribing to a flat-rate plan moves the distribution to every edge location; any other class drifts.
+  price_class     = "PriceClass_All"
   http_version    = "http2and3"
   is_ipv6_enabled = true
-  # "" and null both mean no web ACL to the provider; "" gives the trivy exception above a value to match.
-  web_acl_id = var.web_acl_arn == null ? "" : var.web_acl_arn
+  web_acl_id      = var.web_acl_arn
 
   origin {
     origin_id                = "media"
@@ -75,7 +49,7 @@ resource "aws_cloudfront_distribution" "media" {
     viewer_protocol_policy     = "https-only"
     compress                   = true
     cache_policy_id            = data.aws_cloudfront_cache_policy.caching_optimized.id
-    response_headers_policy_id = aws_cloudfront_response_headers_policy.media_cors.id
+    response_headers_policy_id = data.aws_cloudfront_response_headers_policy.simple_cors.id
   }
 
   restrictions {
@@ -87,4 +61,13 @@ resource "aws_cloudfront_distribution" "media" {
   viewer_certificate {
     cloudfront_default_certificate = true
   }
+}
+
+# The flat-rate Free plan: a fixed $0 a month with no overage charge, in place of pay-as-you-go. AWS requires the plan
+# to cover exactly one distribution and one web ACL. Both are referenced here, so destroy cancels the plan first, as
+# AWS requires before it deletes the distribution or detaches the web ACL.
+resource "aws_pricingplanmanager_subscription" "media" {
+  plan_family   = "CloudFront"
+  plan_tier     = "FREE"
+  resource_arns = [aws_cloudfront_distribution.media.arn, var.web_acl_arn]
 }

@@ -5,7 +5,8 @@
 # Design notes: README.md.
 
 region=ap-southeast-1
-# CloudFront's web ACLs (scope CLOUDFRONT) live in us-east-1 whatever the region of the distribution.
+# CloudFront's web ACLs (scope CLOUDFRONT) and the Pricing Plan Manager (CloudFront flat-rate plans) live in us-east-1
+# whatever the region of the distribution.
 global_region=us-east-1
 
 # The environments, one line each: the only place where they differ; no script branches on an environment's name.
@@ -74,7 +75,7 @@ run_() {
 }
 
 aws_() { run_ "AWS_PROFILE=$profile" aws "$@" --region "$region"; }
-# aws_global_ ARGS...: aws in the region of CloudFront's web ACLs.
+# aws_global_ ARGS...: aws in the region of CloudFront's web ACLs and of the Pricing Plan Manager.
 aws_global_() { run_ "AWS_PROFILE=$profile" aws "$@" --region "$global_region"; }
 # tf_ DIR ARGS...: terraform in root DIR of this repository.
 tf_() {

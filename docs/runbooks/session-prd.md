@@ -1,11 +1,12 @@
 # Runbook: một buổi AWS prd
 
 Một buổi dựng env prd trong account `svp-prd` (`aws/envs/prd`, mức production: NAT mỗi AZ, RDS Multi-AZ, node on-demand trải ba AZ, bảo vệ
-xoá, WAF, API chỉ qua endpoint private), cài Argo CD và root GitOps qua tunnel SSM (`aws/gitops/prd`), chạy đúng commit `svp-gitops` mà stg
+xoá, API chỉ qua endpoint private), cài Argo CD và root GitOps qua tunnel SSM (`aws/gitops/prd`), chạy đúng commit `svp-gitops` mà stg
 đã chạy, đo (thời gian dựng, failover RDS Multi-AZ, mất một node ở một AZ), rồi gỡ sạch trong cùng buổi. Thiết kế:
 [ADR-0048](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0048-prd-aws.md) (§4 truy cập API, §6 bootstrap EKS, §7 ghim revision,
 §8 promote, §9 kết thúc buổi, §10 chi phí), [ADR-0049](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0049-kafka-prd.md) (Kafka
-ba broker), [ADR-0051](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0051-dns-prd-apex.md) (zone của mỗi env).
+ba broker), [ADR-0051](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0051-dns-prd-apex.md) (zone của mỗi env),
+[ADR-0052](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0052-cloudfront-flat-rate-free.md) (gói CloudFront flat-rate Free, web ACL WAF ở cả hai env).
 
 Buổi prd đi đúng chuỗi script của buổi stg; khác biệt là dữ liệu (dòng `prd` của `env_table` trong `aws/scripts/lib.sh`: profile `anhnv-prd`,
 biến `SVP_AWS_PRD_ACCOUNT_ID`, tunnel cổng 6443, file `teardown.tfvars`, không thang k6) và các bước tay ở đây. Mọi mục chung (luật chạy lệnh,
@@ -26,6 +27,8 @@ aws/scripts/session.sh --print prd                 # mọi lệnh script của b
   vào C.
 - **Cả buổi 4 giờ**, từ cổng promote tới hai lượt `sweep.sh` sạch. Quá 3 giờ mà chưa đo xong thì bỏ phần đo còn lại, sang gỡ. Quên gỡ 24
   giờ ≈ $22 (24 × H₀); budget `svp-prd-monthly` và budget tổng của org gửi email ở 50 %, 80 %, 100 %.
+- CloudFront và web ACL WAF của media nằm trong gói flat-rate Free như stg (`session-stg.md`, mục "Giới hạn"); web ACL sót sau khi gói huỷ
+  tính pay-as-you-go theo giờ.
 - Chứng chỉ Let's Encrypt production, giới hạn như stg (`session-stg.md`, mục "Giới hạn"); prd có bộ tên riêng.
 
 ## Điều kiện trước buổi
@@ -68,6 +71,17 @@ aws/scripts/session.sh --print prd                 # mọi lệnh script của b
    EOF
    ```
 
+7. **Gói CloudFront flat-rate Free** (điều kiện như stg: account không ở AWS Free Tier, tối đa 3 gói Free mỗi account, `session-stg.md`
+   điều kiện 1). Mỗi buổi, trước bước 3, phép kiểm (a) của ADR-0052 (chỉ đọc):
+
+   ```sh
+   AWS_PROFILE=anhnv-prd aws pricing-plan-manager list-subscriptions --region us-east-1 --query 'subscriptionSummaries[].[arn,planTier,status]' --output json
+   AWS_PROFILE=anhnv-prd aws freetier get-account-plan-state --region us-east-1 --query accountPlanType --output text
+   ```
+
+   Mong `[]` và `PAID`; dán lại cả hai. Còn gói: huỷ theo `session-stg.md`, mục **Lệnh xoá tay theo loại** (CloudFront), với
+   `AWS_PROFILE=anhnv-prd`; `FREE`: không bắt đầu buổi, dán output cho AI.
+
 ## Mở terminal của buổi
 
 Như `session-stg.md` với profile và biến của prd:
@@ -83,7 +97,7 @@ export SVP_SESSION_DIR="$PWD/.session/$(date -u +%Y%m%dT%H%M%SZ)"
 ## Thứ tự
 
 Các bước script, theo đúng thứ tự `session.sh --print prd`; bước tay của prd chen giữa, ở các mục dưới (cổng promote trước bước 1, tunnel
-sau bước 5, commit status và diễn tập sau bước 11, final snapshot sau bước 18):
+sau bước 5, gói Free, commit status và diễn tập sau bước 11, final snapshot sau bước 18):
 
 | # | Lệnh | Hạn | Dán lại cho AI |
 | --- | --- | --- | --- |
@@ -138,7 +152,9 @@ Như `session-stg.md` bước 1–5, với `prd`. `check-account.sh prd` phải 
 `zone_name` của `aws/accounts/prd/prd.auto.tfvars`) ở `1.1.1.1` và `8.8.8.8` và so với output `name_servers` của `aws/accounts/prd`; `FAIL`
 thì bốn bản ghi `NS` `aws` ở DNS cha chưa lan hay sai: sửa theo `aws/accounts/README.md` (mục 5), không bắt đầu buổi. Zone stg nằm dưới zone
 prd nên `check-dns.sh stg` cũng phải xanh trước buổi stg. Plan của root env đọc `prd.tfvars` (mức prd); đọc
-file text `prd-env-plan.txt`: chỉ `to add`, có WAF (`us-east-1`), bastion SSM, ba NAT gateway, RDS `multi_az = true`. Apply ~35–40 phút.
+file text `prd-env-plan.txt`: chỉ `to add`, có web ACL `module.waf.aws_wafv2_web_acl.this` (`us-east-1`) và gói
+`module.media.aws_pricingplanmanager_subscription.media` (`plan_tier = "FREE"`) như stg, bastion SSM, ba NAT gateway, RDS `multi_az = true`.
+Apply ~35–40 phút; lỗi apply đã biết (gói vượt hạn `ServiceQuotaExceededException`, account chưa xác minh) ở `session-stg.md`, mục 3–5.
 
 ## Tunnel tới API (sau bước 5, trước bước 6)
 
@@ -166,10 +182,20 @@ như `make eks-secrets` đọc). Lệnh `kubectl` tay vào prd ghi profile và c
 AWS_PROFILE=anhnv-prd kubectl --context svp-prd -n argocd get applications.argoproj.io
 ```
 
-## Bước 11: smoke, commit status
+## Bước 11: smoke, gói Free, commit status
 
 `measure.sh prd` chỉ chạy smoke (`make eks-smoke CONTEXT=svp-prd DOMAIN=<domain>`), không seed, không thang k6 (số đo của prd là các diễn tập
-dưới). Sau đó kiểm commit status `argocd/prd` (Argo CD Notifications của prd) có trên commit `svp-root` đã sync (`main` của `svp-gitops`):
+dưới). Sau smoke, phép kiểm (c) và (d) của ADR-0052 theo `session-stg.md`, mục
+[Gói Free và CORS của media](session-stg.md#gói-free-và-cors-của-media), với `AWS_PROFILE=anhnv-prd` và `aws/envs/prd` (web ACL
+`svp-prd-media`; playlist là của video smoke vừa tải lên), gồm plan lần hai sau apply, phải cho `No changes`
+(`ok plan text in …: No changes.`):
+
+```sh
+aws/scripts/tf.sh prd env plan
+```
+
+Output vào phụ lục của ADR-0052, một dòng kết luận vào mục "Xác nhận". Sau đó kiểm commit status `argocd/prd` (Argo CD Notifications của prd) có trên commit `svp-root`
+đã sync (`main` của `svp-gitops`):
 
 ```sh
 AWS_PROFILE=anhnv-prd kubectl --context svp-prd -n argocd get applications.argoproj.io svp-root -o jsonpath='{.status.sync.revision}{"\n"}'
@@ -259,7 +285,13 @@ Theo thứ tự, mỗi bước xong mới sang bước sau:
 
 3. **`aws/scripts/sweep.sh prd`** (profile `anhnv-prd`): chỉ còn dòng `kept` (`Stack=baseline`: bucket state, KMS key state, zone
    `aws.<domain>` cùng bản ghi `NS` uỷ quyền `stg.aws.<domain>` dưới đỉnh của nó) và `pending deletion` (KMS key của root env, 7 ngày), exit 0.
-   Còn gì khác: chạy lệnh `delete:` nó in, rồi chạy lại.
+   Còn gì khác: chạy lệnh `delete:` nó in, rồi chạy lại. Phép kiểm (e) của ADR-0052 (output vào phụ lục của nó, kết luận vào "Xác nhận"): gói của account
+   rỗng (mong `[]`), cùng lượt sweep sạch này:
+
+   ```sh
+   AWS_PROFILE=anhnv-prd aws pricing-plan-manager list-subscriptions --region us-east-1 --query 'subscriptionSummaries[].[arn,planTier,status]' --output json
+   ```
+
 4. **`aws/scripts/sweep.sh mgmt`** (profile `anhnv-sso`): chỉ `Stack=bootstrap|org` (bucket state, trail), không hosted zone, exit 0.
 
 Một lượt `sweep.sh prd` chạy trước bước 2 được phép exit khác 0 (final snapshot, backup tự động còn đó) và chỉ để xem. **Buổi chỉ xong khi
@@ -268,11 +300,7 @@ Explorer của account prd theo dịch vụ, so với C.
 
 ### Web ACL WAF sót
 
-Web ACL scope `CLOUDFRONT` nằm ở `us-east-1`; xoá cần lock token hiện tại (sau khi distribution không còn dùng nó):
-
-```sh
-AWS_PROFILE=anhnv-prd aws wafv2 get-web-acl --scope CLOUDFRONT --name <svp-prd-…> --id <id> --region us-east-1 --query LockToken --output text
-AWS_PROFILE=anhnv-prd aws wafv2 delete-web-acl --scope CLOUDFRONT --name <svp-prd-…> --id <id> --lock-token <token> --region us-east-1
-```
+Lệnh xoá web ACL (sau khi gói đã huỷ, distribution đã xoá) dùng chung cho hai env: `session-stg.md`, mục
+[Lệnh xoá tay theo loại](session-stg.md#lệnh-xoá-tay-theo-loại), với `AWS_PROFILE=anhnv-prd`.
 
 Loại sót khác: `session-stg.md`, mục **Lệnh xoá tay theo loại**, với `AWS_PROFILE=anhnv-prd`.

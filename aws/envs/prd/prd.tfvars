@@ -46,6 +46,5 @@ rds_cloudwatch_logs_retention_days        = 30
 # media: destroy stops at a bucket that holds objects; earlier versions kept 30 days, S3 access logs in a log bucket of
 # the env, the web ACL of waf.tf in front of CloudFront.
 media_force_destroy          = false
-media_price_class            = "PriceClass_200"
 media_versioning_enabled     = true
 media_access_logging_enabled = true

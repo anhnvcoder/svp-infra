@@ -1,9 +1,9 @@
 # `aws/envs/prd`: cấu hình gốc của env prd
 
 Tầng platform của prd trên AWS (ADR-0034 §2, ADR-0048): cùng module, cùng đối số với root stg
-([`aws/envs/stg`](../stg/README.md)), cỡ và mức bảo vệ production ở `prd.tfvars`. Ngoài phần chung đó, root này thêm đúng ba thứ: web ACL
-AWS WAF trước CloudFront (`waf.tf`, provider alias `us_east_1` ở `providers.tf`), bastion SSM tới endpoint private của API (`ssm-bastion.tf`,
-output `api_tunnel_command`, `kubeconfig_command` qua tunnel) và `teardown.tfvars` để gỡ cuối buổi. Ứng dụng trong cluster không ở đây:
+([`aws/envs/stg`](../stg/README.md)), cỡ và mức bảo vệ production ở `prd.tfvars`; web ACL AWS WAF trước CloudFront (`waf.tf`, provider
+alias `us_east_1` ở `providers.tf`) có ở cả hai root. Ngoài phần chung đó, root này thêm đúng hai thứ: bastion SSM tới endpoint private của
+API (`ssm-bastion.tf`, output `api_tunnel_command`, `kubeconfig_command` qua tunnel) và `teardown.tfvars` để gỡ cuối buổi. Ứng dụng trong cluster không ở đây:
 Argo CD triển khai từ `svp-gitops`, bootstrap bằng root `aws/gitops/prd`.
 
 ## Account, profile, state
@@ -25,9 +25,7 @@ Các file `*.tf` chép từ root stg. Khác biệt được phép, ngoài các f
 
 | Chỗ | Khác gì |
 | --- | --- |
-| `main.tf` | `env = "prd"` của `locals`; `web_acl_arn = module.waf.web_acl_arn` ở `module "media"`; không ngoại lệ trivy nào trên `module "eks"` (ba ngoại lệ của stg đều chỉ-stg) |
-| `providers.tf` | thêm provider `aws` alias `us_east_1` (cùng account, cùng tag): CloudFront chỉ nhận web ACL ở `us-east-1` |
-| `waf.tf` | chỉ prd: module `waf` (`svp-prd-media`) |
+| `main.tf` | `env = "prd"` của `locals`; không ngoại lệ trivy nào trên `module "eks"` (ba ngoại lệ của stg đều chỉ-stg) |
 | `ssm-bastion.tf` | chỉ prd: module `ssm-bastion`, output `api_tunnel_command` |
 | `outputs.tf` | `kubeconfig_command` lấy từ module `ssm-bastion` (server `https://127.0.0.1:6443`, `tls-server-name` là host của endpoint) |
 | `prd.tfvars`, `teardown.tfvars` | cỡ và bảo vệ của prd; bảo vệ nhấc khi gỡ |
@@ -131,4 +129,5 @@ về `true` thì quét đỏ ở `AWS-0040`.
 
 ## Chi phí
 
-Trần một buổi và phí giữa các buổi ở phụ lục ADR-0048, ADR-0049 (NAT mỗi AZ, RDS Multi-AZ, node on-demand, WAF, bastion).
+Trần một buổi và phí giữa các buổi ở phụ lục ADR-0048, ADR-0049 (NAT mỗi AZ, RDS Multi-AZ, node on-demand, bastion). CloudFront của media
+và web ACL WAF nằm trong gói flat-rate Free: $0 ([ADR-0052](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0052-cloudfront-flat-rate-free.md)).

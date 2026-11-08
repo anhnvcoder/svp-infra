@@ -20,9 +20,13 @@ Root chạy được khi baseline `aws/accounts/stg` đã apply và uỷ quyền
 
 ## Cái gì khác giữa các env
 
-Root prd chép thư mục này. Trong `*.tf` chỉ khác dòng `env = "<env>"` của `locals` (`main.tf`) và phần chỉ prd có (WAF, bastion SSM,
-`teardown.tfvars`); mọi lời gọi module chỉ tham chiếu biến hay output. Mọi tên tài nguyên bắt đầu bằng `svp-<env>` (cluster, role IAM,
-bucket, instance RDS, entry Secrets Manager). Ngoại lệ trivy chỉ-stg nằm trên lời gọi module của root này (mục "Ngoại lệ trivy").
+Root prd chép thư mục này. Trong `*.tf` chỉ khác dòng `env = "<env>"` của `locals` (`main.tf`) và phần riêng của prd (bastion SSM,
+`kubeconfig_command` của `outputs.tf`, `teardown.tfvars`); mọi lời gọi module chỉ tham chiếu biến hay output. Cả hai root có web ACL AWS
+WAF trước CloudFront (`waf.tf`, module `waf` tên `svp-<env>-media`, provider alias `us_east_1` ở `providers.tf`: CloudFront chỉ nhận web
+ACL ở `us-east-1`), vì gói CloudFront flat-rate Free của distribution media bắt buộc có web ACL
+([ADR-0052](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0052-cloudfront-flat-rate-free.md)). Mọi tên tài nguyên bắt đầu
+bằng `svp-<env>` (cluster, role IAM, bucket, instance RDS, entry Secrets Manager). Ngoại lệ trivy chỉ-stg nằm trên lời gọi module của root
+này (mục "Ngoại lệ trivy").
 Cỡ và mức bảo vệ nằm ở `<env>.tfvars`:
 
 | Tệp | Commit | Nội dung |
@@ -47,7 +51,7 @@ không dựng gì sai.
 | `rds_instance_class`, `rds_multi_az` | `db.t4g.small`, `false` | `db.t4g.medium`, `true` |
 | `rds_backup_retention_period`, `rds_delete_automated_backups` | `1`, `true` | `7`, `false` |
 | `rds_deletion_protection`, `rds_skip_final_snapshot` | `false`, `true` | `true`, `false` |
-| `media_force_destroy`, `media_price_class` | `true`, `PriceClass_200` | `false`, `PriceClass_200` |
+| `media_force_destroy` | `true` | `false` |
 
 Biến có mặc định (mặc định bằng mặc định của module, giữ hành vi của stg, nên `stg.tfvars` không đặt; prd đặt tường minh):
 
@@ -171,3 +175,4 @@ do trong comment, không cái nào có ở root prd:
 ## Chi phí
 
 Theo bảng ADR-0034 §12 (Singapore): ~$0,40/giờ với node Spot, buổi 4 giờ khoảng $2–3; chi tiết từng module ở README của module.
+CloudFront của media và web ACL WAF nằm trong gói flat-rate Free: $0 ([ADR-0052](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0052-cloudfront-flat-rate-free.md)).

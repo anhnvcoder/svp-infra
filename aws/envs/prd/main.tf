@@ -78,7 +78,6 @@ module "media" {
   region               = var.region
   cors_allowed_origins = ["https://${var.domain}"]
   force_destroy        = var.media_force_destroy
-  price_class          = var.media_price_class
 
   versioning_enabled     = var.media_versioning_enabled
   access_logging_enabled = var.media_access_logging_enabled
