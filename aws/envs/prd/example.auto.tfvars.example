@@ -12,3 +12,6 @@ domain = "aws.svp.example"
 
 # Let's Encrypt account of cert-manager.
 acme_email = "you@svp.example"
+
+# Inbox of the CloudWatch alarms of the env: open the confirmation link SNS sends after the apply.
+alarm_email = "you@svp.example"

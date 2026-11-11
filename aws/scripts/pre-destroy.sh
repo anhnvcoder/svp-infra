@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # What Kubernetes made in the account, removed while the controllers that made it still run, before tf.sh <env> gitops
-# destroy: the NLB and target groups (AWS Load Balancer Controller), the EBS volumes of PVCs (EBS CSI driver) and the
-# DNS records (ExternalDNS). Terraform knows none of them; left behind they block the destroy (ENIs, security groups) or
-# stay billed (volumes). Every wait has a limit, and what is left is printed.
+# destroy: the NLB and target groups (AWS Load Balancer Controller), the EBS volumes of PVCs (EBS CSI driver), the DNS
+# records (ExternalDNS) and the nodes of Karpenter. Terraform knows none of them; left behind they block the destroy
+# (ENIs, security groups) or stay billed (volumes, instances). Every wait has a limit, and what is left is printed.
 
 # Design notes: README.md.
 
@@ -20,16 +20,20 @@
 #    svp-cluster's namespaces and StorageClass still there. Waits until no PVC, no PV of the driver and no EBS volume
 #    the driver made for the cluster are left.
 
-# 4. svp-cluster and the platform Applications, highest wave first. Waits a few minutes per wave and only notes what is
+# 4. Every NodePool, then every EC2NodeClass, while Karpenter runs (svp-cluster, which renders them, no longer syncs
+#    since step 1). Waits until no NodeClaim and no EC2 instance Karpenter made for the cluster are left; the limit
+#    exceeds the terminationGracePeriod of the NodePool, after which Karpenter ends a node whatever blocks its drain.
+
+# 5. svp-cluster and the platform Applications, highest wave first. Waits a few minutes per wave and only notes what is
 #    left: nothing of them is billed outside the cluster, which terraform destroy deletes.
 
-# A cluster without Argo CD has no Application to delete: steps 1, 2 and 4 skip them, and the waits of steps 2 and 3
-# still check that nothing of Kubernetes is left in the account.
+# A cluster without Argo CD has no Application to delete: steps 1, 2 and 5 skip them, one without Karpenter has no
+# NodePool: step 4 skips them; the waits of steps 2 to 4 still check that nothing of Kubernetes is left in the account.
 
 # Records pre-destroy-start in the timeline once the account is checked, and pre-destroy-done at the end, which tf.sh
 # <env> gitops plan --destroy requires. Run it again after a failure: each step finds what is left. When the session's
-# time is up and step 2 or 3 is still red, tf.sh <env> gitops plan --destroy --leftovers (it needs pre-destroy-start) is
-# the way out.
+# time is up and step 2, 3 or 4 is still red, tf.sh <env> gitops plan --destroy --leftovers (it needs
+# pre-destroy-start) is the way out.
 
 # Usage: aws/scripts/pre-destroy.sh [--print] stg|prd
 set -euo pipefail
@@ -43,10 +47,12 @@ session_dir
 
 # Applications that stay until step 4: svp-cluster, then the controllers the objects of the workloads need while they
 # are deleted (a ScaledObject's finalizer needs KEDA, Kyverno's webhooks see every write of svp, ...), and the three of
-# step 2's waits.
-platform_apps=" svp-cluster cert-manager envoy-gateway external-secrets aws-load-balancer-controller external-dns keda argo-rollouts kyverno svp-policy "
+# step 2's waits, and Karpenter, which ends its nodes in step 4.
+platform_apps=" svp-cluster cert-manager envoy-gateway external-secrets aws-load-balancer-controller external-dns keda argo-rollouts kyverno svp-policy karpenter "
 wave_limit=600
 platform_wave_limit=300
+# The terminationGracePeriod of the NodePool (10 minutes) plus the time EC2 takes to end an instance.
+karpenter_limit=${SVP_KARPENTER_LIMIT:-900}
 
 # The zone ExternalDNS writes into: hosted_zone_id of the root's personal tfvars, the value output cluster_values
 # passes to the cluster as hostedZoneId (the zone of the environment's account).
@@ -157,6 +163,34 @@ volumes_gone() {
   [ -z "$left" ]
 }
 
+nodeclaims() {
+  local out
+  out=$(kc get nodeclaims.karpenter.sh -o json) || return 1
+  printing && return 0
+  jq -r '.items[] | "\(.metadata.name) \(.status.nodeName // "-")"' <<<"$out"
+}
+nodeclaims_gone() {
+  local left
+  left=$(nodeclaims) || return 1
+  [ -z "$left" ]
+}
+
+# Karpenter tags its instances kubernetes.io/cluster/<cluster>=owned and karpenter.sh/nodepool=<NodePool>; the nodes of
+# the system node group carry no karpenter.sh/nodepool.
+karpenter_instances() {
+  local out
+  out=$(aws_ ec2 describe-instances --filters "Name=tag:kubernetes.io/cluster/$cluster,Values=owned" \
+    Name=tag-key,Values=karpenter.sh/nodepool Name=instance-state-name,Values=pending,running,shutting-down,stopping,stopped \
+    --output json) || return 1
+  printing && return 0
+  jq -r '.Reservations[].Instances[] | "\(.InstanceId) \(.State.Name) \(.InstanceType) \((.Tags // []) | map(select(.Key == "karpenter.sh/nodepool")) | .[0].Value // "")"' <<<"$out"
+}
+karpenter_instances_gone() {
+  local left
+  left=$(karpenter_instances) || return 1
+  [ -z "$left" ]
+}
+
 app_gone() {
   local out
   out=$(kc -n argocd get application "$1" --ignore-not-found -o name) || return 1
@@ -205,7 +239,7 @@ delete_apps() {
   done
 }
 
-step "pre-destroy.sh 1/4: ApplicationSet svp-bootstrap, Applications svp-root and svp-apps"
+step "pre-destroy.sh 1/5: ApplicationSet svp-bootstrap, Applications svp-root and svp-apps"
 if [ -z "$argocd" ]; then
   ok "no Application (no Argo CD)"
 else
@@ -238,15 +272,15 @@ if [ -n "$argocd" ]; then
 fi
 mark pre-destroy-root
 
-# way_out STATUS: after a FAIL of step 2 or 3, the two ways on: fix and run again, or, out of time, destroy with what
+# way_out STATUS: after a FAIL of step 2, 3 or 4, the two ways on: fix and run again, or, out of time, destroy with what
 # is left.
 way_out() {
   [ "$1" = 0 ] ||
-    printf 'note  %s\n' "fix what the FAIL above names, then aws/scripts/pre-destroy.sh $env_name again; once the session's time is up and step 2 or 3 is still red: aws/scripts/tf.sh $env_name gitops plan --destroy --leftovers, and on with the teardown (docs/runbooks/session-stg.md, stuck-destroy section)" >&2
+    printf 'note  %s\n' "fix what the FAIL above names, then aws/scripts/pre-destroy.sh $env_name again; once the session's time is up and step 2, 3 or 4 is still red: aws/scripts/tf.sh $env_name gitops plan --destroy --leftovers, and on with the teardown (docs/runbooks/session-stg.md, stuck-destroy section)" >&2
 }
 trap 'way_out $?' EXIT
 
-step "pre-destroy.sh 2/4: workload Applications, then Gateway svp, while LBC, ExternalDNS and Envoy Gateway run"
+step "pre-destroy.sh 2/5: workload Applications, then Gateway svp, while LBC, ExternalDNS and Envoy Gateway run"
 left_apps=
 if [ -n "$argocd" ]; then
   delete_apps "$wave_limit" workload ||
@@ -280,7 +314,7 @@ fi
 ok "no record of ExternalDNS in $zone"
 mark pre-destroy-workloads
 
-step "pre-destroy.sh 3/4: every PVC, while the EBS CSI driver runs"
+step "pre-destroy.sh 3/5: every PVC, while the EBS CSI driver runs"
 out=$(kc get pvc -A -o json) || fail "list the PVCs"
 if printing; then
   namespaces='<each-namespace-with-a-PVC>'
@@ -302,16 +336,37 @@ if ! wait_until "no EBS volume of the EBS CSI driver is left" "$wave_limit" volu
 fi
 ok "no EBS volume of the EBS CSI driver"
 mark pre-destroy-volumes
+
+step "pre-destroy.sh 4/5: every NodePool, then every EC2NodeClass, while Karpenter runs"
+nodepool_crd=$(kc get crd nodepools.karpenter.sh --ignore-not-found -o name) || fail "read the CRDs"
+if printing || [ -n "$nodepool_crd" ]; then
+  kc delete nodepools.karpenter.sh --all --wait=false >/dev/null || fail "delete the NodePools"
+  nodeclass_crd=$(kc get crd ec2nodeclasses.karpenter.k8s.aws --ignore-not-found -o name) || fail "read the CRDs"
+  if printing || [ -n "$nodeclass_crd" ]; then
+    kc delete ec2nodeclasses.karpenter.k8s.aws --all --wait=false >/dev/null || fail "delete the EC2NodeClasses"
+  fi
+  if ! wait_until "no NodeClaim is left" "$karpenter_limit" nodeclaims_gone; then
+    fail "NodeClaims left after $karpenter_limit s: $(nodeclaims | oneline); Karpenter's log: kubectl --context $context -n kube-system logs deploy/karpenter"
+  fi
+  ok "NodePools and EC2NodeClasses deleted, no NodeClaim"
+else
+  note "no Karpenter on $context (no CRD nodepools.karpenter.sh): no NodePool to delete; its instances are still checked"
+fi
+if ! wait_until "no EC2 instance Karpenter made for $cluster is left" "$karpenter_limit" karpenter_instances_gone; then
+  fail "instances of Karpenter left: $(karpenter_instances | oneline) (aws/scripts/sweep.sh $env_name lists them with the terminate command)"
+fi
+ok "no EC2 instance of Karpenter for $cluster"
+mark pre-destroy-nodes
 trap - EXIT
 
-step "pre-destroy.sh 4/4: svp-cluster and the platform Applications"
+step "pre-destroy.sh 5/5: svp-cluster and the platform Applications"
 left_apps=
 if [ -z "$argocd" ]; then
   ok "no Application (no Argo CD)"
 elif delete_apps "$platform_wave_limit" platform; then
   ok "every Application deleted"
 else
-  note "Application(s)$left_apps not gone after $platform_wave_limit s; terraform destroy deletes the cluster with them (steps 2 and 3 left nothing billed outside it)"
+  note "Application(s)$left_apps not gone after $platform_wave_limit s; terraform destroy deletes the cluster with them (steps 2 to 4 left nothing billed outside it)"
 fi
 mark pre-destroy-done
 ok "ready for: aws/scripts/tf.sh $env_name gitops plan --destroy"

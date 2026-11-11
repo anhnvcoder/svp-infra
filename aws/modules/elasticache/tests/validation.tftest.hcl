@@ -11,6 +11,9 @@ variables {
   allowed_security_groups = { node = "sg-0123456789abcdef0", cluster = "sg-0fedcba9876543210" }
   node_count              = 1
   valkey_users_secret_id  = "arn:aws:secretsmanager:ap-southeast-1:000000000000:secret:svp/stg/valkey-users-AbCdEf"
+  apply_immediately       = true
+  slow_log_retention_days = 1
+  alarm_topic_arn         = "arn:aws:sns:ap-southeast-1:000000000000:svp-stg-alarms"
 }
 
 # Values of the stg root: one cache.t4g.micro node, no replica, no failover.
@@ -87,6 +90,58 @@ run "stg_values" {
     condition     = toset(keys(aws_vpc_security_group_ingress_rule.valkey)) == toset(["node", "cluster"]) && alltrue([for r in aws_vpc_security_group_ingress_rule.valkey : r.ip_protocol == "tcp" && r.from_port == 6379 && r.to_port == 6379 && r.cidr_ipv4 == null])
     error_message = "The security group must open TCP 6379 only, from the given security groups only."
   }
+
+  assert {
+    condition     = aws_elasticache_replication_group.this.apply_immediately == true && aws_elasticache_replication_group.this.maintenance_window == "sun:18:00-sun:19:00"
+    error_message = "stg must apply a change at once; the maintenance window is the same in every env."
+  }
+
+  assert {
+    condition = (
+      length(aws_elasticache_replication_group.this.log_delivery_configuration) == 1 &&
+      alltrue([for c in aws_elasticache_replication_group.this.log_delivery_configuration : c.log_type == "slow-log" && c.destination_type == "cloudwatch-logs" && c.log_format == "json" && c.destination == aws_cloudwatch_log_group.slow_log.name])
+    )
+    error_message = "The slow log must go, as JSON, to the log group of the module."
+  }
+
+  assert {
+    condition     = aws_cloudwatch_log_group.slow_log.name == "/aws/elasticache/svp-stg/slow-log" && aws_cloudwatch_log_group.slow_log.retention_in_days == 1
+    error_message = "The slow log group of stg must be /aws/elasticache/svp-stg/slow-log, kept 1 day."
+  }
+
+  assert {
+    condition     = toset(keys(aws_cloudwatch_metric_alarm.this)) == toset(["valkey-memory-high", "valkey-engine-cpu-high"]) && alltrue([for k, a in aws_cloudwatch_metric_alarm.this : a.alarm_name == "svp-stg-${k}" && a.alarm_actions == toset([var.alarm_topic_arn]) && a.ok_actions == toset([var.alarm_topic_arn])])
+    error_message = "stg must have every Valkey alarm of the table, named svp-stg-<alarm>, notifying the alarm topic when it fires and when it clears."
+  }
+
+  assert {
+    condition = (
+      aws_cloudwatch_metric_alarm.this["valkey-memory-high"].tags["Severity"] == "page" &&
+      strcontains(aws_cloudwatch_metric_alarm.this["valkey-memory-high"].alarm_description, "https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks/valkey-memory-high.md") &&
+      aws_cloudwatch_metric_alarm.this["valkey-engine-cpu-high"].tags["Severity"] == "ticket" &&
+      !strcontains(aws_cloudwatch_metric_alarm.this["valkey-engine-cpu-high"].alarm_description, "Runbook")
+    )
+    error_message = "valkey-memory-high must page with the URL of its runbook; valkey-engine-cpu-high is a ticket."
+  }
+
+  assert {
+    condition = (
+      aws_cloudwatch_metric_alarm.this["valkey-memory-high"].threshold == 80 && aws_cloudwatch_metric_alarm.this["valkey-engine-cpu-high"].threshold == 90 &&
+      alltrue([for a in aws_cloudwatch_metric_alarm.this : a.comparison_operator == "GreaterThanThreshold" && a.evaluation_periods == 5 && a.datapoints_to_alarm == 5])
+    )
+    error_message = "The thresholds and periods of the Valkey alarms must be those of the table."
+  }
+
+  # One node: the alarm reads that node by its cache cluster ID.
+  assert {
+    condition = alltrue([
+      for a in aws_cloudwatch_metric_alarm.this :
+      toset([for q in a.metric_query : q.metric[0].dimensions["CacheClusterId"] if q.return_data != true]) == toset(["svp-stg-001"]) &&
+      alltrue([for q in a.metric_query : q.metric[0].namespace == "AWS/ElastiCache" && q.metric[0].period == 60 && q.metric[0].stat == "Average" if q.return_data != true]) &&
+      one([for q in a.metric_query : q.expression if q.return_data == true]) == "MAX([m0])"
+    ])
+    error_message = "The alarms of stg must read its one node."
+  }
 }
 
 # Values of the prd root: a primary and a replica of cache.m7g.large, Multi-AZ with automatic failover.
@@ -94,12 +149,15 @@ run "prd_values" {
   command = plan
 
   variables {
-    name                   = "svp-prd"
-    subnet_ids             = ["subnet-0aaaaaaaaaaaaaaa1", "subnet-0bbbbbbbbbbbbbbb2", "subnet-0ccccccccccccccc3"]
-    node_type              = "cache.m7g.large"
-    node_count             = 2
-    valkey_users_secret_id = "arn:aws:secretsmanager:ap-southeast-1:000000000000:secret:svp/prd/valkey-users-AbCdEf"
-    password_version       = 3
+    name                    = "svp-prd"
+    subnet_ids              = ["subnet-0aaaaaaaaaaaaaaa1", "subnet-0bbbbbbbbbbbbbbb2", "subnet-0ccccccccccccccc3"]
+    node_type               = "cache.m7g.large"
+    node_count              = 2
+    valkey_users_secret_id  = "arn:aws:secretsmanager:ap-southeast-1:000000000000:secret:svp/prd/valkey-users-AbCdEf"
+    password_version        = 3
+    apply_immediately       = false
+    slow_log_retention_days = 30
+    alarm_topic_arn         = "arn:aws:sns:ap-southeast-1:000000000000:svp-prd-alarms"
   }
 
   assert {
@@ -136,6 +194,31 @@ run "prd_values" {
   assert {
     condition     = alltrue([for u in aws_elasticache_user.this : u.passwords_wo_version == 3]) && aws_secretsmanager_secret_version.valkey_users.secret_string_wo_version == 3
     error_message = "The users and the entry valkey-users must be written with the password version given to the module."
+  }
+
+  assert {
+    condition     = aws_elasticache_replication_group.this.apply_immediately == false && aws_elasticache_replication_group.this.maintenance_window == "sun:18:00-sun:19:00"
+    error_message = "prd must hold a change for the maintenance window."
+  }
+
+  assert {
+    condition     = aws_cloudwatch_log_group.slow_log.name == "/aws/elasticache/svp-prd/slow-log" && aws_cloudwatch_log_group.slow_log.retention_in_days == 30 && alltrue([for c in aws_elasticache_replication_group.this.log_delivery_configuration : c.destination == aws_cloudwatch_log_group.slow_log.name && c.log_format == "json"])
+    error_message = "The slow log of prd must go, as JSON, to /aws/elasticache/svp-prd/slow-log, kept 30 days."
+  }
+
+  assert {
+    condition     = length(aws_cloudwatch_metric_alarm.this) == 2 && alltrue([for k, a in aws_cloudwatch_metric_alarm.this : a.alarm_name == "svp-prd-${k}" && a.alarm_actions == toset([var.alarm_topic_arn]) && a.ok_actions == toset([var.alarm_topic_arn])])
+    error_message = "prd must have every Valkey alarm, named svp-prd-<alarm>, notifying the alarm topic of prd."
+  }
+
+  # Both nodes, primary and replica: either may be the primary after a failover.
+  assert {
+    condition = alltrue([
+      for a in aws_cloudwatch_metric_alarm.this :
+      toset([for q in a.metric_query : q.metric[0].dimensions["CacheClusterId"] if q.return_data != true]) == toset(["svp-prd-001", "svp-prd-002"]) &&
+      one([for q in a.metric_query : q.expression if q.return_data == true]) == "MAX([m0, m1])"
+    ])
+    error_message = "The alarms of prd must read both nodes and take the highest."
   }
 }
 
@@ -239,4 +322,24 @@ run "password_version_zero" {
   }
 
   expect_failures = [var.password_version]
+}
+
+run "slow_log_retention_days_not_offered" {
+  command = plan
+
+  variables {
+    slow_log_retention_days = 2
+  }
+
+  expect_failures = [var.slow_log_retention_days]
+}
+
+run "alarm_topic_arn_not_sns" {
+  command = plan
+
+  variables {
+    alarm_topic_arn = "arn:aws:sqs:ap-southeast-1:000000000000:svp-stg-alarms"
+  }
+
+  expect_failures = [var.alarm_topic_arn]
 }

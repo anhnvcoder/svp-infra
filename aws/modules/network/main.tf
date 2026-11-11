@@ -73,8 +73,12 @@ module "vpc" {
   default_security_group_ingress = []
   default_security_group_egress  = []
 
-  public_subnet_tags  = merge(local.cluster_tag, { "kubernetes.io/role/elb" = "1" })
-  private_subnet_tags = merge(local.cluster_tag, { "kubernetes.io/role/internal-elb" = "1" })
+  public_subnet_tags = merge(local.cluster_tag, { "kubernetes.io/role/elb" = "1" })
+  # karpenter.sh/discovery: the EC2NodeClass of Karpenter launches nodes into the subnets with this tag.
+  private_subnet_tags = merge(local.cluster_tag, {
+    "kubernetes.io/role/internal-elb" = "1"
+    "karpenter.sh/discovery"          = var.cluster_name
+  })
 
   enable_flow_log                                 = var.flow_log_enabled
   create_flow_log_cloudwatch_log_group            = var.flow_log_enabled

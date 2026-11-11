@@ -113,12 +113,27 @@ resource "aws_elasticache_replication_group" "this" {
 
   snapshot_retention_limit = 0
 
-  # An env lives for one session: a change waiting for the maintenance window would never be seen.
-  apply_immediately = true
+  # With apply_immediately false a change waits for this window (01:00-02:00 Monday in Singapore) and the plan shows
+  # it as pending.
+  apply_immediately  = var.apply_immediately
+  maintenance_window = "sun:18:00-sun:19:00"
+
+  log_delivery_configuration {
+    destination      = aws_cloudwatch_log_group.slow_log.name
+    destination_type = "cloudwatch-logs"
+    log_format       = "json"
+    log_type         = "slow-log"
+  }
 
   tags = {
     Name = var.name
   }
+}
+
+# ElastiCache writes to an existing log group only; made here, it keeps the retention below and goes away with destroy.
+resource "aws_cloudwatch_log_group" "slow_log" {
+  name              = "/aws/elasticache/${var.name}/slow-log"
+  retention_in_days = var.slow_log_retention_days
 }
 
 ################################################################################

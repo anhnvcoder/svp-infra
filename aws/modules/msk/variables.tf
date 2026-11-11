@@ -78,6 +78,27 @@ variable "broker_volume_size" {
   }
 }
 
+variable "broker_volume_max_size" {
+  description = "Ceiling of the EBS volume of each broker, in GiB, up to which storage autoscaling grows it (at least broker_volume_size, at most 16384)."
+  type        = number
+
+  validation {
+    condition     = var.broker_volume_max_size >= var.broker_volume_size && var.broker_volume_max_size <= 16384
+    error_message = "broker_volume_max_size must be between broker_volume_size and 16384 GiB."
+  }
+}
+
+variable "broker_storage_target_utilization" {
+  description = "Percentage of the broker volume in use (KafkaBrokerStorageUtilization) that storage autoscaling keeps the brokers under."
+  type        = number
+  default     = 60
+
+  validation {
+    condition     = var.broker_storage_target_utilization > 0 && var.broker_storage_target_utilization < 100
+    error_message = "broker_storage_target_utilization must be a percentage between 0 and 100, both excluded."
+  }
+}
+
 variable "replication_factor" {
   description = "Replication factor of every topic (default.replication.factor; topics are created without one) and of the internal topics of consumer offsets and transactions."
   type        = number
@@ -134,4 +155,14 @@ variable "kafka_admin_secret_id" {
 variable "kafka_users_secret_id" {
   description = "ARN of the External Secrets entry svp/<env>/kafka-users (output secret_arns of the external-secrets module); this module writes its value, one key SVP_KAFKA_<USER>_PASSWORD per user other than svp-admin."
   type        = string
+}
+
+variable "alarm_topic_arn" {
+  description = "ARN of the SNS topic every CloudWatch alarm of the cluster notifies, when it fires and when it clears."
+  type        = string
+
+  validation {
+    condition     = can(regex("^arn:aws[a-z-]*:sns:[a-z0-9-]+:[0-9]{12}:[A-Za-z0-9_-]+$", var.alarm_topic_arn))
+    error_message = "alarm_topic_arn must be the ARN of an SNS topic."
+  }
 }

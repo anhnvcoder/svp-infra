@@ -167,6 +167,17 @@ run "prd_values" {
     condition     = length(jsondecode(aws_vpc_endpoint.s3.policy).Statement) == 2
     error_message = "The S3 endpoint policy of prd must hold exactly the two statements."
   }
+
+  # Karpenter launches nodes only into the subnets with its discovery tag: every private subnet, nothing else.
+  assert {
+    condition     = length(module.vpc.private_subnet_objects) == 3 && alltrue([for s in module.vpc.private_subnet_objects : s.tags["karpenter.sh/discovery"] == "svp-prd"])
+    error_message = "Every private subnet of prd must carry karpenter.sh/discovery = svp-prd."
+  }
+
+  assert {
+    condition     = alltrue([for s in concat(module.vpc.public_subnet_objects, module.vpc.database_subnet_objects) : !contains(keys(s.tags), "karpenter.sh/discovery")])
+    error_message = "Public and database subnets must not carry karpenter.sh/discovery: Karpenter would launch nodes there."
+  }
 }
 
 

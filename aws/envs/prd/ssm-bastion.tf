@@ -13,9 +13,10 @@ module "ssm_bastion" {
   cluster_name          = module.eks.cluster_name
   cluster_endpoint      = module.eks.cluster_endpoint
   api_security_group_id = module.eks.cluster_security_group_id
+  local_port            = var.api_tunnel_port
 }
 
 output "api_tunnel_command" {
-  description = "Command that opens the tunnel to the Kubernetes API (127.0.0.1:6443 to the private endpoint on 443) and runs until stopped; run it with eval in a terminal of its own. Needs the Session Manager plugin of the AWS CLI."
+  description = "Command that opens the tunnel to the Kubernetes API (127.0.0.1:<api_tunnel_port> to the private endpoint on 443) and runs until stopped; run it with eval in a terminal of its own. Needs the Session Manager plugin of the AWS CLI."
   value       = module.ssm_bastion.tunnel_command
 }

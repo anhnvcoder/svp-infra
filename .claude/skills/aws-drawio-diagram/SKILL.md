@@ -73,7 +73,10 @@ inventory thì đặt `cid` của icon là id tài nguyên và `cid` của box s
 7. **Control plane do AWS quản lý vẽ ngoài VPC, trong Cloud** (dải trên VPC), với một đường tới box cluster; ENI của nó trong subnet
    private không vẽ.
 8. **Managed node group: một icon mỗi AZ, trong subnet private của AZ đó** (node group trải mọi subnet của danh sách). Nhãn nêu loại
-   cấp (Spot, on-demand).
+   cấp (Spot, on-demand). **Node do Karpenter dựng** cũng một icon mỗi AZ, cùng cột, dưới icon node group (NodePool chọn subnet theo tag
+   discovery, mọi subnet private); nhãn nêu capacity type của NodePool. Controller tạo node theo luật 11 (đường đứt tới icon gần nhất).
+   Bastion (EC2 không thuộc node group) dùng icon `instance2` trong subnet private của nó, ngoài box cluster, với một đường tới box cluster
+   (endpoint private của API).
 9. **Pod không vẽ từng cái; namespace là khung trên vùng node.** Box cluster bao các icon node, trải box private của mọi hàng AZ (cluster
    trải mọi AZ, như sơ đồ EKS của AWS). Mỗi namespace là một khung (box không nền, không phải container aws4: viền AZ và nền subnet thấy
    qua nó) đặt trong box private, không bao giờ ở khe giữa hai AZ; tiêu đề là tên namespace thật (khung gom vài namespace nhỏ thì liệt kê
@@ -151,17 +154,19 @@ inventory thì đặt `cid` của icon là id tài nguyên và `cid` của box s
 
 ```text
 x:  40 users │ Cloud 160 · Account 200 · Route 53, WAF, CloudFront 240 │ Region 400 · IGW 440 │ VPC 560 · AZ 600..3360
-    public 640..1000 (NAT 680, NLB 880) · EBS 1040 (trong AZ, ngoài subnet) · private 1160..2560
+    public 640..1000 (NAT 680, NLB 880) · EBS 1040 (trong AZ, ngoài subnet) · private 1160..2560 (bastion 1200, AZ đầu)
     cluster 1400..2520: node 1440, cột namespace 1560 / 1800 / 2040 / 2280 (rộng 200; svp 3 cột, platform 2 cột)
     database 2600..3320: hành lang 2640 (MSK), 2680 (ElastiCache); RDS 2840, ElastiCache 3000, MSK 3160
 y:  phụ đề 40, 80, 120 · Cloud 160 · Account 200 · Region 240 · control plane 320 (nhãn trên) · hành lang DNS 420 · VPC 440
-    AZ k ở 480 + 480k, các hàng chạm nhau; ba box subnet +40 (cao 400): MSK, NAT, node +80, ElastiCache +160, EBS +200, RDS +280
+    AZ k ở 480 + 480k, các hàng chạm nhau; ba box subnet +40 (cao 400): MSK, NAT, node group +80, ElastiCache +160, bastion +200,
+    EBS +200, node Karpenter +280 (dưới đường kube-system → EBS ở +240), RDS +280
     hàng khung namespace của AZ đầu +200, +320, của AZ sau +160, +280; svp-data ba workload cách 40
     NLB ở biên hai AZ đầu (đỉnh = đáy box public đầu), IGW → NLB → Envoy chạy 20 trên biên, kube-system → NLB 20 dưới biên
     svp từ +320 của AZ đầu tới +160 của AZ sau (hàng icon 4 + 3); svp → RDS thẳng ở +320, svp → ElastiCache, MSK ra ở +300, +290
     RDS standby, ElastiCache replica ở AZ sau, cùng cột với primary
     gateway endpoint S3 dưới AZ cuối (+80) · dải regional dưới VPC, icon: media 600, uploads 760, Secrets Manager 1000, KMS 1280,
-    CloudWatch Logs 1560 (khi có log) · WAF 160 trên CloudFront · hành lang users → uploads dưới dải, trong Region
+    CloudWatch 1560 (log, alarm) → SNS 1840, EventBridge 2120 → SQS 2400, Systems Manager 2680 · WAF 160 trên CloudFront · hành lang
+    users → uploads dưới dải, trong Region
 ```
 
 Thêm AZ hay dịch vụ: giữ các hàng, cột ở trên, chỉ thêm icon ở bội số 40.

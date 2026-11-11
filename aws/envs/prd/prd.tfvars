@@ -13,25 +13,20 @@ flow_log_retention_days   = 30
 s3_endpoint_restricted    = true
 s3_endpoint_extra_buckets = ["prod-registry-k8s-io-ap-southeast-1"]
 
-# eks: no public endpoint (the API through the SSM tunnel of ssm-bastion.tf, so no public range either), control plane
-# logs kept 30 days, Secrets encrypted with a customer managed KMS key, three on-demand Graviton nodes of one size
-# spread over the three zones.
+# eks: no public endpoint (the API through the SSM tunnel of ssm-bastion.tf on its own local port), all five control
+# plane logs kept 30 days, Secrets encrypted with a customer managed KMS key. The eks module sizes the On-Demand system
+# node group (one node per zone); Karpenter makes the other nodes, sized and limited in svp-gitops.
 kubernetes_version               = "1.36"
-eks_endpoint_public_access       = false
-eks_public_access_cidrs          = []
-control_plane_log_types          = ["api", "audit", "authenticator"]
+api_tunnel_port                  = 6443
+control_plane_log_types          = ["api", "audit", "authenticator", "controllerManager", "scheduler"]
 control_plane_log_retention_days = 30
 eks_secrets_kms_encryption       = true
-node_instance_types              = ["m7g.large", "m6g.large"]
-node_capacity_type               = "ON_DEMAND"
-node_min_size                    = 3
-node_desired_size                = 3
-node_max_size                    = 6
 
-# rds: smallest Graviton class with Database Insights, a standby in a second zone, seven days of backups kept after a
-# deletion, deletion protection and a final snapshot; Performance Insights at the free retention, enhanced monitoring
-# every 60 s, PostgreSQL logs exported, logs and OS metrics kept 30 days.
-rds_instance_class                        = "db.t4g.medium"
+# rds: Graviton class for production, a standby in a second zone, storage growing up to 100 GiB, seven days of backups
+# kept after a deletion, deletion protection and a final snapshot; Performance Insights at the free retention, enhanced
+# monitoring every 60 s, PostgreSQL logs exported, logs and OS metrics kept 30 days.
+rds_instance_class                        = "db.m7g.large"
+rds_max_allocated_storage                 = 100
 rds_multi_az                              = true
 rds_backup_retention_period               = 7
 rds_delete_automated_backups              = false
@@ -44,16 +39,20 @@ rds_cloudwatch_logs_exports               = ["postgresql", "upgrade"]
 rds_cloudwatch_logs_retention_days        = 30
 
 # msk: one Graviton broker per zone, every topic on three brokers with two in sync, so a write acknowledged with
-# acks=all survives the loss of a zone and writes go on; broker logs kept 30 days.
+# acks=all survives the loss of a zone and writes go on; broker volumes growing up to 100 GiB, broker logs kept 30 days.
 msk_broker_instance_type       = "kafka.m7g.large"
 msk_replication_factor         = 3
 msk_min_insync_replicas        = 2
+msk_broker_volume_max_size     = 100
 msk_broker_logs_enabled        = true
 msk_broker_logs_retention_days = 30
 
-# valkey: a primary and a replica in another zone, Multi-AZ with automatic failover.
-valkey_node_type  = "cache.m7g.large"
-valkey_node_count = 2
+# valkey: a primary and a replica in another zone, Multi-AZ with automatic failover; changes wait for the maintenance
+# window, slow log kept 30 days.
+valkey_node_type               = "cache.m7g.large"
+valkey_node_count              = 2
+valkey_apply_immediately       = false
+valkey_slow_log_retention_days = 30
 
 # media: destroy stops at a bucket that holds objects; earlier versions kept 30 days, S3 access logs in a log bucket of
 # the env, the web ACL of waf.tf in front of CloudFront.

@@ -70,6 +70,31 @@ variable "node_count" {
   }
 }
 
+variable "apply_immediately" {
+  description = "Apply a change of the replication group at once (true) or in the next maintenance window (false), where a plan shows it as pending until then."
+  type        = bool
+}
+
+variable "slow_log_retention_days" {
+  description = "Days CloudWatch keeps the slow log of the engine, sent to the log group /aws/elasticache/<name>/slow-log that this module creates."
+  type        = number
+
+  validation {
+    condition     = contains([1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365], var.slow_log_retention_days)
+    error_message = "slow_log_retention_days must be one of 1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180 or 365."
+  }
+}
+
+variable "alarm_topic_arn" {
+  description = "ARN of the SNS topic every CloudWatch alarm of the replication group notifies, when it fires and when it clears."
+  type        = string
+
+  validation {
+    condition     = can(regex("^arn:aws[a-z-]*:sns:[a-z0-9-]+:[0-9]{12}:[A-Za-z0-9_-]+$", var.alarm_topic_arn))
+    error_message = "alarm_topic_arn must be the ARN of an SNS topic."
+  }
+}
+
 variable "valkey_users_secret_id" {
   description = "ID or ARN of the Secrets Manager entry svp/<env>/valkey-users (made by the external-secrets module), into which the module writes the password of each user under SVP_VALKEY_<USER>_PASSWORD."
   type        = string

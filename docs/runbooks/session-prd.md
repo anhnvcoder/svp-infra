@@ -1,17 +1,22 @@
 # Runbook: một buổi AWS prd
 
 Một buổi dựng env prd trong account `svp-prd` (`aws/envs/prd`, mức production: NAT mỗi AZ, RDS Multi-AZ, MSK ba broker trên ba AZ,
-ElastiCache primary và replica Multi-AZ, node on-demand trải ba AZ, bảo vệ xoá, API chỉ qua endpoint private), cài Argo CD và root GitOps qua
-tunnel SSM (`aws/gitops/prd`), chạy đúng commit `svp-gitops` mà stg đã chạy, đo (thời gian dựng, failover RDS Multi-AZ, mất một node ở một
-AZ, khởi động lại một broker MSK khi đang ghi, failover Valkey), rồi gỡ sạch trong cùng buổi. Thiết kế:
+ElastiCache primary và replica Multi-AZ, nhóm node hệ thống và node Karpenter on-demand trải ba AZ, bảo vệ xoá), cài Argo CD và root GitOps
+qua tunnel SSM (`aws/gitops/prd`), chạy đúng commit `svp-gitops` mà stg đã chạy, đo (thời gian dựng, failover RDS Multi-AZ, drain một AZ,
+khởi động lại một broker MSK khi đang ghi, failover Valkey, alarm), rồi gỡ sạch trong cùng buổi. Các diễn tập là chỗ kiểm bù của nhóm "giảm
+có điều kiện" ở stg ([ADR-0055](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0055-environment-matrix.md) §4). Thiết kế:
 [ADR-0048](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0048-prd-aws.md) (§4 truy cập API, §6 bootstrap EKS, §7 ghim revision,
 §8 promote, §9 kết thúc buổi, §10 chi phí), [ADR-0053](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0053-msk-elasticache-valkey.md)
 (Kafka là Amazon MSK, Valkey là ElastiCache; prd mất một AZ không mất event đã xác nhận), [ADR-0051](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0051-dns-prd-apex.md) (zone của mỗi env),
-[ADR-0052](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0052-cloudfront-flat-rate-free.md) (gói CloudFront flat-rate Free, web ACL WAF ở cả hai env).
+[ADR-0052](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0052-cloudfront-flat-rate-free.md) (gói CloudFront flat-rate Free, web ACL WAF ở cả hai env),
+[ADR-0056](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0056-eks-platform-ha.md) (Karpenter, Envoy và Kyverno HA, trải zone),
+[ADR-0057](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0057-postgres17-verify-full.md) (PostgreSQL 17, `verify-full`, không proxy kết nối),
+[ADR-0058](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0058-managed-data-operations.md) (CloudWatch alarm tới email).
 
 Buổi prd đi đúng chuỗi script của buổi stg; khác biệt là dữ liệu (dòng `prd` của `env_table` trong `aws/scripts/lib.sh`: profile `anhnv-prd`,
 biến `SVP_AWS_PRD_ACCOUNT_ID`, tunnel cổng 6443, file `teardown.tfvars`, không thang k6) và các bước tay ở đây. Mọi mục chung (luật chạy lệnh,
-thư mục buổi, mở lại terminal, ý nghĩa từng bước script, **Destroy kẹt**, **Lệnh xoá tay theo loại**, đổi secret) ở
+thư mục buổi, mở lại terminal, ý nghĩa từng bước script, xác nhận email của alarm, tunnel tới API, phép kiểm nền tảng, **Destroy kẹt**, **Lệnh
+xoá tay theo loại**, đổi secret) ở
 [`session-stg.md`](session-stg.md): đọc trước, thay `stg` bằng `prd`, `anhnv-stg` bằng `anhnv-prd`. File này chỉ ghi phần riêng của prd.
 
 **Người học chạy mọi lệnh ở đây.** AI không chạy lệnh nào chạm account hay cluster, kể cả lệnh chỉ đọc; AI đọc output dán lại và nhắc tới khi
@@ -24,8 +29,9 @@ aws/scripts/session.sh --print prd                 # mọi lệnh script của b
 ## Chi phí và giới hạn
 
 - **Trần một buổi C ≈ $11,0** = 4 giờ × (H₀ $0,90 + H_k $1,09)/giờ + O₀ $2,8 + O_k $0,22 (ADR-0053 §16 và bảng ở phụ lục của nó; H_k là
-  3 broker `kafka.m7g.large` cộng 2 node `cache.m7g.large` cộng phần nhỏ; H₀, O₀ ở phụ lục ADR-0048). **Phí giữ R ≈ $4,6/tháng** giữa các buổi (trail, KMS, bucket state của management; bucket state, KMS key, zone của hai baseline), báo riêng, không cộng
-  vào C.
+  3 broker `kafka.m7g.large` cộng 2 node `cache.m7g.large` cộng phần nhỏ; H₀, O₀ ở phụ lục ADR-0048), cộng node Karpenter on-demand ngoài
+  nhóm hệ thống, KMS key và CloudWatch alarm (ADR-0056, ADR-0058); buổi prd đầu đo số thật ở Cost Explorer. **Phí giữ R ≈ $4,6/tháng** giữa
+  các buổi (trail, KMS, bucket state của management; bucket state, KMS key, zone của hai baseline), báo riêng, không cộng vào C.
 - **Cả buổi 4 giờ**, từ cổng promote tới hai lượt `sweep.sh` sạch. Quá 3 giờ mà chưa đo xong thì bỏ phần đo còn lại, sang gỡ. Quên gỡ 24
   giờ ≈ $48 (24 × (H₀ + H_k)); budget `svp-prd-monthly` và budget tổng của org gửi email ở 50 %, 80 %, 100 %.
 - CloudFront và web ACL WAF của media nằm trong gói flat-rate Free như stg (`session-stg.md`, mục "Giới hạn"); web ACL sót sau khi gói huỷ
@@ -49,20 +55,19 @@ aws/scripts/session.sh --print prd                 # mọi lệnh script của b
    ```
 
 4. Account prd: AWS đã xác minh cho CloudFront (case Support mở từ account prd, như `session-stg.md` điều kiện 1) và quota EC2 on-demand đủ
-   cho node của `prd.tfvars` (3 `m7g.large` hay `m6g.large`, tối đa 6, cộng bastion `t4g.nano`): đọc quota vCPU on-demand chuẩn
-   (`L-1216C47A`):
+   cho mọi node của prd, cả node Karpenter (NodePool prd on-demand): đọc quota vCPU on-demand chuẩn (`L-1216C47A`):
 
    ```sh
    AWS_PROFILE=anhnv-prd aws service-quotas get-service-quota --service-code ec2 --quota-code L-1216C47A --region ap-southeast-1 \
      --query 'Quota.Value'
    ```
 
-   Cần ≥ 14 vCPU: 6 node × 2 vCPU + bastion 2 vCPU (`m7g.large`, `m6g.large` và `t4g.nano` đều 2 vCPU,
-   [trang loại instance của AWS](https://aws.amazon.com/ec2/instance-types/)); thiếu thì xin tăng và chờ trước buổi.
-5. Trên máy, ngoài các công cụ của stg: Session Manager plugin của AWS CLI (`session-manager-plugin --version`), `nc`, `gh` đã đăng nhập.
+   Cần ≥ 14 vCPU cộng `limits.cpu` của NodePool prd (`envs/prd/svp-cluster.yaml` của `svp-gitops`, số ở ADR-0056 §2): nhóm node hệ thống tới
+   `system_node_max_size` 6 node `m7g.large` × 2 vCPU, bastion `t4g.nano` 2 vCPU
+   ([trang loại instance của AWS](https://aws.amazon.com/ec2/instance-types/)); thiếu thì xin tăng và chờ trước buổi.
+5. Trên máy, ngoài các công cụ của stg: `gh` đã đăng nhập.
 6. `aws/backend-prd.hcl` và `aws/envs/prd/prd.auto.tfvars` như điều kiện 4, 5 của stg (profile `anhnv-prd`, root `aws/accounts/prd`,
-   `domain = "aws.<domain>"`: tên zone prd, web ở đỉnh, API ở `api.aws.<domain>`); prd không có `eks_public_access_cidrs` (endpoint công
-   khai tắt):
+   `domain = "aws.<domain>"`: tên zone prd, web ở đỉnh, API ở `api.aws.<domain>`; `alarm_email` là hộp thư nhận alarm):
 
    ```sh
    AWS_PROFILE=anhnv-prd terraform -chdir=aws/accounts/prd output -raw backend_hcl > aws/backend-prd.hcl
@@ -71,6 +76,7 @@ aws/scripts/session.sh --print prd                 # mọi lệnh script của b
    hosted_zone_id = "$zone"
    domain         = "aws.<domain>"
    acme_email     = "<email>"
+   alarm_email    = "<email>"
    EOF
    ```
 
@@ -99,8 +105,8 @@ export SVP_SESSION_DIR="$PWD/.session/$(date -u +%Y%m%dT%H%M%SZ)"
 
 ## Thứ tự
 
-Các bước script, theo đúng thứ tự `session.sh --print prd`; bước tay của prd chen giữa, ở các mục dưới (cổng promote trước bước 1, tunnel
-sau bước 5, gói Free, commit status và diễn tập sau bước 11, final snapshot sau bước 18):
+Các bước script, theo đúng thứ tự `session.sh --print prd`; bước tay của prd chen giữa, ở các mục dưới (cổng promote trước bước 1, email
+của alarm và tunnel sau bước 5, gói Free, phép kiểm nền tảng, commit status và diễn tập sau bước 11, final snapshot sau bước 18):
 
 | # | Lệnh | Hạn | Dán lại cho AI |
 | --- | --- | --- | --- |
@@ -161,22 +167,22 @@ cluster MSK ba broker `kafka.m7g.large` (configuration RF 3, min ISR 2) cùng lo
 node `cache.m7g.large` (`automatic_failover_enabled`, `multi_az_enabled` `true`). Apply ~65–70 phút (MSK là phần dài nhất). `apply` đỏ giữa
 chừng và lỗi apply đã biết (gói vượt hạn `ServiceQuotaExceededException`, account chưa xác minh, ElastiCache không nhận access string) theo
 `session-stg.md`, mục 3–5: lượt đỏ đã ghi một tài nguyên mang mật khẩu của nhóm Kafka hay Valkey thì tăng `msk_password_version` hay
-`valkey_password_version` trong `aws/envs/prd/prd.auto.tfvars` trước khi `plan` lại, rồi `bootstrap.sh prd secrets` ở bước 6.
+`valkey_password_version` trong `aws/envs/prd/prd.auto.tfvars` trước khi `plan` lại, rồi `bootstrap.sh prd secrets` ở bước 6. Plan có cùng
+các tài nguyên của Karpenter, bastion, KMS key, SNS và alarm như stg (`session-stg.md`, mục 3–5), tên `svp-prd-*`. Sau apply, xác nhận email
+của topic `svp-prd-alarms` theo `session-stg.md`, mục 3–5 (`AWS_PROFILE=anhnv-prd`, `$SVP_AWS_PRD_ACCOUNT_ID`).
 
 ## Tunnel tới API (sau bước 5, trước bước 6)
 
-Endpoint công khai của API prd tắt; máy tới endpoint private qua SSM port forwarding tới bastion (`127.0.0.1:6443`). Mở ở **một terminal
-riêng** từ gốc repo, giữ chạy tới hết bước 14 (Ctrl-C để đóng):
+Như `session-stg.md`, mục **Tunnel tới API**, với cổng `127.0.0.1:6443` của prd. Mở ở **một terminal riêng** từ gốc repo, giữ chạy tới hết
+bước 14 (Ctrl-C để đóng):
 
 ```sh
 cd infra
 eval "$(AWS_PROFILE=anhnv-prd terraform -chdir=aws/envs/prd output -raw api_tunnel_command)"
 ```
 
-Lệnh của output có sẵn profile `anhnv-prd` và `--region`. Mọi script cần API (`tf.sh prd gitops plan|apply|plan --destroy|destroy`,
-`bootstrap.sh prd wait`, `measure.sh prd`, `pre-destroy.sh prd`) kiểm `127.0.0.1:6443` trước lệnh đầu tới API và dừng với `FAIL no tunnel …`
-khi tunnel chưa mở hay đã rớt (phiên SSM hết hạn): mở lại tunnel rồi chạy lại đúng bước đó. Context `svp-prd` do `bootstrap.sh prd secrets`
-(và `pre-destroy.sh prd`) ghi: server `https://127.0.0.1:6443`, TLS server name là host của endpoint private.
+`FAIL no tunnel …` của một script là tunnel chưa mở hay đã rớt: mở lại rồi chạy lại đúng bước đó. Context `svp-prd`: server
+`https://127.0.0.1:6443`, TLS server name là host của endpoint private.
 
 ## Bước 6–10: secret, root gitops, chờ
 
@@ -196,7 +202,10 @@ dưới). Sau smoke, phép kiểm (c) và (d) của ADR-0052 theo `session-stg.m
 [Gói Free và CORS của media](session-stg.md#gói-free-và-cors-của-media), với `AWS_PROFILE=anhnv-prd` và `aws/envs/prd` (web ACL
 `svp-prd-media`; playlist là của video smoke vừa tải lên), và phép kiểm (a)–(e) của ADR-0053 theo mục
 [Kafka và Valkey managed](session-stg.md#kafka-và-valkey-managed), với `anhnv-prd`, `--context svp-prd`, tên `svp-prd` (mong `kafka.m7g.large`,
-`3` broker; replication group `2` node), gồm plan lần hai sau apply, phải cho `No changes` (`ok plan text in …: No changes.`):
+`3` broker; replication group `2` node), phép kiểm (a)–(f) của mục
+[Nền tảng EKS, TLS Postgres và alarm](session-stg.md#nền-tảng-eks-tls-postgres-và-alarm) với `anhnv-prd`, `--context svp-prd`, `svp-prd`
+(mong ba node `nodegroup=system` ở ba zone, node Karpenter `capacity-type=on-demand`, pod Kyverno trên ba zone, `db.m7g.large`, trần storage
+của `prd.tfvars`), gồm plan lần hai sau apply, phải cho `No changes` (`ok plan text in …: No changes.`):
 
 ```sh
 aws/scripts/tf.sh prd env plan
@@ -240,19 +249,50 @@ Deployment `svp-data/svp-ops`); một truy vấn tay vào database của service
    AWS_PROFILE=anhnv-prd make -C ../backend eks-smoke CONTEXT=svp-prd DOMAIN=<domain>
    ```
 
-   Dán lại: hai dòng AZ, các sự kiện `failover` (bắt đầu, xong), dòng cuối của smoke.
-3. **Mất một node ở một AZ**: xoá instance EC2 của một node (node group dựng node mới cùng AZ), trong lúc nó mất chạy smoke (pod của nó
-   chuyển sang node của AZ khác), rồi chờ node mới:
+   Dán lại: hai dòng AZ, các sự kiện `failover` (bắt đầu, xong), dòng cuối của smoke. **Thời gian nối lại** của service (số đo cho mục "Xem
+   lại khi" của **Proxy kết nối**, ADR-0057): từ sự kiện failover bắt đầu tới request lỗi cuối của `user-service`, `video-service`,
+   `engagement-service`, `feed-service` ở dashboard SLO (Grafana như `session-stg.md` bước 11, panel lỗi theo route), ghi giây. Alarm
+   `rds-*` nào đổi trạng thái trong lúc đó: đọc lịch sử, đối chiếu thư tới `alarm_email`:
 
    ```sh
-   AWS_PROFILE=anhnv-prd kubectl --context svp-prd get nodes -L topology.kubernetes.io/zone
-   AWS_PROFILE=anhnv-prd kubectl --context svp-prd get node <một node> -o jsonpath='{.spec.providerID}{"\n"}'   # aws:///<az>/<i-…>
-   AWS_PROFILE=anhnv-prd aws ec2 terminate-instances --instance-ids <i-…> --region ap-southeast-1 --query 'TerminatingInstances[0].CurrentState.Name' --output text
-   AWS_PROFILE=anhnv-prd make -C ../backend eks-smoke CONTEXT=svp-prd DOMAIN=<domain>
-   AWS_PROFILE=anhnv-prd kubectl --context svp-prd get nodes -L topology.kubernetes.io/zone -w                            # chờ node mới Ready, Ctrl-C
+   AWS_PROFILE=anhnv-prd aws cloudwatch describe-alarm-history --history-item-type StateUpdate \
+     --start-date "$(date -u -v-30M +%Y-%m-%dT%H:%M:%SZ)" --region ap-southeast-1 --output text \
+     --query "AlarmHistoryItems[?starts_with(AlarmName, 'svp-prd-rds-')].[Timestamp,AlarmName,HistorySummary]"
    ```
 
-   Dán lại: AZ của node đã xoá, dòng cuối của smoke (phải đạt khi chỉ còn hai node), thời gian tới khi node mới Ready.
+3. **Drain một AZ** (ADR-0056, phép kiểm buổi prd): cordon rồi drain mọi node của một zone, cả node hệ thống. Pod bị đuổi theo PDB (Envoy
+   `minAvailable: 1`, Kyverno `maxUnavailable: 1`, controller nền tảng), chạy lại trên node của hai zone còn lại; pod còn Pending thì Karpenter
+   dựng node mới. Karpenter không biết zone đó "mất" và có thể dựng node mới ngay ở zone đó (nhóm node hệ thống cũng vậy): zone của node mới
+   là số đo, không là trượt. Trong lúc drain chạy, terminal thứ hai chạy smoke và đọc Envoy, Kyverno:
+
+   ```sh
+   AWS_PROFILE=anhnv-prd kubectl --context svp-prd get nodes -L topology.kubernetes.io/zone,eks.amazonaws.com/nodegroup,karpenter.sh/nodepool
+   zone=ap-southeast-1a                                                                                     # một zone của dòng trên
+   AWS_PROFILE=anhnv-prd kubectl --context svp-prd cordon -l topology.kubernetes.io/zone="$zone"
+   AWS_PROFILE=anhnv-prd kubectl --context svp-prd drain -l topology.kubernetes.io/zone="$zone" --ignore-daemonsets --delete-emptydir-data \
+     --timeout=15m 2>&1 | tee "$SVP_SESSION_DIR/drain-$zone.log"
+   ```
+
+   Terminal thứ hai, trong lúc drain:
+
+   ```sh
+   AWS_PROFILE=anhnv-prd make -C ../backend eks-smoke CONTEXT=svp-prd DOMAIN=<domain>
+   AWS_PROFILE=anhnv-prd kubectl --context svp-prd -n envoy-gateway-system get pods -l gateway.envoyproxy.io/owning-gateway-name=svp -o wide
+   AWS_PROFILE=anhnv-prd kubectl --context svp-prd -n kyverno get pods -l app.kubernetes.io/component=admission-controller -o wide
+   AWS_PROFILE=anhnv-prd kubectl --context svp-prd get nodeclaims.karpenter.sh
+   AWS_PROFILE=anhnv-prd kubectl --context svp-prd get pods -A --field-selector=status.phase=Pending
+   ```
+
+   Rồi trả zone về và đọc lại node:
+
+   ```sh
+   AWS_PROFILE=anhnv-prd kubectl --context svp-prd uncordon -l topology.kubernetes.io/zone="$zone"
+   AWS_PROFILE=anhnv-prd kubectl --context svp-prd get nodes -L topology.kubernetes.io/zone,karpenter.sh/nodepool
+   ```
+
+   Mong: smoke đạt trong lúc drain; luôn còn ít nhất một pod Envoy `Running` và hai pod Kyverno `Running`; drain xong không lỗi
+   `Cannot evict pod as it would violate the pod's disruption budget` kéo quá `--timeout`; không pod nào Pending quá vài phút. Dán lại: zone đã
+   drain, dòng cuối của smoke, ba output đọc pod, NodeClaim mới (zone, thời gian tới `Ready`), các dòng `evicting`/`error` của log drain.
 
 4. **Khởi động lại một broker MSK khi đang ghi, không mất event** (phép kiểm (g) của ADR-0053): tải thật qua `https://api.<domain>` của prd
    (k6 profile `cloud`, view ghi vào `engagement.views.v1`), cộng một producer đếm được trên topic thử `svp-durability-check` (`acks=all`,
@@ -346,6 +386,10 @@ Deployment `svp-data/svp-ops`); một truy vấn tay vào database của service
    dashboard SLO số request lỗi của `gateway`, `web` trong khoảng giữa hai sự kiện: lỗi chỉ trong khoảng đó, không quá timeout Redis của
    service, là đạt.
 
+6. **Alarm `page` tới email**: phép (f) của mục
+   [Nền tảng EKS, TLS Postgres và alarm](session-stg.md#nền-tảng-eks-tls-postgres-và-alarm) với `anhnv-prd`, `svp-prd-rds-storage-low`:
+   thư `ALARM` có URL runbook, rồi thư `OK`. Dán lại lịch sử của alarm.
+
 (Tuỳ chọn) **Đổi một secret của env đang chạy**: như mục cùng tên của `session-stg.md`, với `aws/scripts/bootstrap.sh prd secrets`,
 `aws/envs/prd/prd.auto.tfvars` (version write-only của mật khẩu Kafka, Valkey), `aws/scripts/tf.sh prd env plan|apply`, `AWS_PROFILE=anhnv-prd`,
 `--context svp-prd`, tunnel mở: cùng các dòng `ok`, `FAIL` (`cluster svp-prd …`). Không broker nào restart: MSK đọc mật khẩu từ secret SCRAM,
@@ -380,8 +424,9 @@ Theo thứ tự, mỗi bước xong mới sang bước sau:
    ```
 
 3. **`aws/scripts/sweep.sh prd`** (profile `anhnv-prd`): chỉ còn dòng `kept` (`Stack=baseline`: bucket state, KMS key state, zone
-   `aws.<domain>` cùng bản ghi `NS` uỷ quyền `stg.aws.<domain>` dưới đỉnh của nó) và `pending deletion` (hai KMS key của root env: Secrets của
-   EKS, MSK; 7 ngày), exit 0; không còn dòng MSK, ElastiCache, `AmazonMSK_*`, log group `/aws/msk/svp-prd` (phép kiểm (f) của ADR-0053).
+   `aws.<domain>` cùng bản ghi `NS` uỷ quyền `stg.aws.<domain>` dưới đỉnh của nó) và `pending deletion` (KMS key của root env: RDS, MSK, alarm,
+   Secrets của EKS; 7 ngày), exit 0; không còn dòng MSK, ElastiCache, `AmazonMSK_*`, log group `/aws/msk/svp-prd` (phép kiểm (f) của ADR-0053),
+   không còn instance, launch template, instance profile, hàng đợi SQS hay rule EventBridge nào của Karpenter.
    Còn gì khác: chạy lệnh `delete:` nó in, rồi chạy lại. Phép kiểm (e) của ADR-0052 (output vào phụ lục của nó, kết luận vào "Xác nhận"): gói của account
    rỗng (mong `[]`), cùng lượt sweep sạch này:
 

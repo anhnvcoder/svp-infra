@@ -5,8 +5,9 @@
 # with its own profile. Exit 0 when nothing else is left, 1 when anything is left or a kind could not be read.
 
 # Looks for resources tagged Project=svp, or with a tag Kubernetes components put on what they make
-# (kubernetes.io/cluster/svp-*, elbv2.k8s.aws/cluster, ebs.csi.aws.com/cluster, cluster.k8s.amazonaws.com/name), or
-# named svp-* (AmazonMSK_svp-* for the SCRAM secrets). What stays between sessions (a Stack of the environment's kept
+# (kubernetes.io/cluster/svp-*, elbv2.k8s.aws/cluster, ebs.csi.aws.com/cluster, cluster.k8s.amazonaws.com/name,
+# karpenter.sh/nodepool, karpenter.k8s.aws/cluster), or named svp-* (AmazonMSK_svp-* for the SCRAM secrets, Karpenter*
+# for the interruption rules of EventBridge). What stays between sessions (a Stack of the environment's kept
 # list in env_table of lib.sh) is printed as "kept", and KMS keys in PendingDeletion as "pending deletion", not counted;
 # an alias of the lab still on such a key is counted: it keeps its name, so the next session cannot make it again.
 
@@ -46,10 +47,10 @@ KEPT=$(printf '%s' "$kept_stacks" | jq -Rc 'split(",")')
 export KEPT
 
 # found KIND LINES DELETE: one line ok or FAIL for KIND, then each leftover indented, with the command that deletes it:
-# DELETE with {} for the first word of the leftover's line, run with the account's profile in $region, or the runbook's
-# section when one command does not do it.
+# DELETE with {} for the first word of the leftover's line and {rest} for the words after it, run with the account's
+# profile in $region, or the runbook's section when one command does not do it.
 found() {
-  local kind=$1 lines=$2 delete=$3 n line id
+  local kind=$1 lines=$2 delete=$3 n line id rest cmd
   lines=$(grep . <<<"$lines" | LC_ALL=C sort -u || true)
   printing && return 0
   if [ -z "$lines" ]; then
@@ -61,8 +62,11 @@ found() {
   while IFS= read -r line; do
     printf '        %s\n' "$line"
     id=${line%% *}
+    rest=${line#"$id"}
+    rest=${rest# }
+    cmd=${delete//\{rest\}/$rest}
     case $delete in
-      aws\ *) printf '          delete: AWS_PROFILE=%s %s --region %s\n' "$profile" "${delete//\{\}/$id}" "$region" ;;
+      aws\ *) printf '          delete: AWS_PROFILE=%s %s --region %s\n' "$profile" "${cmd//\{\}/$id}" "$region" ;;
       *) printf '          delete: %s\n' "$delete" ;;
     esac
   done <<<"$lines"
@@ -92,9 +96,24 @@ eks_clusters() { q '.clusters[] | select(startswith("svp-"))' eks list-clusters;
 
 instances() {
   local states=Name=instance-state-name,Values=pending,running,shutting-down,stopping,stopped f
-  for f in "$svp_tag" "$k8s_tag"; do
+  for f in "$svp_tag" "$k8s_tag" Name=tag-key,Values=karpenter.sh/nodepool; do
     q '.Reservations[].Instances[] | "\(.InstanceId) \(.State.Name) \(.InstanceType)"' ec2 describe-instances --filters "$states" "$f" || return 1
   done
+}
+
+# Launch templates Karpenter makes for each EC2NodeClass (tag karpenter.k8s.aws/cluster), and any of the lab's.
+launch_templates() {
+  local f
+  for f in "$svp_tag" 'Name=tag:karpenter.k8s.aws/cluster,Values=svp-*'; do
+    q '.LaunchTemplates[] | "\(.LaunchTemplateId) \(.LaunchTemplateName)"' ec2 describe-launch-templates --filters "$f" || return 1
+  done
+}
+
+# Instance profiles Karpenter makes for an EC2NodeClass, outside Terraform's state: under path /karpenter/<region>/
+# <cluster>/, with the node role svp-<env>-karpenter-node. While one holds the role, IAM refuses to delete the role.
+instance_profiles() {
+  q '.InstanceProfiles[] | select((.Path | test("^/karpenter/[^/]+/svp-")) or any(.Roles[]?; .RoleName | startswith("svp-")))
+    | "\(.InstanceProfileName) \(.Roles[0].RoleName // "-")"' iam list-instance-profiles
 }
 
 volumes() {
@@ -196,6 +215,28 @@ cache_subnet_groups() {
 cache_parameter_groups() {
   q '.CacheParameterGroups[] | select(.CacheParameterGroupName | startswith("svp-")) | "\(.CacheParameterGroupName) \(.CacheParameterGroupFamily)"' \
     elasticache describe-cache-parameter-groups
+}
+
+# The interruption queue of Karpenter (svp-<env>-karpenter) and any other queue svp-*.
+queues() { q '.QueueUrls[]?' sqs list-queues --queue-name-prefix svp-; }
+
+# The EventBridge rules that feed that queue (Karpenter<event>-<suffix>), each with the ids of its targets, which go
+# before the rule.
+event_rules() {
+  local names n ids
+  names=$(q '.Rules[].Name' events list-rules --name-prefix Karpenter) || return 1
+  printing && names='<each-rule-above>'
+  for n in $names; do
+    ids=$(q '[.Targets[].Id] | join(" ")' events list-targets-by-rule --rule "$n") || return 1
+    printing || echo "$n $ids"
+  done
+}
+
+# Alarms of the lab (svp-<env>-<alarm>) and the target tracking alarms Application Auto Scaling makes for the storage of
+# an MSK cluster svp-*, which deleting the cluster before its scaling policy leaves behind.
+alarms() {
+  q '.MetricAlarms[].AlarmName | select(startswith("svp-") or (startswith("TargetTracking-") and contains(":cluster/svp-")))' \
+    cloudwatch describe-alarms
 }
 
 # Buckets named svp-*; those tagged with a kept Stack go to the kept list.
@@ -334,6 +375,9 @@ step "sweep.sh: leftovers of the lab in account $env_name, $region and $global_r
 check_account
 sweep_kind "EKS clusters" eks_clusters "aws eks delete-cluster --name {}"
 sweep_kind "EC2 instances" instances "aws ec2 terminate-instances --instance-ids {}"
+sweep_kind "EC2 launch templates" launch_templates "aws ec2 delete-launch-template --launch-template-id {}"
+sweep_kind "IAM instance profiles of Karpenter" instance_profiles \
+  "aws iam remove-role-from-instance-profile --instance-profile-name {} --role-name {rest} --region $region && AWS_PROFILE=$profile aws iam delete-instance-profile --instance-profile-name {}"
 sweep_kind "EBS volumes" volumes "aws ec2 delete-volume --volume-id {}"
 sweep_kind "EBS snapshots" snapshots "aws ec2 delete-snapshot --snapshot-id {}"
 vpc_ids=
@@ -367,6 +411,10 @@ sweep_kind "CloudFront pricing plan subscriptions" subscriptions \
 sweep_kind "CloudFront distributions" distributions "$runbook (disable, wait, then delete)"
 sweep_kind "CloudFront origin access controls and response headers policies" cloudfront_policies "$runbook"
 sweep_kind "WAF web ACLs of CloudFront" web_acls "$runbook (delete-web-acl takes the lock token of get-web-acl)"
+sweep_kind "SQS queues" queues "aws sqs delete-queue --queue-url {}"
+sweep_kind "EventBridge rules of Karpenter" event_rules \
+  "aws events remove-targets --rule {} --ids {rest} --region $region && AWS_PROFILE=$profile aws events delete-rule --name {}"
+sweep_kind "CloudWatch alarms" alarms "aws cloudwatch delete-alarms --alarm-names {}"
 sweep_kind "CloudWatch log groups" log_groups "aws logs delete-log-group --log-group-name {}"
 sweep_kind "Secrets Manager secrets (scheduled for deletion included)" secrets \
   "aws secretsmanager delete-secret --secret-id {} --force-delete-without-recovery"

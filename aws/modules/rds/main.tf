@@ -47,7 +47,7 @@ resource "aws_vpc_security_group_ingress_rule" "postgres" {
 # service's URL fails loudly instead of sending passwords and rows in clear inside the VPC.
 resource "aws_db_parameter_group" "this" {
   name_prefix = "${var.name}-pg${var.engine_major_version}-"
-  description = "PostgreSQL ${var.engine_major_version} of ${var.name}, TLS only"
+  description = "PostgreSQL ${var.engine_major_version} of ${var.name}, TLS only, slow statements and sessions logged"
   family      = "postgres${var.engine_major_version}"
 
   parameter {
@@ -55,10 +55,46 @@ resource "aws_db_parameter_group" "this" {
     value = "1"
   }
 
+  # What an incident needs to be read later: statements and autovacuum runs of 1 s or more, lock waits past
+  # deadlock_timeout, temporary files of 10 MiB or more, every connection and session. Bind values stay out of the log
+  # (log_parameter_max_length = 0): they carry e-mail addresses and password hashes.
+  dynamic "parameter" {
+    for_each = {
+      log_min_duration_statement  = "1000"
+      log_lock_waits              = "1"
+      log_temp_files              = "10240"
+      log_autovacuum_min_duration = "1000"
+      log_connections             = "1"
+      log_disconnections          = "1"
+      log_parameter_max_length    = "0"
+    }
+
+    content {
+      name  = parameter.key
+      value = parameter.value
+    }
+  }
+
   # A new major means a new family, hence a new group, which must exist before the instance switches to it.
   lifecycle {
     create_before_destroy = true
   }
+}
+
+# One key of the instance for its storage, its Performance Insights data and the secret of its master password, so the
+# env controls and audits every use of the data and can revoke it. The default key policy: who may use the key is
+# decided by IAM of the account, and RDS uses it through grants it creates.
+resource "aws_kms_key" "this" {
+  description              = "RDS ${var.name}: storage, Performance Insights and master user secret"
+  key_usage                = "ENCRYPT_DECRYPT"
+  customer_master_key_spec = "SYMMETRIC_DEFAULT"
+  enable_key_rotation      = true
+  deletion_window_in_days  = 7
+}
+
+resource "aws_kms_alias" "this" {
+  name          = "alias/${var.name}-rds"
+  target_key_id = aws_kms_key.this.key_id
 }
 
 # A final snapshot needs a name no earlier snapshot holds: a production instance destroyed and made again would
@@ -77,17 +113,23 @@ resource "aws_db_instance" "this" {
   engine_version = var.engine_major_version
   instance_class = var.instance_class
 
-  storage_type      = "gp3"
-  allocated_storage = var.allocated_storage
-  # Encrypted with the AWS managed key of RDS: no key of our own to pay for and keep a policy on.
-  storage_encrypted = true
+  storage_type          = "gp3"
+  allocated_storage     = var.allocated_storage
+  max_allocated_storage = var.max_allocated_storage
+  storage_encrypted     = true
+  kms_key_id            = aws_kms_key.this.arn
+
+  # The CA RDS signs the server certificate with, written out so that a change of the RDS default shows in a plan:
+  # clients verify the server against the bundle of this CA.
+  ca_cert_identifier = "rds-ca-rsa2048-g1"
 
   # The chart of the cluster expects this name for the bootstrap user (it carries only the password), on every
   # platform; it is the default master name of RDS PostgreSQL.
   username = "postgres"
   # RDS makes the password, keeps it in Secrets Manager and rotates it; it never passes through Terraform, so it is
   # in neither the plan nor the state.
-  manage_master_user_password = true
+  manage_master_user_password   = true
+  master_user_secret_kms_key_id = aws_kms_key.this.arn
 
   db_subnet_group_name   = aws_db_subnet_group.this.name
   vpc_security_group_ids = [aws_security_group.this.id]
@@ -109,6 +151,7 @@ resource "aws_db_instance" "this" {
   database_insights_mode                = "standard"
   performance_insights_enabled          = var.performance_insights_enabled
   performance_insights_retention_period = var.performance_insights_enabled ? var.performance_insights_retention_period : null
+  performance_insights_kms_key_id       = var.performance_insights_enabled ? aws_kms_key.this.arn : null
   monitoring_interval                   = var.monitoring_interval
   monitoring_role_arn                   = var.monitoring_interval > 0 ? aws_iam_role.monitoring[0].arn : null
   enabled_cloudwatch_logs_exports       = var.cloudwatch_logs_exports

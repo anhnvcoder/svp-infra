@@ -6,7 +6,8 @@ mang metadata của cluster, và ApplicationSet `svp-bootstrap` tạo Applicatio
 [`gitops-bridge`](../modules/gitops-bridge/README.md); root chỉ đọc nguồn và áp.
 
 Root riêng, không gộp vào root env: provider `kubernetes` khuyên dựng cluster và tài nguyên Kubernetes trong hai lần apply riêng,
-`kubernetes_manifest` cần API server ngay lúc plan, và API của prd chỉ tới được qua tunnel, nên plan của root env không bao giờ cần tunnel.
+`kubernetes_manifest` cần API server ngay lúc plan, và API của cả hai env chỉ tới được qua tunnel, nên plan của root env không bao giờ cần
+tunnel.
 
 ## Áp gì, theo thứ tự nào
 
@@ -14,7 +15,7 @@ Root riêng, không gộp vào root env: provider `kubernetes` khuyên dựng cl
 
 | Resource | Nguồn |
 | --- | --- |
-| `kubernetes_manifest.namespace` | `argocd`, namespace của dự án và của chart nền tảng, render `templates/namespaces.yaml` của chart `svp-cluster` (`data "helm_template"`) với values Application `svp-cluster` đọc, theo thứ tự Argo CD đọc: `platforms/eks/svp-cluster.yaml` ở B, `envs/<env>/svp-cluster.yaml` ở `main` khi file có, cuối cùng `valuesObject` (mẫu `platforms/eks/svp-cluster.values.tpl` ở B render trên `cluster_values` bằng chart `platform-values` của module); server-side apply, field manager `svp-pod-security` |
+| `kubernetes_manifest.namespace` | `argocd`, namespace của dự án và của chart nền tảng, render `templates/namespaces.yaml` của chart `svp-cluster` (`data "helm_template"`) với values Application `svp-cluster` đọc, theo thứ tự Argo CD đọc: `platforms/eks/svp-cluster.yaml` ở B, `envs/<env>/svp-cluster.yaml` ở `main` khi file có (overlay theo env: capacity type, `limits`, ngân sách disruption của NodePool Karpenter), cuối cùng `valuesObject` (mẫu `platforms/eks/svp-cluster.values.tpl` ở B render trên `cluster_values` bằng chart `platform-values` của module); server-side apply, field manager `svp-pod-security` |
 | `helm_release.argocd` | repo, chart, version, namespace của `argocd/bootstrap.json` ở B; values file nó nêu rồi `platforms/eks/argo-cd.yaml` ở B. Argo CD không tự quản: đổi version hay values tới cluster ở lần apply sau |
 | `helm_release.app_projects` | `argocd/project.yaml` ở B, nguyên văn, qua chart `resources` của module, `take_ownership` (argocd-server đã tạo AppProject `default`) |
 | `kubernetes_secret_v1.cluster` | `argocd/in-cluster`: label env, platform, kiến trúc node; annotation `svp.io/cluster-values` (output `cluster_values` của root env) và chat Telegram |
@@ -35,7 +36,7 @@ Các file `*.tf` của hai root giống hệt nhau trừ dòng `env` của `loca
 | --- | --- | --- | --- |
 | `node_arch` | `arm64` | `arm64` | node Graviton của cả hai env |
 | `require_pinned_revision` | `false` | `true` | prd chỉ bootstrap ở commit stg đã chạy (`gitopsRevision`, PR promote ghi); khoá vắng thì plan dừng |
-| `api_server_url` | không đặt (`null`) | `https://127.0.0.1:6443` | endpoint công khai của prd tắt: hai provider đi qua tunnel SSM của root `aws/envs/prd` |
+| `api_server_url` | `https://127.0.0.1:6444` | `https://127.0.0.1:6443` | endpoint công khai của API tắt ở cả hai env: hai provider đi qua tunnel SSM của root `aws/envs/<env>`, mỗi env một cổng local (`api_tunnel_port` của root env) |
 
 TLS server name luôn là host của `cluster_endpoint` (state root env), cả khi đi qua tunnel; không nằm trong file commit nào.
 
@@ -55,15 +56,15 @@ Trình tự cả buổi ở runbook buổi của `docs/runbooks/`.
 
 1. Apply root `aws/envs/<env>` (README của nó).
 2. Ghi giá trị secret: `AWS_PROFILE=anhnv-stg make eks-secrets CONTEXT=svp-stg` ở repo code.
-3. Chỉ prd: PR promote đặt `gitopsRevision` của `envs/prd/charts.yaml` đã merge; mở tunnel ở một terminal riêng
-   (`eval "$(AWS_PROFILE=anhnv-prd terraform -chdir=../../envs/prd output -raw api_tunnel_command)"`) và giữ nó chạy tới khi xong apply.
+3. Mở tunnel ở một terminal riêng (`eval "$(AWS_PROFILE=anhnv-stg terraform -chdir=../../envs/stg output -raw api_tunnel_command)"`)
+   và giữ nó chạy tới khi gỡ xong root này. Chỉ prd: PR promote đặt `gitopsRevision` của `envs/prd/charts.yaml` đã merge trước plan.
 4. Giải nén chart `svp-cluster` (mục dưới), rồi init, plan, apply root này (mục "Lệnh").
 5. Chờ Application `svp-observability` Healthy, chạy `make eks-glitchtip-init CONTEXT=svp-stg` ở repo code, rồi chờ `svp-root`:
 
 ```sh
-kubectl --context svp-stg -n argocd wait applications.argoproj.io/svp-observability --for=jsonpath='{.status.health.status}'=Healthy --timeout=30m
-kubectl --context svp-stg -n argocd wait applications.argoproj.io/svp-root --for=jsonpath='{.status.sync.status}'=Synced --timeout=30m
-kubectl --context svp-stg -n argocd wait applications.argoproj.io/svp-root --for=jsonpath='{.status.health.status}'=Healthy --timeout=30m
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n argocd wait applications.argoproj.io/svp-observability --for=jsonpath='{.status.health.status}'=Healthy --timeout=30m
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n argocd wait applications.argoproj.io/svp-root --for=jsonpath='{.status.sync.status}'=Synced --timeout=30m
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n argocd wait applications.argoproj.io/svp-root --for=jsonpath='{.status.health.status}'=Healthy --timeout=30m
 ```
 
 Plan đầu tiên của buổi chạy sau apply root env: provider đọc output `cluster_endpoint`, `cluster_values` từ state đó, root env chưa apply thì
@@ -104,10 +105,11 @@ AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform appl
 
 ## Gỡ
 
-Root này gỡ **trước** root env (prd: tunnel vẫn mở), theo thứ tự:
+Root này gỡ **trước** root env (tunnel vẫn mở), theo thứ tự:
 
 1. `aws/scripts/pre-destroy.sh stg`: xoá ApplicationSet `svp-bootstrap` (`svp-root` không finalizer nên không xoá dây chuyền), rồi Application
-   workload, chờ NLB, TargetGroupBinding, bản ghi DNS, PVC gỡ khi controller còn chạy.
+   workload, chờ NLB, TargetGroupBinding, bản ghi DNS, PVC gỡ khi controller còn chạy; rồi NodePool và EC2NodeClass, chờ hết node của
+   Karpenter; rồi controller nền tảng.
 2. Destroy root này:
 
    ```sh

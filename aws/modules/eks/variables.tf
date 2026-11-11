@@ -18,6 +18,12 @@ variable "kubernetes_version" {
     condition     = can(regex("^1\\.[0-9]{2}$", var.kubernetes_version))
     error_message = "kubernetes_version must be a minor version such as 1.36."
   }
+
+  validation {
+    # The node group runs the pinned image release, which is built for one minor only.
+    condition     = !can(regex("^1\\.[0-9]{2}$", var.kubernetes_version)) || startswith(local.ami_release_version, "${var.kubernetes_version}.")
+    error_message = "kubernetes_version must be the minor of the pinned AMI release (local.ami_release_version of nodes.tf): bump both together."
+  }
 }
 
 variable "vpc_id" {
@@ -96,59 +102,25 @@ variable "control_plane_log_retention_days" {
   }
 }
 
-variable "node_instance_types" {
-  description = "Graviton (arm64) instance types of the node group, all of the same size so the scheduler sees the same node whichever one runs. Several types give Spot more pools to draw from when one runs short."
-  type        = list(string)
-  default     = ["m7g.large", "m6g.large", "t4g.large"]
+variable "system_node_instance_type" {
+  description = "Graviton (arm64) instance type of the system node group, On-Demand in every env. It holds what runs before Karpenter has a node of its own (add-ons, Argo CD, Karpenter), one replica of Karpenter per node."
+  type        = string
+  default     = "m7g.large"
 
   validation {
     # The node group runs the arm64 image of Amazon Linux 2023; Graviton types carry a g after the generation digit.
-    condition     = length(var.node_instance_types) > 0 && alltrue([for t in var.node_instance_types : can(regex("^[a-z]+[0-9]+g[a-z]*\\.[a-z0-9]+$", t))])
-    error_message = "node_instance_types must hold at least one Graviton (arm64) instance type such as m7g.large."
+    condition     = can(regex("^[a-z]+[0-9]+g[a-z]*\\.[a-z0-9]+$", var.system_node_instance_type))
+    error_message = "system_node_instance_type must be a Graviton (arm64) instance type such as m7g.large."
   }
 }
 
-variable "node_capacity_type" {
-  description = "SPOT (cheaper, nodes can be reclaimed with two minutes of notice) or ON_DEMAND."
-  type        = string
-  default     = "SPOT"
-
-  validation {
-    condition     = contains(["SPOT", "ON_DEMAND"], var.node_capacity_type)
-    error_message = "node_capacity_type must be SPOT or ON_DEMAND."
-  }
-}
-
-variable "node_min_size" {
-  description = "Smallest number of nodes of the node group."
+variable "system_node_max_size" {
+  description = "Largest number of nodes of the system node group, room to scale it by hand. It starts with one node per zone (the number of private_subnet_ids) and nothing scales it on its own."
   type        = number
-  default     = 3
 
   validation {
-    condition     = var.node_min_size >= 1 && floor(var.node_min_size) == var.node_min_size
-    error_message = "node_min_size must be a whole number of at least 1."
-  }
-}
-
-variable "node_desired_size" {
-  description = "Number of nodes when the node group is created. Terraform ignores later changes of it (the module leaves it to whoever scales the group), so a session scales with aws eks update-nodegroup-config."
-  type        = number
-  default     = 3
-
-  validation {
-    condition     = var.node_desired_size >= var.node_min_size && var.node_desired_size <= var.node_max_size && floor(var.node_desired_size) == var.node_desired_size
-    error_message = "node_desired_size must be a whole number between node_min_size and node_max_size."
-  }
-}
-
-variable "node_max_size" {
-  description = "Largest number of nodes of the node group."
-  type        = number
-  default     = 5
-
-  validation {
-    condition     = var.node_max_size >= var.node_min_size && floor(var.node_max_size) == var.node_max_size
-    error_message = "node_max_size must be a whole number of at least node_min_size."
+    condition     = var.system_node_max_size >= length(var.private_subnet_ids) && floor(var.system_node_max_size) == var.system_node_max_size
+    error_message = "system_node_max_size must be a whole number of at least the number of private_subnet_ids."
   }
 }
 

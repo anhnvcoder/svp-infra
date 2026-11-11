@@ -61,6 +61,6 @@ output "cluster_certificate_authority_data" {
 }
 
 output "kubeconfig_command" {
-  description = "Command that adds the cluster to the kubeconfig under the context name the make targets of the code repository expect (CONTEXT=<name>), served through the tunnel of api_tunnel_command on 127.0.0.1:6443 with the endpoint's host as TLS server name. Run it with eval."
+  description = "Command that adds the cluster to the kubeconfig under the context name the make targets of the code repository expect (CONTEXT=<name>), served through the tunnel of api_tunnel_command on 127.0.0.1:<api_tunnel_port> with the endpoint's host as TLS server name. Run it with eval."
   value       = module.ssm_bastion.kubeconfig_command
 }

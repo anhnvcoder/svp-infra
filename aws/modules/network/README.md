@@ -63,7 +63,7 @@ module "network" {
 | ---- | ----------- | ---- | ------- | :------: |
 | az\_count | Number of availability zones, taken in order from the zones of the region that need no opt-in. Each zone gets one public, one private and one database subnet. EKS needs subnets in at least two zones. | `number` | `2` | no |
 | cidr | IPv4 range of the VPC, a /16 to /20. Pods take their addresses from the private subnets (VPC CNI), so the range must not overlap any network the cluster talks to. | `string` | `"10.0.0.0/16"` | no |
-| cluster\_name | Name of the EKS cluster that runs in this VPC. The subnets get the tag kubernetes.io/cluster/<name> = shared, which the AWS Load Balancer Controller reads to pick subnets. | `string` | n/a | yes |
+| cluster\_name | Name of the EKS cluster that runs in this VPC. The subnets get the tag kubernetes.io/cluster/<name> = shared, which the AWS Load Balancer Controller reads to pick subnets; the private subnets also get karpenter.sh/discovery = <name>, which the EC2NodeClass of Karpenter reads. | `string` | n/a | yes |
 | flow\_log\_enabled | Send VPC flow logs (accepted and rejected traffic) to a CloudWatch log group that this module creates, with the IAM role that writes it. Off by default: ingestion is billed per GB. | `bool` | `false` | no |
 | flow\_log\_retention\_days | Days CloudWatch keeps the flow logs when flow\_log\_enabled is true. | `number` | `1` | no |
 | name | Name of the VPC and prefix of the names of its subnets, route tables, NAT gateways and Elastic IPs, e.g. svp-stg. | `string` | n/a | yes |
@@ -109,6 +109,8 @@ database có route table riêng chỉ với route `local` của VPC (`create_dat
 Internet Gateway), nên không đi ra Internet được dù qua NAT, và không gì từ Internet vào được. Mặc định của module `vpc` là gắn subnet
 database vào route table private (có `0.0.0.0/0` tới NAT); module đặt rõ ba cờ trong local `database_routes`, vì id route table chỉ biết
 sau apply nên test đọc local đó. Subnet database không có tag `kubernetes.io/*`: Load Balancer Controller không đặt load balancer ở đó.
+Chỉ subnet private mang `karpenter.sh/discovery = <cluster_name>`: EC2NodeClass của Karpenter chọn subnet theo tag này, nên node do
+Karpenter dựng chỉ nằm ở subnet private, không ở subnet public hay database.
 Module không tạo DB subnet group (`create_database_subnet_group = false`): module `rds` đã tạo của nó. Root đặt RDS, MSK, ElastiCache vào
 `database_subnet_ids` và dùng `database_subnet_cidrs` cho egress của NetworkPolicy tới database.
 
@@ -147,7 +149,8 @@ nguồn của từng thành phần (nhánh chính, tính đến 2026-10-31); bu�
 | ENI phụ của node (IP pod) | VPC CNI | `cluster.k8s.amazonaws.com/name=<cluster_name>`, `node.k8s.amazonaws.com/instance_id`, `eks:eni:owner=amazon-vpc-cni`; mô tả `aws-K8S-<instance-id>`; ENI `available` còn sót sau khi node mất |
 | ENI của control plane EKS trong subnet private | EKS | mô tả `Amazon EKS <cluster_name>`; EKS xoá khi xoá cluster |
 | Volume EBS của PVC | EBS CSI driver | `ebs.csi.aws.com/cluster=true`, `CSIVolumeName`, `kubernetes.io/created-for/pvc/namespace`, `kubernetes.io/created-for/pvc/name`, `kubernetes.io/created-for/pv/name`; `Project=svp` khi addon đặt `extraVolumeTags` (module EKS) |
+| Instance, ổ gốc, ENI chính của node do Karpenter dựng | Karpenter (NodePool, EC2NodeClass) | `karpenter.sh/nodepool`, `karpenter.sh/nodeclaim`, `kubernetes.io/cluster/<cluster_name>=owned`; `Project=svp` do EC2NodeClass đặt |
 | Log group `/aws/eks/<cluster_name>/cluster` | EKS khi bật log control plane | tên log group (module EKS quản lý nếu tạo trước) |
 
-Thứ tự xoá an toàn: xoá Service `LoadBalancer` và PVC trong cluster khi controller còn chạy, chờ NLB và volume mất, rồi mới
-`terraform destroy`; sau đó quét các tag trên trong region.
+Thứ tự xoá an toàn: xoá Service `LoadBalancer`, PVC và NodePool của Karpenter trong cluster khi controller còn chạy, chờ NLB, volume
+và node mất, rồi mới `terraform destroy`; sau đó quét các tag trên trong region.

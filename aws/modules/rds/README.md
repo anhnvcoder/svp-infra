@@ -2,13 +2,23 @@
 
 Một instance RDS PostgreSQL cho mọi service của một env (mỗi service vẫn một database và cặp role riêng, do Job bootstrap của cluster
 tạo; module không tạo database nào). Thiết kế: [ADR-0034](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0034-aws-stage7.md)
-mục 9 và 11.
+mục 9 và 11; major, CMK, storage autoscaling, tham số ghi log, CA:
+[ADR-0057](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0057-postgres17-verify-full.md); alarm:
+[ADR-0058](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0058-managed-data-operations.md).
 
 Tạo: DB subnet group (subnet database của VPC, không route ra Internet), security group chỉ nhận TCP 5432 từ các security group
-truyền vào (không rule egress), parameter group `postgres<major>` với `rds.force_ssl = 1` (kết nối không TLS bị từ chối), instance gp3
-mã hoá bằng key AWS quản lý của RDS, không public, master username cố định `postgres`, mật khẩu master do RDS tạo và giữ ở Secrets
+truyền vào (không rule egress), parameter group `postgres<major>` với `rds.force_ssl = 1` (kết nối không TLS bị từ chối) và các tham số
+ghi log của ADR-0057 §6, instance gp3 không public, master username cố định `postgres`, mật khẩu master do RDS tạo và giữ ở Secrets
 Manager (`manage_master_user_password`: không đi qua Terraform, không có trong plan hay state). Minor tự nâng trong cửa sổ bảo trì, major
 không bao giờ tự nâng.
+
+- **KMS key customer managed của module** (alias `alias/<name>-rds`, rotation bật, deletion window 7 ngày, key policy mặc định của
+  account): mã hoá storage, dữ liệu Performance Insights (khi bật) và secret mật khẩu master.
+- **CA của cert server** ghi rõ `rds-ca-rsa2048-g1`: client nối `sslmode=verify-full` với bundle CA của RDS, nên đổi CA hiện ra ở plan.
+- **Storage autoscaling:** `max_allocated_storage` là trần RDS tự tăng volume tới khi dung lượng trống thấp; trần phải cao hơn
+  `allocated_storage` ít nhất 26 %. Volume không bao giờ tự giảm.
+- **Tạo lại instance:** đổi KMS key hay major buộc tạo instance mới (mất dữ liệu nếu không restore từ snapshot). Chấp nhận vì mỗi buổi
+  dựng env mới; prd đổi một trong hai thì phải có kế hoạch restore riêng.
 
 Giám sát ngoài Prometheus của cluster, mỗi thứ tắt mặc định (tốn tiền; lab đọc Prometheus), prd bật qua biến:
 
@@ -50,11 +60,14 @@ Giám sát ngoài Prometheus của cluster, mỗi thứ tắt mặc định (t�
 | ---- | ---- |
 | [aws_cloudwatch_log_group.os_metrics](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_log_group) | resource |
 | [aws_cloudwatch_log_group.this](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_log_group) | resource |
+| [aws_cloudwatch_metric_alarm.this](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_metric_alarm) | resource |
 | [aws_db_instance.this](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/db_instance) | resource |
 | [aws_db_parameter_group.this](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/db_parameter_group) | resource |
 | [aws_db_subnet_group.this](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/db_subnet_group) | resource |
 | [aws_iam_role.monitoring](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role) | resource |
 | [aws_iam_role_policy_attachment.monitoring](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy_attachment) | resource |
+| [aws_kms_alias.this](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/kms_alias) | resource |
+| [aws_kms_key.this](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/kms_key) | resource |
 | [aws_security_group.this](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/security_group) | resource |
 | [aws_vpc_security_group_ingress_rule.postgres](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/vpc_security_group_ingress_rule) | resource |
 | [random_id.final_snapshot](https://registry.terraform.io/providers/hashicorp/random/latest/docs/resources/id) | resource |
@@ -66,6 +79,7 @@ Giám sát ngoài Prometheus của cluster, mỗi thứ tắt mặc định (t�
 
 | Name | Description | Type | Default | Required |
 | ---- | ----------- | ---- | ------- | :------: |
+| alarm\_topic\_arn | ARN of the SNS topic every CloudWatch alarm of the instance notifies, when it fires and when it clears. | `string` | n/a | yes |
 | allocated\_storage | Size of the gp3 volume, in GiB (20 is the gp3 minimum of RDS PostgreSQL). | `number` | `20` | no |
 | allowed\_security\_groups | Security groups whose members may connect on 5432 (the EKS node and cluster security groups), keyed by a fixed label such as node or cluster: the keys name the rules, so they are known at plan time even when the ids are not. | `map(string)` | n/a | yes |
 | backup\_retention\_period | Days of automated backups and point-in-time recovery. At least 1: 0 turns backups off. | `number` | `1` | no |
@@ -73,8 +87,9 @@ Giám sát ngoài Prometheus của cluster, mỗi thứ tắt mặc định (t�
 | cloudwatch\_logs\_retention\_days | Days CloudWatch keeps the exported logs when cloudwatch\_logs\_exports is not empty, and the OS metrics of enhanced monitoring when monitoring\_interval is not 0. | `number` | `1` | no |
 | delete\_automated\_backups | Delete the automated backups, and with them the point-in-time recovery window, together with the instance, so a destroyed lab instance leaves no billed backup behind. Production keeps them (false): after a deletion they stay restorable to any second of the retention period, where the final snapshot alone holds one moment. | `bool` | `true` | no |
 | deletion\_protection | Refuse to delete the instance until this is turned off by an apply. Off where the instance is destroyed at the end of every session, on for production. | `bool` | n/a | yes |
-| engine\_major\_version | Major version of PostgreSQL. RDS picks the newest minor of it and upgrades minors in the maintenance window; a major upgrade is a change of its own. | `string` | `"15"` | no |
-| instance\_class | DB instance class. | `string` | `"db.t4g.small"` | no |
+| engine\_major\_version | Major version of PostgreSQL. RDS picks the newest minor of it and upgrades minors in the maintenance window; a major upgrade is a change of its own. | `string` | `"17"` | no |
+| instance\_class | DB instance class: db.t4g.small (stg) or db.m7g.large (prd), the classes whose memory, vCPU count and default max\_connections the alarm thresholds are written for. | `string` | `"db.t4g.small"` | no |
+| max\_allocated\_storage | Upper limit, in GiB, up to which storage autoscaling grows the volume when free space runs low. At least 26 % above allocated\_storage, so RDS does not warn that the limit is too close. | `number` | `40` | no |
 | monitoring\_interval | Seconds between two enhanced monitoring samples of the operating system; 0 (the default) turns enhanced monitoring off and creates no IAM role. Any other value creates the role <name>-rds-monitoring and the log group RDSOSMetrics of the account and region, which RDS writes the OS metrics to: no other instance of that account and region may have enhanced monitoring on. | `number` | `0` | no |
 | multi\_az | Keep a synchronous standby in a second availability zone, which takes over on failure (twice the instance cost). Off for a lab env that lives a few hours, on for production. | `bool` | `false` | no |
 | name | Identifier of the DB instance (svp-stg, svp-prd), also the prefix of its security group, subnet group and parameter group. | `string` | n/a | yes |
@@ -95,6 +110,17 @@ Giám sát ngoài Prometheus của cluster, mỗi thứ tắt mặc định (t�
 <!-- END_TF_DOCS -->
 <!-- markdownlint-enable MD033 -->
 
+## Alarm
+
+Mỗi alarm CloudWatch tên `<name>-<alarm>`, chu kỳ 60 giây, dimension `DBInstanceIdentifier`, tag `Severity` (`page` hay `ticket`), gửi
+`alarm_actions` và `ok_actions` tới `alarm_topic_arn` (topic SNS của module `alarms`). Alarm `page` có URL runbook
+`https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks/<alarm>.md` trong `alarm_description`. Bảng alarm, ngưỡng và nguồn
+của chúng: ADR-0058 §2, §3; code giữ ở `alarms.tf`.
+
+Ba ngưỡng tính theo lớp instance (25 % bộ nhớ, 90 % `max_connections` mặc định, số vCPU), nên module chỉ nhận lớp có ngưỡng trong
+`local.class_alarm_thresholds` của `alarms.tf`; dùng lớp khác thì thêm ngưỡng của nó vào đó trước. Ngưỡng `rds-storage-low` tính theo
+`allocated_storage` lúc apply, không theo dung lượng autoscaling đã tăng.
+
 ## Giá trị theo env
 
 | Biến | stg | prd |
@@ -103,9 +129,9 @@ Giám sát ngoài Prometheus của cluster, mỗi thứ tắt mặc định (t�
 | `vpc_id` | VPC của module `network` | như stg |
 | `subnet_ids` | subnet database, ≥ 2 AZ | subnet database, 3 AZ |
 | `allowed_security_groups` | `{ node = …, cluster = … }` của EKS | như stg |
-| `engine_major_version` | `"15"` | `"15"` |
-| `instance_class` | `db.t4g.small` | theo số đo khi dựng prd |
-| `allocated_storage` | `20` | theo số đo khi dựng prd |
+| `engine_major_version` | mặc định | mặc định |
+| `instance_class`, `allocated_storage`, `max_allocated_storage` | ADR-0057 §5 | ADR-0057 §5 |
+| `alarm_topic_arn` | topic của module `alarms` | như stg |
 | `multi_az` | `false` | `true` |
 | `backup_retention_period` | `1` | ≥ 7, chốt khi dựng prd |
 | `delete_automated_backups` | `true` | `false` |
@@ -131,11 +157,17 @@ tới buổi dài hơn chu kỳ xoay.
 | gp3 20 GB | $0,138/GB-tháng | ~$0,004 (Multi-AZ tính theo giá Multi-AZ của trang giá, chưa ghi số ở đây) |
 | Backup tự động | Miễn phí tới bằng dung lượng database mỗi region (trang giá [N7]); retention 1 ngày ở stg | ~$0 |
 | Secret master (Secrets Manager) | $0,40/secret-tháng, $0,05/10 000 API | ~$0,0006 |
+| KMS key của module | $1/key-tháng theo [trang giá KMS](https://aws.amazon.com/kms/pricing/); API của RDS qua grant | ~$0,0014 |
+| 8 alarm CloudWatch | $0,10/metric của alarm-tháng (ADR-0058 [N4]) | ~$0,0011 |
 | Subnet group, security group, parameter group | Không tính tiền | $0 |
 
-stg ~$0,055/giờ. Snapshot cuối của prd tính theo giá lưu trữ backup tới khi xoá tay.
+stg ~$0,058/giờ. Snapshot cuối của prd tính theo giá lưu trữ backup tới khi xoá tay.
 
 ## Có thể sót sau destroy
+
+- **KMS key của module:** destroy đặt lịch xoá key sau 7 ngày (deletion window), alias xoá ngay. Snapshot cuối và backup tự động mà
+  prd giữ lại được mã hoá bằng key này: khi key bị xoá thì chúng không restore được nữa. Muốn giữ chúng dùng được thì huỷ lịch xoá key
+  (`aws kms cancel-key-deletion`) trong 7 ngày đó.
 
 - **Secret master của RDS** (Secrets Manager, tên bắt đầu `rds!db-`): đi theo instance, chưa kiểm trên account; destroy dở (instance chưa
   xoá xong) thì còn. Quét Secrets Manager kể cả secret đang chờ xoá.

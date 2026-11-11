@@ -32,3 +32,13 @@ output "cluster_primary_security_group_id" {
   description = "Security group EKS creates for the cluster and attaches to the control plane's network interfaces."
   value       = module.eks.cluster_primary_security_group_id
 }
+
+output "karpenter_node_iam_role_name" {
+  description = "IAM role of the nodes Karpenter launches: spec.role of the EC2NodeClass (Karpenter makes the instance profile from it)."
+  value       = module.karpenter.node_iam_role_name
+}
+
+output "karpenter_queue_name" {
+  description = "SQS queue of the interruption events Karpenter handles (Spot interruption, rebalance, health, state change): settings.interruptionQueue of the Karpenter chart."
+  value       = module.karpenter.queue_name
+}
