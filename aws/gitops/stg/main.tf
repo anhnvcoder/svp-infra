@@ -42,14 +42,26 @@ data "http" "gitops_main" {
   }
 }
 
-data "http" "env_file" {
-  for_each = toset(["charts.yaml", "svp-cluster.yaml"])
-  url      = "${local.gitops_raw}/${local.main}/envs/${local.env}/${each.key}"
+data "http" "env_charts" {
+  url = "${local.gitops_raw}/${local.main}/envs/${local.env}/charts.yaml"
 
   lifecycle {
     postcondition {
       condition     = self.status_code == 200
       error_message = "svp-gitops holds no ${self.url}."
+    }
+  }
+}
+
+# Optional: chart argocd/apps reads only the files envs/<env>/ has, so 404 means no overlay; any other status is an
+# error.
+data "http" "env_overlay" {
+  url = "${local.gitops_raw}/${local.main}/envs/${local.env}/svp-cluster.yaml"
+
+  lifecycle {
+    postcondition {
+      condition     = contains([200, 404], self.status_code)
+      error_message = "svp-gitops answered ${self.status_code} for ${self.url}, expected 200 or 404."
     }
   }
 }
@@ -110,12 +122,12 @@ data "helm_template" "project_namespaces" {
   name      = "svp-cluster"
   chart     = var.svp_cluster_chart
   show_only = ["templates/namespaces.yaml"]
-  values = [
-    data.http.bootstrap_file["platforms/eks/svp-cluster.yaml"].response_body,
-    data.http.env_file["svp-cluster.yaml"].response_body,
+  values = concat(
+    [data.http.bootstrap_file["platforms/eks/svp-cluster.yaml"].response_body],
+    data.http.env_overlay.status_code == 200 ? [data.http.env_overlay.response_body] : [],
     # Holds acmeEmail of cluster_values.
-    sensitive(data.helm_template.svp_cluster_platform_values.manifest),
-  ]
+    [sensitive(data.helm_template.svp_cluster_platform_values.manifest)],
+  )
 }
 
 module "gitops_bridge" {
@@ -128,7 +140,7 @@ module "gitops_bridge" {
   api_server_url              = var.api_server_url
   telegram_chat_id            = var.telegram_chat_id
   main_commit                 = local.main
-  env_charts                  = data.http.env_file["charts.yaml"].response_body
+  env_charts                  = data.http.env_charts.response_body
   require_pinned_revision     = var.require_pinned_revision
   argocd_bootstrap            = data.http.bootstrap_file["argocd/bootstrap.json"].response_body
   argocd_values               = [data.http.argocd_values.response_body, data.http.bootstrap_file["platforms/eks/argo-cd.yaml"].response_body]
