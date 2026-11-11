@@ -14,7 +14,7 @@ Root riêng, không gộp vào root env: provider `kubernetes` khuyên dựng cl
 
 | Resource | Nguồn |
 | --- | --- |
-| `kubernetes_manifest.namespace` | `argocd`, namespace của dự án và của chart nền tảng, render `templates/namespaces.yaml` của chart `svp-cluster` (`data "helm_template"`) với values Application `svp-cluster` đọc, theo thứ tự Argo CD đọc: `platforms/eks/svp-cluster.yaml` ở B, `envs/<env>/svp-cluster.yaml` ở `main`, cuối cùng `valuesObject` (mẫu `platforms/eks/svp-cluster.values.tpl` ở B render trên `cluster_values` bằng chart `platform-values` của module); server-side apply, field manager `svp-pod-security` |
+| `kubernetes_manifest.namespace` | `argocd`, namespace của dự án và của chart nền tảng, render `templates/namespaces.yaml` của chart `svp-cluster` (`data "helm_template"`) với values Application `svp-cluster` đọc, theo thứ tự Argo CD đọc: `platforms/eks/svp-cluster.yaml` ở B, `envs/<env>/svp-cluster.yaml` ở `main` khi file có, cuối cùng `valuesObject` (mẫu `platforms/eks/svp-cluster.values.tpl` ở B render trên `cluster_values` bằng chart `platform-values` của module); server-side apply, field manager `svp-pod-security` |
 | `helm_release.argocd` | repo, chart, version, namespace của `argocd/bootstrap.json` ở B; values file nó nêu rồi `platforms/eks/argo-cd.yaml` ở B. Argo CD không tự quản: đổi version hay values tới cluster ở lần apply sau |
 | `helm_release.app_projects` | `argocd/project.yaml` ở B, nguyên văn, qua chart `resources` của module, `take_ownership` (argocd-server đã tạo AppProject `default`) |
 | `kubernetes_secret_v1.cluster` | `argocd/in-cluster`: label env, platform, kiến trúc node; annotation `svp.io/cluster-values` (output `cluster_values` của root env) và chat Telegram |
