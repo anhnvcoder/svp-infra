@@ -52,3 +52,16 @@ locals {
     }
   }
 }
+
+# The GuardDuty Runtime Monitoring agent, a DaemonSet on every node. Outside local.addons: the registry module cannot
+# make one add-on wait for something outside it, and the agent reports through the guardduty-data endpoint of the VPC.
+resource "aws_eks_addon" "guardduty_agent" {
+  cluster_name  = module.eks.cluster_name
+  addon_name    = "aws-guardduty-agent"
+  addon_version = "v1.17.3-eksbuild.2"
+
+  tags = local.tags
+
+  # module.eks: the node group, without which the DaemonSet never becomes ready and the add-on never ACTIVE.
+  depends_on = [module.eks, var.guardduty_data_endpoint_id]
+}

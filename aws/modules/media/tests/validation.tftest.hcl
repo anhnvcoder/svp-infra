@@ -182,6 +182,57 @@ run "access_logging_on" {
   }
 }
 
+# Malware Protection for S3 on the uploads bucket only, in every env: each new object is scanned and tagged with the
+# result, by a role that only GuardDuty's malware protection service may assume.
+run "malware_protection" {
+  command = plan
+
+  assert {
+    condition     = one(one(aws_guardduty_malware_protection_plan.uploads.protected_resource).s3_bucket).bucket_name == "svp-stg-uploads-000000000000-ap-southeast-1"
+    error_message = "The plan must protect the uploads bucket."
+  }
+
+  assert {
+    condition     = one(one(aws_guardduty_malware_protection_plan.uploads.actions).tagging).status == "ENABLED"
+    error_message = "The plan must tag each scanned object with the result."
+  }
+
+  assert {
+    condition = (aws_iam_role.malware_protection.name == "svp-stg-uploads-malware-protection" &&
+      jsondecode(aws_iam_role.malware_protection.assume_role_policy).Statement[0].Principal.Service == "malware-protection-plan.guardduty.amazonaws.com" &&
+    length(jsondecode(aws_iam_role.malware_protection.assume_role_policy).Statement) == 1)
+    error_message = "Only the GuardDuty malware protection service may assume the role of the plan."
+  }
+
+  assert {
+    condition = toset([for s in data.aws_iam_policy_document.malware_protection.statement : s.sid]) == toset([
+      "AllowManagedRuleToSendS3EventsToGuardDuty",
+      "AllowGuardDutyToMonitorEventBridgeManagedRule",
+      "AllowPostScanTag",
+      "AllowEnableS3EventBridgeEvents",
+      "AllowPutValidationObject",
+      "AllowCheckBucketOwnership",
+      "AllowMalwareScan",
+    ])
+    error_message = "The role must hold the statements of the GuardDuty guide for a bucket without KMS, and nothing else."
+  }
+
+  assert {
+    condition     = alltrue([for s in data.aws_iam_policy_document.malware_protection.statement : alltrue([for a in s.actions : !strcontains(a, "*") && !startswith(a, "kms:")])])
+    error_message = "The role must name each action, with no wildcard and no KMS action (the uploads bucket uses SSE-S3)."
+  }
+
+  assert {
+    condition     = one([for s in data.aws_iam_policy_document.malware_protection.statement : s.resources if s.sid == "AllowManagedRuleToSendS3EventsToGuardDuty"]) == toset(["arn:aws:events:ap-southeast-1:000000000000:rule/DO-NOT-DELETE-AmazonGuardDutyMalwareProtectionS3*"])
+    error_message = "The role may only change the EventBridge rule GuardDuty manages for the plan."
+  }
+
+  assert {
+    condition     = alltrue([for r in aws_s3_bucket_lifecycle_configuration.uploads.rule : length(r.filter[0].tag) == 0 && length(r.filter[0].and) == 0])
+    error_message = "No lifecycle rule of the uploads bucket may filter on object tags, which the scan result tag would then change."
+  }
+}
+
 # Values of the prd root: buckets that destroy does not empty, earlier versions kept, access logs, and the web ACL of
 # the waf module in front of the distribution.
 run "prd_values" {

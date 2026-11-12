@@ -25,13 +25,13 @@ variable "sso_region" {
 }
 
 variable "account_emails" {
-  description = "Root email of each member account, by env (stg, prd). Each must be an address no other AWS account uses, a closed or suspended one included. Personal data of a public repository: set it in the uncommitted org.auto.tfvars."
+  description = "Root email of each member account: stg, prd, log-archive, security. Each must be an address no other AWS account uses, a closed or suspended one included. Personal data of a public repository: set it in the uncommitted org.auto.tfvars."
   type        = map(string)
   sensitive   = true
 
   validation {
-    condition     = toset(keys(var.account_emails)) == toset(["stg", "prd"]) && alltrue([for e in values(var.account_emails) : can(regex("^[^@[:space:]]+@[^@[:space:]]+\\.[^@[:space:]]+$", e))])
-    error_message = "account_emails must hold exactly the keys stg and prd, each an email address."
+    condition     = toset(keys(var.account_emails)) == toset(["stg", "prd", "log-archive", "security"]) && alltrue([for e in values(var.account_emails) : can(regex("^[^@[:space:]]+@[^@[:space:]]+\\.[^@[:space:]]+$", e))])
+    error_message = "account_emails must hold exactly the keys stg, prd, log-archive and security, each an email address."
   }
 
   validation {
@@ -41,11 +41,38 @@ variable "account_emails" {
 }
 
 variable "sso_user_name" {
-  description = "User name of the learner in IAM Identity Center (top right of the AWS access portal), given SvpAdmin in both member accounts. Set it in the uncommitted org.auto.tfvars."
+  description = "User name of the learner in IAM Identity Center (top right of the AWS access portal), given the permission sets of identity-center.tf. Set it in the uncommitted org.auto.tfvars."
   type        = string
 
   validation {
     condition     = length(trimspace(var.sso_user_name)) > 0
     error_message = "sso_user_name must not be empty."
+  }
+}
+
+variable "security_contact" {
+  description = "Alternate contact of type SECURITY of the management account and every member account: who AWS writes to about security issues. Personal data of a public repository: set it in the uncommitted org.auto.tfvars."
+  type = object({
+    name          = string
+    title         = string
+    email_address = string
+    phone_number  = string
+  })
+  sensitive = true
+
+  validation {
+    condition     = length(trimspace(var.security_contact.name)) > 0 && length(trimspace(var.security_contact.title)) > 0
+    error_message = "security_contact needs a name and a title."
+  }
+
+  validation {
+    condition     = can(regex("^[^@[:space:]]+@[^@[:space:]]+\\.[^@[:space:]]+$", var.security_contact.email_address))
+    error_message = "security_contact.email_address must be an email address."
+  }
+
+  # The pattern of the Account Management API for PhoneNumber.
+  validation {
+    condition     = can(regex("^[\\s0-9()+-]+$", var.security_contact.phone_number))
+    error_message = "security_contact.phone_number may hold only digits, spaces, parentheses, + and -."
   }
 }

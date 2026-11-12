@@ -1,11 +1,12 @@
 # Validation rules of the module's variables: one plan per rule with a value that only that rule rejects; then the web
-# ACL with the defaults and with the values of prd. The AWS provider is a mock: nothing reaches an account; the module
-# reads no data source.
+# ACL with the defaults, with the values of prd, and its log. The AWS provider is a mock: nothing reaches an account;
+# the module reads no data source.
 
 mock_provider "aws" {}
 
 variables {
-  name = "svp-stg-media"
+  name           = "svp-stg-media"
+  log_bucket_arn = "arn:aws:s3:::aws-waf-logs-svp-000000000000-us-east-1"
 }
 
 run "name_uppercase" {
@@ -26,6 +27,26 @@ run "rate_limit_below_minimum" {
   }
 
   expect_failures = [var.rate_limit]
+}
+
+run "log_bucket_without_waf_prefix" {
+  command = plan
+
+  variables {
+    log_bucket_arn = "arn:aws:s3:::svp-flowlogs-000000000000-ap-southeast-1"
+  }
+
+  expect_failures = [var.log_bucket_arn]
+}
+
+run "log_destination_not_s3" {
+  command = plan
+
+  variables {
+    log_bucket_arn = "arn:aws:logs:us-east-1:000000000000:log-group:aws-waf-logs-svp"
+  }
+
+  expect_failures = [var.log_bucket_arn]
 }
 
 run "defaults" {
@@ -76,5 +97,28 @@ run "prd_values" {
       "AWSManagedRulesKnownBadInputsRuleSet",
     ])
     error_message = "prd must run both AWS managed rule groups with their own block actions."
+  }
+}
+
+# Every request of the web ACL goes to the WAF log bucket of the Log Archive account, without credentials or cookies.
+run "logging" {
+  command = plan
+
+  assert {
+    condition     = aws_wafv2_web_acl_logging_configuration.this.log_destination_configs == toset(["arn:aws:s3:::aws-waf-logs-svp-000000000000-us-east-1"])
+    error_message = "The web ACL must log to the bucket of log_bucket_arn and nowhere else."
+  }
+
+  assert {
+    condition = toset([for f in aws_wafv2_web_acl_logging_configuration.this.redacted_fields : f.single_header[0].name if length(f.single_header) > 0]) == toset([
+      "authorization",
+      "cookie",
+    ]) && length(aws_wafv2_web_acl_logging_configuration.this.redacted_fields) == 2
+    error_message = "The log must redact exactly the authorization and cookie headers."
+  }
+
+  assert {
+    condition     = length(aws_wafv2_web_acl_logging_configuration.this.logging_filter) == 0
+    error_message = "The log must keep every request, with no logging filter."
   }
 }

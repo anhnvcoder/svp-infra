@@ -133,3 +133,13 @@ variable "hosted_zone_id" {
     error_message = "hosted_zone_id must be a Route 53 hosted zone id such as Z0123456789ABCDEFGHIJ."
   }
 }
+
+variable "guardduty_data_endpoint_id" {
+  description = "ID of the interface endpoint guardduty-data of the VPC (output guardduty_data_endpoint_id of the network module). The GuardDuty agent add-on is created after it, so the agent's first reports have a way out."
+  type        = string
+
+  validation {
+    condition     = can(regex("^vpce-[0-9a-f]+$", var.guardduty_data_endpoint_id))
+    error_message = "guardduty_data_endpoint_id must be a VPC endpoint id such as vpce-0123456789abcdef0."
+  }
+}

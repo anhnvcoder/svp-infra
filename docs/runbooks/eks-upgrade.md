@@ -29,7 +29,7 @@ Một lần nâng chỉ đi một minor: EKS không nhảy minor và không hạ
 ```sh
 AWS_PROFILE=anhnv-stg aws eks describe-cluster-versions --region ap-southeast-1 --output text \
   --query 'clusterVersions[].[clusterVersion,status,endOfStandardSupportDate]'
-for a in vpc-cni kube-proxy coredns eks-pod-identity-agent aws-ebs-csi-driver metrics-server; do
+for a in vpc-cni kube-proxy coredns eks-pod-identity-agent aws-ebs-csi-driver metrics-server aws-guardduty-agent; do
   printf '%s ' "$a"
   AWS_PROFILE=anhnv-stg aws eks describe-addon-versions --addon-name "$a" --kubernetes-version 1.N+1 --region ap-southeast-1 \
     --query 'addons[0].addonVersions[0].addonVersion' --output text

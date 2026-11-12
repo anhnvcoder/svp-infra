@@ -139,6 +139,16 @@ nat_gateways() {
 
 addresses() { q '.Addresses[] | "\(.AllocationId) \(.PublicIp) \(.AssociationId // "unassociated")"' ec2 describe-addresses --filters "$svp_tag"; }
 
+# Endpoints of the lab or in its VPCs left, such as the interface endpoint guardduty-data, billed by the hour, or one
+# GuardDuty makes itself outside any state when its agent management is on. Their network interfaces go with them.
+vpc_endpoints() {
+  local f
+  for f in "$svp_tag" $(vpc_filter); do
+    q '.VpcEndpoints[] | select((.State | ascii_downcase) != "deleted") | "\(.VpcEndpointId) \(.VpcEndpointType) \(.ServiceName) \(.State)"' \
+      ec2 describe-vpc-endpoints --filters "$f" || return 1
+  done
+}
+
 # The VPCs of the lab that are left: any interface or security group in them is a leftover too.
 vpc_filter() {
   printing && {
@@ -239,6 +249,22 @@ alarms() {
     cloudwatch describe-alarms
 }
 
+# GuardDuty Malware Protection plans on a bucket of the lab (uploads of the media module): one left keeps scanning, and
+# a plan of the same bucket cannot be made again. Deleting it also removes the EventBridge rule
+# DO-NOT-DELETE-AmazonGuardDutyMalwareProtectionS3* GuardDuty made for it, so that rule is never listed on its own.
+malware_protection_plans() {
+  local ids id
+  ids=$(q '.MalwareProtectionPlans[]?.MalwareProtectionPlanId' guardduty list-malware-protection-plans) || return 1
+  printing && ids='<each-plan-above>'
+  for id in $ids; do
+    # shellcheck disable=SC2016 # $p and $b are jq's, not the shell's
+    q '. as $p | ($p.ProtectedResource.S3Bucket.BucketName // "") as $b
+      | select(($b | startswith("svp-")) or ($p.Tags.Project // "") == "svp")
+      | "\($p.Arn | sub("^.*/"; "")) \($b) \($p.Status // "?")"' \
+      guardduty get-malware-protection-plan --malware-protection-plan-id "$id" || return 1
+  done
+}
+
 # Buckets named svp-*; those tagged with a kept Stack go to the kept list.
 buckets() {
   local names b tags
@@ -287,7 +313,7 @@ web_acls() {
 
 # Log groups EKS or RDS make under the lab's names (untagged: they write them outside Terraform's state, and again
 # after a destroy while the last logs arrive), the broker log group of MSK by name as well, RDS's Enhanced Monitoring
-# group, and any tagged Project=svp but with a kept Stack (the VPC flow log, the groups the rds module makes).
+# group, and any tagged Project=svp but with a kept Stack (the groups the rds module makes).
 log_groups() {
   q '.logGroups[].logGroupName | select(test("^/aws/eks/svp-|^/aws/rds/instance/svp-|^/aws/msk/svp-|^RDSOSMetrics$"))' logs describe-log-groups || return 1
   # shellcheck disable=SC2016 # $ENV is jq's, not the shell's
@@ -389,6 +415,7 @@ else
 fi
 sweep_kind "NAT gateways" nat_gateways "aws ec2 delete-nat-gateway --nat-gateway-id {}"
 sweep_kind "Elastic IPs" addresses "aws ec2 release-address --allocation-id {}"
+sweep_kind "VPC endpoints" vpc_endpoints "aws ec2 delete-vpc-endpoints --vpc-endpoint-ids {}"
 sweep_kind "network interfaces" interfaces "aws ec2 delete-network-interface --network-interface-id {}"
 sweep_kind "security groups" security_groups "aws ec2 delete-security-group --group-id {}"
 sweep_kind "ELBv2 load balancers" load_balancers "aws elbv2 delete-load-balancer --load-balancer-arn {}"
@@ -405,6 +432,8 @@ sweep_kind "ElastiCache users" cache_users "aws elasticache delete-user --user-i
 sweep_kind "ElastiCache subnet groups" cache_subnet_groups "aws elasticache delete-cache-subnet-group --cache-subnet-group-name {}"
 sweep_kind "ElastiCache parameter groups" cache_parameter_groups \
   "aws elasticache delete-cache-parameter-group --cache-parameter-group-name {}"
+sweep_kind "GuardDuty Malware Protection plans" malware_protection_plans \
+  "aws guardduty delete-malware-protection-plan --malware-protection-plan-id {}"
 sweep_kind "S3 buckets" buckets "$runbook (versioned: every version first)"
 sweep_kind "CloudFront pricing plan subscriptions" subscriptions \
   "$runbook (cancel the plan first: cancel-subscription takes the eTag of get-subscription, both in us-east-1)"

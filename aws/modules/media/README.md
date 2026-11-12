@@ -1,7 +1,7 @@
 # Module `media`
 
-Hai bucket S3 `uploads`, `media` và CloudFront trước `media` (đăng ký gói flat-rate Free), cộng hai policy IAM (JSON) cho video-service và
-media-worker. Thiết kế: [ADR-0034](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0034-aws-stage7.md) mục 9 và 11,
+Hai bucket S3 `uploads`, `media` và CloudFront trước `media` (đăng ký gói flat-rate Free), plan GuardDuty Malware Protection for S3 trên
+`uploads`, cộng hai policy IAM (JSON) cho video-service và media-worker. Thiết kế: [ADR-0034](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0034-aws-stage7.md) mục 9 và 11,
 [ADR-0052](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0052-cloudfront-flat-rate-free.md) (gói Free, WAF, CORS của
 CloudFront); ngưỡng an toàn theo threat model UP-4…UP-6, WEB-10 của repo code.
 
@@ -32,8 +32,9 @@ CloudFront); ngưỡng an toàn theo threat model UP-4…UP-6, WEB-10 của repo
   của server access log chỉ nhận SSE-S3, ngoại lệ trivy AWS-0132), TLS-only, policy cho `logging.s3.amazonaws.com` `s3:PutObject` với điều
   kiện `aws:SourceArn` là hai bucket này và `aws:SourceAccount` là account này (mẫu của tài liệu S3), log xoá sau 90 ngày. Bucket log không
   ghi log của chính nó (vòng lặp vô hạn). `force_destroy` áp cho cả bucket log.
-- **`force_destroy`:** `true` làm `terraform destroy` xoá **mọi object** của cả hai bucket rồi xoá bucket. Chỉ đặt `true` ở stg (dữ liệu
-  buổi lab bỏ đi được); prd `false`, destroy dừng ở bucket còn object. Biến không có mặc định để mỗi env phải ghi rõ.
+- **`force_destroy`:** `true` làm `terraform destroy` xoá **mọi object** của cả hai bucket rồi xoá bucket. `true` ở stg (dữ liệu
+  buổi lab bỏ đi được); prd `false`, destroy dừng ở bucket còn object, trừ khi teardown của buổi đặt `true` qua `teardown.tfvars`. Biến
+  không có mặc định để mỗi env phải ghi rõ.
 
 ## CloudFront
 
@@ -97,6 +98,39 @@ Kiểm ở buổi AWS: `POST /videos/{id}/complete` khi chưa tải file trả 4
 
 Root của env gắn mỗi JSON vào role của Pod Identity association `svp/video-service`, `svp/media-worker`.
 
+## Malware Protection for S3
+
+`aws_guardduty_malware_protection_plan.uploads` quét mọi object mới của bucket `uploads` (cả bucket, không giới hạn tiền tố) và gắn tag
+kết quả `GuardDutyMalwareScanStatus` (ví dụ `NO_THREATS_FOUND`) lên object
+([ADR-0060](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0060-org-detection-logging.md) §6). Cấu hình tổ chức của GuardDuty
+không tự bật plan này, nên module tạo nó ở mọi env, sống và gỡ cùng bucket. video-service, media-worker chưa đọc tag: file nhiễm vẫn được
+transcode, finding đi theo đường cảnh báo của GuardDuty.
+
+Role `<name_prefix>-uploads-malware-protection` theo đúng mẫu của
+[tài liệu GuardDuty](https://docs.aws.amazon.com/guardduty/latest/ug/malware-protection-s3-iam-policy-prerequisite.html): trust
+`malware-protection-plan.guardduty.amazonaws.com` (`sts:AssumeRole`, mẫu không có điều kiện), inline policy `malware-protection-s3`:
+
+| Sid | Quyền | Tài nguyên |
+| --- | --- | --- |
+| `AllowManagedRuleToSendS3EventsToGuardDuty` | `events:PutRule`, `DeleteRule`, `PutTargets`, `RemoveTargets` (điều kiện `events:ManagedBy`) | rule `DO-NOT-DELETE-AmazonGuardDutyMalwareProtectionS3*` của account, region |
+| `AllowGuardDutyToMonitorEventBridgeManagedRule` | `events:DescribeRule`, `ListTargetsByRule` | như trên |
+| `AllowPostScanTag` | `s3:PutObjectTagging`, `GetObjectTagging`, `PutObjectVersionTagging`, `GetObjectVersionTagging` | `<uploads>/*` |
+| `AllowEnableS3EventBridgeEvents` | `s3:PutBucketNotification`, `GetBucketNotification` | `<uploads>` |
+| `AllowPutValidationObject` | `s3:PutObject` | `<uploads>/malware-protection-resource-validation-object` |
+| `AllowCheckBucketOwnership` | `s3:ListBucket` | `<uploads>` |
+| `AllowMalwareScan` | `s3:GetObject`, `GetObjectVersion` | `<uploads>/*` |
+
+Bucket `uploads` mã hoá SSE-S3, nên không có statement KMS của mẫu (chỉ cần khi bucket SSE-KMS).
+
+- **Thứ tự:** plan tham chiếu bucket và role, và phụ thuộc inline policy: `apply` tạo bucket, role, policy rồi mới tạo plan (GuardDuty kiểm
+  quyền của role lúc tạo); `destroy` xoá plan trước, rồi mới xoá policy, role, bucket, nên plan không lúc nào thiếu quyền nó được tạo
+  cùng. Rule EventBridge `DO-NOT-DELETE-AmazonGuardDutyMalwareProtectionS3*` hay plan còn sót sau destroy do lệnh quét của buổi tìm.
+- **Không đụng cấu hình có sẵn:** GuardDuty bật thông báo EventBridge của bucket; module không quản `aws_s3_bucket_notification` của
+  `uploads` (tài nguyên đó ghi đè cả cấu hình thông báo, tắt đường quét). Tag kết quả không đổi lifecycle (rule lọc theo tiền tố, không theo
+  tag; test kiểm) hay bucket policy (chỉ chặn request không TLS); gắn tag một version không tạo version mới. Object kiểm tra
+  `malware-protection-resource-validation-object` GuardDuty ghi ở gốc bucket nằm ngoài `uploads/`, không bị rule lifecycle `uploads/` chạm;
+  `force_destroy = true` (stg, và teardown của prd) xoá nó cùng bucket.
+
 <!-- markdownlint-disable MD033 -->
 <!-- BEGIN_TF_DOCS -->
 ## Requirements
@@ -118,6 +152,9 @@ Root của env gắn mỗi JSON vào role của Pod Identity association `svp/vi
 | ---- | ---- |
 | [aws_cloudfront_distribution.media](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudfront_distribution) | resource |
 | [aws_cloudfront_origin_access_control.media](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudfront_origin_access_control) | resource |
+| [aws_guardduty_malware_protection_plan.uploads](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/guardduty_malware_protection_plan) | resource |
+| [aws_iam_role.malware_protection](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role) | resource |
+| [aws_iam_role_policy.malware_protection](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy) | resource |
 | [aws_pricingplanmanager_subscription.media](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/pricingplanmanager_subscription) | resource |
 | [aws_s3_bucket.logs](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket) | resource |
 | [aws_s3_bucket.this](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket) | resource |
@@ -140,6 +177,7 @@ Root của env gắn mỗi JSON vào role của Pod Identity association `svp/vi
 | [aws_cloudfront_cache_policy.caching_optimized](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/cloudfront_cache_policy) | data source |
 | [aws_cloudfront_response_headers_policy.simple_cors](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/cloudfront_response_headers_policy) | data source |
 | [aws_iam_policy_document.logs](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
+| [aws_iam_policy_document.malware_protection](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
 | [aws_iam_policy_document.media](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
 | [aws_iam_policy_document.media_worker](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
 | [aws_iam_policy_document.tls_only](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
@@ -191,16 +229,20 @@ Root của env gắn mỗi JSON vào role của Pod Identity association `svp/vi
 | CloudFront theo gói flat-rate Free | $0 mỗi tháng: 1 triệu request và 100 GB, không tính phí vượt ([trang giá CloudFront](https://aws.amazon.com/cloudfront/pricing/), đọc 2026-11-07) | $0 |
 | WAF (web ACL, luật, request) | trong gói; web ACL sót sau khi gói huỷ thì pay-as-you-go (~$5 mỗi ACL + $1 mỗi luật mỗi tháng, theo giờ) | $0 |
 | OAC, cache policy, response headers policy, CORS, lifecycle | Không tính tiền | $0 |
+| GuardDuty Malware Protection for S3 | free tier 1 000 request và 1 GB quét mỗi tháng mỗi region; vượt thì theo GB quét và request (bảng giá ở phụ lục ADR-0060) | ~$0 (vài file mỗi buổi) |
 
 S3 tới từ cluster đi qua gateway endpoint của VPC (module `network`), không qua NAT. Tạo và xoá distribution mỗi lần mất vài phút
 (Terraform chờ tới khi deploy xong); destroy phải tắt distribution trước, Terraform tự làm.
 
 ## Có thể sót sau destroy
 
-- **Bucket còn object khi `force_destroy = false`** (prd): destroy dừng ở bucket, cố ý. stg đặt `true` nên không sót.
+- **Bucket còn object khi `force_destroy = false`** (prd ngoài teardown): destroy dừng ở bucket, cố ý. stg và teardown của prd đặt `true`
+  nên không sót.
 - **Bucket, distribution của một `apply` hay `destroy` dở:** bucket mang tag `Project=svp` của root (quét theo tag); distribution, OAC tìm
   theo tên hay comment có `name_prefix` (OAC không có tag).
 - **Subscription của gói:** destroy dừng giữa chừng có thể để lại gói còn hiệu lực (`sweep.sh` liệt kê ở loại `CloudFront pricing plan
   subscriptions`, `us-east-1`), mà AWS không cho xoá distribution hay gỡ web ACL còn trong gói: huỷ gói trước, rồi mới xoá distribution,
   OAC, web ACL (runbook buổi stg, mục xoá tay).
+- **Plan Malware Protection của một `destroy` dở:** plan còn thì rule EventBridge `DO-NOT-DELETE-AmazonGuardDutyMalwareProtectionS3*` do
+  GuardDuty quản còn theo; xoá plan (GuardDuty tự gỡ rule), rồi role `<name_prefix>-uploads-malware-protection`.
 - Distribution đã tắt mà chưa xoá không tính tiền request nhưng vẫn là tài nguyên sót; xoá sau khi trạng thái `Deployed`.

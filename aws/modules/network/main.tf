@@ -35,6 +35,55 @@ locals {
     nat_gateway_route      = false
     internet_gateway_route = false
   }
+
+  # Entries of the NACL of each tier. No entry allows TCP or UDP to port 22 or 3389 from anywhere, so the ranges open
+  # to the internet skip both ports. TCP, UDP and ICMP are named one by one instead of protocol -1: nothing in the VPC
+  # speaks another IP protocol. Kept in locals for the tests: the rules are made inside the registry module.
+  # Design notes: aws/modules/network/README.md.
+  nacl_from_vpc = [for i, p in ["tcp", "udp", "icmp"] :
+    { rule_number = 100 + i, rule_action = "allow", protocol = p, from_port = 0, to_port = p == "icmp" ? 0 : 65535, icmp_type = p == "icmp" ? -1 : null, icmp_code = p == "icmp" ? -1 : null, cidr_block = var.cidr }
+  ]
+  nacl_outbound = [for i, p in ["tcp", "udp", "icmp"] :
+    { rule_number = 100 + i, rule_action = "allow", protocol = p, from_port = 0, to_port = p == "icmp" ? 0 : 65535, icmp_type = p == "icmp" ? -1 : null, icmp_code = p == "icmp" ? -1 : null, cidr_block = "0.0.0.0/0" }
+  ]
+  nacl_return_traffic = flatten([for i, p in ["tcp", "udp"] : [
+    { rule_number = 120 + 20 * i, rule_action = "allow", protocol = p, from_port = 1024, to_port = 3388, cidr_block = "0.0.0.0/0" },
+    { rule_number = 130 + 20 * i, rule_action = "allow", protocol = p, from_port = 3390, to_port = 65535, cidr_block = "0.0.0.0/0" },
+  ]])
+  nacl_icmp = [
+    { rule_number = 160, rule_action = "allow", protocol = "icmp", from_port = 0, to_port = 0, icmp_type = -1, icmp_code = -1, cidr_block = "0.0.0.0/0" },
+  ]
+  nacl_https = [
+    { rule_number = 110, rule_action = "allow", protocol = "tcp", from_port = 443, to_port = 443, cidr_block = "0.0.0.0/0" },
+  ]
+  nacl_inbound = {
+    public   = concat(local.nacl_from_vpc, local.nacl_https, local.nacl_return_traffic, local.nacl_icmp)
+    private  = concat(local.nacl_from_vpc, local.nacl_return_traffic, local.nacl_icmp)
+    database = local.nacl_from_vpc
+  }
+
+  # Every subnet has the NACL of its tier, so the default NACL guards nothing and keeps no allow entry.
+  default_nacl = {
+    ingress = []
+    egress  = []
+  }
+
+  # The default fields in their order, then those an investigation needs: subnet, instance and zone, the packet
+  # addresses behind a NAT gateway or load balancer, the AWS service on either end, direction and path.
+  flow_log_fields = [
+    "version", "account-id", "interface-id", "srcaddr", "dstaddr", "srcport", "dstport", "protocol", "packets", "bytes",
+    "start", "end", "action", "log-status", "vpc-id", "subnet-id", "instance-id", "tcp-flags", "type", "pkt-srcaddr",
+    "pkt-dstaddr", "az-id", "pkt-src-aws-service", "pkt-dst-aws-service", "flow-direction", "traffic-path",
+  ]
+  flow_log = {
+    destination_type           = "s3"
+    file_format                = "parquet"
+    hive_compatible_partitions = true
+    per_hour_partition         = true
+    max_aggregation_interval   = 60
+    traffic_type               = "ALL"
+    log_format                 = join(" ", [for f in local.flow_log_fields : "$${${f}}"])
+  }
 }
 
 module "vpc" {
@@ -80,14 +129,31 @@ module "vpc" {
     "karpenter.sh/discovery"          = var.cluster_name
   })
 
-  enable_flow_log                                 = var.flow_log_enabled
-  create_flow_log_cloudwatch_log_group            = var.flow_log_enabled
-  create_flow_log_cloudwatch_iam_role             = var.flow_log_enabled
-  flow_log_traffic_type                           = "ALL"
-  flow_log_cloudwatch_log_group_retention_in_days = var.flow_log_retention_days
-  # Named after the VPC so that a sweep can tell which env a leftover role belongs to (the module adds a suffix).
-  vpc_flow_log_iam_role_name   = "${var.name}-vpc-flow-log"
-  vpc_flow_log_iam_policy_name = "${var.name}-vpc-flow-log"
+  manage_default_network_acl  = true
+  default_network_acl_ingress = local.default_nacl.ingress
+  default_network_acl_egress  = local.default_nacl.egress
+
+  public_dedicated_network_acl   = true
+  public_inbound_acl_rules       = local.nacl_inbound.public
+  public_outbound_acl_rules      = local.nacl_outbound
+  private_dedicated_network_acl  = true
+  private_inbound_acl_rules      = local.nacl_inbound.private
+  private_outbound_acl_rules     = local.nacl_outbound
+  database_dedicated_network_acl = true
+  database_inbound_acl_rules     = local.nacl_inbound.database
+  database_outbound_acl_rules    = local.nacl_outbound
+
+  # Straight into the bucket of the log archive account: delivery to S3 needs no IAM role here, the bucket and key
+  # policies of that account let the log delivery service write.
+  enable_flow_log                     = true
+  flow_log_destination_type           = local.flow_log.destination_type
+  flow_log_destination_arn            = var.flow_log_bucket_arn
+  flow_log_file_format                = local.flow_log.file_format
+  flow_log_hive_compatible_partitions = local.flow_log.hive_compatible_partitions
+  flow_log_per_hour_partition         = local.flow_log.per_hour_partition
+  flow_log_max_aggregation_interval   = local.flow_log.max_aggregation_interval
+  flow_log_traffic_type               = local.flow_log.traffic_type
+  flow_log_log_format                 = local.flow_log.log_format
 }
 
 # Gateway endpoint for S3 on every private route table: object traffic of the pods (uploads, HLS output) skips the NAT
@@ -136,5 +202,68 @@ resource "aws_vpc_endpoint" "s3" {
 
   tags = {
     Name = "${var.name}-s3"
+  }
+}
+
+# Interface endpoint the GuardDuty agent of the EKS nodes sends runtime events to. Made here rather than left to
+# GuardDuty, whose own endpoint and security group would sit outside the state and keep the VPC from being destroyed.
+# The policy follows the GuardDuty guide: any call, but only by principals of this account.
+data "aws_caller_identity" "current" {}
+
+resource "aws_security_group" "guardduty_data" {
+  name        = "${var.name}-guardduty-data"
+  description = "Interface endpoint guardduty-data: HTTPS from the VPC"
+  vpc_id      = module.vpc.vpc_id
+
+  tags = {
+    Name = "${var.name}-guardduty-data"
+  }
+}
+
+resource "aws_vpc_security_group_ingress_rule" "guardduty_data_https" {
+  security_group_id = aws_security_group.guardduty_data.id
+  description       = "GuardDuty agent on the nodes"
+  ip_protocol       = "tcp"
+  from_port         = 443
+  to_port           = 443
+  cidr_ipv4         = var.cidr
+}
+
+locals {
+  guardduty_data_endpoint_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect    = "Allow"
+        Principal = "*"
+        Action    = "*"
+        Resource  = "*"
+      },
+      {
+        Effect    = "Deny"
+        Principal = "*"
+        Action    = "*"
+        Resource  = "*"
+        Condition = {
+          StringNotEquals = {
+            "aws:PrincipalAccount" = data.aws_caller_identity.current.account_id
+          }
+        }
+      },
+    ]
+  })
+}
+
+resource "aws_vpc_endpoint" "guardduty_data" {
+  vpc_id              = module.vpc.vpc_id
+  service_name        = "com.amazonaws.${data.aws_region.current.region}.guardduty-data"
+  vpc_endpoint_type   = "Interface"
+  subnet_ids          = module.vpc.private_subnets
+  security_group_ids  = [aws_security_group.guardduty_data.id]
+  private_dns_enabled = true
+  policy              = local.guardduty_data_endpoint_policy
+
+  tags = {
+    Name = "${var.name}-guardduty-data"
   }
 }

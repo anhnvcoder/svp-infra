@@ -12,6 +12,16 @@ variable "account_id" {
   }
 }
 
+variable "log_archive_account_id" {
+  description = "The account svp-log-archive (12 digits), whose buckets receive the VPC flow logs and the WAF logs of this env. Set it with TF_VAR_log_archive_account_id from SVP_AWS_LOG_ACCOUNT_ID, as account_id; it never goes into a committed file."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[0-9]{12}$", var.log_archive_account_id))
+    error_message = "log_archive_account_id must be the 12 digits of an AWS account id."
+  }
+}
+
 variable "region" {
   description = "Region of every resource of this env."
   type        = string
@@ -71,17 +81,6 @@ variable "az_count" {
 variable "single_nat_gateway" {
   description = "One NAT gateway for the whole VPC (true) or one per zone (false)."
   type        = bool
-}
-
-variable "flow_log_enabled" {
-  description = "Send VPC flow logs to CloudWatch."
-  type        = bool
-}
-
-variable "flow_log_retention_days" {
-  description = "Days CloudWatch keeps the flow logs when flow_log_enabled is true."
-  type        = number
-  default     = 1
 }
 
 variable "s3_endpoint_restricted" {

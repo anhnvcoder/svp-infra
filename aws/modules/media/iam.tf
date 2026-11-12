@@ -3,9 +3,9 @@
 # bucket (ListUploads): S3 answers a HEAD or GET of a missing key with 403, not 404, when the caller may not list the
 # bucket, and both services would take "not there" for an outage.
 
-# ListUploads carries no s3:prefix condition: the bucket only ever holds uploads/<id>, so a condition would narrow
-# nothing, and S3 does not document that its 403-or-404 decision honours one. A listing shows only video ids, which
-# both services already know. s3:PutObject also covers multipart calls and conditional If-None-Match writes; neither
+# ListUploads carries no s3:prefix condition: besides uploads/<id> the bucket holds only GuardDuty's validation object,
+# and S3 does not document that its 403-or-404 decision honours one. A listing shows video ids, which both services
+# already know, and that object. s3:PutObject also covers multipart calls and conditional If-None-Match writes; neither
 # service may abort a multipart upload (the lifecycle rules do).
 
 # video-service signs upload forms for uploads/<id>, checks and deletes the uploaded file, and deletes the media of a

@@ -3,20 +3,26 @@ locals {
   # protections differ in <env>.tfvars, the backend key is given at init. Every name below starts with svp-<env>.
   env  = "prd"
   name = "svp-${local.env}"
+
+  # Buckets of the log archive account that receive this env's flow logs and WAF logs, named as that account's root
+  # names them: the account id comes from the terminal, so no file holds it.
+  log_archive_buckets = {
+    flow_logs = "svp-flowlogs-${var.log_archive_account_id}-${var.region}"
+    waf       = "aws-waf-logs-svp-${var.log_archive_account_id}-us-east-1"
+  }
 }
 
 module "network" {
   source = "../../modules/network"
 
-  name               = local.name
-  cluster_name       = local.name
-  az_count           = var.az_count
-  single_nat_gateway = var.single_nat_gateway
-  flow_log_enabled   = var.flow_log_enabled
+  name                = local.name
+  cluster_name        = local.name
+  az_count            = var.az_count
+  single_nat_gateway  = var.single_nat_gateway
+  flow_log_bucket_arn = "arn:aws:s3:::${local.log_archive_buckets.flow_logs}"
 
-  flow_log_retention_days = var.flow_log_retention_days
-  s3_endpoint_restricted  = var.s3_endpoint_restricted
-  s3_endpoint_buckets     = concat([module.media.uploads_bucket, module.media.media_bucket], var.s3_endpoint_extra_buckets)
+  s3_endpoint_restricted = var.s3_endpoint_restricted
+  s3_endpoint_buckets    = concat([module.media.uploads_bucket, module.media.media_bucket], var.s3_endpoint_extra_buckets)
 }
 
 module "eks" {
@@ -29,6 +35,8 @@ module "eks" {
   control_plane_log_types = var.control_plane_log_types
   secrets_kms_encryption  = var.eks_secrets_kms_encryption
   hosted_zone_id          = var.hosted_zone_id
+
+  guardduty_data_endpoint_id = module.network.guardduty_data_endpoint_id
 
   # One system node per zone, room for as many again when scaled by hand; Karpenter makes the other nodes.
   system_node_max_size = 2 * var.az_count

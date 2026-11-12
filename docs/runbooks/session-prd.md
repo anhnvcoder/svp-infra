@@ -90,6 +90,9 @@ aws/scripts/session.sh --print prd                 # mọi lệnh script của b
 
    Mong `[]` và `PAID`; dán lại cả hai. Còn gói: huỷ theo `session-stg.md`, mục **Lệnh xoá tay theo loại** (CloudFront), với
    `AWS_PROFILE=anhnv-prd`; `FREE`: không bắt đầu buổi, dán output cho AI.
+8. **Nền bảo mật của org đã áp** tới ít nhất bước (3) của [`org-security-setup.md`](org-security-setup.md#thứ-tự-áp-lần-đầu), và biến
+   `SVP_AWS_LOG_ACCOUNT_ID` đặt trong terminal của buổi: như `session-stg.md` điều kiện 6 (root env prd ghi flow log, log WAF vào bucket
+   của `svp-log-archive`).
 
 ## Mở terminal của buổi
 
@@ -100,13 +103,15 @@ cd infra
 AWS_PROFILE=anhnv-prd aws sso login --region us-east-1
 AWS_PROFILE=anhnv-sso aws sso login --region us-east-1                                             # cho lượt sweep.sh mgmt cuối buổi
 export SVP_AWS_PRD_ACCOUNT_ID=<12 số của account svp-prd> SVP_AWS_MGMT_ACCOUNT_ID=<12 số của account management>
+export SVP_AWS_LOG_ACCOUNT_ID=<12 số của account svp-log-archive>
 export SVP_SESSION_DIR="$PWD/.session/$(date -u +%Y%m%dT%H%M%SZ)"
 ```
 
 ## Thứ tự
 
 Các bước script, theo đúng thứ tự `session.sh --print prd`; bước tay của prd chen giữa, ở các mục dưới (cổng promote trước bước 1, email
-của alarm và tunnel sau bước 5, gói Free, phép kiểm nền tảng, commit status và diễn tập sau bước 11, final snapshot sau bước 18):
+của alarm và tunnel sau bước 5, gói Free, phép kiểm nền tảng, commit status và diễn tập sau bước 11, finding bảo mật trước bước 12, final
+snapshot sau bước 18):
 
 | # | Lệnh | Hạn | Dán lại cho AI |
 | --- | --- | --- | --- |
@@ -397,6 +402,11 @@ ElastiCache từ user của nó; chỉ pod client restart (Reloader).
 
 ## Kết thúc buổi
 
+**Trước bước 12, finding bảo mật của buổi** (chỉ đọc, khi tài nguyên của buổi còn sống, cả khi buổi dừng sớm): hai lệnh và cách xử lý của
+`session-stg.md`, mục [Finding bảo mật của buổi](session-stg.md#finding-bảo-mật-của-buổi-sau-bước-11-trước-bước-12), cùng điều kiện
+(bước (4), (5) của nền bảo mật org), với dòng đầu `ACC="${SVP_AWS_PRD_ACCOUNT_ID:?not set}"` của prd (comment trên dòng `ACC` của stg) thay
+dòng của stg: dòng của stg chạy ở terminal prd thì đọc finding của account stg. Mốc của diễn tập prd cũng nằm trong `timeline.tsv` của buổi.
+
 Theo thứ tự, mỗi bước xong mới sang bước sau:
 
 1. **Destroy root gitops rồi root env** (bước 12–18, tunnel còn mở tới hết bước 14). Bảo vệ của prd được nhấc trước: bước 15 đọc
@@ -424,7 +434,7 @@ Theo thứ tự, mỗi bước xong mới sang bước sau:
    ```
 
 3. **`aws/scripts/sweep.sh prd`** (profile `anhnv-prd`): chỉ còn dòng `kept` (`Stack=baseline`: bucket state, KMS key state, zone
-   `aws.<domain>` cùng bản ghi `NS` uỷ quyền `stg.aws.<domain>` dưới đỉnh của nó) và `pending deletion` (KMS key của root env: RDS, MSK, alarm,
+   `aws.<domain>` cùng bản ghi `NS` uỷ quyền `stg.aws.<domain>` dưới đỉnh của nó; `Stack=security-baseline`: CMK EBS) và `pending deletion` (KMS key của root env: RDS, MSK, alarm,
    Secrets của EKS; 7 ngày), exit 0; không còn dòng MSK, ElastiCache, `AmazonMSK_*`, log group `/aws/msk/svp-prd` (phép kiểm (f) của ADR-0053),
    không còn instance, launch template, instance profile, hàng đợi SQS hay rule EventBridge nào của Karpenter.
    Còn gì khác: chạy lệnh `delete:` nó in, rồi chạy lại. Phép kiểm (e) của ADR-0052 (output vào phụ lục của nó, kết luận vào "Xác nhận"): gói của account
@@ -434,7 +444,8 @@ Theo thứ tự, mỗi bước xong mới sang bước sau:
    AWS_PROFILE=anhnv-prd aws pricing-plan-manager list-subscriptions --region us-east-1 --query 'subscriptionSummaries[].[arn,planTier,status]' --output json
    ```
 
-4. **`aws/scripts/sweep.sh mgmt`** (profile `anhnv-sso`): chỉ `Stack=bootstrap|org` (bucket state, trail), không hosted zone, exit 0.
+4. **`aws/scripts/sweep.sh mgmt`** (profile `anhnv-sso`): chỉ `Stack=bootstrap|org|security-baseline|security` (bucket state, trail,
+   baseline bảo mật, detector GuardDuty của management), không hosted zone, exit 0.
 
 Một lượt `sweep.sh prd` chạy trước bước 2 được phép exit khác 0 (final snapshot, backup tự động còn đó) và chỉ để xem. **Buổi chỉ xong khi
 lượt `sweep.sh prd` sau bước 2 và lượt `sweep.sh mgmt` cùng exit 0.** AI nhắc tới khi người học xác nhận đủ bốn bước. Sau 24 giờ: Cost

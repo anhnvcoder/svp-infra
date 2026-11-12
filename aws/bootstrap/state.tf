@@ -1,5 +1,4 @@
-# Remote state of the roots that change the management account and of the GitHub settings: aws/bootstrap
-# (aws/bootstrap/terraform.tfstate), aws/org (aws/org/terraform.tfstate) and github/ (github/terraform.tfstate), one key
+# Remote state of the roots run with the management account's profile (the list is in aws/bootstrap/README.md), one key
 # per root, locked with the S3 backend's native lock file, so no DynamoDB table. The roots of each environment keep
 # their state in the bucket of their own account (aws/accounts/<env>).
 
@@ -25,22 +24,36 @@ resource "aws_s3_bucket_versioning" "state" {
   }
 }
 
-# SSE-S3: encrypted at rest at no cost. A customer managed KMS key (what the finding below asks for) adds $1 a month and
-# a key policy to keep, and draws no line that IAM and the bucket policy do not draw already: only the administrators
-# of the management account reach this bucket, and they are the ones who run its three roots.
+# The key policy is the AWS default one: the account's IAM policies decide who uses the key, as they decide who reads
+# the bucket. The permission sets of the management account are not managed in this repository, so no statement can
+# name the roles that should read state, as the key of each environment's state does (aws/modules/account-baseline).
+resource "aws_kms_key" "state" {
+  description             = "Terraform state of the management account (bucket ${aws_s3_bucket.state.bucket})"
+  enable_key_rotation     = true
+  deletion_window_in_days = 30
 
-# Scope: management account only (aws/bootstrap, aws/org, github/); stg and prd: the state of each environment is in the
-# bucket of its own account, encrypted with a customer managed KMS key whose key policy grants kms:Decrypt only to the
-# SvpAdmin roles (aws/modules/account-baseline), since state holds outputs and attributes that roles allowed only to
-# list or read the bucket should not see.
-#trivy:ignore:AWS-0132
+  # Without this key the state in the bucket cannot be read. Removing both on purpose: aws/bootstrap/README.md.
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "aws_kms_alias" "state" {
+  name          = "alias/svp-tfstate"
+  target_key_id = aws_kms_key.state.key_id
+}
+
+# Every object is encrypted with the state key unless the client asks for another encryption. The S3 Bucket Key cuts
+# the KMS requests to one per bucket key instead of one per object.
 resource "aws_s3_bucket_server_side_encryption_configuration" "state" {
   bucket = aws_s3_bucket.state.id
 
   rule {
     apply_server_side_encryption_by_default {
-      sse_algorithm = "AES256"
+      sse_algorithm     = "aws:kms"
+      kms_master_key_id = aws_kms_key.state.arn
     }
+    bucket_key_enabled = true
   }
 }
 

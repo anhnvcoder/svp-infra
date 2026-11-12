@@ -1,0 +1,6 @@
+# Copy to security.auto.tfvars (ignored by git) and fill in. Never commit the real value: the repository is public.
+# Account ids are not here: TF_VAR_account_id, TF_VAR_security_account_id and TF_VAR_log_archive_account_id are set in
+# each command from SVP_AWS_MGMT_ACCOUNT_ID, SVP_AWS_SECURITY_ACCOUNT_ID and SVP_AWS_LOG_ACCOUNT_ID.
+
+# Receives every security alert of the organization; SNS emails it a confirmation link first.
+security_alert_email = "security@svp.example"

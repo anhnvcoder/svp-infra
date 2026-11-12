@@ -19,3 +19,15 @@ variable "rate_limit" {
     error_message = "rate_limit must be a whole number from 10 to 2000000000."
   }
 }
+
+variable "log_bucket_arn" {
+  description = "ARN of the S3 bucket that receives the web ACL's logs: the WAF log bucket of the Log Archive account, arn:aws:s3:::aws-waf-logs-svp-<log account>-us-east-1."
+  type        = string
+  nullable    = false
+
+  validation {
+    # WAF delivers to S3 only into a bucket whose name starts with aws-waf-logs-.
+    condition     = can(regex("^arn:aws[a-z-]*:s3:::aws-waf-logs-[a-z0-9][a-z0-9.-]*[a-z0-9]$", var.log_bucket_arn))
+    error_message = "log_bucket_arn must be the ARN of an S3 bucket whose name starts with aws-waf-logs-, e.g. arn:aws:s3:::aws-waf-logs-svp-000000000000-us-east-1."
+  }
+}

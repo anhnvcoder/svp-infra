@@ -1,5 +1,5 @@
 variable "name" {
-  description = "Name of the env (svp-stg, svp-prd): prefix of the SNS topic <name>-alarms and of the KMS alias alias/<name>-alarms."
+  description = "Name of the env or stack (svp-stg, svp-prd, svp-security): prefix of the SNS topic <name>-alarms and of the KMS alias alias/<name>-alarms."
   type        = string
 
   validation {
@@ -17,5 +17,16 @@ variable "alarm_email" {
   validation {
     condition     = can(regex("^[^@[:space:]]+@[^@[:space:]]+\\.[^@[:space:]]+$", var.alarm_email))
     error_message = "alarm_email must be an email address."
+  }
+}
+
+variable "publisher_services" {
+  description = "Service principals that publish to the topic and use its key, each limited to its own resources of this account and region: cloudwatch.amazonaws.com (alarms), events.amazonaws.com (EventBridge rules)."
+  type        = list(string)
+  default     = ["cloudwatch.amazonaws.com"]
+
+  validation {
+    condition     = length(var.publisher_services) > 0 && length(distinct(var.publisher_services)) == length(var.publisher_services) && alltrue([for p in var.publisher_services : contains(["cloudwatch.amazonaws.com", "events.amazonaws.com"], p)])
+    error_message = "publisher_services must list, without repeats, at least one of cloudwatch.amazonaws.com and events.amazonaws.com."
   }
 }

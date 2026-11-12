@@ -59,6 +59,7 @@ module "eks" {
 
 | Name | Type |
 | ---- | ---- |
+| [aws_eks_addon.guardduty_agent](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/eks_addon) | resource |
 | [aws_eks_pod_identity_association.aws_load_balancer_controller](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/eks_pod_identity_association) | resource |
 | [aws_eks_pod_identity_association.cert_manager](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/eks_pod_identity_association) | resource |
 | [aws_eks_pod_identity_association.external_dns](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/eks_pod_identity_association) | resource |
@@ -85,6 +86,7 @@ module "eks" {
 | control\_plane\_log\_types | Control plane logs sent to CloudWatch, e.g. ["api", "audit"]. Empty (the default) sends none and creates no log group: ingestion is billed per GB. | `list(string)` | `[]` | no |
 | endpoint\_public\_access | Open the public endpoint of the Kubernetes API, reachable only from endpoint\_public\_access\_cidrs. The private endpoint is always on, so nodes and pods reach the API inside the VPC either way. | `bool` | `false` | no |
 | endpoint\_public\_access\_cidrs | IPv4 ranges allowed to call the public endpoint of the Kubernetes API, e.g. the address of the learner's machine as a /32. Personal data of a public repository: set it in an uncommitted *.auto.tfvars or TF\_VAR\_endpoint\_public\_access\_cidrs. | `list(string)` | `[]` | no |
+| guardduty\_data\_endpoint\_id | ID of the interface endpoint guardduty-data of the VPC (output guardduty\_data\_endpoint\_id of the network module). The GuardDuty agent add-on is created after it, so the agent's first reports have a way out. | `string` | n/a | yes |
 | hosted\_zone\_id | ID of the Route 53 hosted zone of the env, in the env's account (output zone\_id of aws/accounts/<env>). ExternalDNS and cert-manager may change records of this zone only. | `string` | n/a | yes |
 | kubernetes\_version | Kubernetes minor version of the control plane and of the node group, e.g. 1.36. Pick a minor in standard support: the cluster is created with the STANDARD support policy. | `string` | n/a | yes |
 | name | Name of the EKS cluster, e.g. svp-stg, and prefix of the names of its IAM roles, policies, security groups and node group. | `string` | n/a | yes |
@@ -161,7 +163,7 @@ người học chạy.
 | IAM role của node | `system-eks-node-group-<hậu tố>` | EC2 assume; gắn `AmazonEKSWorkerNodePolicy`, `AmazonEC2ContainerRegistryReadOnly` và `AmazonEKS_CNI_Policy` (VPC CNI dùng role của node: pod thường không tới được IMDS, xem IMDS dưới đây) |
 | Launch template | `system-<hậu tố>` | AMI `AL2023_ARM_64_STANDARD` bản ghim, IMDSv2 bắt buộc, hop limit 1, ổ gốc gp3 30 GiB mã hoá; tag `Project=svp` lên instance, volume, ENI |
 | `aws_eks_node_group` | `system-<hậu tố>` | `ON_DEMAND`, `release_version` ghim, loại instance và `max_size` theo biến; trải mọi subnet private |
-| `aws_eks_addon` | 6 addon | mục Addon |
+| `aws_eks_addon` | 6 addon | mục Addon (`aws-guardduty-agent` do module nội bộ tạo, ngoài module cộng đồng) |
 | Log group CloudWatch | `/aws/eks/<name>/cluster` | chỉ khi `control_plane_log_types` khác rỗng, retention theo biến |
 
 Submodule `karpenter` (`modules/karpenter/main.tf`, `policy.tf`), tên nguyên văn (`*_use_name_prefix = false`) vì chart Karpenter và
@@ -205,6 +207,13 @@ Mỗi addon ghim `addon_version` ở `addons.tf` (bản và nguồn: ADR-0056 §
 | `coredns` | không (cần node để chạy) | mặc định |
 | `aws-ebs-csi-driver` | không | Pod Identity như trên; `controller.extraVolumeTags: {Project: svp}`; không tạo StorageClass nào (EKS từ 1.30 không đánh dấu `gp2` mặc định: `gp3` mặc định do `svp-cluster` render) |
 | `metrics-server` | không | addon community của EKS (AWS chỉ hỗ trợ cài, gỡ qua API): API metrics cho `kubectl top` và HPA CPU của gateway, feed-service; k3s có sẵn, EKS không |
+| `aws-guardduty-agent` | không | agent Runtime Monitoring của GuardDuty, DaemonSet trên mọi node (cả node Karpenter); resource `aws_eks_addon.guardduty_agent` riêng ở `addons.tf`, không trong `local.addons`: tạo sau module cộng đồng (cần node) và sau endpoint `guardduty-data` (`depends_on` trên biến `guardduty_data_endpoint_id`, output của `network`) |
+
+Agent GuardDuty do Terraform cài, không để GuardDuty tự quản: GuardDuty tự quản thì tự tạo endpoint `guardduty-data` và security group
+ngoài state, chặn destroy VPC cuối buổi ([ADR-0060](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0060-org-detection-logging.md)
+§5). Agent gửi sự kiện qua endpoint đó (private DNS, module `network`); add-on không cần role IAM hay Pod Identity. Đưa add-on vào
+`local.addons` thì cách duy nhất để nó chờ endpoint là cho cả map phụ thuộc biến, nghĩa là mọi add-on (kể cả `vpc-cni` trước node group)
+cùng chờ.
 
 **Số pod mỗi node:** không prefix delegation, `m7g.large` giữ 29 pod (3 ENI × (IP mỗi ENI − 1) + 2). Bật prefix delegation mỗi ENI nhận các khối `/28` nên số tính ra vượt 400, managed node group chặn ở
 **110 pod** cho instance dưới 30 vCPU (EC2NodeClass đặt cùng `kubelet.maxPods`). vpc-cni được tạo trước node group để node đầu tiên đã có
@@ -280,7 +289,8 @@ hết NodeClaim và instance; giới hạn chờ ở ADR-0056 §9.
 - Bản ghim của mỗi addon có cho `kubernetes_version`:
   `aws eks describe-addon-versions --addon-name <addon> --kubernetes-version 1.36 --region ap-southeast-1` liệt kê đúng `addon_version`
   của `addons.tf` (không có thì `apply` đỏ ở `aws_eks_addon`); `kubectl top node` chạy, HPA của gateway và feed-service không
-  `FailedGetResourceMetric`.
+  `FailedGetResourceMetric`. Agent GuardDuty: lệnh trên với `--addon-name aws-guardduty-agent` liệt kê bản của `addons.tf`; add-on
+  `ACTIVE`, DaemonSet trong namespace `amazon-guardduty` chạy trên mọi node, GuardDuty báo coverage EKS `HEALTHY`.
 - Karpenter: pod `karpenter` lấy được credential của role `<name>-karpenter` (log không `AccessDenied`), đọc được hàng đợi `<name>-karpenter`;
   NodeClaim của pod Pending lên `Ready` trong subnet private.
 - Access entry của role SSO: `kubectl get ns` bằng kubeconfig của người tạo chạy được ngay sau `apply`.

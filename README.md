@@ -46,6 +46,9 @@ make help                             # liệt kê target
 Dựng, đo và gỡ một env theo runbook [`docs/runbooks/session-stg.md`](docs/runbooks/session-stg.md) hay
 [`docs/runbooks/session-prd.md`](docs/runbooks/session-prd.md) (mục [Plan và apply](#plan-và-apply)).
 Nâng minor EKS của cả hai env theo runbook [`docs/runbooks/eks-upgrade.md`](docs/runbooks/eks-upgrade.md).
+Áp nền bảo mật của tổ chức lần đầu (account Log Archive, Security Tooling, policy, dịch vụ phát hiện, baseline) theo runbook
+[`docs/runbooks/org-security-setup.md`](docs/runbooks/org-security-setup.md); đường vào khẩn cấp ở
+[`docs/runbooks/break-glass.md`](docs/runbooks/break-glass.md).
 Cài đặt GitHub của các repo (Terraform `github/`, GitHub App từ manifest, phần provider không quản) theo runbook
 [`docs/runbooks/github-setup.md`](docs/runbooks/github-setup.md); `make github-check` đọc lại phần ngoài Terraform.
 
@@ -65,21 +68,25 @@ renovate.json                 provider, module, ruleset tflint, image ghim của
 .github/workflows/scorecard.yml push main và lịch tuần: OpenSSF Scorecard, kết quả công khai và lên code scanning
 .github/zizmor.yml            ngoại lệ của zizmor, mỗi mục một lý do (tạo khi có ngoại lệ đầu tiên)
 aws/
-  bootstrap/                  management account, một lần, giữ giữa các buổi: bucket state, budget của org; không hosted zone nào
-  org/                        management account: Organizations, OU Workloads, account svp-stg và svp-prd, SCP, IAM Identity Center (SvpAdmin), organization trail
+  bootstrap/                  management account, một lần, giữ giữa các buổi: bucket state (KMS key), budget, Cost Anomaly Detection, tag phân bổ chi phí của org; không hosted zone nào
+  org/                        management account: Organizations, OU Security và Workloads/Prod, Workloads/NonProd, bốn account thành viên, policy của tổ chức, delegated admin, root tập trung, liên hệ SECURITY, IAM Identity Center (SvpAdmin, SvpReadOnly, SvpLogReader), organization trail
+  log-archive/                account svp-log-archive (chạy từ management qua OrganizationAccountAccessRole): bucket log của org và hai KMS key
+  security/                   account svp-security (như trên): GuardDuty, Security Hub CSPM, aggregator Config, Access Analyzer của org; bus và SNS cảnh báo bảo mật
+  baseline/                   năm account (như trên): baseline bảo mật của mỗi account, CMK EBS của stg, prd
   accounts/<env>/             baseline của mỗi account thành viên (stg, prd), giữ giữa các buổi: bucket state, KMS key của nó, zone của env (prd aws.<domain>, giữ cả bản ghi NS uỷ quyền stg.aws.<domain>; stg stg.aws.<domain>), budget
   envs/<env>/                 cấu hình gốc của mỗi env (stg, prd: cùng *.tf kể cả bastion SSM, khác ở <env>.tfvars; prd thêm teardown.tfvars)
   gitops/<env>/               bootstrap GitOps của cluster EKS của env (GitOps Bridge): namespace, Argo CD, AppProject, cluster Secret, ApplicationSet svp-bootstrap
   modules/                    module nội bộ; lock file không commit
-    network, eks, rds, media  nền của mỗi env (network: ba tầng subnet mỗi AZ, public, private, database; eks: nhóm node hệ thống, IAM, SQS, EventBridge của Karpenter)
+    network, eks, rds, media  nền của mỗi env (network: ba tầng subnet mỗi AZ, public, private, database, NACL không mở 22, 3389, flow log về Log Archive, endpoint guardduty-data; eks: nhóm node hệ thống, IAM, SQS, EventBridge của Karpenter, add-on agent GuardDuty; media: Malware Protection cho uploads)
     msk                       Kafka của env: Amazon MSK provisioned, một broker mỗi AZ ở subnet database, SASL/SCRAM-SHA-512 trên TLS 9096
     elasticache               Valkey của env: ElastiCache for Valkey, cluster mode tắt, ở subnet database, TLS 6379, user RBAC theo db và tiền tố
-    alarms                    topic SNS svp-<env>-alarms mã hoá bằng KMS key của module, subscription email; alarm của RDS, MSK, ElastiCache gửi tới nó
-    waf                       web ACL của CloudFront (cả hai root env gọi, provider us-east-1; gói flat-rate Free của media đòi nó)
+    alarms                    topic SNS mã hoá bằng KMS key của module, subscription email: svp-<env>-alarms nhận alarm của RDS, MSK, ElastiCache; svp-security-alarms (root security) nhận sự kiện bảo mật
+    waf                       web ACL của CloudFront (cả hai root env gọi, provider us-east-1; gói flat-rate Free của media đòi nó), log về bucket WAF của Log Archive
     ssm-bastion               bastion SSM tới endpoint private của API EKS (cả hai env)
     external-secrets          vỏ entry Secrets Manager svp/<env>/*, role của External Secrets theo namespace, Pod Identity
     gitops-bridge             giá trị của bootstrap GitOps (không resource): cluster Secret, values Argo CD, root
-    org-policies              ba SCP của OU Workloads
+    org-policies              mọi policy của tổ chức: SCP, RCP data perimeter, declarative policy EC2, tag policy
+    security-baseline         baseline bảo mật của một account: S3 BPA cấp account, EBS mã hoá mặc định, Config recorder, rule svp-security-*
     account-baseline          bucket state, KMS key, zone (cùng bản ghi NS uỷ quyền zone con, chỉ prd dùng), budget của một account thành viên
   backend.hcl                 backend của management (bucket của aws/bootstrap; không commit, sinh từ output backend_hcl)
   backend-<env>.hcl           backend của account stg, prd (bucket, region, KMS; không key, mỗi root truyền key riêng; không commit, sinh từ output của accounts/<env>)
@@ -214,8 +221,12 @@ hiện ở log của step Scorecard. Mọi action ghim SHA đầy đủ của co
 
 Hai đường vào:
 
-- **Một lần ở management account:** [`aws/bootstrap/README.md`](aws/bootstrap/README.md) (bucket state, budget của org), rồi
-  [`aws/org/README.md`](aws/org/README.md) (tổ chức, account stg và prd, SCP, Identity Center, trail).
+- **Dựng tổ chức, một lần, từ management account:** `aws/bootstrap` (bucket state, budget của org), `aws/org` (tổ chức, account, policy,
+  Identity Center, trail) và nền bảo mật (account Log Archive và Security Tooling, root `aws/log-archive`, `aws/security`, `aws/baseline`) theo
+  thứ tự áp lần đầu và phần kiểm sau áp của runbook [`docs/runbooks/org-security-setup.md`](docs/runbooks/org-security-setup.md): `aws/org`
+  áp hai lượt, trước và sau `aws/log-archive`. Đổi về sau thì theo README của từng root
+  ([`aws/bootstrap/README.md`](aws/bootstrap/README.md), [`aws/org/README.md`](aws/org/README.md), …). Đường vào khẩn cấp:
+  [`docs/runbooks/break-glass.md`](docs/runbooks/break-glass.md).
 - **Một lần mỗi account thành viên:** [`aws/accounts/README.md`](aws/accounts/README.md) (baseline, uỷ quyền zone của env: zone gốc `aws.<domain>`
   của prd ở DNS cha, zone `stg.aws.<domain>` ở zone prd).
 - **Cài đặt GitHub** (thêm repo hay App): runbook [`docs/runbooks/github-setup.md`](docs/runbooks/github-setup.md).
@@ -225,18 +236,26 @@ Hai đường vào:
   4 giờ: mục "Giới hạn" của `session-stg.md`, "Chi phí và giới hạn" của `session-prd.md`.
 - **Nâng minor EKS:** runbook [`docs/runbooks/eks-upgrade.md`](docs/runbooks/eks-upgrade.md).
 
-Chỉ người học chạy, từ máy, bằng SSO, theo script và runbook của repo. Mỗi account một profile và một biến chứa 12 số của account (export
-trong terminal của buổi, không ghi vào file nào); mọi lệnh viết sẵn ghi profile ngay trong lệnh, `TF_VAR_account_id` từ biến của account đó
-và `--region`:
+Chỉ người học chạy, từ máy, bằng SSO, theo script và runbook của repo. Mỗi account một biến chứa 12 số của account (export trong terminal
+của buổi, không ghi vào file nào); mọi lệnh viết sẵn ghi profile ngay trong lệnh, `TF_VAR_account_id` từ biến của account mà profile vào, và
+`--region`:
 
-| Account | Profile SSO | Biến account | Root |
-| --- | --- | --- | --- |
-| management (account sandbox) | `anhnv-sso` | `SVP_AWS_MGMT_ACCOUNT_ID` | `aws/bootstrap`, `aws/org`, `github/` |
-| `svp-stg` | `anhnv-stg` | `SVP_AWS_STG_ACCOUNT_ID` | `aws/accounts/stg`, `aws/envs/stg`, `aws/gitops/stg` |
-| `svp-prd` | `anhnv-prd` | `SVP_AWS_PRD_ACCOUNT_ID` | `aws/accounts/prd`, `aws/envs/prd`, `aws/gitops/prd` |
+| Account | Profile ghi | Profile chỉ đọc | Biến account | Root |
+| --- | --- | --- | --- | --- |
+| management (account sandbox) | `anhnv-sso` | — | `SVP_AWS_MGMT_ACCOUNT_ID` | `aws/bootstrap`, `aws/org`, `aws/log-archive`, `aws/security`, `aws/baseline`, `github/` |
+| `svp-log-archive` | — (qua management) | `anhnv-log-ro` | `SVP_AWS_LOG_ACCOUNT_ID` | không root riêng |
+| `svp-security` | — (qua management) | `anhnv-security-ro` | `SVP_AWS_SECURITY_ACCOUNT_ID` | không root riêng |
+| `svp-stg` | `anhnv-stg` | `anhnv-stg-ro` | `SVP_AWS_STG_ACCOUNT_ID` | `aws/accounts/stg`, `aws/envs/stg`, `aws/gitops/stg` |
+| `svp-prd` | `anhnv-prd` | `anhnv-prd-ro` | `SVP_AWS_PRD_ACCOUNT_ID` | `aws/accounts/prd`, `aws/envs/prd`, `aws/gitops/prd` |
 
-Region `ap-southeast-1` cho dịch vụ theo region và STS, `us-east-1` cho Organizations, WAF của CloudFront, Pricing Plan Manager và API Free
-Tier, region của instance Identity Center cho `sso-admin`, `identitystore`. Terraform của máy (Homebrew) phải nằm trong `required_version` của root (`~> 1.15`). Backend S3,
+**Root chạy từ management qua role.** `aws/log-archive`, `aws/security`, `aws/baseline` chạy bằng `anhnv-sso` với `TF_VAR_account_id` của
+management; provider của mỗi account đích assume `OrganizationAccountAccessRole` của account đó, `allowed_account_ids` đúng account đó, id
+từ `TF_VAR_<log_archive|security|stg|prd>_account_id` đặt trong lệnh từ biến tương ứng. Hai account bảo mật không có profile ghi, bucket state
+riêng hay root riêng: baseline áp từ một chỗ, như execution role của Control Tower. Root `aws/envs/<env>` cần thêm `SVP_AWS_LOG_ACCOUNT_ID`
+(tên bucket flow log và log WAF của account Log Archive); `tf.sh` đặt `TF_VAR_log_archive_account_id` từ nó và dừng khi rỗng.
+
+Region `ap-southeast-1` cho dịch vụ theo region và STS, `us-east-1` cho Organizations, IAM, Cost Explorer, WAF của CloudFront, Pricing Plan
+Manager và API Free Tier, region của instance Identity Center cho `sso-admin`, `identitystore`. Terraform của máy (Homebrew) phải nằm trong `required_version` của root (`~> 1.15`). Backend S3,
 khoá bằng lock file native của S3 (`use_lockfile`): root của management đọc `aws/backend.hcl` (sinh từ output của `aws/bootstrap`); root
 của account thành viên đọc `aws/backend-<env>.hcl` (sinh từ output `backend_hcl` của `aws/accounts/<env>`, không có `key`) cộng một
 `-backend-config=key=<key của root>` thứ hai, `init -reconfigure` (script buổi `tf.sh` làm vậy). Không file nào trong hai loại được commit.
@@ -340,7 +359,8 @@ flowchart TD
   không credential), `make tfdocs`, `terraform fmt`, `terraform init -backend=false`, `terraform validate`,
   `terraform providers lock` (`make lock`). Mọi lệnh chạm account (`terraform test` trần, `plan`, `apply`, `destroy`, `import`, `state`, `output`, `aws` trừ
   `--version`, script dùng SDK) do người học chạy; trước mọi lệnh ghi, `aws sts get-caller-identity` với profile của chính account đó
-  (`aws/scripts/check-account.sh mgmt|stg|prd`) và so account. Provider của root ghim account bằng `allowed_account_ids` từ `TF_VAR_account_id`.
+  (`aws/scripts/check-account.sh mgmt|stg|prd`) và so account. Provider của root ghim account bằng `allowed_account_ids` từ `TF_VAR_account_id`
+  (root chạy qua role: từ biến id của account đích).
 - **`make test` từ chối file test sai khuôn thay vì dò từng cách phá luật** (một `run` không có `command` thì apply; một mock đặt dưới
   `alias` để provider thật làm mặc định). Chỉ `init`, trong một container riêng, tải provider và module registry; container chạy test có
   `HOME` là `/tmp` của container và chỉ mount thư mục module (chỉ đọc), không bao giờ `~/.aws`, gốc repo hay thư mục env. Chuỗi trong HCL không
@@ -352,6 +372,12 @@ flowchart TD
   tên bucket) chỉ qua `*.auto.tfvars` không commit hay `TF_VAR_*`; repo có file `*.example` với `svp.example`, `000000000000`.
 - Tên bucket theo `<tên>-<account>-<region>` (như bucket của AWS CDK, Control Tower): duy nhất toàn cầu không cần phần ngẫu nhiên.
   Account thật vẫn không nằm trong file commit nào: tên tính từ `var.account_id` lúc chạy.
+- **Guardrail của tổ chức** (policy ở module [`org-policies`](aws/modules/org-policies/README.md)): account thành viên không tạo được IAM user,
+  access key hay mật khẩu IAM; không tắt hay đổi trail, dịch vụ phát hiện, rule `svp-security-*`; không đổi baseline bảo mật (S3 BPA cấp
+  account, EBS mã hoá mặc định, Config, CMK EBS) trừ qua `OrganizationAccountAccessRole`, tức root `aws/baseline` chạy từ management; root của
+  account thành viên không có credential (root tập trung). Lệnh bị guardrail từ chối và đổi quản trị gửi email (README
+  [`aws/security`](aws/security/README.md#luồng-cảnh-báo)). Đường vào khi Identity Center hỏng hay cần root: runbook
+  [`break-glass.md`](docs/runbooks/break-glass.md).
 - Nghi đã lộ khoá AWS hay giá trị cá nhân: mục "Giảm thiểu" của runbook `svp-infra-setup.md`.
 
 ## Đóng góp

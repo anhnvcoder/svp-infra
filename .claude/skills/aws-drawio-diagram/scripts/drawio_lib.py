@@ -1,6 +1,6 @@
 # copied from templates/terraform-base/.claude/skills/aws-drawio-diagram/scripts/drawio_lib.py (ecc4349); changed: export() finds the draw.io CLI through $DRAWIO, PATH, then the macOS app; Page.k8s() draws Kubernetes icons; edge(label_pos=…)
 # also changed: the AWS Account and Region groups (ACCOUNT, REGION) and the analytics color ANA
-# also changed: export() lowers the scale of a PNG past what draw.io draws in full (PNG_MAX_PIXELS)
+# also changed: export() lowers the scale of a PNG past what draw.io draws in full (PNG_MAX_PIXELS, blank_tail())
 """drawio_lib — generates `.drawio` files (plus PDF/PNG) in the terraform-base AWS infrastructure diagram style.
 
 Usage: write a short Python spec file that calls `Page` and then `write()`; see `build_terraform_base.py` for an example.
@@ -23,6 +23,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import zlib
 from pathlib import Path
 from xml.sax.saxutils import quoteattr
 
@@ -31,9 +32,11 @@ ICON = 80         # icon, 2×2 major cells
 BADGE = 40        # small attached icon (WAF…), 1 major cell
 GRID = 10         # minor cell — waypoints snap to it
 DRAWIO_APP = Path("/Applications/draw.io.app/Contents/MacOS/draw.io")   # macOS app, last resort of drawio_cli()
-# draw.io (32.6) renders a PNG in an offscreen window at device scale 2 and draws only its first 2**27 device pixels:
-# past that the bottom of the image stays blank. Measured: a 6789×4917 page comes out whole, 6807×4930 cut.
-PNG_MAX_PIXELS = 2**25
+# draw.io (32.6) stops drawing a PNG somewhat below 2**25 image pixels: past that the image keeps its size but its
+# bottom stays blank. Measured: 6789×4917 (33,381,513 px) whole, 6441×5183 (33,383,703 px) cut at row 3915.
+# The bound keeps a margin; blank_tail() catches a cut image that still slips under it.
+PNG_MAX_PIXELS = 33_000_000
+PNG_MAX_BLANK_ROWS = 100   # a whole export ends in a border of ~20 blank rows
 
 # ---------------------------------------------------------------- style (kept verbatim from terraform-base.drawio)
 _PTS = "points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];"
@@ -237,9 +240,30 @@ def png_size(path: Path) -> tuple[int, int]:
     return w, h
 
 
+def blank_tail(path: Path) -> int:
+    """Rows at the bottom of a PNG equal to the row above, counted from the filter bytes: draw.io's encoder stores such a
+    row with filter Up and all-zero data. Lower bound only: an encoder may store an equal row another way."""
+    data, chunks, i = Path(path).read_bytes(), [], 8
+    while i < len(data):
+        n, kind = struct.unpack(">I4s", data[i:i + 8])
+        if kind == b"IDAT":
+            chunks.append(data[i + 8:i + 8 + n])
+        i += 12 + n
+    w, h = png_size(path)
+    depth, color = data[24], data[25]
+    stride = (w * {0: 1, 2: 3, 4: 2, 6: 4}[color] * depth + 7) // 8 + 1
+    raw, n = zlib.decompress(b"".join(chunks)), 0
+    for r in range(h - 1, 0, -1):
+        row = raw[r * stride:(r + 1) * stride]
+        if row[0] != 2 or row.count(0) != stride - 1:
+            break
+        n += 1
+    return n
+
+
 def export(drawio: Path, fmt="pdf", out: Path | None = None, page: int | None = None, scale=1) -> Path:
     """Export with the draw.io CLI. PDF: all pages, cropped to the drawing. PNG: one page (`page` is 1-based) at
-    `scale`, or at the largest scale (2 decimals) whose image stays within PNG_MAX_PIXELS."""
+    `scale`, or at the largest scale (2 decimals) whose image stays within PNG_MAX_PIXELS and ends drawn."""
     drawio = Path(drawio)
     out = Path(out) if out else drawio.with_suffix("." + fmt)
     cli = drawio_cli()
@@ -257,5 +281,9 @@ def export(drawio: Path, fmt="pdf", out: Path | None = None, page: int | None = 
             fit = math.floor(scale * math.sqrt(PNG_MAX_PIXELS / (w * h)) * 100) / 100
             print(f"  {out.name}: {w}×{h} px at scale {scale} is past what draw.io draws in full; scale {fit}",
                   file=sys.stderr)
+            return export(drawio, fmt, out, page, fit)
+        if (blank := blank_tail(out)) > PNG_MAX_BLANK_ROWS:
+            fit = math.floor(scale * 95) / 100
+            print(f"  {out.name}: bottom {blank} of {h} rows blank at scale {scale}; scale {fit}", file=sys.stderr)
             return export(drawio, fmt, out, page, fit)
     return out

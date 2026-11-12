@@ -1,6 +1,7 @@
 # Copy to prd.auto.tfvars (ignored by git) and fill in. Never commit the real values: the repository is public.
-# The account id is not here: every command sets TF_VAR_account_id from SVP_AWS_PRD_ACCOUNT_ID (README.md). No address
-# of the learner's machine either: the public endpoint of the API is off in prd (prd.tfvars).
+# The account ids are not here: every command sets TF_VAR_account_id from SVP_AWS_PRD_ACCOUNT_ID and
+# TF_VAR_log_archive_account_id from SVP_AWS_LOG_ACCOUNT_ID (README.md). No address of the learner's machine either: the
+# public endpoint of the API is off in prd (prd.tfvars).
 
 # Output zone_id of aws/accounts/prd, the zone of the prd account:
 #   AWS_PROFILE=anhnv-prd terraform -chdir=../../accounts/prd output -raw zone_id

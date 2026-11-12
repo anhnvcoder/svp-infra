@@ -92,3 +92,23 @@ resource "aws_wafv2_web_acl" "this" {
     Name = var.name
   }
 }
+
+# Every request goes to the WAF log bucket of the Log Archive account; that bucket's policy lets the log delivery
+# service write for accounts of the organization, so this account needs no bucket policy rights. Credentials and
+# session cookies stay out of the log.
+resource "aws_wafv2_web_acl_logging_configuration" "this" {
+  resource_arn            = aws_wafv2_web_acl.this.arn
+  log_destination_configs = [var.log_bucket_arn]
+
+  redacted_fields {
+    single_header {
+      name = "authorization"
+    }
+  }
+
+  redacted_fields {
+    single_header {
+      name = "cookie"
+    }
+  }
+}
