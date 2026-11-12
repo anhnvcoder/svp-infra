@@ -24,7 +24,7 @@ tunnel.
 B là commit bootstrap: `gitopsRevision` của `envs/<env>/charts.yaml` ở `main`, không có khoá thì commit của `main` lúc plan (GitHub REST API).
 Root đọc `svp-gitops` qua HTTPS không credential (repo public), luôn ở commit cố định. CRD của Argo CD có sau release Argo CD trong cùng lần apply,
 nên AppProject và ApplicationSet đi qua `helm_release`, không qua `kubernetes_manifest`. Helm render cả chart `svp-cluster` rồi `show_only` mới
-lọc `templates/namespaces.yaml`, nên render namespace cần đủ values mọi template của chart bắt buộc (CIDR health check của Envoy, email ACME…):
+lọc `templates/namespaces.yaml`, nên render namespace cần đủ values mọi template của chart bắt buộc (CIDR edge của Envoy, ARN target group…):
 thiếu `valuesObject` thì plan dừng ở đó.
 
 ## stg và prd
@@ -108,7 +108,7 @@ AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform appl
 Root này gỡ **trước** root env (tunnel vẫn mở), theo thứ tự:
 
 1. `aws/scripts/pre-destroy.sh stg`: xoá ApplicationSet `svp-bootstrap` (`svp-root` không finalizer nên không xoá dây chuyền), rồi Application
-   workload, chờ NLB, TargetGroupBinding, bản ghi DNS, PVC gỡ khi controller còn chạy; rồi NodePool và EC2NodeClass, chờ hết node của
+   workload, chờ TargetGroupBinding, PVC gỡ khi controller còn chạy; rồi NodePool và EC2NodeClass, chờ hết node của
    Karpenter; rồi controller nền tảng.
 2. Destroy root này:
 

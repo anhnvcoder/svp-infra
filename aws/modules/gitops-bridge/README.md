@@ -23,11 +23,11 @@ resource hay data source của provider nào: nó chỉ tính những gì root [
   dõi `refs/heads/main`.
 - **Cluster Secret** `in-cluster` (namespace `argocd`, server `https://kubernetes.default.svc`): label `argocd.argoproj.io/secret-type: cluster`,
   `svp.io/env`, `svp.io/platform: eks`, `svp.io/node-arch`; annotation `svp.io/cluster-values` (JSON của `cluster_values`) và
-  `svp.io/telegram-chat-id`. `cluster_values` là biến `sensitive` (có `acmeEmail`), nên annotation ở output `sensitive` riêng.
+  `svp.io/telegram-chat-id`.
 - **`cluster_values`** phải có đúng các khoá của hợp đồng `cluster.*` (output `cluster_values` của hai root env), mỗi khoá đúng loại: chuỗi,
-  `dbCidrs`, `s3Cidrs` là danh sách chuỗi, `externalSecretsRoles` là map chuỗi của đúng năm namespace `svp`, `svp-data`, `svp-obs`, `keda`,
-  `argocd`; `kafkaBrokers` là một chuỗi `host:9096,host:9096,…` như MSK trả, không phải danh sách. Biến không khai kiểu object: đổi sang
-  kiểu object sẽ âm thầm bỏ khoá thừa và báo khoá thiếu bằng lỗi kiểu thay vì luật kiểm.
+  `dbCidrs`, `edgeCidrs`, `s3Cidrs` là danh sách chuỗi, `externalSecretsRoles` là map chuỗi của đúng năm namespace `svp`, `svp-data`,
+  `svp-obs`, `keda`, `argocd`; `kafkaBrokers` là một chuỗi `host:9096,host:9096,…` như MSK trả, không phải danh sách. Biến không khai kiểu
+  object: đổi sang kiểu object sẽ âm thầm bỏ khoá thừa và báo khoá thiếu bằng lỗi kiểu thay vì luật kiểm.
 - **ApplicationSet `svp-bootstrap`:** cluster generator chọn Secret có label `svp.io/env`, `goTemplate` với `missingkey=error`; tạo
   `svp-root` (project `svp`, label `svp.io/notify: root`, annotation `argocd.argoproj.io/compare-options: ServerSideDiff=false`, chart
   `argocd/root` của `svp-gitops` ở `refs/heads/main`); `templatePatch` đặt `env`, `platform`, `nodeArch` từ label, `cluster` từ annotation,
@@ -40,7 +40,7 @@ resource hay data source của provider nào: nó chỉ tính những gì root [
   áp, `kubernetes_manifest` cần ngay lúc plan.
 - **Chart `charts/platform-values`:** render mẫu `platforms/eks/<tên>.values.tpl` của `svp-gitops` trên value `cluster` bằng `tpl`, như chart
   `argocd/apps` ở đó render thành `valuesObject` của Application (render không ra map YAML thì fail). Root đặt kết quả sau mọi values file
-  của render namespace, đúng thứ tự Argo CD đọc. Output `svp_cluster_platform_values` là `sensitive` (có `acmeEmail`).
+  của render namespace, đúng thứ tự Argo CD đọc.
 - **Provider `aws`** chỉ được khai trong `required_providers`, không dùng: `make test` bắt mỗi file test có `mock_provider "aws"`, và
   Terraform chỉ nạp mock cho provider module có khai.
 
@@ -51,8 +51,8 @@ label, annotation, data của cluster Secret, ApplicationSet và tên `svp-root`
 namespace `argocd` và namespace dự án, values của chart `platform-values` (mẫu nguyên văn, đủ khoá `cluster_values`), release Argo CD,
 AppProject, B là `main_commit`. Run `prd` kiểm host loopback qua tunnel, TLS server
 name vẫn là host của endpoint, B là `gitopsRevision`, chat Telegram. Mỗi luật còn lại có một run với giá trị chỉ luật đó từ chối (env, kiến
-trúc, khoá thiếu, khoá thừa, sai loại, thiếu role namespace, URL không phải loopback, khoá ghim vắng hay không phải commit, namespace
-`baseline`, thiếu `argocd`, chart Argo CD lạ, thiếu AppProject).
+trúc, khoá thiếu, khoá thừa như `hostedZoneId`, sai loại, thiếu role namespace, URL không phải loopback, khoá ghim vắng hay không phải commit,
+namespace `baseline`, thiếu `argocd`, chart Argo CD lạ, thiếu AppProject).
 
 <!-- BEGIN_TF_DOCS -->
 ## Requirements
@@ -90,13 +90,13 @@ trúc, khoá thiếu, khoá thừa, sai loại, thiếu role namespace, URL khô
 | argocd\_release | Release of Argo CD: repository, chart, version and namespace of argocd/bootstrap.json, values of argocd\_values in order. |
 | bootstrap\_revision | Commit of svp-gitops the bootstrap reads Argo CD, its values and the AppProjects at: gitopsRevision of the charts.yaml of the env under envs/, or main\_commit without it. |
 | cluster\_secret | Name, namespace, labels and data of the cluster Secret of Argo CD (its annotations: cluster\_secret\_annotations). |
-| cluster\_secret\_annotations | Annotations of the cluster Secret: svp.io/cluster-values (JSON of cluster\_values) and svp.io/telegram-chat-id. Sensitive: cluster\_values holds acmeEmail. |
+| cluster\_secret\_annotations | Annotations of the cluster Secret: svp.io/cluster-values (JSON of cluster\_values) and svp.io/telegram-chat-id. |
 | gitops\_repository | GitHub repository of svp-gitops (owner/name), from which the root fetches the files of the bootstrap. |
 | kubernetes\_host | Address of the Kubernetes API for the helm and kubernetes providers: api\_server\_url, or cluster\_endpoint without it. |
 | namespaces | Namespace manifests by name, before Argo CD: argocd and those of the project and the platform charts, each with Pod Security restricted. |
 | platform\_values\_chart | Path of chart platform-values of this module, which prints what a template of platforms/eks/ of svp-gitops renders on value cluster, as chart argocd/apps renders it into the valuesObject of an Application. |
 | resources\_chart | Path of chart resources of this module, which prints the manifests of value resources: the chart of app\_projects\_release and root\_release. |
 | root\_release | Release of chart resources holding ApplicationSet svp-bootstrap, which makes Application svp-root. |
-| svp\_cluster\_platform\_values | Values for chart platform-values: platforms/eks/svp-cluster.values.tpl and cluster\_values. What it prints is the valuesObject of Application svp-cluster, which Argo CD reads after its values files. Sensitive: cluster\_values holds acmeEmail. |
+| svp\_cluster\_platform\_values | Values for chart platform-values: platforms/eks/svp-cluster.values.tpl and cluster\_values. What it prints is the valuesObject of Application svp-cluster, which Argo CD reads after its values files. |
 | tls\_server\_name | Name the providers check the certificate of the API server against: the host of cluster\_endpoint, also through a tunnel. |
 <!-- END_TF_DOCS -->

@@ -68,6 +68,8 @@ class Env:
     logs: tuple            # what writes to CloudWatch Logs; empty: no log group
     kms_eks: bool          # a customer managed KMS key encrypts the cluster's Secrets
     zone: str              # Route 53 zone as drawn: zone_name of the committed example, a placeholder domain
+    media_free: bool       # media distribution on the flat-rate Free plan (no access log); every other distribution pays as you go
+    dnssec: bool           # the zone is DNSSEC signed and has a query log (the same two root variables of aws/accounts/<env>)
 
     @property
     def nat_rows(self) -> list[int]:
@@ -80,6 +82,12 @@ def zone_label(env: str) -> str:
     if not zone.endswith("svp.example"):
         raise SystemExit(f"aws/accounts/{env}: zone_name {zone!r} does not end in the example domain svp.example")
     return zone.removesuffix("svp.example") + "&lt;domain&gt;"
+
+
+def zone_flag(env: str, name: str) -> bool:
+    """`<name> = true|false` of the account-baseline call in aws/accounts/<env>/main.tf."""
+    m = re.search(rf"^\s*{name}\s*=\s*(true|false)\s*$", (ROOT / f"aws/accounts/{env}/main.tf").read_text(encoding="utf8"), re.M)
+    return bool(m) and m.group(1) == "true"
 
 
 def envs() -> list[Env]:
@@ -98,7 +106,8 @@ def envs() -> list[Env]:
                                            ("Valkey slow log", True))
                      if on)
         out.append(Env(name, v("region"), cidr, v("az_count"), v("single_nat_gateway"), NODEPOOL[name], v("rds_multi_az"),
-                       v("valkey_node_count"), logs, v("eks_secrets_kms_encryption"), zone_label(name)))
+                       v("valkey_node_count"), logs, v("eks_secrets_kms_encryption"), zone_label(name), v("media_flat_rate_free"),
+                       zone_flag(name, "dnssec_enabled")))
     return out
 
 
@@ -126,15 +135,17 @@ FRAMES = 7          # namespace frames of an env page, each marked with one ns i
 def expected(env: Env) -> dict[str, int]:
     """What the page of `env` must hold, by check_diagram.kind_counts() kind — derived from the sizes, not from the drawing."""
     n = env.az_count
-    want = {"users": 1, "route_53": 1, "cloudfront": 1, "waf": 1, "internet_gateway": 1, "elastic_load_balancing": 1, "eks": 1,
+    # three distributions with a web ACL each, one internal ALB, one ACM icon (viewer certificates in us-east-1,
+    # the ALB's in the region)
+    want = {"users": 1, "route_53": 1, "cloudfront": 3, "waf": 3, "internet_gateway": 1, "application_load_balancer": 1, "certificate_manager_2": 1, "eks": 1,
             "nat_gateway": len(env.nat_rows), "ec2": 2 * n, "instance2": 1, "rds": 2 if env.multi_az else 1, "managed_streaming_for_kafka": n,
             # endpoints: S3 gateway and guardduty-data interface;
-            # s3: media, uploads and the two log archive buckets it writes
-            "elasticache": env.cache_nodes, "endpoints": 2, "s3": 4, "secrets_manager": 1, "key_management_service": 1,
+            # s3: media, uploads and the three log archive buckets it writes (VPC flow, WAF, CloudFront access logs)
+            "elasticache": env.cache_nodes, "endpoints": 2, "s3": 5, "secrets_manager": 1, "key_management_service": 1,
             "elastic_block_store": n, "sns": 1, "sqs": 1, "eventbridge": 1, "systems_manager": 1,
-            "account": 2, "region": 1, "az": n, "subnet": 3 * n,
+            "account": 2, "region": 1, "az": n, "subnet": 4 * n,
             # Kubernetes: a ns icon per frame; a workload icon per svp service, per svp-data workload, and Envoy's
-            # proxy Deployment and the Service the NLB targets
+            # proxy Deployment and its ClusterIP Service
             "k8s_ns": FRAMES, "k8s_deploy": len(SVP) + 1 + sum(k == "deploy" for k, _ in SVP_DATA),
             "k8s_job": sum(k == "job" for k, _ in SVP_DATA), "k8s_svc": 1}
     if env.logs:
@@ -145,38 +156,39 @@ def expected(env: Env) -> dict[str, int]:
 def org_expected() -> dict[str, int]:
     """What the org page must hold, by check_diagram.kind_counts() kind: the five accounts, one icon per service the
     organization, the log archive and the security account run (see org_page)."""
-    return {"account": 5, "organizations": 1, "single_sign_on": 1, "cloudtrail": 1, "eventbridge": 4, "s3": 5, "key_management_service": 1,
-            "flow_logs": 2, "waf": 2, "config": 1, "guardduty": 1, "security_hub": 1, "access_analyzer": 1, "sns": 1, "users": 1}
+    return {"account": 5, "organizations": 1, "single_sign_on": 1, "cloudtrail": 1, "eventbridge": 4, "s3": 6, "key_management_service": 1,
+            "flow_logs": 2, "waf": 2, "cloudfront": 2, "config": 1, "guardduty": 1, "security_hub": 1, "access_analyzer": 1, "sns": 1, "users": 1}
 
 
 # ---------------------------------------------------------------- geometry of an env page
 # Coordinates: the layout section of SKILL.md; why each part sits where it does: its content rules 0–13 (nesting Cloud
-# → Account → Region → VPC → AZ → subnet, three subnet tiers per AZ row, EBS in the AZ outside the subnets,
-# the NLB across the first two AZ rows, the cluster box over every private box, the database columns ordered so no edge
-# crosses a replication line).
+# → Account → Region → VPC → AZ → subnet, subnet tiers per AZ row, EBS outside the subnets, the ALB across the edge
+# subnets of the first two AZ rows, the cluster box over each private box, database columns kept off replication lines).
 CLOUD_X, ACCT_X, GLOBAL_X, REGION_X, IGW_X, VPC_X, AZ_X = 160, 200, 240, 400, 440, 560, 600
-PUB_X, PUB_W, NAT_X, NLB_X, EBS_X = 640, 360, 680, 880, 1040
-PRIV_X, EKS_X, NODE_X, BASTION_X = 1160, 1400, 1440, 1200
-COL, COL_W = (1560, 1800, 2040, 2280), 200
-EKS_R, PRIV_R = 2520, 2560
-DB_X, DB_R = 2600, 3320
-LANE_MSK, LANE_CACHE = 2640, 2680                     # corridors of svp → MSK, svp → ElastiCache
-RDS_X, CACHE_X, MSK_X = 2840, 3000, 3160      # clear of the database box's label
-CLOUD_Y, ACCT_Y, REGION_Y, CP_Y, DNS_LANE, VPC_Y, SUB_H, AZ_H = 160, 200, 240, 320, 420, 440, 400, 480
-CP_X = 2280
+PUB_X, PUB_W, NAT_X = 640, 240, 680
+EDGE_X, EDGE_W, ALB_X, EBS_X = 920, 240, 1000, 1200
+PRIV_X, EKS_X, NODE_X, BASTION_X = 1320, 1560, 1600, 1360
+COL, COL_W = (1720, 1960, 2200, 2440), 200
+EKS_R, PRIV_R = 2680, 2720
+DB_X, DB_R = 2760, 3480
+LANE_MSK, LANE_CACHE = 2800, 2840                     # corridors of svp → MSK, svp → ElastiCache
+RDS_X, CACHE_X, MSK_X = 3000, 3160, 3320      # clear of the database box's label
+CLOUD_Y, ACCT_Y, REGION_Y, CP_Y, VPC_Y, SUB_H, AZ_H = 160, 200, 240, 320, 440, 400, 480
+CP_X = 2440
 AZ_R, VPC_R = DB_R + 40, DB_R + 80
 REGION_R, ACCT_R, CLOUD_R = VPC_R + 40, VPC_R + 80, VPC_R + 120
 PAGE_W = CLOUD_R + 40
 
 
 def cidrs(env: Env):
-    """Private, public and database CIDR of each AZ, as modules/network computes them."""
+    """Private, public, edge and database CIDR of each AZ, as modules/network computes them: the public subnets at the start
+    of the last eighth of the VPC, the edge subnets in its back half."""
     net = ipaddress.ip_network(env.cidr)
     blocks = list(net.subnets(prefixlen_diff=3))
     public = list(blocks[7].subnets(prefixlen_diff=5))
+    edge = list(blocks[7].subnets(prefixlen_diff=4))[8:]
     database = list(blocks[6].subnets(prefixlen_diff=3))
-    return ([str(blocks[k]) for k in range(env.az_count)], [str(public[k]) for k in range(env.az_count)],
-            [str(database[k]) for k in range(env.az_count)])
+    return tuple([str(x[k]) for k in range(env.az_count)] for x in (blocks, public, edge, database))
 
 
 def along(route, at) -> float:
@@ -210,7 +222,7 @@ def env_page(env: Env) -> Page:
     az = [VPC_Y + 40 + k * AZ_H for k in range(n)]      # top of each AZ row; the rows touch
     sub = [y + 40 for y in az]                            # top of its three subnet boxes
     a, b = sub[0], sub[1]
-    nlb_y = a + SUB_H                                     # bottom of the first public box = top of the NLB
+    alb_y = a + SUB_H                                     # bottom of the first edge box = top of the ALB
     bottom = az[-1] + AZ_H                                # bottom of the last AZ
     ep_y, vpc_b = bottom + 80, bottom + 200
     band_y = vpc_b + 40
@@ -221,17 +233,16 @@ def env_page(env: Env) -> Page:
     log_y = acct_b + 40                                   # the log archive account, under the env's own account
     log_icon, log_b = log_y + 80, log_y + 240
     cloud_b = log_b + 40
-    priv, pub, data = cidrs(env)
+    priv, pub, edge, data = cidrs(env)
 
     p = Page(env.name, PAGE_W, cloud_b + 40)
     p.text(f"{env.name} — EKS cluster svp-{env.name}", 40, 0, 920, 40, size=17, bold=1)
     nat = "one NAT gateway, in the first AZ, for every private subnet" if env.single_nat else "one NAT gateway per AZ"
-    p.text(f"{env.region} · {n} AZs, each with a public, a private and a database subnet · {nat} · system node group "
-           f"on-demand and Karpenter's nodes ({env.capacity}), one icon each per AZ · API endpoint private only, reached "
-           "through Systems Manager port forwarding to the SSM bastion · one NLB across all public subnets, made by the AWS "
-           "Load Balancer Controller · EBS volumes in the AZ of their pod's node · TLS certificates from Let's Encrypt "
-           "(cert-manager), no ACM · VPC flow logs and WAF logs are written to S3 buckets of the svp-log-archive account",
-           40, 40, PAGE_W - 80, 40, color=MUTED)
+    p.text(f"{env.region} · {n} AZs, each with a public (NAT gateway only), an edge (the internal ALB only), a private and a "
+           f"database subnet · {nat} · system node group on-demand and Karpenter's nodes ({env.capacity}), one icon each per AZ · "
+           "API endpoint private only, reached through Systems Manager port forwarding to the SSM bastion · EBS volumes in the "
+           "AZ of their pod's node · VPC flow logs, WAF logs and CloudFront access logs are written to S3 buckets of the "
+           "svp-log-archive account", 40, 40, PAGE_W - 80, 40, color=MUTED)
     rds = ("RDS single-AZ" if not env.multi_az else "RDS Multi-AZ primary/standby")
     cache = ("ElastiCache for Valkey one node" if env.cache_nodes == 1
              else f"ElastiCache for Valkey primary and {env.cache_nodes - 1} replica(s), Multi-AZ, automatic failover")
@@ -252,7 +263,8 @@ def env_page(env: Env) -> Page:
     p.group(f"VPC {env.cidr}", VPC_X, VPC_Y, VPC_R - VPC_X, vpc_b - VPC_Y, **VPC, cid="vpc")
     for k in range(n):
         p.group(f"AZ {env.region}{'abcdef'[k]}", AZ_X, az[k], AZ_R - AZ_X, AZ_H, **AZ)
-        p.group(f"Public subnet {pub[k]}", PUB_X, sub[k], PUB_W, SUB_H, **{**PUBLIC, "grstroke": True}, cid=f"pub{k}")
+        p.group(f"Public subnet {pub[k]}", PUB_X, sub[k], PUB_W, SUB_H, **PUBLIC, cid=f"pub{k}")
+        p.group(f"Edge subnet {edge[k]}", EDGE_X, sub[k], EDGE_W, SUB_H, **{**PUBLIC, "grstroke": True}, cid=f"edge{k}")
         p.group(f"Private subnet {priv[k]}", PRIV_X, sub[k], PRIV_R - PRIV_X, SUB_H, **PRIVATE, cid=f"priv{k}")
         p.group(f"Database subnet {data[k]}", DB_X, sub[k], DB_R - DB_X, SUB_H, **PRIVATE, cid=f"db{k}")
     eks = p.group(f"EKS cluster svp-{env.name}", EKS_X, a, EKS_R - EKS_X, sub[-1] + SUB_H - a, gr="eks", stroke="#D05C17",
@@ -263,10 +275,10 @@ def env_page(env: Env) -> Page:
     # namespace frames (boxes, not aws4 containers), every Kubernetes icon wholly inside one private box: first AZ rows
     # +160 and +280, second AZ rows +120 and +240; the fourth column of the second AZ stays free for svp → endpoint
     envoy = frame(p, "envoy-gateway-system", COL[0], a + 160, COL_W, 200)
-    workload(p, "deploy", "Envoy proxy", COL[0], a + 240)
-    envoy_svc = workload(p, "svc", "Service · type<br>LoadBalancer", COL[0], a + 320)
-    dns = frame(p, "external-dns,<br>cert-manager", COL[1], a + 160, COL_W, 80)
-    p.text("ExternalDNS · cert-manager<br>(Let's Encrypt, DNS-01)", COL[1], a + 200, COL_W, 40, align="center")
+    workload(p, "svc", "Service svp-envoy<br>ClusterIP", COL[0], a + 240)
+    envoy_pods = workload(p, "deploy", "Envoy proxy<br>TargetGroupBinding", COL[0], a + 320)
+    frame(p, "cert-manager", COL[1], a + 160, COL_W, 80)
+    p.text("internal CA svp-ca<br>(Envoy's certificate)", COL[1], a + 200, COL_W, 40, align="center")
     frame(p, "argocd · argo-rollouts · kyverno · keda · external-secrets", COL[2], a + 160, 2 * COL_W + 40, 80)
     p.text("Argo CD, Argo Rollouts, Kyverno, KEDA, External Secrets", COL[2], a + 200, 2 * COL_W + 40, 40, align="center")
 
@@ -287,19 +299,34 @@ def env_page(env: Env) -> Page:
            COL[2], b + 200, COL_W, 120)
     mid = COL[3] + 120                                    # x of svp → S3 endpoint (centre of the endpoint)
 
-    # global services of the account, left of the Region; users outside the Cloud
-    users = p.flat("Users", "users", 40, nlb_y, cid="users")
-    r53 = p.icon(f"Route 53 · {env.zone}", "route_53", GLOBAL_X, nlb_y, NET, cid="r53")
-    waf = p.icon("WAF web ACL · CloudFront scope<br>(us-east-1, flat-rate Free)", "waf", GLOBAL_X, row - 160, SEC, cid="waf")
-    cf = p.icon("CloudFront · *.cloudfront.net", "cloudfront", GLOBAL_X, row, NET, cid="cf")
-    igw = p.flat("Internet gateway", "internet_gateway", IGW_X, nlb_y, VPC_PURPLE, cid="igw")
+    # global services of the account, left of the Region; users outside the Cloud. Web and api distributions sit
+    # beside the ALB rows, each under its web ACL; media's pair stays on the row of the band's bucket it reads
+    users = p.flat("Users", "users", 40, alb_y, cid="users")
+    r53_lines = [f"Route 53 · {env.zone}", "alias A/AAAA, CAA"] + (["DNSSEC, query log"] if env.dnssec else [])
+    r53 = p.icon("<br>".join(r53_lines), "route_53", GLOBAL_X, a, NET, cid="r53")
+    waf_web = p.icon(f"WAF web ACL<br>svp-{env.name}-web", "waf", GLOBAL_X, a + 200, SEC, cid="waf_web", label_top=True)
+    cf_web = p.icon(f"CloudFront svp-{env.name}-web<br>{env.zone}", "cloudfront", GLOBAL_X, a + 360, NET, cid="cf_web")
+    waf_api = p.icon(f"WAF web ACL<br>svp-{env.name}-api", "waf", GLOBAL_X, a + 560, SEC, cid="waf_api", label_top=True)
+    cf_api = p.icon(f"CloudFront svp-{env.name}-api<br>api.{env.zone}", "cloudfront", GLOBAL_X, a + 720, NET, cid="cf_api")
+    waf = p.icon(f"WAF web ACL<br>svp-{env.name}-media", "waf", GLOBAL_X, row - 200, SEC, cid="waf", label_top=True)
+    cf = p.icon(f"CloudFront svp-{env.name}-media<br>media.{env.zone}", "cloudfront", GLOBAL_X, row, NET, cid="cf")
+    igw = p.flat("Internet gateway", "internet_gateway", IGW_X, a + 40, VPC_PURPLE, cid="igw")
     cp = p.icon("EKS control plane · AWS managed", "eks", CP_X, CP_Y, COMP, cid="cp", label_top=True)
-    nlb = p.icon("Network Load Balancer", "elastic_load_balancing", NLB_X, nlb_y, NET, cid="nlb")
+    alb = p.icon(f"ALB svp-{env.name}-edge<br>internal, HTTPS 443", "application_load_balancer", ALB_X, alb_y, NET, cid="alb", label_top=True)
+    p.text("Web and API: viewer → CloudFront (web ACL, ACM certificate in us-east-1) → CloudFront VPC origin → internal ALB in the "
+           "edge subnets, which only CloudFront may reach (security group on the CloudFront origin-facing prefix list); the ALB "
+           "targets Envoy's pods directly (target group svp-" + env.name + "-envoy, filled by the TargetGroupBinding), Envoy "
+           "routes by Host to web and gateway · Media: CloudFront → S3 media through origin access control, " +
+           ("flat-rate Free plan, no access log" if env.media_free else "pay-as-you-go") + " · Route 53 aliases to the three "
+           "distributions · access logs of " + ("web and API (media has none)" if env.media_free else "the three distributions") +
+           " and logs of the three web ACLs go to the log archive account", REGION_X + 240, 280, 1640, 120, color=MUTED,
+           valign="top")
     ep = p.flat("S3 gateway endpoint", "endpoints", mid - 40, ep_y, VPC_PURPLE, cid="s3ep")
     gd_ep = p.flat("GuardDuty interface endpoint<br>guardduty-data, 443 from the VPC", "endpoints", mid + 240, ep_y, VPC_PURPLE, cid="gdep")
-    waf_logs = p.icon("S3 aws-waf-logs-svp<br>WAF logs, us-east-1", "s3", GLOBAL_X, log_icon, STO, cid="waflogs")
+    waf_logs = p.icon("S3 aws-waf-logs-svp<br>logs of the three web ACLs, us-east-1", "s3", GLOBAL_X, log_icon, STO, cid="waflogs")
+    cf_logs = p.icon("S3 svp-cloudfront<br>CloudFront access logs, us-east-1", "s3", GLOBAL_X + 240, log_icon, STO, cid="cflogs")
     p.text("SSE-KMS with alias/svp-log-archive · blocked from public access · written by service principals of the "
-           "organization (aws:SourceOrgID)", GLOBAL_X + 240, log_icon, 1040, 80, color=MUTED)
+           "organization (aws:SourceOrgID)", GLOBAL_X + 480, log_icon, 1040, 80, color=MUTED)
     flow_logs = p.icon("S3 svp-flowlogs<br>VPC flow logs", "s3", ACCT_R - 120, log_icon, STO, cid="flowlogs")
 
     nats = {k: p.flat("NAT gateway", "nat_gateway", NAT_X, sub[k] + 40, VPC_PURPLE, cid=f"nat{k}") for k in env.nat_rows}
@@ -332,13 +359,22 @@ def env_page(env: Env) -> Page:
                     cid="events")
     queue = p.icon(f"SQS svp-{env.name}-karpenter<br>read by Karpenter", "sqs", 2400, row, INTEG, cid="sqs")
     p.icon("Systems Manager<br>port forwarding to the bastion", "systems_manager", 2680, row, SEC, cid="ssm")
+    p.icon(f"ACM · ALB certificate, {env.region}<br>viewer certificates in us-east-1", "certificate_manager_2", 2960, row, SEC, cid="acm")
 
-    # request path: DNS, IGW, NLB, Envoy, services, databases. IGW → NLB → Envoy run 20 above the shared AZ border,
-    # in the bottom margin of the first AZ, never on the dashed line itself (the controllers' edge runs 20 below it).
-    p.edge(users, r53)
-    p.edge(r53, igw, STROKE["net"])
-    p.edge(igw, nlb, STROKE["net"], exit_=(1, 0.25), entry=(0, 0.25))
-    p.edge(nlb, envoy_svc, STROKE["net"], label="TCP 443", exit_=(1, 0.25), entry=(0.5, 1), points=[(COL[0] + 20, nlb_y + 20)])
+    # request path: DNS, CloudFront, VPC origin, ALB, Envoy, services, databases. The origin edges and ALB → Envoy run
+    # 20 above and 20 below the shared AZ border (bottom margin of the first AZ, top margin of the second), never on
+    # the dashed line itself (the controllers' edge runs 20 below it, left of the cluster).
+    p.edge(users, r53, label="DNS", exit_=(0.5, 0), entry=(0, 0.5), points=[(80, a + 40)])
+    p.edge(users, cf_web, STROKE["net"], exit_=(1, 0.5), entry=(0, 0.5), points=[(180, alb_y + 40), (180, a + 400)])
+    p.edge(users, cf_api, STROKE["net"], exit_=(1, 0.5), entry=(0, 0.5), points=[(180, alb_y + 40), (180, a + 760)])
+    route = [(GLOBAL_X + 80, a + 400), (REGION_X + 120, a + 400), (REGION_X + 120, alb_y + 20), (ALB_X, alb_y + 20)]
+    p.edge(cf_web, alb, STROKE["net"], label="VPC origin", exit_=(1, 0.5), entry=(0, 0.25), points=route[1:3],
+           label_pos=along(route, ((VPC_X + ALB_X) // 2 - 100, alb_y + 20)))
+    p.edge(cf_api, alb, STROKE["net"], exit_=(1, 0.5), entry=(0, 0.75),
+           points=[(REGION_X + 120, a + 760), (REGION_X + 120, alb_y + 60)])
+    p.edge(waf_web, cf_web, STROKE["sec"], dashed=True, arrow=False, exit_=(0.5, 1), entry=(0.5, 0))
+    p.edge(waf_api, cf_api, STROKE["sec"], dashed=True, arrow=False, exit_=(0.5, 1), entry=(0.5, 0))
+    p.edge(alb, envoy_pods, STROKE["net"], label="HTTPS 10443", exit_=(1, 0.25), entry=(0.5, 1), points=[(COL[0] + 20, alb_y + 20)])
     p.edge(envoy, svp, STROKE["net"], exit_=(1, 0.9), entry=(0, 60 / svp_h))
     # svp → RDS straight on the RDS row; svp → ElastiCache and svp → MSK leave svp's right side above it and climb
     # the two corridors, MSK (the higher row) in the left one, so no two routes cross
@@ -363,17 +399,15 @@ def env_page(env: Env) -> Page:
     # egress: nodes → NAT of their AZ (stg: only the first AZ has one), the first NAT → IGW
     for k in env.nat_rows:
         p.edge(nodes[k], nats[k], STROKE["vpc"], dashed=True)
-    p.edge(nats[0], igw, STROKE["vpc"], dashed=True, exit_=(0, 0.5), entry=(0.5, 0), points=[(IGW_X + 40, a + 80)])
+    p.edge(nats[0], igw, STROKE["vpc"], dashed=True, exit_=(0, 0.5), entry=(1, 0.5))
 
-    # controllers that create AWS resources. kube-system → NLB rises right of the node column into the top margin of
-    # the second AZ, then left into the NLB's side: from below it would cross every node → NAT line of a NAT per AZ.
+    # controllers that create AWS resources. kube-system → ALB rises right of the node column into the top margin of
+    # the second AZ, then left into the ALB's side: from below it would cross every node → NAT line of a NAT per AZ.
     # Its label sits left of the cluster: the middle of the route would fall on the cluster's border.
-    p.edge(csi, nlb, STROKE["net"], dashed=True, label="creates NLB", exit_=(0.25, 0), entry=(1, 0.75),
-           points=[(COL[0] + 50, nlb_y + 60)], label_pos=0.33)
+    p.edge(csi, alb, STROKE["net"], dashed=True, label="registers targets", exit_=(0.25, 0), entry=(1, 0.75),
+           points=[(COL[0] + 50, alb_y + 60)], label_pos=0.33)
     p.edge(csi, ebs[1], STROKE["sto"], dashed=True, label="volumes", exit_=(0, 0.5), entry=(1, 0.5))
     p.edge(csi, karpenter[1], COMP[0], dashed=True, exit_=(0.25, 1), entry=(1, 0.5), points=[(COL[0] + 50, b + 280)])
-    p.edge(dns, r53, STROKE["net"], dashed=True, label="records, DNS-01", exit_=(0.5, 0), entry=(0.5, 0),
-           points=[(COL[1] + 100, DNS_LANE), (GLOBAL_X + 40, DNS_LANE)])
 
     # the agent on the nodes reaches GuardDuty through its interface endpoint, down the right of the cluster
     p.edge(eks, gd_ep, STROKE["sec"], dashed=True, label="runtime events", exit_=((mid + 80 - EKS_X) / (EKS_R - EKS_X), 1), entry=(0, 0.5))
@@ -386,16 +420,21 @@ def env_page(env: Env) -> Page:
     p.edge(ep, uploads, STROKE["sto"], exit_=(0, 0.75), entry=(1, 0.5), points=[(880, ep_y + 60), (880, row + 40)])
     # label on the lane below the band (x 480, inside the Region left of the band): the middle of the route is on the
     # page's left edge
-    route = [(60, nlb_y + 80), (60, lane), (800, lane), (800, row + 80)]
+    route = [(60, alb_y + 80), (60, lane), (800, lane), (800, row + 80)]
     p.edge(users, uploads, STROKE["sto"], label="POST presigned form", exit_=(0.25, 1), entry=(0.5, 1), points=route[1:3],
            label_pos=along(route, (480, lane)))
     p.edge(users, cf, STROKE["net"], label="GET HLS", exit_=(0.75, 1), entry=(0, 0.5), points=[(100, row + 40)])
     p.edge(waf, cf, STROKE["sec"], dashed=True, arrow=False, exit_=(0.5, 1), entry=(0.5, 0))
 
-    # logs to the log archive account: WAF down the corridor left of the account, the VPC down the one right of
-    # the Region
-    p.edge(waf, waf_logs, STROKE["sec"], dashed=True, label="logs", exit_=(0, 0.5), entry=(0, 0.5),
-           points=[(ACCT_X - 20, row - 120), (ACCT_X - 20, log_icon + 40)], label_pos=0.6)
+    # logs to the log archive account: the three web ACLs down one corridor between the global column and the Region
+    # (left of it run the users' edges), the VPC down the one right of the Region
+    waf_x = REGION_X - 40
+    route = [(GLOBAL_X + 80, a + 240), (waf_x, a + 240), (waf_x, log_icon + 40), (GLOBAL_X + 80, log_icon + 40)]
+    p.edge(waf_web, waf_logs, STROKE["sec"], dashed=True, label="logs", exit_=(1, 0.5), entry=(1, 0.5), points=route[1:3],
+           label_pos=along(route, (waf_x, log_y - 20)))
+    for acl, y in ((waf_api, a + 600), (waf, row - 160)):
+        p.edge(acl, waf_logs, STROKE["sec"], dashed=True, exit_=(1, 0.5), entry=(1, 0.5),
+               points=[(waf_x, y), (waf_x, log_icon + 40)])
     lane_x, out_y = VPC_R + 60, bottom + 100
     p.edge("vpc", flow_logs, STROKE["sto"], dashed=True, label="flow logs", exit_=(1, (out_y - VPC_Y) / (vpc_b - VPC_Y)), entry=(1, 0.5),
            points=[(lane_x, out_y), (lane_x, log_icon + 40)], label_pos=0.5)
@@ -438,7 +477,7 @@ def org_page() -> Page:
     scp = [x for x in on_root if x.startswith("SCP")]
     rest = [x for x in on_root if not x.startswith("SCP")]
 
-    p = Page("org", 2840, 2240)
+    p = Page("org", 2840, 2600)
     p.text("org — organization, accounts and security flows", 40, 0, 920, 40, size=17, bold=1)
     p.text("The management account holds the organization, IAM Identity Center and the organization trail · accounts in OUs as in the "
            "AWS Security Reference Architecture: Security (log archive, security tooling) and Workloads (Prod, NonProd) · every "
@@ -447,7 +486,7 @@ def org_page() -> Page:
     p.text("Green: logs to the log archive account · red: detection and events to the security account, then SNS and email · "
            "policies on the root reach every member account (SCP, RCP) or every account (declarative, tag)", 40, 80, 2760, 40, color=MUTED)
 
-    p.group("AWS Organization · root", 40, 160, 2760, 2040, **ORG)
+    p.group("AWS Organization · root", 40, 160, 2760, 2360, **ORG)
     p.box("<b>On the root: service control policies</b>" + bullets(*scp), 80, 240, 840, 200, "#F7F7F7", MUTED, valign="top")
     p.box("<b>On the root: resource control, declarative, tag</b>" + bullets(*rest), 960, 240, 840, 200, "#F7F7F7", MUTED, valign="top")
     p.box("<b>Organization features</b>" + bullets(
@@ -461,12 +500,12 @@ def org_page() -> Page:
     p.group("OU Security", 760, 560, 880, 1560, **OU)
     p.group("svp-log-archive", 800, 640, 800, 880, **ACCOUNT)
     p.group("svp-security · delegated administrator", 800, 1560, 800, 520, **ACCOUNT)
-    p.group("OU Workloads", 2000, 560, 720, 1560, **OU)
-    p.group("OU Prod", 2040, 600, 640, 720, **OU)
-    p.group("svp-prd", 2080, 680, 560, 560, **ACCOUNT)
-    p.group("OU NonProd", 2040, 1360, 640, 760, **OU)
-    p.group("svp-stg", 2080, 1440, 560, 560, **ACCOUNT)
-    p.text("<b>On OU Prod:</b> " + ", ".join(on_prod), 2080, 1240, 560, 40)
+    p.group("OU Workloads", 2000, 560, 720, 1920, **OU)
+    p.group("OU Prod", 2040, 600, 640, 880, **OU)
+    p.group("svp-prd", 2080, 680, 560, 720, **ACCOUNT)
+    p.group("OU NonProd", 2040, 1520, 640, 920, **OU)
+    p.group("svp-stg", 2080, 1600, 560, 720, **ACCOUNT)
+    p.text("<b>On OU Prod:</b> " + ", ".join(on_prod), 2080, 1400, 560, 40)
 
     # management account
     p.icon("AWS Organizations<br>root, OUs, member accounts", "organizations", 320, 720, SEC, cid="orgs")
@@ -475,13 +514,14 @@ def org_page() -> Page:
     m_fwd = p.icon("EventBridge svp-security-* rules<br>forwarder role", "eventbridge", 320, 1360, INTEG, cid="mfwd", label_top=True)
 
     # log archive: one bucket per kind of log, in a column the sources reach from both sides
-    b = {"cloudtrail": 720, "config": 880, "flowlogs": 1040, "waf": 1200, "guardduty": 1360}
+    b = {"cloudtrail": 720, "config": 880, "flowlogs": 1040, "waf": 1200, "guardduty": 1360, "cloudfront": 1360}
     buckets = {
         "cloudtrail": p.icon("S3 svp-cloudtrail<br>organization trail, Object Lock", "s3", 1000, b["cloudtrail"], STO, cid="b_trail"),
         "config": p.icon("S3 svp-config<br>recorder of every account", "s3", 1000, b["config"], STO, cid="b_config"),
         "flowlogs": p.icon("S3 svp-flowlogs<br>VPC flow logs", "s3", 1000, b["flowlogs"], STO, cid="b_flow"),
         "waf": p.icon("S3 aws-waf-logs-svp<br>WAF logs, us-east-1", "s3", 1000, b["waf"], STO, cid="b_waf"),
         "guardduty": p.icon("S3 svp-guardduty<br>finding export", "s3", 1000, b["guardduty"], STO, cid="b_gd", label_top=True),
+        "cloudfront": p.icon("S3 svp-cloudfront<br>CloudFront access logs, us-east-1", "s3", 1320, b["cloudfront"], STO, cid="b_cf"),
     }
     p.icon("KMS alias/svp-log-archive<br>a key in each bucket region", "key_management_service", 1320, b["config"], SEC, cid="kms")
 
@@ -496,24 +536,27 @@ def org_page() -> Page:
 
     # workload accounts: the log sources of an env and its event forwarder
     sources = {}
-    for env, top in (("prd", 760), ("stg", 1520)):
+    for env, top in (("prd", 760), ("stg", 1680)):
         sources[env] = (
             p.flat("VPC flow logs", "flow_logs", 2160, top, VPC_PURPLE, cid=f"{env}_flow"),
             p.icon("WAF web ACL logging<br>aws-waf-logs-svp", "waf", 2160, top + 160, SEC, cid=f"{env}_waf"),
-            p.icon("EventBridge svp-security-* rules<br>forwarder role", "eventbridge", 2160, top + 320, INTEG, cid=f"{env}_fwd", label_top=True))
+            p.icon("CloudFront standard logging<br>svp-cloudfront-" + env, "cloudfront", 2160, top + 320, NET, cid=f"{env}_cf"),
+            p.icon("EventBridge svp-security-* rules<br>forwarder role", "eventbridge", 2160, top + 480, INTEG, cid=f"{env}_fwd", label_top=True))
 
     green, integ, sec = STROKE["sto"], STROKE["integ"], STROKE["sec"]
     # logs: left lane x=720 from the management account, lanes right of the Security OU from the workload accounts
     p.edge(trail, buckets["cloudtrail"], green, exit_=(1, 0.5), entry=(0, 0.5), points=[(720, 1080), (720, b["cloudtrail"] + 40)])
     p.edge(gd, buckets["guardduty"], green, exit_=(0.5, 0), entry=(0.5, 1))
-    lanes = {("prd", "flow"): 1840, ("prd", "waf"): 1860, ("stg", "waf"): 1880, ("stg", "flow"): 1900}
-    ys = {"prd": 760, "stg": 1520}
+    lanes = {("prd", "flow"): 1840, ("prd", "waf"): 1860, ("stg", "waf"): 1880, ("stg", "flow"): 1900,
+             ("prd", "cf"): 1960, ("stg", "cf"): 1980}
+    ys = {"prd": 760, "stg": 1680}
     for env in ("prd", "stg"):
-        flow, waf, _ = sources[env]
-        for src, kind, dy in ((flow, "flow", 0), (waf, "waf", 160)):
+        flow, waf, cf, _ = sources[env]
+        for src, kind, dy in ((flow, "flow", 0), (waf, "waf", 160), (cf, "cf", 320)):
             lane = lanes[(env, kind)]
-            p.edge(src, buckets["flowlogs" if kind == "flow" else "waf"], green, exit_=(0, 0.5), entry=(1, 0.5),
-                   points=[(lane, ys[env] + dy + 40), (lane, b["flowlogs" if kind == "flow" else "waf"] + 40)])
+            bucket = {"flow": "flowlogs", "waf": "waf", "cf": "cloudfront"}[kind]
+            p.edge(src, buckets[bucket], green, exit_=(0, 0.5), entry=(1, 0.5),
+                   points=[(lane, ys[env] + dy + 40), (lane, b[bucket] + 40)])
     # detection: GuardDuty and Access Analyzer findings into Security Hub, Security Hub and every account's rules
     # to the bus
     p.edge(gd, hub, sec, label="findings")
@@ -521,17 +564,17 @@ def org_page() -> Page:
     p.edge(hub, bus, integ, exit_=(0.5, 1), entry=(0, 0.5))
     p.edge(m_fwd, bus, integ, exit_=(1, 0.5), entry=(0.5, 1), points=[(720, 1400), (720, 2040), (1360, 2040)])
     for env, lane in (("prd", 1920), ("stg", 1940)):
-        fwd = sources[env][2]
+        fwd = sources[env][3]
         p.edge(fwd, bus, integ, exit_=(0, 0.5), entry=(0.5, 1),
-               points=[(lane, ys[env] + 360), (lane, 2040), (1360, 2040)])
+               points=[(lane, ys[env] + 520), (lane, 2040), (1360, 2040)])
     p.edge(bus, sns, integ)
     p.edge(sns, learner, integ, label="email")
     return p
 
 
 def flows(region: str) -> Page:
-    p = Page("flows", 1880, 840)
-    p.text("Flows — release path and upload to playback", 40, 0, 920, 40, size=17, bold=1)
+    p = Page("flows", 1880, 1440)
+    p.text("Flows — release path, upload to playback and request to the web and API", 40, 0, 1200, 40, size=17, bold=1)
     p.text("Release: commit → signed image → svp-gitops → Argo CD", 40, 120, 880, 40, size=13, bold=1)
     p.group(f"AWS Cloud · {region}", 1360, 120, 480, 320, **CLOUD)
     p.group("EKS cluster svp-&lt;env&gt;", 1400, 160, 400, 240, gr="eks", stroke="#D05C17", font="#D05C17")
@@ -555,13 +598,39 @@ def flows(region: str) -> Page:
     up = p.icon("S3 uploads", "s3", 320, 600, STO, cid="up")
     worker = p.k8s("media-worker<br>Deployment · KEDA", "deploy", 760, 600, size=80, cid="worker")
     media = p.icon("S3 media", "s3", 1200, 600, STO, cid="med")
-    cf = p.icon("CloudFront", "cloudfront", 1480, 600, NET, cid="cdn")
+    cf = p.icon("CloudFront<br>svp-&lt;env&gt;-media", "cloudfront", 1480, 600, NET, cid="cdn")
     viewer = p.flat("Viewer", "users", 1720, 600, cid="viewer")
     p.edge(creator, up, STROKE["sto"], label="POST presigned")
     p.edge(up, worker, STROKE["sto"], label="read, gateway endpoint")
     p.edge(worker, media, STROKE["sto"], label="write HLS once")
     p.edge(media, cf, STROKE["sto"], label="OAC")
     p.edge(cf, viewer, STROKE["net"], label="GET HLS")
+
+    # Request: every icon of the row on one centre line, so each edge is straight. The ALB sits in an edge subnet
+    # (not drawn: the Cloud group stands for the region); Envoy's pods are its targets (TargetGroupBinding).
+    p.text("Request to the web and API", 40, 840, 880, 40, size=13, bold=1)
+    p.group(f"AWS Cloud · {region}", 520, 880, 1320, 400, **CLOUD)
+    p.group("EKS cluster svp-&lt;env&gt;", 880, 920, 920, 320, gr="eks", stroke="#D05C17", font="#D05C17")
+    viewer = p.flat("Viewer", "users", 40, 1120, cid="rviewer")
+    waf = p.icon("WAF web ACL<br>svp-&lt;env&gt;-web, -api", "waf", 320, 960, SEC, cid="rwaf", label_top=True)
+    cdn = p.icon("CloudFront<br>svp-&lt;env&gt;-web, -api", "cloudfront", 320, 1120, NET, cid="rcdn")
+    alb = p.icon("ALB svp-&lt;env&gt;-edge<br>internal, edge subnets", "application_load_balancer", 600, 1120, NET, cid="ralb")
+    envoy = p.k8s("Envoy proxy<br>Deployment", "deploy", 960, 1120, size=80, cid="renvoy")
+    web = p.k8s("web<br>BFF", "deploy", 1240, 960, size=80, cid="rweb")
+    gw = p.k8s("gateway<br>Rollout", "deploy", 1240, 1120, size=80, cid="rgw")
+    svc = p.k8s("user, video, engagement,<br>feed services", "deploy", 1520, 1120, size=80, cid="rsvc")
+    p.edge(viewer, cdn, STROKE["net"], label="HTTPS")
+    p.edge(waf, cdn, STROKE["sec"], dashed=True, arrow=False)
+    p.edge(cdn, alb, STROKE["net"], label="VPC origin", label_pos=-0.6)
+    p.edge(alb, envoy, STROKE["net"], label="HTTPS 10443")
+    p.edge(envoy, web, STROKE["net"], label="&lt;domain&gt;", exit_=(0.5, 0), entry=(0, 0.5), points=[(1000, 1000)])
+    p.edge(envoy, gw, STROKE["net"], label="api.&lt;domain&gt;")
+    p.edge(web, gw, STROKE["net"])
+    p.edge(gw, svc, STROKE["net"])
+    p.text("CloudFront adds CloudFront-Viewer-Address and the gateway trusts it only on connections from the VPC; web forwards it to "
+           "the gateway · the ALB accepts only CloudFront (security group on the origin-facing prefix list) · access logs of the "
+           "distributions (none for media on the flat-rate Free plan) and the web ACL logs go to the log archive account",
+           40, 1320, 1800, 80, color=MUTED, valign="top")
     return p
 
 

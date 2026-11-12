@@ -1,8 +1,9 @@
 # `aws/envs/prd`: cấu hình gốc của env prd
 
-Tầng platform của prd trên AWS (ADR-0034 §2, ADR-0048, ADR-0055…0058, ADR-0060): cùng `*.tf`, cùng module, cùng đối số
-với root stg ([`aws/envs/stg`](../stg/README.md)), kể cả web ACL AWS WAF trước CloudFront (`waf.tf`), bastion SSM tới
-endpoint private của API (`ssm-bastion.tf`), module `alarms`, flow log và log WAF về bucket của account `svp-log-archive`,
+Tầng platform của prd trên AWS (ADR-0034 §2, ADR-0048, ADR-0055…0058, ADR-0060, ADR-0061): cùng `*.tf`, cùng module, cùng đối số
+với root stg ([`aws/envs/stg`](../stg/README.md)), kể cả đường vào CloudFront, ALB internal và ba web ACL AWS WAF
+([mục "Đường vào" của stg](../stg/README.md#đường-vào)), bastion SSM tới endpoint private của API (`ssm-bastion.tf`), module `alarms`,
+flow log, log WAF và log CloudFront về bucket của account `svp-log-archive`,
 phần GuardDuty của env (agent EKS, endpoint `guardduty-data`, Malware Protection cho `uploads`; [mục "Log và phát hiện"
 của stg](../stg/README.md#log-và-phát-hiện)); cỡ, dự phòng, retention và bảo vệ production ở `prd.tfvars`. Ngoài phần
 chung đó, root này thêm đúng một file: `teardown.tfvars` để gỡ cuối buổi. Ứng dụng trong cluster không ở đây: Argo CD
@@ -15,14 +16,14 @@ triển khai từ `svp-gitops`, bootstrap bằng root `aws/gitops/prd`.
 | Account | `svp-prd`, account thành viên của org (OU `Workloads`), không phải management account |
 | Profile SSO | `anhnv-prd` (permission set `SvpAdmin`), người học tự tạo bằng `aws configure sso` |
 | Biến account | `SVP_AWS_PRD_ACCOUNT_ID`, export trong terminal của buổi; mọi lệnh đặt `TF_VAR_account_id` từ nó (`allowed_account_ids` của cả hai provider) |
-| Biến account Log Archive | `SVP_AWS_LOG_ACCOUNT_ID` (output `log_archive_account_id` của `aws/org`), export cùng terminal; mọi lệnh đặt `TF_VAR_log_archive_account_id` từ nó (tên bucket flow log và log WAF, [mục "Log và phát hiện" của stg](../stg/README.md#log-và-phát-hiện)) |
+| Biến account Log Archive | `SVP_AWS_LOG_ACCOUNT_ID` (output `log_archive_account_id` của `aws/org`), export cùng terminal; mọi lệnh đặt `TF_VAR_log_archive_account_id` từ nó (tên bucket flow log, log WAF và delivery destination của log CloudFront, [mục "Log và phát hiện" của stg](../stg/README.md#log-và-phát-hiện)) |
 | Backend | `../../backend-prd.hcl` (bucket `svp-tfstate-<account prd>-<region>`, KMS key `alias/svp-tfstate`, lock file S3), sinh từ output `backend_hcl` của `aws/accounts/prd`, dạng ở `backend.hcl.example` |
 | Key của state | `aws/prd/terraform.tfstate`, truyền bằng `-backend-config` thứ hai lúc `init`; khối `backend "s3" {}` trong `versions.tf` trống |
 | Zone | `aws.<domain>` của account prd (output `zone_id` của `aws/accounts/prd`), uỷ quyền từ DNS cha của `<domain>` (bốn bản ghi `NS` `aws`, ngoài Terraform) |
 
 Root chạy được khi baseline `aws/accounts/prd` đã apply, uỷ quyền DNS đã xong
-([`aws/accounts/README.md`](../../accounts/README.md)) và root `aws/log-archive` đã apply (bucket nhận flow log và log WAF,
-[`aws/log-archive/README.md`](../../log-archive/README.md)).
+([`aws/accounts/README.md`](../../accounts/README.md)) và root `aws/log-archive` đã apply (bucket nhận flow log, log WAF, log CloudFront và
+delivery destination `svp-cloudfront-prd`, [`aws/log-archive/README.md`](../../log-archive/README.md)).
 
 ## Cái gì khác với stg
 
@@ -34,7 +35,7 @@ dòng `env` đó, `<env>.tfvars`, `teardown.tfvars`, `README.md`, `backend.hcl.e
 | Tệp | Commit | Nội dung |
 | --- | --- | --- |
 | `prd.tfvars` | có | cỡ, dự phòng, retention và mức bảo vệ của prd; không giá trị cá nhân nào |
-| `teardown.tfvars` | có | chỉ hai bảo vệ cần nhấc để xoá (mục "Gỡ") |
+| `teardown.tfvars` | có | chỉ ba bảo vệ cần nhấc để xoá (mục "Gỡ") |
 | `prd.auto.tfvars` | **không** (git bỏ qua) | giá trị cá nhân, chép từ `example.auto.tfvars.example` |
 | `../../backend-prd.hcl` | **không** | phần chung của backend trong account prd |
 | `TF_VAR_account_id` | biến môi trường, đặt ngay trong lệnh | account được phép đổi (`allowed_account_ids`) |
@@ -43,15 +44,17 @@ Giá trị của `prd.tfvars`: mỗi nhóm biến một comment nói vì sao, c�
 gì ở stg: bảng của [`environments.md`](https://github.com/anhnvcoder/svp-backend/blob/main/docs/explanation/environments.md) ở repo code. Những gì chỉ prd có: ba AZ, NAT mỗi AZ, RDS
 `db.m7g` Multi-AZ, MSK RF 3 và min ISR 2 (mất một AZ không mất ghi đã `acks=all`, ADR-0053 §6), Valkey có replica ở AZ khác với failover tự
 động, `apply_immediately = false` của Valkey (thay đổi chờ cửa sổ bảo trì), retention log CloudWatch 30 ngày (flow log và log WAF ở Log
-Archive: [README của stg](../stg/README.md#log-và-phát-hiện)), backup 7 ngày giữ lại sau khi xoá, deletion protection, final snapshot,
-versioning của media.
+Archive: [README của stg](../stg/README.md#log-và-phát-hiện)), backup 7 ngày giữ lại sau khi xoá, deletion protection (RDS, ALB edge),
+final snapshot, versioning của media, distribution media pay-as-you-go có response headers policy riêng và log chuẩn về Log Archive
+(`media_flat_rate_free = false`).
 
 Root không có `validation` ép giá trị prd: test của từng module có một `run` với giá trị prd, `make trivy DIRS=aws/envs/prd` quét với
 `prd.tfvars`.
 
-Giá trị cá nhân (`prd.auto.tfvars` hay `TF_VAR_*`): `hosted_zone_id` (output `zone_id` của `aws/accounts/prd`), `domain` (tên zone prd `aws.<domain>`, web ở
-apex, API ở `api.<tên này>`; plan dừng ở precondition của `cluster_values` nếu tên khác), `acme_email`, `alarm_email` (hộp thư của topic
-`svp-prd-alarms`, xác nhận link SNS gửi sau apply). Không có IP của máy người học.
+Giá trị cá nhân (`prd.auto.tfvars` hay `TF_VAR_*`): `hosted_zone_id` (output `zone_id` của `aws/accounts/prd`; module `edge`, `media` ghi
+bản ghi alias và validation ACM vào zone này), `domain` (tên zone prd `aws.<domain>`, web ở apex, API ở `api.<tên này>`, media ở
+`media.<tên này>`; plan dừng ở precondition của `cluster_values` nếu tên khác), `alarm_email` (hộp thư của topic `svp-prd-alarms`, xác
+nhận link SNS gửi sau apply). Không có IP của máy người học.
 
 ## Tới API: tunnel SSM
 
@@ -111,8 +114,9 @@ AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" TF_VAR_log_arc
   terraform destroy -var-file=prd.tfvars -var-file=teardown.tfvars
 ```
 
-`teardown.tfvars` chỉ đặt `rds_deletion_protection = false` (RDS từ chối xoá instance còn bảo vệ) và `media_force_destroy = true` (bucket có
-versioning không bao giờ rỗng); không đổi cỡ, log hay mã hoá. MSK và ElastiCache không có bảo vệ xoá nào để nhấc: `destroy` gỡ chúng
+`teardown.tfvars` chỉ đặt `rds_deletion_protection = false` (RDS từ chối xoá instance còn bảo vệ), `media_force_destroy = true` (bucket có
+versioning không bao giờ rỗng) và `edge_alb_deletion_protection = false` (ALB edge còn bảo vệ thì `destroy` dừng ở nó); không đổi cỡ, log
+hay mã hoá. MSK và ElastiCache không có bảo vệ xoá nào để nhấc: `destroy` gỡ chúng
 cùng secret `AmazonMSK_*` (xoá ngay, không cửa sổ khôi phục) và để KMS key của root (RDS, MSK, alarm, Secrets của EKS) ở `PendingDeletion`. `rds_skip_final_snapshot`
 vẫn `false`, backup tự động vẫn giữ: destroy vẫn tạo final snapshot. Sau đó runbook đọc final snapshot và backup tự động được giữ, xoá
 chúng, rồi chạy lệnh quét tài nguyên sót.
@@ -130,5 +134,6 @@ module mang `Scope: every environment` hay có điều kiện khớp giá trị 
 ## Chi phí
 
 Trần một buổi và phí giữa các buổi ở mục "Chi phí và giới hạn" của runbook [`session-prd.md`](../../../docs/runbooks/session-prd.md) (phụ
-lục ADR-0048, ADR-0053 §16: NAT mỗi AZ, RDS Multi-AZ, node on-demand, bastion, ba broker MSK, hai node Valkey). CloudFront của media
-và web ACL WAF nằm trong gói flat-rate Free: $0 ([ADR-0052](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0052-cloudfront-flat-rate-free.md)).
+lục ADR-0048, ADR-0053 §16: NAT mỗi AZ, RDS Multi-AZ, node on-demand, bastion, ba broker MSK, hai node Valkey). Cả ba distribution
+CloudFront, ba web ACL (ATP, Bot Control) và ALB edge tính theo giờ và request, không gói flat-rate Free: bảng ở mục "Chi phí edge" của
+[ADR-0061](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0061-edge-cloudfront-waf-acm.md).

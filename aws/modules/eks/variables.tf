@@ -124,16 +124,6 @@ variable "system_node_max_size" {
   }
 }
 
-variable "hosted_zone_id" {
-  description = "ID of the Route 53 hosted zone of the env, in the env's account (output zone_id of aws/accounts/<env>). ExternalDNS and cert-manager may change records of this zone only."
-  type        = string
-
-  validation {
-    condition     = can(regex("^Z[A-Z0-9]{1,31}$", var.hosted_zone_id))
-    error_message = "hosted_zone_id must be a Route 53 hosted zone id such as Z0123456789ABCDEFGHIJ."
-  }
-}
-
 variable "guardduty_data_endpoint_id" {
   description = "ID of the interface endpoint guardduty-data of the VPC (output guardduty_data_endpoint_id of the network module). The GuardDuty agent add-on is created after it, so the agent's first reports have a way out."
   type        = string

@@ -9,8 +9,9 @@ output "media_bucket" {
 }
 
 output "media_domain" {
-  description = "Domain of the CloudFront distribution (<id>.cloudfront.net): MEDIA_PUBLIC_BASE_URL of the gateway and MEDIA_ORIGIN of the web are https://<domain>."
-  value       = aws_cloudfront_distribution.media.domain_name
+  description = "Public name of the media, `media.<domain>`: MEDIA_PUBLIC_BASE_URL of the gateway and MEDIA_ORIGIN of the web are https://<media_domain>."
+  # Taken from the alias record, so nothing reads the name before it resolves to the distribution.
+  value = aws_route53_record.media["A"].name
 }
 
 output "media_distribution_arn" {

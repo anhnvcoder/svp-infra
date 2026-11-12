@@ -33,10 +33,6 @@ data "aws_iam_policy_document" "pod_identity_trust" {
   }
 }
 
-locals {
-  hosted_zone_arn = "arn:${data.aws_partition.current.partition}:route53:::hostedzone/${var.hosted_zone_id}"
-}
-
 ################################################################################
 # AWS Load Balancer Controller
 ################################################################################
@@ -59,107 +55,6 @@ resource "aws_iam_policy" "aws_load_balancer_controller" {
 resource "aws_iam_role_policy_attachment" "aws_load_balancer_controller" {
   role       = aws_iam_role.aws_load_balancer_controller.name
   policy_arn = aws_iam_policy.aws_load_balancer_controller.arn
-}
-
-################################################################################
-# ExternalDNS
-################################################################################
-
-data "aws_iam_policy_document" "external_dns" {
-  # Writes only the record types ExternalDNS publishes (TXT for its ownership registry), so it can never write the NS
-  # records that delegate a child zone, nor the SOA of the zone.
-  statement {
-    sid       = "ChangeRecordsOfTheEnvZone"
-    actions   = ["route53:ChangeResourceRecordSets"]
-    resources = [local.hosted_zone_arn]
-
-    condition {
-      test     = "ForAllValues:StringEquals"
-      variable = "route53:ChangeResourceRecordSetsRecordTypes"
-      values   = ["A", "AAAA", "CNAME", "TXT"]
-    }
-  }
-
-  statement {
-    sid       = "ReadRecordsOfTheEnvZone"
-    actions   = ["route53:ListResourceRecordSets", "route53:ListTagsForResources"]
-    resources = [local.hosted_zone_arn]
-  }
-
-  # Listing zones has no resource-level permission; ExternalDNS lists them, then keeps only the zone id it is given.
-  statement {
-    sid       = "ListZones"
-    actions   = ["route53:ListHostedZones"]
-    resources = ["*"]
-  }
-}
-
-resource "aws_iam_role" "external_dns" {
-  name               = "${var.name}-external-dns"
-  description        = "ExternalDNS of EKS cluster ${var.name}"
-  assume_role_policy = data.aws_iam_policy_document.pod_identity_trust["external_dns"].json
-}
-
-resource "aws_iam_role_policy" "external_dns" {
-  name   = "route53-env-zone"
-  role   = aws_iam_role.external_dns.id
-  policy = data.aws_iam_policy_document.external_dns.json
-}
-
-################################################################################
-# cert-manager (ACME DNS-01 through Route 53)
-################################################################################
-
-data "aws_iam_policy_document" "cert_manager" {
-  statement {
-    sid       = "WatchChanges"
-    actions   = ["route53:GetChange"]
-    resources = ["arn:${data.aws_partition.current.partition}:route53:::change/*"]
-  }
-
-  # DNS-01 writes and removes only the TXT records of _acme-challenge names, in the zone of the env only.
-  statement {
-    sid       = "ChangeChallengeRecords"
-    actions   = ["route53:ChangeResourceRecordSets"]
-    resources = [local.hosted_zone_arn]
-
-    condition {
-      test     = "ForAllValues:StringEquals"
-      variable = "route53:ChangeResourceRecordSetsRecordTypes"
-      values   = ["TXT"]
-    }
-
-    condition {
-      test     = "ForAllValues:StringLike"
-      variable = "route53:ChangeResourceRecordSetsNormalizedRecordNames"
-      values   = ["_acme-challenge.*"]
-    }
-  }
-
-  statement {
-    sid       = "ReadRecords"
-    actions   = ["route53:ListResourceRecordSets"]
-    resources = [local.hosted_zone_arn]
-  }
-
-  # Finding the zone of a name has no resource-level permission.
-  statement {
-    sid       = "FindZone"
-    actions   = ["route53:ListHostedZonesByName"]
-    resources = ["*"]
-  }
-}
-
-resource "aws_iam_role" "cert_manager" {
-  name               = "${var.name}-cert-manager"
-  description        = "cert-manager of EKS cluster ${var.name} (ACME DNS-01)"
-  assume_role_policy = data.aws_iam_policy_document.pod_identity_trust["cert_manager"].json
-}
-
-resource "aws_iam_role_policy" "cert_manager" {
-  name   = "route53-acme-dns01"
-  role   = aws_iam_role.cert_manager.id
-  policy = data.aws_iam_policy_document.cert_manager.json
 }
 
 ################################################################################

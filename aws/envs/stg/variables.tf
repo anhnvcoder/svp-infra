@@ -13,7 +13,7 @@ variable "account_id" {
 }
 
 variable "log_archive_account_id" {
-  description = "The account svp-log-archive (12 digits), whose buckets receive the VPC flow logs and the WAF logs of this env. Set it with TF_VAR_log_archive_account_id from SVP_AWS_LOG_ACCOUNT_ID, as account_id; it never goes into a committed file."
+  description = "The account svp-log-archive (12 digits), whose buckets receive the VPC flow logs, the WAF logs and the CloudFront standard logs of this env. Set it with TF_VAR_log_archive_account_id from SVP_AWS_LOG_ACCOUNT_ID, as account_id; it never goes into a committed file."
   type        = string
 
   validation {
@@ -33,7 +33,7 @@ variable "region" {
 ################################################################################
 
 variable "hosted_zone_id" {
-  description = "ID of the Route 53 hosted zone of the env, in the env's account: output zone_id of aws/accounts/<env> (stg.aws.svp.example for stg, aws.svp.example for prd). ExternalDNS and cert-manager may change records of this zone only, and domain must be its name or a name inside it."
+  description = "ID of the Route 53 hosted zone of the env, in the env's account: output zone_id of aws/accounts/<env> (stg.aws.svp.example for stg, aws.svp.example for prd). The edge and media modules write the alias records of the web, the API and the media and the validation records of their certificates there; domain must be its name or a name inside it."
   type        = string
 
   validation {
@@ -43,23 +43,12 @@ variable "hosted_zone_id" {
 }
 
 variable "domain" {
-  description = "Host name of the web client of this env: the name of the zone of hosted_zone_id (e.g. stg.aws.svp.example for stg, aws.svp.example for prd) or a name inside it; the API is api.<domain>. Origin of the CORS rules of both buckets and of CloudFront."
+  description = "Host name of the web client of this env: the name of the zone of hosted_zone_id (e.g. stg.aws.svp.example for stg, aws.svp.example for prd) or a name inside it; the API is api.<domain>, the media media.<domain>. Origin of the CORS rules of both buckets and of CloudFront."
   type        = string
 
   validation {
     condition     = can(regex("^([a-z0-9]([a-z0-9-]*[a-z0-9])?\\.)+[a-z]{2,}$", var.domain))
     error_message = "domain must be a lowercase DNS name without a trailing dot, e.g. stg.aws.svp.example or aws.svp.example."
-  }
-}
-
-variable "acme_email" {
-  description = "Email of the Let's Encrypt account of cert-manager (expiry notices go there)."
-  type        = string
-  sensitive   = true
-
-  validation {
-    condition     = can(regex("^[^@[:space:]]+@[^@[:space:]]+\\.[^@[:space:]]+$", var.acme_email))
-    error_message = "acme_email must be an email address."
   }
 }
 
@@ -253,6 +242,16 @@ variable "media_access_logging_enabled" {
   description = "Write S3 server access logs of both buckets to a log bucket of the env."
   type        = bool
   default     = false
+}
+
+variable "media_flat_rate_free" {
+  description = "Subscribe the media distribution to the CloudFront flat-rate Free plan (no standard logs, no headers policy of its own); false: pay-as-you-go, with standard logs to the log archive account."
+  type        = bool
+}
+
+variable "edge_alb_deletion_protection" {
+  description = "Deletion protection of the internal ALB of the edge: while it is on, terraform destroy fails at the load balancer."
+  type        = bool
 }
 
 ################################################################################

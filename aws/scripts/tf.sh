@@ -7,7 +7,7 @@
 # Design notes: README.md.
 
 # plan --teardown (env only) targets the resources of the state whose protection the teardown file lifts (the DB
-# instance, the buckets) and nothing else, so it never creates what an apply that failed halfway left out.
+# instance, the edge's ALB, the buckets) and nothing else, so it never creates what a failed apply left out.
 
 # plan --destroy: gitops is refused until pre-destroy.sh has finished in this session (what Kubernetes made would block
 # the destroy or stay billed); env until root gitops is destroyed and, with a teardown file, that is applied.
@@ -74,9 +74,9 @@ fi
 # has_mark EVENT: the session's timeline holds EVENT.
 has_mark() { awk -F '\t' -v e="$1" '$3 == e { found = 1 } END { exit !found }' "$session/timeline.tsv" 2>/dev/null; }
 
-# The resource types whose protection the teardown file lifts: deletion protection of the DB instance, force_destroy
-# of the buckets (root env has no other instance or bucket).
-teardown_types='aws_db_instance aws_s3_bucket'
+# The resource types whose protection the teardown file lifts: deletion protection of the DB instance and of the
+# edge's ALB, force_destroy of the buckets (root env has no other instance, load balancer or bucket).
+teardown_types='aws_db_instance aws_lb aws_s3_bucket'
 
 # protected_addresses: the addresses of the resources of teardown_types in the state of the root, one per line, data
 # sources left out; with --print, a placeholder.
@@ -106,7 +106,7 @@ write_plan_text() {
   ok "plan text in $plan_text${summary:+: $summary}"
 }
 
-# need_auto_tfvars: root env reads the personal values (zone, domain, ACME email) from <env>.auto.tfvars.
+# need_auto_tfvars: root env reads the personal values (zone, domain, alarm email) from <env>.auto.tfvars.
 need_auto_tfvars() {
   [ "$root" = env ] || return 0
   printing || [ -f "$root_dir/$env_name.auto.tfvars" ] ||
@@ -233,7 +233,7 @@ case $op in
           ! has_mark pre-destroy-done ||
             fail "--leftovers refused: pre-destroy.sh $env_name has finished in this session (pre-destroy-done): $(basename "$0") $env_name gitops plan --destroy without --leftovers"
         fi
-        note "--leftovers: pre-destroy.sh did not finish, so what Kubernetes made may be left: the Load Balancer and its target groups, the DNS records of ExternalDNS, the EBS volumes of PVCs, the EC2 instances of Karpenter. destroy may get stuck on them (stuck-destroy section of docs/runbooks/session-stg.md); aws/scripts/sweep.sh $env_name afterwards lists what to delete by hand"
+        note "--leftovers: pre-destroy.sh did not finish, so what Kubernetes made may be left: the EBS volumes of PVCs, the EC2 instances of Karpenter, a load balancer of the AWS Load Balancer Controller. destroy may get stuck on them (stuck-destroy section of docs/runbooks/session-stg.md); aws/scripts/sweep.sh $env_name afterwards lists what to delete by hand"
         mark pre-destroy-skipped
         ;;
       plan-destroy-no-cluster)
@@ -260,7 +260,7 @@ case $op in
         ;;
     esac
     if [ "$root" = env ] && [ -n "$teardown" ] && ! printing && ! has_mark env-teardown-applied; then
-      fail "the protections of $rel are still on (deletion protection of RDS, versioned buckets): $(basename "$0") $env_name env plan --teardown (it targets the DB instance and the buckets of the state alone, and records that nothing is to lift when the state has none), read it, $(basename "$0") $env_name env apply --teardown, then this again"
+      fail "the protections of $rel are still on (deletion protection of RDS and of the ALB, versioned buckets): $(basename "$0") $env_name env plan --teardown (it targets the DB instance, the ALB and the buckets of the state alone, and records that nothing is to lift when the state has none), read it, $(basename "$0") $env_name env apply --teardown, then this again"
     fi
     need_auto_tfvars
     [ "$root" = env ] || gitops_inputs

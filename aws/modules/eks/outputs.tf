@@ -1,5 +1,5 @@
 output "cluster_name" {
-  description = "Name of the EKS cluster: clusterName of the AWS Load Balancer Controller, txtOwnerId of ExternalDNS, aws eks update-kubeconfig --name."
+  description = "Name of the EKS cluster: clusterName of the AWS Load Balancer Controller, aws eks update-kubeconfig --name."
   value       = module.eks.cluster_name
 }
 

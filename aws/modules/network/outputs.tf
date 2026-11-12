@@ -34,8 +34,18 @@ output "database_subnet_cidrs" {
 }
 
 output "public_subnet_ids" {
-  description = "IDs of the public subnets, one per zone, in the order of azs: NAT gateways and internet-facing load balancers."
+  description = "IDs of the public subnets, one per zone, in the order of azs: the NAT gateways and nothing else."
   value       = module.vpc.public_subnets
+}
+
+output "edge_subnet_ids" {
+  description = "IDs of the edge subnets, one per zone, in the order of azs: the internal ALB that CloudFront reaches through a VPC origin. No node or pod takes an address there; their route table holds only the local route."
+  value       = module.vpc.intra_subnets
+}
+
+output "edge_subnet_cidrs" {
+  description = "IPv4 ranges of the edge subnets, in the order of azs: every connection from them to Envoy comes from the ALB, so the network policy of Envoy lets in these ranges."
+  value       = module.vpc.intra_subnets_cidr_blocks
 }
 
 output "nat_public_ips" {

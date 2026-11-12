@@ -41,7 +41,6 @@ variables {
   kubernetes_version   = "1.36"
   vpc_id               = "vpc-0123456789abcdef0"
   private_subnet_ids   = ["subnet-0aaaaaaaaaaaaaaa1", "subnet-0bbbbbbbbbbbbbbb2"]
-  hosted_zone_id       = "Z0123456789ABCDEFGHIJ"
   system_node_max_size = 4
 
   guardduty_data_endpoint_id = "vpce-0123456789abcdef0"
@@ -229,29 +228,13 @@ run "prd_values" {
   }
 }
 
-# ExternalDNS writes only the record types it publishes, so the role of the zone that holds a child zone's delegation
-# cannot change that NS record.
-run "external_dns_record_types" {
+# No controller of the cluster writes DNS: the edge records live in Terraform, so no Pod Identity role reaches Route 53.
+run "no_dns_writer" {
   command = plan
 
   assert {
-    condition = alltrue([for s in data.aws_iam_policy_document.external_dns.statement :
-      !contains(s.actions, "route53:ChangeResourceRecordSets") || (
-        length(s.actions) == 1 &&
-        length(s.condition) == 1 &&
-        one(s.condition).test == "ForAllValues:StringEquals" &&
-        one(s.condition).variable == "route53:ChangeResourceRecordSetsRecordTypes" &&
-        toset(one(s.condition).values) == toset(["A", "AAAA", "CNAME", "TXT"])
-      )
-    ])
-    error_message = "ExternalDNS may change only A, AAAA, CNAME and TXT records (ForAllValues:StringEquals route53:ChangeResourceRecordSetsRecordTypes), never NS."
-  }
-
-  assert {
-    condition = anytrue([for s in data.aws_iam_policy_document.external_dns.statement :
-      contains(s.actions, "route53:ChangeResourceRecordSets") && toset(s.resources) == toset(["arn:aws:route53:::hostedzone/Z0123456789ABCDEFGHIJ"])
-    ])
-    error_message = "ExternalDNS must be allowed to change records of the zone of the env only."
+    condition     = toset(keys(local.pod_identity)) == toset(["aws_load_balancer_controller", "ebs_csi"])
+    error_message = "Only the AWS Load Balancer Controller and the EBS CSI driver get a Pod Identity role from this module."
   }
 }
 
@@ -396,14 +379,4 @@ run "guardduty_data_endpoint_id_not_vpce" {
   }
 
   expect_failures = [var.guardduty_data_endpoint_id]
-}
-
-run "hosted_zone_id_lowercase" {
-  command = plan
-
-  variables {
-    hosted_zone_id = "z0123456789abcdefghij"
-  }
-
-  expect_failures = [var.hosted_zone_id]
 }

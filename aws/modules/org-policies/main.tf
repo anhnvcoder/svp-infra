@@ -494,7 +494,7 @@ locals {
     }
 
     # Hop limit 1 is what the EKS nodes, Karpenter nodes and the bastion already use. Public VPCs stay allowed: the NAT
-    # gateways and the NLB need an internet gateway.
+    # gateways need an internet gateway, and CloudFront accepts a VPC origin only in a VPC that has one.
     "ec2-baseline" = {
       type        = "DECLARATIVE_POLICY_EC2"
       target_id   = var.root_id

@@ -143,6 +143,7 @@ locals {
       "svp-flowlogs-${local.log_archive_id}-${var.region}",
       "svp-guardduty-${local.log_archive_id}-${var.region}",
       "aws-waf-logs-svp-${local.log_archive_id}-us-east-1",
+      "svp-cloudfront-${local.log_archive_id}-us-east-1",
     ] : "arn:${data.aws_partition.current.partition}:s3:::${name}"
   ]
 }

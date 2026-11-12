@@ -1,28 +1,27 @@
 # Values of the cluster.* contract: the GitOps bootstrap root aws/gitops/<env> reads this map from the state of this
 # root and hands it to the root Application, from which the charts of the platform take what depends on the account
 # or the session. A key added here is added to the templates of svp-gitops and to the fixture of the check as well.
-# Sensitive because it carries acme_email; terraform output -json cluster_values prints it.
 output "cluster_values" {
   description = "Values of the cluster.* contract of the GitOps root (read with terraform output -json cluster_values)."
-  sensitive   = true
 
   value = {
-    name          = module.eks.cluster_name
-    region        = var.region
-    vpcId         = module.network.vpc_id
-    vpcCidr       = module.network.vpc_cidr
-    serviceCidr   = module.eks.cluster_service_cidr
-    dbCidrs       = module.network.database_subnet_cidrs
-    domain        = var.domain
-    hostedZoneId  = var.hosted_zone_id
-    acmeEmail     = var.acme_email
-    rdsAddress    = module.rds.address
-    kafkaBrokers  = module.msk.bootstrap_brokers
-    valkeyHost    = module.elasticache.primary_endpoint_address
-    uploadsBucket = module.media.uploads_bucket
-    mediaBucket   = module.media.media_bucket
-    mediaDomain   = module.media.media_domain
-    s3Cidrs       = sort(data.aws_ip_ranges.s3.cidr_blocks)
+    name        = module.eks.cluster_name
+    region      = var.region
+    vpcId       = module.network.vpc_id
+    vpcCidr     = module.network.vpc_cidr
+    serviceCidr = module.eks.cluster_service_cidr
+    dbCidrs     = module.network.database_subnet_cidrs
+    # Every connection from the edge subnets to Envoy comes from the ALB.
+    edgeCidrs          = module.network.edge_subnet_cidrs
+    edgeTargetGroupArn = module.edge.target_group_arn
+    domain             = var.domain
+    rdsAddress         = module.rds.address
+    kafkaBrokers       = module.msk.bootstrap_brokers
+    valkeyHost         = module.elasticache.primary_endpoint_address
+    uploadsBucket      = module.media.uploads_bucket
+    mediaBucket        = module.media.media_bucket
+    mediaDomain        = module.media.media_domain
+    s3Cidrs            = sort(data.aws_ip_ranges.s3.cidr_blocks)
     # IAM role of the SecretStore of each namespace that reads Secrets Manager.
     externalSecretsRoles = module.external_secrets.roles
   }

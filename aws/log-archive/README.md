@@ -1,10 +1,12 @@
 # `aws/log-archive`: bucket log của cả org (account `svp-log-archive`)
 
 Root này dựng nơi giữ log của mọi account trong org ở account `svp-log-archive` (Log Archive của AWS SRA): trail org, AWS Config, flow log
-VPC, finding GuardDuty và log WAF. Admin của account workload (`svp-stg`, `svp-prd`) và `svp-security` không đọc, sửa hay xoá được log ở
+VPC, finding GuardDuty, log WAF và access log CloudFront. Admin của account workload (`svp-stg`, `svp-prd`) và `svp-security` không đọc, sửa hay xoá được log ở
 đây; admin của management thì được, qua `OrganizationAccountAccessRole` mà root này dùng để apply. Thiết kế và lý do ở
 [ADR-0060](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0060-org-detection-logging.md) §7, retention và policy từng dịch vụ ở
-[phụ lục §7](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0060-org-detection-logging.md#7-bucket-log-archive).
+[phụ lục §7](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0060-org-detection-logging.md#7-bucket-log-archive);
+bucket log CloudFront và delivery destination ở [ADR-0061](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0061-edge-cloudfront-waf-acm.md)
+§8, [phụ lục §8](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0061-edge-cloudfront-waf-acm.md#8-log-edge).
 
 Root chạy từ management (`AWS_PROFILE=anhnv-sso`): provider duy nhất assume role `OrganizationAccountAccessRole` của `svp-log-archive`,
 `allowed_account_ids` chỉ gồm account đó. State nằm ở bucket của `aws/bootstrap`, key `aws/log-archive/terraform.tfstate`. Account
@@ -22,16 +24,21 @@ Tên bucket theo `<tiền tố>-<id account log>-<region>`; root khác suy cùng
 | `svp-flowlogs-<log>-ap-southeast-1` | Flow log VPC của stg, prd (`delivery.logs.amazonaws.com`) | SSE-KMS, key region nhà | — |
 | `svp-guardduty-<log>-ap-southeast-1` | Finding GuardDuty xuất từ detector của `svp-security`, hai region | SSE-KMS, key region nhà | — |
 | `aws-waf-logs-svp-<log>-us-east-1` | Log WAF của CloudFront ở stg, prd (`delivery.logs.amazonaws.com`) | SSE-KMS, key `us-east-1` | — |
+| `svp-cloudfront-<log>-us-east-1` | Standard log (v2) của distribution CloudFront ở stg, prd (`delivery.logs.amazonaws.com`) | SSE-KMS, key `us-east-1` | — |
 
-- **Hai KMS key cùng alias `alias/svp-log-archive`**: một ở `ap-southeast-1`, một ở `us-east-1` (SSE-KMS đòi key cùng region với
-  bucket). Cả hai xoay khoá hằng năm, chờ xoá 30 ngày. Root khác lấy ARN `key/<id>` của key region nhà bằng data source `aws_kms_alias`.
+- **Hai KMS key cùng alias `alias/svp-log-archive`**: một ở `ap-southeast-1`, một ở `us-east-1` cho hai bucket log của CloudFront
+  (SSE-KMS đòi key cùng region với bucket). Cả hai xoay khoá hằng năm, chờ xoá 30 ngày. Root khác lấy ARN `key/<id>` của key region nhà bằng data source `aws_kms_alias`.
 - **Bucket access log dùng SSE-S3, không Object Lock**: S3 không giao server access log vào bucket SSE-KMS hay có Object Lock.
 - **Mọi bucket**: chặn public, `BucketOwnerEnforced`, versioning, chỉ nhận request TLS, version cũ hết hạn sau 1 ngày.
-- **Policy theo org, không theo danh sách account**: Config, flow log, log WAF qua điều kiện `aws:SourceOrgID`, nên account mới của org ghi
-  được mà không sửa policy. Trail theo `aws:SourceArn` của `svp-audit`; GuardDuty theo `aws:SourceAccount` của `svp-security` và ARN
+- **Policy theo org, không theo danh sách account**: Config, flow log, log WAF, log CloudFront qua điều kiện `aws:SourceOrgID`, nên account
+  mới của org ghi được mà không sửa policy. Log CloudFront thêm `aws:SourceArn` là delivery source ở `us-east-1`. Trail theo `aws:SourceArn` của `svp-audit`; GuardDuty theo `aws:SourceAccount` của `svp-security` và ARN
   detector của account đó ở hai region.
-- **Retention**: số ngày ở `locals` của `main.tf`, lý do ở ADR. Log của account stg trong bucket flow log và WAF có rule riêng theo tiền tố
-  account, ngắn hơn: S3 áp hạn ngắn hơn khi hai rule chồng nhau.
+- **Retention**: số ngày ở `locals` của `main.tf`, lý do ở ADR. Log của account stg trong bucket flow log, WAF và CloudFront có rule riêng
+  theo tiền tố account, ngắn hơn: S3 áp hạn ngắn hơn khi hai rule chồng nhau.
+- **Delivery destination `svp-cloudfront-<env>`** (`us-east-1`, một mỗi env, Parquet): đích là bucket log CloudFront với tiền tố
+  `AWSLogs/<account env>/CloudFront`; destination policy chỉ cho account env đó `logs:CreateDelivery`. Account env tạo delivery source và
+  delivery (module `edge`, `media`), suy ARN `arn:aws:logs:us-east-1:<log>:delivery-destination:svp-cloudfront-<env>` từ tên. Mỗi env
+  chỉ giao được vào tiền tố mang id account của nó.
 - **Key policy**: account quản và đọc key qua IAM (permission set `SvpLogReader` có `kms:Decrypt` qua S3); dịch vụ giao log chỉ được dùng
   key với cùng điều kiện như policy bucket.
 
@@ -46,12 +53,15 @@ flowchart LR
   vpc["VPC stg, prd"] -- delivery.logs --> flow["svp-flowlogs-…"]
   gd["GuardDuty svp-security"] --> guard["svp-guardduty-…"]
   waf["WAF CloudFront stg, prd"] -- delivery.logs --> wafb["aws-waf-logs-svp-…-us-east-1"]
+  cf["Distribution CloudFront stg, prd"] -- "delivery svp-cloudfront-#60;env#62;" --> cfb["svp-cloudfront-…-us-east-1"]
 ```
 
 ## Phí
 
 Hai key KMS tính theo key mỗi tháng, tăng theo số lần xoay; bucket tính theo dung lượng và request. Giá và ước theo tháng ở
 [phụ lục ADR-0060 §12](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0060-org-detection-logging.md#12-chi-phí-liên-tục).
+Log CloudFront còn phí giao vended log và phí chuyển Parquet của CloudWatch theo GB, tính ở account env: [phụ lục ADR-0061
+§13](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0061-edge-cloudfront-waf-acm.md#13-chi-phí-edge).
 
 ## Apply lần đầu
 
@@ -64,10 +74,11 @@ account). Cần Terraform 1.15, AWS CLI v2, `aws sso login --profile anhnv-sso`.
 ```sh
 cd infra/aws/log-archive
 AWS_PROFILE=anhnv-sso aws sts get-caller-identity --region ap-southeast-1 --query '[Account,Arn]' --output text
-printf '%s\n' "$SVP_AWS_MGMT_ACCOUNT_ID" "$SVP_AWS_LOG_ACCOUNT_ID" "$SVP_AWS_SECURITY_ACCOUNT_ID" "$SVP_AWS_STG_ACCOUNT_ID"
+printf '%s\n' "$SVP_AWS_MGMT_ACCOUNT_ID" "$SVP_AWS_LOG_ACCOUNT_ID" "$SVP_AWS_SECURITY_ACCOUNT_ID" "$SVP_AWS_STG_ACCOUNT_ID" \
+  "$SVP_AWS_PRD_ACCOUNT_ID"
 ```
 
-`Account` phải bằng `SVP_AWS_MGMT_ACCOUNT_ID` (management), `Arn` là role SSO của người học. Bốn dòng sau đều là 12 số: log archive và
+`Account` phải bằng `SVP_AWS_MGMT_ACCOUNT_ID` (management), `Arn` là role SSO của người học. Năm dòng sau đều là 12 số: log archive và
 security từ output `log_archive_account_id`, `security_account_id` của `aws/org`. Khác hay thiếu thì dừng.
 
 ### 2. Init và plan
@@ -76,11 +87,14 @@ security từ output `log_archive_account_id`, `security_account_id` của `aws/
 AWS_PROFILE=anhnv-sso terraform init -backend-config=../backend.hcl
 AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
   TF_VAR_security_account_id="$SVP_AWS_SECURITY_ACCOUNT_ID" TF_VAR_stg_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+  TF_VAR_prd_account_id="$SVP_AWS_PRD_ACCOUNT_ID" \
   terraform plan -out=log-archive.tfplan
 ```
 
-Mong đợi `Plan: 48 to add, 0 to change, 0 to destroy`. Đọc: hai `aws_kms_key.log`, key `waf` và mọi tài nguyên `["waf"]` có `region =
-"us-east-1"`, còn lại `ap-southeast-1`; `aws_s3_bucket_server_side_encryption_configuration.log["waf"]` trỏ key `waf`. Lỗi `AccessDenied` khi
+Mong đợi `Plan: 59 to add, 0 to change, 0 to destroy` (root đã apply từ trước: chỉ phần chưa có, không `change` hay `destroy`). Đọc:
+hai `aws_kms_key.log`, key `waf`, mọi tài nguyên `["waf"]`, `["cloudfront"]` và hai `aws_cloudwatch_log_delivery_destination.cloudfront` có
+`region = "us-east-1"`, còn lại `ap-southeast-1`; `aws_s3_bucket_server_side_encryption_configuration.log["waf"]` và `["cloudfront"]` trỏ key
+`waf`; `destination_resource_arn` của mỗi destination kết thúc bằng `/AWSLogs/<id account env đó>/CloudFront`. Lỗi `AccessDenied` khi
 assume role là account chưa tạo xong hay profile sai; lỗi `account_id is not the management account` là `SVP_AWS_MGMT_ACCOUNT_ID` sai. Dừng
 và dán output nếu có dòng `change` hay `destroy`.
 
@@ -89,14 +103,16 @@ và dán output nếu có dòng `change` hay `destroy`.
 ```sh
 AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
   TF_VAR_security_account_id="$SVP_AWS_SECURITY_ACCOUNT_ID" TF_VAR_stg_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+  TF_VAR_prd_account_id="$SVP_AWS_PRD_ACCOUNT_ID" \
   terraform apply log-archive.tfplan
 rm log-archive.tfplan
 AWS_PROFILE=anhnv-sso terraform output bucket_names
 AWS_PROFILE=anhnv-sso terraform output kms_key_arns
 ```
 
-`bucket_names` có sáu bucket, tên chứa id account log; `kms_key_arns` có hai ARN dạng `arn:aws:kms:<region>:<log>:key/<id>`, một
-`ap-southeast-1`, một `us-east-1`. Sau đó áp đủ `aws/org` (bước (4)): trail đổi đích sang bucket `svp-cloudtrail-…` ở đây.
+`bucket_names` có bảy bucket, tên chứa id account log; `kms_key_arns` có hai ARN dạng `arn:aws:kms:<region>:<log>:key/<id>`, một
+`ap-southeast-1`, một `us-east-1`. Sau đó áp đủ `aws/org` (bước (4)): trail đổi đích sang bucket `svp-cloudtrail-…` ở đây, `SvpLogReader`
+đọc được bucket log CloudFront.
 
 ## Gỡ có chủ đích
 
@@ -108,7 +124,7 @@ thì log còn tới khi account `svp-log-archive` đóng hẳn (90 ngày sau bư
    `alias/svp-log-archive`, nên chạy trước mục này.
 3. Mục này, trước bước 2 của `aws/org` (đóng account): sau khi đóng, management không assume role vào account này được nữa.
 
-Các bước, chạy trong `infra/aws/log-archive` với bốn biến như mục [Apply lần đầu](#apply-lần-đầu):
+Các bước, chạy trong `infra/aws/log-archive` với năm biến như mục [Apply lần đầu](#apply-lần-đầu):
 
 1. **Kiểm account của phiên gỡ** (trước lệnh ghi đầu tiên):
 
@@ -127,14 +143,16 @@ Các bước, chạy trong `infra/aws/log-archive` với bốn biến như mục
    ```sh
    AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
      TF_VAR_security_account_id="$SVP_AWS_SECURITY_ACCOUNT_ID" TF_VAR_stg_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+     TF_VAR_prd_account_id="$SVP_AWS_PRD_ACCOUNT_ID" \
      terraform apply
    AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
      TF_VAR_security_account_id="$SVP_AWS_SECURITY_ACCOUNT_ID" TF_VAR_stg_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+     TF_VAR_prd_account_id="$SVP_AWS_PRD_ACCOUNT_ID" \
      terraform destroy
    ```
 
-   Plan của `apply` phải là `0 to add, 6 to change, 0 to destroy`, chỉ `force_destroy` của sáu `aws_s3_bucket.log`; khác thì trả lời `no`
-   và dán plan lại. `destroy` phải là `48 to destroy`. Bucket nhiều object xoá lâu. Hai key vào `PendingDeletion` 30 ngày: huỷ được trong thời
+   Plan của `apply` phải là `0 to add, 7 to change, 0 to destroy`, chỉ `force_destroy` của bảy `aws_s3_bucket.log`; khác thì trả lời `no`
+   và dán plan lại. `destroy` phải là `59 to destroy`. Bucket nhiều object xoá lâu. Hai key vào `PendingDeletion` 30 ngày: huỷ được trong thời
    gian đó, sau đó log nào còn mã hoá bằng chúng không đọc được nữa.
 
 4. Hoàn tác sửa local (`git checkout -- buckets.tf kms.tf`), rồi chạy bước 2 của `aws/org`.

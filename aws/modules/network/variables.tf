@@ -20,7 +20,7 @@ variable "cidr" {
 }
 
 variable "az_count" {
-  description = "Number of availability zones, taken in order from the zones of the region that need no opt-in. Each zone gets one public, one private and one database subnet. EKS needs subnets in at least two zones."
+  description = "Number of availability zones, taken in order from the zones of the region that need no opt-in. Each zone gets one public, one private, one edge and one database subnet. EKS needs subnets in at least two zones."
   type        = number
   default     = 2
 
@@ -37,7 +37,7 @@ variable "single_nat_gateway" {
 }
 
 variable "cluster_name" {
-  description = "Name of the EKS cluster that runs in this VPC. The subnets get the tag kubernetes.io/cluster/<name> = shared, which the AWS Load Balancer Controller reads to pick subnets; the private subnets also get karpenter.sh/discovery = <name>, which the EC2NodeClass of Karpenter reads."
+  description = "Name of the EKS cluster that runs in this VPC. The public and private subnets get the tag kubernetes.io/cluster/<name> = shared, which the AWS Load Balancer Controller reads to pick subnets; the private subnets also get karpenter.sh/discovery = <name>, which the EC2NodeClass of Karpenter reads."
   type        = string
 
   validation {

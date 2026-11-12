@@ -52,7 +52,11 @@ valkey_apply_immediately       = false
 valkey_slow_log_retention_days = 30
 
 # media: destroy stops at a bucket that holds objects; earlier versions kept 30 days, S3 access logs in a log bucket of
-# the env, the web ACL of waf.tf in front of CloudFront.
+# the env, its web ACL of waf.tf in front of CloudFront; pay-as-you-go, with standard logs in the log archive account.
 media_force_destroy          = false
 media_versioning_enabled     = true
 media_access_logging_enabled = true
+media_flat_rate_free         = false
+
+# edge: the internal ALB behind CloudFront refuses deletion until teardown.tfvars turns this off.
+edge_alb_deletion_protection = true

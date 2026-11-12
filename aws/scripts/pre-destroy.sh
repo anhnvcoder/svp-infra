@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # What Kubernetes made in the account, removed while the controllers that made it still run, before tf.sh <env> gitops
-# destroy: the NLB and target groups (AWS Load Balancer Controller), the EBS volumes of PVCs (EBS CSI driver), the DNS
-# records (ExternalDNS) and the nodes of Karpenter. Terraform knows none of them; left behind they block the destroy
+# destroy: Envoy's targets in the edge's target group (TargetGroupBinding of AWS Load Balancer Controller), PVCs' EBS
+# volumes (EBS CSI driver) and Karpenter's nodes. Terraform knows none of them; left behind they block the destroy
 # (ENIs, security groups) or stay billed (volumes, instances). Every wait has a limit, and what is left is printed.
 
 # Design notes: README.md.
@@ -12,9 +12,9 @@
 #    turned off too, so that svp-cluster does not make the Gateway again.
 
 # 2. Workload Applications, highest sync wave first, one wave at a time (their finalizer deletes what each deployed):
-#    every Application but svp-cluster and the platform controllers, whose finalizers and webhooks the workloads'
-#    objects need on deletion. Then Gateway svp of svp-edge. Waits, with LBC, ExternalDNS and Envoy Gateway still
-#    running, until no Service of type LoadBalancer, TargetGroupBinding, load balancer or ExternalDNS record is left.
+#    all but svp-cluster and the platform controllers, whose finalizers and webhooks the workloads' objects need. Then
+#    Gateway svp of svp-edge and svp-cluster's TargetGroupBinding svp-envoy. Waits, with LBC and Envoy Gateway running,
+#    until no LoadBalancer Service, TargetGroupBinding or LBC load balancer is left (DNS records are root env's).
 
 # 3. Every PVC of every namespace (volumeClaimTemplates: Argo CD never prunes them), with the EBS CSI driver running and
 #    svp-cluster's namespaces and StorageClass still there. Waits until no PVC, no PV of the driver and no EBS volume
@@ -46,27 +46,13 @@ env_arg "$1"
 session_dir
 
 # Applications that stay until step 4: svp-cluster, then the controllers the objects of the workloads need while they
-# are deleted (a ScaledObject's finalizer needs KEDA, Kyverno's webhooks see every write of svp, ...), and the three of
+# are deleted (a ScaledObject's finalizer needs KEDA, Kyverno's webhooks see every write of svp, ...), and the two of
 # step 2's waits, and Karpenter, which ends its nodes in step 4.
-platform_apps=" svp-cluster cert-manager envoy-gateway external-secrets aws-load-balancer-controller external-dns keda argo-rollouts kyverno svp-policy karpenter "
+platform_apps=" svp-cluster cert-manager envoy-gateway external-secrets aws-load-balancer-controller keda argo-rollouts kyverno svp-policy karpenter "
 wave_limit=600
 platform_wave_limit=300
 # The terminationGracePeriod of the NodePool (10 minutes) plus the time EC2 takes to end an instance.
 karpenter_limit=${SVP_KARPENTER_LIMIT:-900}
-
-# The zone ExternalDNS writes into: hosted_zone_id of the root's personal tfvars, the value output cluster_values
-# passes to the cluster as hostedZoneId (the zone of the environment's account).
-tfvars=$env_root/$env_name.auto.tfvars
-if printing; then
-  zone_id="<hosted_zone_id of aws/envs/$env_name/$env_name.auto.tfvars>"
-  zone="<zone of $env_name>"
-else
-  [ -f "$tfvars" ] || fail "no $tfvars: the file tf.sh $env_name plan read, with the hosted_zone_id of the zone of $env_name"
-  zone_id=$(sed -n 's/^[[:space:]]*hosted_zone_id[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$tfvars" | head -n 1)
-  [[ $zone_id =~ ^Z[A-Z0-9]{1,31}$ ]] ||
-    fail "hosted_zone_id of $tfvars is '$zone_id', not a hosted zone id such as Z0123456789ABCDEFGHIJ"
-  env_zone
-fi
 
 step "pre-destroy.sh: account and cluster $context"
 check_account
@@ -120,25 +106,6 @@ elb_gone() {
     elasticloadbalancing:targetgroup --tag-filters "Key=elbv2.k8s.aws/cluster,Values=$cluster" --output json) || return 1
   printing && return 0
   [ "$(jq '.ResourceTagMappingList | length' <<<"$out")" = 0 ]
-}
-
-# Records of the environment's zone but NS and SOA at its apex, the NS records below it (delegations of child zones,
-# which the baseline makes) and the TXT of an ACME challenge (cert-manager's, which the sweep reports): ExternalDNS's A
-# and TXT records of the cluster's names.
-dns_records() {
-  local out
-  out=$(aws_ route53 list-resource-record-sets --hosted-zone-id "$zone_id" --output json) || return 1
-  printing && return 0
-  jq -r --arg apex "$zone." '.ResourceRecordSets[]
-    | select((.Name == $apex and .Type == "SOA") | not)
-    | select((.Type == "NS" and (.Name == $apex or (.Name | endswith("." + $apex)))) | not)
-    | select((.Type == "TXT" and (.Name | startswith("_acme-challenge."))) | not)
-    | "\(.Name) \(.Type)"' <<<"$out"
-}
-dns_gone() {
-  local left
-  left=$(dns_records) || return 1
-  [ -z "$left" ]
 }
 
 pv_gone() {
@@ -280,7 +247,7 @@ way_out() {
 }
 trap 'way_out $?' EXIT
 
-step "pre-destroy.sh 2/5: workload Applications, then Gateway svp, while LBC, ExternalDNS and Envoy Gateway run"
+step "pre-destroy.sh 2/5: workload Applications, then Gateway svp, while LBC and Envoy Gateway run"
 left_apps=
 if [ -n "$argocd" ]; then
   delete_apps "$wave_limit" workload ||
@@ -299,6 +266,12 @@ wait_until "no Service of type LoadBalancer is left" "$wave_limit" lb_services_g
 ok "no Service of type LoadBalancer"
 crd=$(kc get crd targetgroupbindings.elbv2.k8s.aws --ignore-not-found -o name) || fail "read the CRDs"
 if printing || [ -n "$crd" ]; then
+  # svp-cluster keeps it until step 5, so nothing deletes it with the Gateway; LBC takes Envoy's targets out of the
+  # edge's target group (Terraform's) before it lets the binding go.
+  kc -n envoy-gateway-system delete targetgroupbindings.elbv2.k8s.aws svp-envoy --ignore-not-found --wait=true \
+    --timeout="${wave_limit}s" >/dev/null ||
+    fail "TargetGroupBinding envoy-gateway-system/svp-envoy not deleted in $wave_limit s (error above): kubectl --context $context -n envoy-gateway-system get targetgroupbindings.elbv2.k8s.aws svp-envoy -o yaml (finalizers, status); LBC's log: kubectl --context $context -n kube-system logs deploy/aws-load-balancer-controller"
+  ok "TargetGroupBinding envoy-gateway-system/svp-envoy deleted"
   wait_until "no TargetGroupBinding is left" "$wave_limit" gone targetgroupbindings.elbv2.k8s.aws -A ||
     fail "a TargetGroupBinding is left: kubectl --context $context get targetgroupbindings.elbv2.k8s.aws -A"
   ok "no TargetGroupBinding"
@@ -308,10 +281,6 @@ fi
 wait_until "no load balancer or target group of $cluster is left in ELBv2" "$wave_limit" elb_gone ||
   fail "ELBv2 still holds a load balancer or target group tagged elbv2.k8s.aws/cluster=$cluster (aws/scripts/sweep.sh $env_name lists it)"
 ok "no load balancer or target group of $cluster in ELBv2"
-if ! wait_until "no record of ExternalDNS is left in $zone" "$wave_limit" dns_gone; then
-  fail "records left in $zone: $(dns_records | oneline); ExternalDNS's log: kubectl --context $context -n external-dns logs deploy/external-dns"
-fi
-ok "no record of ExternalDNS in $zone"
 mark pre-destroy-workloads
 
 step "pre-destroy.sh 3/5: every PVC, while the EBS CSI driver runs"

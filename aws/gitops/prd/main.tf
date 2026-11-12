@@ -125,8 +125,7 @@ data "helm_template" "project_namespaces" {
   values = concat(
     [data.http.bootstrap_file["platforms/eks/svp-cluster.yaml"].response_body],
     data.http.env_overlay.status_code == 200 ? [data.http.env_overlay.response_body] : [],
-    # Holds acmeEmail of cluster_values.
-    [sensitive(data.helm_template.svp_cluster_platform_values.manifest)],
+    [data.helm_template.svp_cluster_platform_values.manifest],
   )
 }
 

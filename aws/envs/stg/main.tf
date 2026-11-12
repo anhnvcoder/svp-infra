@@ -10,6 +10,9 @@ locals {
     flow_logs = "svp-flowlogs-${var.log_archive_account_id}-${var.region}"
     waf       = "aws-waf-logs-svp-${var.log_archive_account_id}-us-east-1"
   }
+
+  # Delivery destination of the log archive account for this env's CloudFront standard logs, named the same way.
+  cloudfront_log_destination_arn = "arn:aws:logs:us-east-1:${var.log_archive_account_id}:delivery-destination:svp-cloudfront-${local.env}"
 }
 
 module "network" {
@@ -34,7 +37,6 @@ module "eks" {
   private_subnet_ids      = module.network.private_subnet_ids
   control_plane_log_types = var.control_plane_log_types
   secrets_kms_encryption  = var.eks_secrets_kms_encryption
-  hosted_zone_id          = var.hosted_zone_id
 
   guardduty_data_endpoint_id = module.network.guardduty_data_endpoint_id
 
@@ -151,7 +153,32 @@ module "media" {
 
   versioning_enabled     = var.media_versioning_enabled
   access_logging_enabled = var.media_access_logging_enabled
-  web_acl_arn            = module.waf.web_acl_arn
+
+  domain                       = var.domain
+  hosted_zone_id               = var.hosted_zone_id
+  flat_rate_free               = var.media_flat_rate_free
+  web_acl_arn                  = module.waf["media"].web_acl_arn
+  log_delivery_destination_arn = local.cloudfront_log_destination_arn
+}
+
+# The public way in to the web and the API: CloudFront, through a VPC origin, to an internal ALB in the edge subnets
+# in front of Envoy. The ALB lets Envoy in on the node security group, where the pods take their addresses.
+module "edge" {
+  source = "../../modules/edge"
+
+  name                    = local.name
+  domain                  = var.domain
+  hosted_zone_id          = var.hosted_zone_id
+  vpc_id                  = module.network.vpc_id
+  subnet_ids              = module.network.edge_subnet_ids
+  node_security_group_id  = module.eks.node_security_group_id
+  alb_deletion_protection = var.edge_alb_deletion_protection
+
+  web_acl_arns = {
+    web = module.waf["web"].web_acl_arn
+    api = module.waf["api"].web_acl_arn
+  }
+  log_delivery_destination_arn = local.cloudfront_log_destination_arn
 }
 
 # Secrets Manager entries of the env and the roles the SecretStores of the cluster read them with (External Secrets
@@ -164,8 +191,8 @@ module "external_secrets" {
   cluster_name = module.eks.cluster_name
 }
 
-# Read to check that domain is the env's zone or lies inside it: ExternalDNS and cert-manager may only write that
-# zone, so a web name outside it would get neither a record nor a certificate.
+# Read to check that domain is the env's zone or lies inside it: the edge and media modules write their records and
+# certificate validations in that zone, so a name outside it would get neither.
 data "aws_route53_zone" "env" {
   zone_id = var.hosted_zone_id
 }

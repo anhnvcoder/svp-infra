@@ -53,7 +53,7 @@ quét malware EC2 ở account thành viên
 | --- | --- | --- | --- | --- |
 | `SvpAdmin` | `AdministratorAccess` | 1 giờ | `svp-stg`, `svp-prd` | `anhnv-stg`, `anhnv-prd` |
 | `SvpReadOnly` | `ViewOnlyAccess`, `SecurityAudit`, inline đọc log CloudWatch (`FilterLogEvents`, `GetLogEvents`, `StartQuery`, `StopQuery`, `GetQueryResults`) | 4 giờ | `svp-stg`, `svp-prd`, `svp-security` | `anhnv-stg-ro`, `anhnv-prd-ro`, `anhnv-security-ro` |
-| `SvpLogReader` | `ViewOnlyAccess`, inline `s3:ListBucket`, `s3:GetObject` trên sáu bucket của `aws/log-archive`, `kms:Decrypt` chỉ qua S3 của hai region và chỉ trên key có alias `alias/svp-log-archive` | 4 giờ | `svp-log-archive` | `anhnv-log-ro` |
+| `SvpLogReader` | `ViewOnlyAccess`, inline `s3:ListBucket`, `s3:GetObject` trên bảy bucket của `aws/log-archive`, `kms:Decrypt` chỉ qua S3 của hai region và chỉ trên key có alias `alias/svp-log-archive` | 4 giờ | `svp-log-archive` | `anhnv-log-ro` |
 
 - `SvpReadOnly` đọc cấu hình, trạng thái và finding của GuardDuty, Security Hub, Config, Access Analyzer; không đọc object S3, giá trị secret,
   dữ liệu bảng, không ghi gì (kể cả đổi trạng thái finding).
