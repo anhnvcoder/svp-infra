@@ -14,6 +14,8 @@ variables {
   min_insync_replicas     = 1
   kafka_admin_secret_id   = "arn:aws:secretsmanager:ap-southeast-1:000000000000:secret:svp/stg/kafka-admin-AbCdEf"
   kafka_users_secret_id   = "arn:aws:secretsmanager:ap-southeast-1:000000000000:secret:svp/stg/kafka-users-AbCdEf"
+  broker_volume_max_size  = 20
+  alarm_topic_arn         = "arn:aws:sns:ap-southeast-1:000000000000:svp-stg-alarms"
 }
 
 # Values of the stg root: two brokers in two zones, replication 2, minimum ISR 1, no broker logs.
@@ -90,6 +92,65 @@ run "stg_values" {
     condition     = length(aws_cloudwatch_log_group.this) == 0 && aws_msk_cluster.this.logging_info[0].broker_logs[0].cloudwatch_logs[0].enabled == false
     error_message = "By default the brokers must send no log and the module must create no log group."
   }
+
+  assert {
+    condition     = aws_appautoscaling_target.storage.service_namespace == "kafka" && aws_appautoscaling_target.storage.scalable_dimension == "kafka:broker-storage:VolumeSize" && aws_appautoscaling_target.storage.min_capacity == 10 && aws_appautoscaling_target.storage.max_capacity == 20
+    error_message = "Storage autoscaling of stg must grow the broker volumes from 10 GiB up to 20 GiB."
+  }
+
+  assert {
+    condition = (
+      aws_appautoscaling_policy.storage.policy_type == "TargetTrackingScaling" &&
+      aws_appautoscaling_policy.storage.target_tracking_scaling_policy_configuration[0].predefined_metric_specification[0].predefined_metric_type == "KafkaBrokerStorageUtilization" &&
+      aws_appautoscaling_policy.storage.target_tracking_scaling_policy_configuration[0].target_value == 60 &&
+      aws_appautoscaling_policy.storage.target_tracking_scaling_policy_configuration[0].disable_scale_in == true
+    )
+    error_message = "The storage policy must track KafkaBrokerStorageUtilization at 60 %, never scaling in."
+  }
+
+  assert {
+    condition     = toset(keys(aws_cloudwatch_metric_alarm.this)) == toset(["msk-disk-high", "msk-offline-partitions", "msk-under-min-isr", "msk-under-replicated", "msk-cpu-high", "msk-heap-high"]) && alltrue([for k, a in aws_cloudwatch_metric_alarm.this : a.alarm_name == "svp-stg-${k}"])
+    error_message = "stg must have every MSK alarm of the table, named svp-stg-<alarm>."
+  }
+
+  assert {
+    condition     = alltrue([for a in aws_cloudwatch_metric_alarm.this : a.alarm_actions == toset([var.alarm_topic_arn]) && a.ok_actions == toset([var.alarm_topic_arn])])
+    error_message = "Every alarm must notify the alarm topic when it fires and when it clears."
+  }
+
+  assert {
+    condition = alltrue([
+      for k, a in aws_cloudwatch_metric_alarm.this : a.tags["Severity"] == (contains(["msk-disk-high", "msk-offline-partitions", "msk-under-min-isr"], k) ? "page" : "ticket") && (
+        a.tags["Severity"] == "page" ? strcontains(a.alarm_description, "https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks/${k}.md") : !strcontains(a.alarm_description, "Runbook")
+      )
+    ])
+    error_message = "Disk, offline partitions and under min ISR must page with the URL of their runbook; the other alarms are tickets."
+  }
+
+  # Per-broker alarms read both brokers by ID and take the highest; offline partitions is a cluster metric.
+  assert {
+    condition = (
+      toset([for q in aws_cloudwatch_metric_alarm.this["msk-disk-high"].metric_query : q.metric[0].dimensions["Broker ID"] if q.return_data != true]) == toset(["1", "2"]) &&
+      alltrue([for q in aws_cloudwatch_metric_alarm.this["msk-disk-high"].metric_query : q.metric[0].dimensions["Cluster Name"] == "svp-stg" && q.metric[0].namespace == "AWS/Kafka" && q.metric[0].period == 60 && q.metric[0].stat == "Maximum" if q.return_data != true]) &&
+      one([for q in aws_cloudwatch_metric_alarm.this["msk-disk-high"].metric_query : q.expression if q.return_data == true]) == "MAX([m1_0, m2_0])"
+    )
+    error_message = "msk-disk-high must take the highest disk use of the two brokers of stg."
+  }
+
+  assert {
+    condition     = one([for q in aws_cloudwatch_metric_alarm.this["msk-cpu-high"].metric_query : q.expression if q.return_data == true]) == "MAX([m1_0 + m1_1, m2_0 + m2_1])" && length(aws_cloudwatch_metric_alarm.this["msk-cpu-high"].metric_query) == 5
+    error_message = "msk-cpu-high must add user and system CPU of each broker, then take the highest."
+  }
+
+  assert {
+    condition     = one([for q in aws_cloudwatch_metric_alarm.this["msk-offline-partitions"].metric_query : q.metric[0].dimensions if q.return_data != true]) == tomap({ "Cluster Name" = "svp-stg" })
+    error_message = "msk-offline-partitions must read the cluster-level metric."
+  }
+
+  assert {
+    condition     = alltrue([for k, a in aws_cloudwatch_metric_alarm.this : a.evaluation_periods == a.datapoints_to_alarm]) && aws_cloudwatch_metric_alarm.this["msk-disk-high"].threshold == 85 && aws_cloudwatch_metric_alarm.this["msk-disk-high"].comparison_operator == "GreaterThanOrEqualToThreshold" && aws_cloudwatch_metric_alarm.this["msk-under-replicated"].evaluation_periods == 15 && aws_cloudwatch_metric_alarm.this["msk-offline-partitions"].evaluation_periods == 1
+    error_message = "The levels and periods of the alarms must be those of the table."
+  }
 }
 
 # Values of the prd root: three brokers in three zones, replication 3, minimum ISR 2, broker logs kept 30 days.
@@ -108,6 +169,8 @@ run "prd_values" {
     kafka_admin_secret_id      = "arn:aws:secretsmanager:ap-southeast-1:000000000000:secret:svp/prd/kafka-admin-AbCdEf"
     kafka_users_secret_id      = "arn:aws:secretsmanager:ap-southeast-1:000000000000:secret:svp/prd/kafka-users-AbCdEf"
     password_version           = 3
+    broker_volume_max_size     = 100
+    alarm_topic_arn            = "arn:aws:sns:ap-southeast-1:000000000000:svp-prd-alarms"
   }
 
   assert {
@@ -158,6 +221,21 @@ run "prd_values" {
   assert {
     condition     = aws_cloudwatch_log_group.this[0].name == "/aws/msk/svp-prd" && aws_cloudwatch_log_group.this[0].retention_in_days == 30 && aws_msk_cluster.this.logging_info[0].broker_logs[0].cloudwatch_logs[0].enabled == true
     error_message = "prd must send the broker logs to /aws/msk/svp-prd, kept 30 days."
+  }
+
+  assert {
+    condition     = aws_appautoscaling_target.storage.min_capacity == 10 && aws_appautoscaling_target.storage.max_capacity == 100 && aws_appautoscaling_policy.storage.target_tracking_scaling_policy_configuration[0].target_value == 60 && aws_appautoscaling_policy.storage.target_tracking_scaling_policy_configuration[0].disable_scale_in == true
+    error_message = "Storage autoscaling of prd must grow the broker volumes from 10 GiB up to 100 GiB, never scaling in."
+  }
+
+  assert {
+    condition     = length(aws_cloudwatch_metric_alarm.this) == 6 && alltrue([for k, a in aws_cloudwatch_metric_alarm.this : a.alarm_name == "svp-prd-${k}" && a.alarm_actions == toset([var.alarm_topic_arn]) && a.ok_actions == toset([var.alarm_topic_arn])])
+    error_message = "prd must have every MSK alarm, named svp-prd-<alarm>, notifying the alarm topic of prd."
+  }
+
+  assert {
+    condition     = toset([for q in aws_cloudwatch_metric_alarm.this["msk-under-min-isr"].metric_query : q.metric[0].dimensions["Broker ID"] if q.return_data != true]) == toset(["1", "2", "3"]) && one([for q in aws_cloudwatch_metric_alarm.this["msk-cpu-high"].metric_query : q.expression if q.return_data == true]) == "MAX([m1_0 + m1_1, m2_0 + m2_1, m3_0 + m3_1])"
+    error_message = "The per-broker alarms of prd must read the three brokers."
   }
 }
 
@@ -283,4 +361,47 @@ run "password_version_zero" {
   }
 
   expect_failures = [var.password_version]
+}
+
+run "broker_volume_max_size_below_volume_size" {
+  command = plan
+
+  variables {
+    broker_volume_max_size = 5
+  }
+
+  expect_failures = [var.broker_volume_max_size]
+}
+
+run "broker_storage_target_utilization_full" {
+  command = plan
+
+  variables {
+    broker_storage_target_utilization = 100
+  }
+
+  expect_failures = [var.broker_storage_target_utilization]
+}
+
+run "alarm_topic_arn_not_sns" {
+  command = plan
+
+  variables {
+    alarm_topic_arn = "arn:aws:sqs:ap-southeast-1:000000000000:svp-stg-alarms"
+  }
+
+  expect_failures = [var.alarm_topic_arn]
+}
+
+# Six brokers would make the CPU alarm read 12 metrics, over the 10 an alarm allows.
+run "alarm_over_ten_metrics" {
+  command = plan
+
+  variables {
+    subnet_ids         = ["subnet-0aaaaaaaaaaaaaaa1", "subnet-0bbbbbbbbbbbbbbb2", "subnet-0ccccccccccccccc3"]
+    broker_count       = 6
+    replication_factor = 3
+  }
+
+  expect_failures = [aws_cloudwatch_metric_alarm.this["msk-cpu-high"]]
 }

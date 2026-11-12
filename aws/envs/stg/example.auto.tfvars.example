@@ -1,5 +1,6 @@
 # Copy to stg.auto.tfvars (ignored by git) and fill in. Never commit the real values: the repository is public.
-# The account id is not here: every command sets TF_VAR_account_id from SVP_AWS_STG_ACCOUNT_ID (README.md).
+# The account id is not here: every command sets TF_VAR_account_id from SVP_AWS_STG_ACCOUNT_ID (README.md). No address
+# of the learner's machine either: the public endpoint of the API is off in stg (stg.tfvars).
 
 # Output zone_id of aws/accounts/stg, the zone of the stg account:
 #   AWS_PROFILE=anhnv-stg terraform -chdir=../../accounts/stg output -raw zone_id
@@ -12,5 +13,5 @@ domain = "stg.aws.svp.example"
 # Let's Encrypt account of cert-manager.
 acme_email = "you@svp.example"
 
-# Address of the machine that runs kubectl, as a /32 (curl -s https://checkip.amazonaws.com).
-eks_public_access_cidrs = ["192.0.2.10/32"]
+# Inbox of the CloudWatch alarms of the env: open the confirmation link SNS sends after the apply.
+alarm_email = "you@svp.example"

@@ -35,7 +35,7 @@ def main() -> int:
             print(f"  ✘ {env.name}: {k} drawn {g}, expected {w}")
         bad += len(diff)
         print(f"  {path.name} [{env.name}]: {env.az_count} AZs, {len(env.nat_rows)} NAT, {expected(env)['rds']} RDS, "
-              f"{env.az_count} MSK, {env.cache_nodes} ElastiCache, {env.capacity} → {len(diff)} mismatches")
+              f"{env.az_count} MSK, {env.cache_nodes} ElastiCache, NodePool {env.capacity} → {len(diff)} mismatches")
     print(f"\nTotal: {bad} mismatches")
     return 1 if bad else 0
 

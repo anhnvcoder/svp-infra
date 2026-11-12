@@ -140,7 +140,45 @@ case "$1 $2" in
     else
       echo '{"Volumes":[]}'
     fi ;;
-  "ec2 describe-instances") echo '{"Reservations":[]}' ;;
+  # Instances of Karpenter (filter on tag karpenter.sh/nodepool): those of $FAKE_STATE/karpenter-instances ("id state
+  # type nodepool"), which deleting the NodePools ends, and one left for the sweep (FAKE_LEFTOVER=karpenter).
+  "ec2 describe-instances")
+    {
+      if [[ "$*" == *karpenter.sh/nodepool* ]]; then
+        [ "$left" != karpenter ] || echo "i-0karp running m7g.large default"
+        [ ! -s "$FAKE_STATE/karpenter-instances" ] || cat "$FAKE_STATE/karpenter-instances"
+      fi
+    } | while read -r id st ty pool; do
+      jq -n --arg i "$id" --arg s "$st" --arg t "$ty" --arg p "$pool" \
+        '{InstanceId: $i, State: {Name: $s}, InstanceType: $t, Tags: [{Key: "karpenter.sh/nodepool", Value: $p}]}'
+    done | jq -s '{Reservations: [{Instances: .}]}' ;;
+  # FAKE_LEFTOVER=karpenter: what Karpenter makes outside Terraform's state, left after a destroy.
+  "ec2 describe-launch-templates")
+    if [ "$left" = karpenter ] && [[ "$*" == *karpenter.k8s.aws/cluster* ]]; then
+      echo '{"LaunchTemplates":[{"LaunchTemplateId":"lt-0karp","LaunchTemplateName":"karpenter.k8s.aws/1234567890"}]}'
+    else
+      echo '{"LaunchTemplates":[]}'
+    fi ;;
+  "iam list-instance-profiles")
+    {
+      echo '{"InstanceProfileName":"other-profile","Path":"/","Roles":[{"RoleName":"other-role"}]}'
+      [ "$left" != karpenter ] ||
+        echo '{"InstanceProfileName":"svp-stg_1234567890","Path":"/karpenter/ap-southeast-1/svp-stg/uid/","Roles":[{"RoleName":"svp-stg-karpenter-node"}]}'
+    } | jq -s '{InstanceProfiles: .}' ;;
+  "sqs list-queues")
+    if [ "$left" = karpenter ]; then echo "{\"QueueUrls\":[\"https://sqs.ap-southeast-1.amazonaws.com/$account/svp-stg-karpenter\"]}"; else echo '{}'; fi ;;
+  "events list-rules")
+    if [ "$left" = karpenter ]; then echo '{"Rules":[{"Name":"KarpenterSpotInterrupt-2026"}]}'; else echo '{"Rules":[]}'; fi ;;
+  "events list-targets-by-rule") echo '{"Targets":[{"Id":"KarpenterInterruptionQueueTarget"}]}' ;;
+  # FAKE_LEFTOVER=alarm: an alarm of the lab and the target tracking alarm of MSK's storage, beside another one's.
+  "cloudwatch describe-alarms")
+    {
+      echo '{"AlarmName":"other-alarm"}'
+      if [ "$left" = alarm ]; then
+        echo '{"AlarmName":"svp-stg-rds-storage-low"}'
+        echo "{\"AlarmName\":\"TargetTracking-arn:aws:kafka:ap-southeast-1:$account:cluster/svp-stg/c-fake-AlarmHigh-0a1b\"}"
+      fi
+    } | jq -s '{MetricAlarms: .}' ;;
   "ec2 describe-snapshots") echo '{"Snapshots":[]}' ;;
   "ec2 describe-vpcs") echo '{"Vpcs":[]}' ;;
   "ec2 describe-nat-gateways") echo '{"NatGateways":[]}' ;;
@@ -314,7 +352,8 @@ EOF
 # kubectl: a cluster in files of $FAKE_STATE (apps: "wave name", appset, root, svp-apps, lb, pvcs: "namespace name",
 # nodes); with FAKE_NO_ARGOCD, a cluster where root gitops never ran (no CRD of Argo CD, Gateway API or LBC); with
 # FAKE_GATEWAY_CRD_DOWN, the read of the Gateway API CRD (step 2 of pre-destroy.sh) fails; FAKE_ROOT_NEVER, svp-root
-# never gets Synced and Healthy.
+# never gets Synced and Healthy; FAKE_NO_KARPENTER, no CRD of Karpenter; FAKE_KARPENTER_STUCK, deleting the NodePools
+# ends no NodeClaim (nodeclaims: "name node") and no instance.
 cat >"$bin/kubectl" <<'EOF'
 #!/usr/bin/env bash
 echo "kubectl $*" >>"$FAKE_LOG"
@@ -354,6 +393,14 @@ case "$*" in
   "-n svp-edge delete gateway svp "*) rm -f "$s/lb" ;;
   "get services -A -o json")
     if [ -e "$s/lb" ]; then echo '{"items":[{"spec":{"type":"LoadBalancer"}}]}'; else echo '{"items":[{"spec":{"type":"ClusterIP"}}]}'; fi ;;
+  "get crd nodepools.karpenter.sh --ignore-not-found -o name" | "get crd ec2nodeclasses.karpenter.k8s.aws --ignore-not-found -o name")
+    [ -n "${FAKE_NO_ARGOCD:-}${FAKE_NO_KARPENTER:-}" ] || echo "customresourcedefinition.apiextensions.k8s.io/$3" ;;
+  "delete nodepools.karpenter.sh --all --wait=false")
+    [ -n "${FAKE_KARPENTER_STUCK:-}" ] || { : >"$s/nodeclaims"; : >"$s/karpenter-instances"; } ;;
+  "delete ec2nodeclasses.karpenter.k8s.aws --all --wait=false") ;;
+  "get nodeclaims.karpenter.sh -o json")
+    while read -r n node; do [ -z "$n" ] || jq -n --arg n "$n" --arg node "$node" '{metadata: {name: $n}, status: {nodeName: $node}}'; done \
+      <"$s/nodeclaims" | items ;;
   "get crd targetgroupbindings.elbv2.k8s.aws --ignore-not-found -o name")
     [ -n "${FAKE_NO_ARGOCD:-}" ] || echo customresourcedefinition.apiextensions.k8s.io/targetgroupbindings.elbv2.k8s.aws ;;
   "get targetgroupbindings.elbv2.k8s.aws -A -o json") if [ -e "$s/lb" ]; then echo '{"items":[{}]}'; else echo '{"items":[]}'; fi ;;
@@ -502,6 +549,23 @@ for e in stg prd; do
   expect "--print $e: root gitops destroyed before root env" \
     before "$out" "aws/gitops/$e apply -input=false $e.destroy.tfplan" "aws/envs/$e plan -destroy"
   expect "--print $e: no terraform destroy, only the apply of saved plans" test -z "$(grep -E '^\+ .*terraform -chdir=[^ ]* destroy' "$out")"
+  expect "--print $e: NodePools deleted after the PVCs, EC2NodeClasses after them, both before the platform Applications" \
+    sh -c 'b() { a=$(grep -nE -- "$2" "$1" | head -n 1 | cut -d: -f1); c=$(grep -nE -- "$3" "$1" | head -n 1 | cut -d: -f1); [ -n "$a" ] && [ -n "$c" ] && [ "$a" -lt "$c" ]; }
+      b "$1" "delete pvc --all" "delete nodepools.karpenter.sh --all" &&
+      b "$1" "delete nodepools.karpenter.sh --all" "delete ec2nodeclasses.karpenter.k8s.aws --all" &&
+      b "$1" "delete ec2nodeclasses.karpenter.k8s.aws --all" "delete application .<each platform"' _ "$out"
+  expect "--print $e: waits up to 900 s for the NodeClaims and the instances of Karpenter, before the platform Applications" \
+    sh -c 'b() { a=$(grep -nE -- "$2" "$1" | head -n 1 | cut -d: -f1); c=$(grep -nE -- "$3" "$1" | head -n 1 | cut -d: -f1); [ -n "$a" ] && [ -n "$c" ] && [ "$a" -lt "$c" ]; }
+      grep -q "up to 900 s, until no NodeClaim is left" "$1" &&
+      b "$1" "up to 900 s, until no EC2 instance Karpenter made for svp-$2 is left" "delete application .<each platform" &&
+      grep -q "ec2 describe-instances --filters Name=tag:kubernetes.io/cluster/svp-$2,Values=owned Name=tag-key,Values=karpenter.sh/nodepool " "$1"' _ "$out" "$e"
+done
+# The tunnel's local port of each environment, as the scripts take it (env_table of lib.sh), is the one of its roots.
+for e in stg prd; do
+  port=$(awk -v e="$e" '$1 == e { print $6 }' <<<"$(sed -n "/^env_table='/,/'$/p" "$src/lib.sh" | sed "s/^env_table='//; s/'$//")")
+  expect "$e: tunnel port $port of lib.sh is api_tunnel_port of aws/envs/$e and api_server_url of aws/gitops/$e" \
+    sh -c 'grep -qE "^api_tunnel_port +=  *$2$" "$1/aws/envs/$3/$3.tfvars" && grep -qE "^api_server_url += \"https://127\.0\.0\.1:$2\"$" "$1/aws/gitops/$3/$3.tfvars"' \
+    _ "$(cd "$src/../.." && pwd)" "$port" "$e"
 done
 expect "--print prd: the tunnel checked before the first kubectl to the API" before "$work/print-prd.out" '^\+ nc -z -w 3 127.0.0.1 6443' 'kubectl --context svp-prd'
 expect "--print prd: the tunnel checked before the plan of root gitops" before "$work/print-prd.out" '^\+ nc -z' 'aws/gitops/prd plan '
@@ -513,8 +577,12 @@ expect "--print prd: teardown plan with both var files, targeting the DB instanc
     grep -q "aws/envs/prd apply -input=false prd.teardown.tfplan$" "$1" &&
     grep -q "aws/envs/prd plan -destroy -input=false -var-file=prd.tfvars -var-file=teardown.tfvars -out=prd.destroy.tfplan$" "$1"' _ "$work/print-prd.out"
 expect "--print prd: no k6 level, the smoke alone" sh -c '! grep -q "eks-rl-reset" "$1" && grep -q "eks-smoke CONTEXT=svp-prd" "$1"' _ "$work/print-prd.out"
-expect "--print stg: no tunnel, no teardown file" \
-  sh -c '! grep -E "^\+ " "$1" | grep -qE "nc -z|set-cluster|teardown" && grep -q "aws/envs/stg plan -destroy -input=false -var-file=stg.tfvars -out=stg.destroy.tfplan$" "$1"' _ "$work/print-stg.out"
+expect "--print stg: the tunnel on 6444 checked before the first kubectl to the API, the kubeconfig points at it" \
+  sh -c 'b() { a=$(grep -nE -- "$2" "$1" | head -n 1 | cut -d: -f1); c=$(grep -nE -- "$3" "$1" | head -n 1 | cut -d: -f1); [ -n "$a" ] && [ -n "$c" ] && [ "$a" -lt "$c" ]; }
+    b "$1" "^\+ nc -z -w 3 127.0.0.1 6444" "kubectl --context svp-stg" && b "$1" "^\+ nc -z" "aws/gitops/stg plan " &&
+    grep -q "^+ kubectl config set-cluster .* --server=https://127.0.0.1:6444 .--tls-server-name=" "$1" && ! grep -q "127.0.0.1:6443" "$1"' _ "$work/print-stg.out"
+expect "--print stg: no teardown file" \
+  sh -c '! grep -E "^\+ " "$1" | grep -q "teardown" && grep -q "aws/envs/stg plan -destroy -input=false -var-file=stg.tfvars -out=stg.destroy.tfplan$" "$1"' _ "$work/print-stg.out"
 expect "--print stg: an eks-rl-reset before each of the four k6 levels" test "$(grep -c 'make .* eks-rl-reset CONTEXT=svp-stg' "$work/print-stg.out")" = 4
 
 # --- check-account.sh -------------------------------------------------------------------------------------------
@@ -772,7 +840,8 @@ expect "bootstrap.sh prd secrets points the context at the tunnel, TLS server na
   grep -q '^kubectl config set-cluster arn:aws:eks:ap-southeast-1:222222222222:cluster/svp-prd --server=https://127.0.0.1:6443 --tls-server-name=0123ABCD.gr7.ap-southeast-1.eks.amazonaws.com$' "$log"
 new_session
 bash "$here/bootstrap.sh" stg secrets >/dev/null 2>&1 || true
-expect "bootstrap.sh stg secrets: no set-cluster for a public endpoint" test -z "$(grep 'set-cluster' "$log")"
+expect "bootstrap.sh stg secrets points the context at its own tunnel port" \
+  grep -q '^kubectl config set-cluster arn:aws:eks:ap-southeast-1:111111111111:cluster/svp-stg --server=https://127.0.0.1:6444 --tls-server-name=0123ABCD.gr7.ap-southeast-1.eks.amazonaws.com$' "$log"
 clear_log
 expect "bootstrap.sh stops on another account before any other command" \
   sh -c '! FAKE_ACCOUNT=222222222222 bash "$1/bootstrap.sh" stg secrets >/dev/null 2>&1 && [ -s "$2" ] && ! grep -qv "^aws sts get-caller-identity " "$2"' _ "$here" "$log"
@@ -803,11 +872,13 @@ expect "bootstrap.sh wait: no svp-root-healthy when it fails" no_mark svp-root-h
 
 # --- pre-destroy.sh ----------------------------------------------------------------------------------------------
 new_session
-printf '%s\n' "0 cert-manager" "0 envoy-gateway" "0 external-secrets" "1 svp-cluster" "1 aws-load-balancer-controller" \
+printf '%s\n' "0 cert-manager" "0 envoy-gateway" "0 external-secrets" "0 karpenter" "1 svp-cluster" "1 aws-load-balancer-controller" \
   "2 keda" "2 external-dns" "2 argo-rollouts" "2 kyverno" "2 kube-prometheus-stack" "3 svp-policy" "3 loki" \
   "4 svp-data" "5 svp-observability" "6 otel-collector" "7 gateway" "7 web" >"$state/apps"
 touch "$state/appset" "$state/root" "$state/svp-apps" "$state/lb"
 printf '%s\n' "svp-data data-0" "svp-obs prometheus-db-0" >"$state/pvcs"
+echo "default-x7k2p ip-10-0-9-9" >"$state/nodeclaims"
+echo "i-0karp running m7g.large default" >"$state/karpenter-instances"
 bash "$here/pre-destroy.sh" stg >"$work/pre.out" 2>&1 || bad "pre-destroy.sh stg exits 0 ($(tail -n 3 "$work/pre.out"))"
 expect "pre-destroy.sh: sync and finalizers of svp-root and svp-apps cleared before the ApplicationSet is deleted" \
   sh -c 'b() { a=$(grep -nE -- "$2" "$1" | head -n 1 | cut -d: -f1); c=$(grep -nE -- "$3" "$1" | head -n 1 | cut -d: -f1); [ -n "$a" ] && [ -n "$c" ] && [ "$a" -lt "$c" ]; }
@@ -825,6 +896,17 @@ expect "pre-destroy.sh: PVCs before every platform Application" before "$log" 'd
 expect "pre-destroy.sh: the PVCs of both namespaces" test "$(grep -c 'delete pvc --all' "$log")" = 2
 expect "pre-destroy.sh leaves no Application, ApplicationSet or root" sh -c '[ -z "$(grep . "$1/apps")" ] && [ ! -e "$1/appset" ] && [ ! -e "$1/root" ] && [ ! -e "$1/svp-apps" ]' _ "$state"
 expect "pre-destroy.sh: the records of the zone of stg" grep -q 'route53 list-resource-record-sets --hosted-zone-id Z0TFVARS ' "$log"
+expect "pre-destroy.sh: NodePools after the PVCs, then EC2NodeClasses, then the instances of Karpenter, before Application karpenter" \
+  sh -c 'b() { a=$(grep -nE -- "$2" "$1" | head -n 1 | cut -d: -f1); c=$(grep -nE -- "$3" "$1" | head -n 1 | cut -d: -f1); [ -n "$a" ] && [ -n "$c" ] && [ "$a" -lt "$c" ]; }
+    b "$1" "delete pvc --all" "delete nodepools.karpenter.sh --all" && b "$1" "delete nodepools.karpenter.sh --all" "delete ec2nodeclasses.karpenter.k8s.aws --all" &&
+    b "$1" "delete ec2nodeclasses.karpenter.k8s.aws --all" "get nodeclaims.karpenter.sh" &&
+    b "$1" "get nodeclaims.karpenter.sh" "ec2 describe-instances .*karpenter.sh/nodepool" &&
+    b "$1" "ec2 describe-instances .*karpenter.sh/nodepool" "delete application karpenter "' _ "$log"
+expect "pre-destroy.sh: Application karpenter stays through step 2" \
+  sh -c '! sed -n "1,/delete nodepools.karpenter.sh/p" "$1" | grep -q "delete application karpenter "' _ "$log"
+expect "pre-destroy.sh: no NodeClaim and no instance of Karpenter, marked pre-destroy-nodes" \
+  sh -c 'grep -q "^ok    NodePools and EC2NodeClasses deleted, no NodeClaim$" "$1" && grep -q "^ok    no EC2 instance of Karpenter for svp-stg$" "$1" &&
+    awk -F "\t" "\$3 == \"pre-destroy-nodes\" { f = 1 } END { exit !f }" "$2"' _ "$work/pre.out" "$SVP_SESSION_DIR/timeline.tsv"
 expect "pre-destroy.sh marks pre-destroy-start and pre-destroy-done" sh -c 'has() { awk -F "\t" -v e="$2" "\$3 == e { f = 1 } END { exit !f }" "$1"; }; has "$1" pre-destroy-start && has "$1" pre-destroy-done' _ "$SVP_SESSION_DIR/timeline.tsv"
 expect "pre-destroy.sh: no way-out note when every step passes; next is root gitops" \
   sh -c '! grep -q -- "--leftovers" "$1" && grep -q "ready for: aws/scripts/tf.sh stg gitops plan --destroy" "$1"' _ "$work/pre.out"
@@ -843,6 +925,9 @@ expect "pre-destroy.sh without Argo CD calls nothing of Argo CD or the Gateway" 
 expect "pre-destroy.sh without Argo CD still waits on load balancers, records and volumes" \
   sh -c 'grep -q "get services -A" "$1" && grep -q "route53 list-resource-record-sets" "$1" && grep -q "ec2 describe-volumes" "$1"' _ "$log"
 expect "pre-destroy.sh without Argo CD marks pre-destroy-done" has_mark pre-destroy-done
+expect "pre-destroy.sh without Karpenter skips the NodePools, says so, and still checks its instances" \
+  sh -c 'grep -q "^note  no Karpenter on svp-prd" "$1" && ! grep -qE "delete (nodepools|ec2nodeclasses)|nodeclaims" "$2" &&
+    grep -q "ec2 describe-instances --filters Name=tag:kubernetes.io/cluster/svp-prd,Values=owned Name=tag-key,Values=karpenter.sh/nodepool " "$2"' _ "$work/pre.out" "$log"
 expect "pre-destroy.sh prd: the NS records delegating stg.aws.svp.example in its zone are no record to wait for" \
   grep -q '^ok    no record of ExternalDNS in aws.svp.example$' "$work/pre.out"
 new_session
@@ -872,6 +957,24 @@ FAKE_NO_ARGOCD=1 FAKE_GATEWAY_CRD_DOWN=1 bash "$here/pre-destroy.sh" stg >"$work
   bad "pre-destroy.sh fails when step 2 cannot read the cluster"
 expect "pre-destroy.sh red at step 2: the FAIL, then a last line with run again and the way out --leftovers" \
   sh -c 'grep -q "^FAIL  read the CRDs" "$1" && tail -n 1 "$1" | grep -q "^note  fix what the FAIL above names, then aws/scripts/pre-destroy.sh stg again; .*aws/scripts/tf.sh stg gitops plan --destroy --leftovers"' _ "$work/pre.out"
+new_session
+: >"$state/apps"
+echo "default-x7k2p ip-10-0-9-9" >"$state/nodeclaims"
+echo "i-0karp running m7g.large default" >"$state/karpenter-instances"
+FAKE_KARPENTER_STUCK=1 SVP_KARPENTER_LIMIT=0 bash "$here/pre-destroy.sh" stg >"$work/pre.out" 2>&1 &&
+  bad "pre-destroy.sh fails when a NodeClaim outlives the limit"
+expect "pre-destroy.sh red at step 4: the NodeClaim left, then the way out, and no pre-destroy-done" \
+  sh -c 'grep -q "^FAIL  NodeClaims left after 0 s: default-x7k2p ip-10-0-9-9;" "$1" &&
+    tail -n 1 "$1" | grep -q "^note  fix what the FAIL above names, then aws/scripts/pre-destroy.sh stg again; .*step 2, 3 or 4 is still red" &&
+    ! grep -q "delete application svp-cluster " "$2"' _ "$work/pre.out" "$log"
+expect "pre-destroy.sh red at step 4 marks no pre-destroy-done" no_mark pre-destroy-done
+new_session
+FAKE_NO_ARGOCD=1 SVP_KARPENTER_LIMIT=0 bash "$here/pre-destroy.sh" stg >"$work/pre.out" 2>&1 &&
+  bad "pre-destroy.sh fails on an instance of Karpenter left on a cluster without its CRDs"
+expect "pre-destroy.sh without Karpenter's CRDs still fails on its instance, named with the sweep" \
+  sh -c 'grep -q "^FAIL  instances of Karpenter left: i-0karp running m7g.large default (aws/scripts/sweep.sh stg lists them" "$1"' _ "$work/pre.out"
+: >"$state/nodeclaims"
+: >"$state/karpenter-instances"
 
 # --- measure.sh ---------------------------------------------------------------------------------------------------
 start_measure() {
@@ -1037,6 +1140,20 @@ expect "sweep.sh --print stg shows list-subscriptions with --region us-east-1" \
   sh -c 'bash "$1/sweep.sh" --print stg >"$2" 2>&1 && grep -q "^+ AWS_PROFILE=anhnv-stg aws pricing-plan-manager list-subscriptions --output json --region us-east-1$" "$2"' _ "$here" "$work/sweep.out"
 expect "sweep.sh --print stg prints list-subscriptions before list-distributions" \
   before "$work/sweep.out" '^\+ AWS_PROFILE=anhnv-stg aws pricing-plan-manager list-subscriptions ' '^\+ AWS_PROFILE=anhnv-stg aws cloudfront list-distributions '
+expect "sweep.sh stg fails on what Karpenter made outside the state, each with the commands that delete it" \
+  sh -c '! FAKE_LEFTOVER=karpenter bash "$1/sweep.sh" stg >"$2" 2>&1 &&
+    grep -q "^        i-0karp running m7g.large$" "$2" &&
+    grep -q "delete: AWS_PROFILE=anhnv-stg aws ec2 delete-launch-template --launch-template-id lt-0karp --region ap-southeast-1$" "$2" &&
+    grep -q "delete: AWS_PROFILE=anhnv-stg aws iam remove-role-from-instance-profile --instance-profile-name svp-stg_1234567890 --role-name svp-stg-karpenter-node --region ap-southeast-1 && AWS_PROFILE=anhnv-stg aws iam delete-instance-profile --instance-profile-name svp-stg_1234567890 --region ap-southeast-1$" "$2" &&
+    ! grep -q "other-profile" "$2" &&
+    grep -q "delete: AWS_PROFILE=anhnv-stg aws sqs delete-queue --queue-url https://sqs.ap-southeast-1.amazonaws.com/111111111111/svp-stg-karpenter --region ap-southeast-1$" "$2" &&
+    grep -q "delete: AWS_PROFILE=anhnv-stg aws events remove-targets --rule KarpenterSpotInterrupt-2026 --ids KarpenterInterruptionQueueTarget --region ap-southeast-1 && AWS_PROFILE=anhnv-stg aws events delete-rule --name KarpenterSpotInterrupt-2026 --region ap-southeast-1$" "$2" &&
+    grep -q "^FAIL  EC2 launch templates: 1 left$" "$2" && grep -q "^FAIL  IAM instance profiles of Karpenter: 1 left$" "$2" &&
+    grep -q "^FAIL  SQS queues: 1 left$" "$2" && grep -q "^FAIL  EventBridge rules of Karpenter: 1 left$" "$2"' _ "$here" "$work/sweep.out"
+expect "sweep.sh stg fails on an alarm of the lab and the target tracking alarm of MSK, leaves another one's" \
+  sh -c '! FAKE_LEFTOVER=alarm bash "$1/sweep.sh" stg >"$2" 2>&1 && grep -q "^FAIL  CloudWatch alarms: 2 left$" "$2" &&
+    grep -q "delete: AWS_PROFILE=anhnv-stg aws cloudwatch delete-alarms --alarm-names svp-stg-rds-storage-low --region ap-southeast-1$" "$2" &&
+    grep -q "^        TargetTracking-arn:aws:kafka:ap-southeast-1:111111111111:cluster/svp-stg/c-fake-AlarmHigh-0a1b$" "$2" && ! grep -q "other-alarm" "$2"' _ "$here" "$work/sweep.out"
 expect "sweep.sh stg fails on a record of its zone" \
   sh -c '! FAKE_LEFTOVER=record bash "$1/sweep.sh" stg >"$2" 2>&1 && grep -q "api.stg.aws.svp.example. A" "$2"' _ "$here" "$work/sweep.out"
 expect "sweep.sh stops on another account before any other command" \

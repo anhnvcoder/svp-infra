@@ -32,6 +32,9 @@ quyết định chung của lab nằm ở `docs/` của repo code (bản clone `
   mgmt|stg|prd`), hai bên cùng đọc account. Script buổi lấy profile và biến từ bảng env của `aws/scripts/lib.sh`. Buổi tạo tài nguyên kết
   thúc bằng lệnh destroy và lệnh quét sót (`sweep.sh <env>` rồi `sweep.sh mgmt`); AI nhắc tới khi người học xác nhận đã chạy cả hai.
 - CI (`check.yml`) không có credential AWS, secret, OIDC hay environment nào; thêm thì phải có ADR trước.
+- **API EKS chỉ qua tunnel:** endpoint công khai của API tắt ở cả hai env; lệnh viết sẵn tới cluster (`kubectl`, script buổi, root
+  `aws/gitops/<env>`) đi qua tunnel SSM tới bastion (output `api_tunnel_command` của `aws/envs/<env>`), mỗi env một cổng local (cột `tunnel`
+  của `env_table`: stg `6444`, prd `6443`). Không bật lại endpoint công khai, không cho hai env chung một cổng; AI không mở tunnel.
 
 ## Quy ước
 
@@ -42,6 +45,9 @@ Quy ước chung (ngôn ngữ, tài liệu timeless, ADR, comment, Git, repo pub
   account ID, IP, email, tên miền thật), override (`*_override.tf`), `.terraform/`, `.session/`. Ví dụ và test dùng `000000000000`,
   `svp.example`, `<domain>`. Tên bucket theo `<tên>-<account>-<region>`, tính từ `var.account_id` lúc chạy, nên account thật vẫn không
   nằm trong file commit nào.
+- **Alarm dịch vụ managed:** CloudWatch alarm nằm trong module của dịch vụ (biến `alarm_topic_arn`), tên `svp-<env>-<alarm>`, tag
+  `Severity`; alarm `page` có runbook cùng tên ở `docs/runbooks/` của repo code. Mọi alarm gửi topic của module `alarms`; email nhận alarm chỉ
+  qua `alarm_email` của `<env>.auto.tfvars` (không commit).
 - **Root và module:** thư mục dưới `modules/` là module (không commit lock file), thư mục `*.tf` khác là root (commit
   `.terraform.lock.hcl` ba nền tảng bằng `make lock DIRS=<root>`). Provider ghim trong lock của root; module registry ghim version chính
   xác. Root đặt `default_tags` `Project=svp`, `ManagedBy=terraform`, `Stack=<tên>` và `allowed_account_ids = [var.account_id]`.
@@ -54,8 +60,8 @@ Quy ước chung (ngôn ngữ, tài liệu timeless, ADR, comment, Git, repo pub
   mỗi root với giá trị của env (`<root>/<env>.tfvars`), và ngoại lệ chỉ-stg không bao giờ che finding của prd: nó nằm ở lời gọi module trong
   root stg, hay trong module với điều kiện trên thuộc tính khác nhau giữa hai env, đặt đúng giá trị của stg
   (`#trivy:ignore:AWS-0039[create_kms_key=false]` của `aws/modules/eks/cluster.tf`). trivy khớp điều kiện trên thuộc tính chuỗi ở mọi nơi quét,
-  còn trên bool hay số chỉ khi quét chính module, nên root cần ngoại lệ như vậy lặp lại nó ở lời gọi module (`aws/envs/stg/main.tf` lặp
-  `#trivy:ignore:AWS-0039` trên `module "eks"`). `.trivyignore.yaml` không có mục chỉ-stg nào (`paths` không phân biệt được env).
+  còn trên bool hay số chỉ khi quét chính module, nên root của env cần ngoại lệ như vậy lặp lại nó, không điều kiện, ở lời gọi module
+  của chính root đó. `.trivyignore.yaml` không có mục chỉ-stg nào (`paths` không phân biệt được env).
 - **Docker** chỉ qua `Makefile` (`env -u DOCKER_DEFAULT_PLATFORM docker run …`, image ghim digest có dòng `# renovate:` ngay trên).
 - **Card chạy song song** kiểm bằng `make check DIRS=<thư mục của mình>`: mỗi lượt chỉ ghi dưới thư mục đó, không có cache dùng chung.
 - **Git:** mọi thay đổi vào `main` qua PR có `infra-ok` xanh (từ khi bật ruleset), squash merge.

@@ -221,11 +221,11 @@ case $op in
       plan-destroy-leftovers)
         if ! printing; then
           has_mark pre-destroy-start ||
-            fail "--leftovers refused: pre-destroy.sh $env_name never started in this session ($session): run it first, and --leftovers only if its step 2 or 3 is still red when the session's time is up"
+            fail "--leftovers refused: pre-destroy.sh $env_name never started in this session ($session): run it first, and --leftovers only if its step 2, 3 or 4 is still red when the session's time is up"
           ! has_mark pre-destroy-done ||
             fail "--leftovers refused: pre-destroy.sh $env_name has finished in this session (pre-destroy-done): $(basename "$0") $env_name gitops plan --destroy without --leftovers"
         fi
-        note "--leftovers: pre-destroy.sh did not finish, so what Kubernetes made may be left: the Load Balancer and its target groups, the DNS records of ExternalDNS, the EBS volumes of PVCs. destroy may get stuck on them (stuck-destroy section of docs/runbooks/session-stg.md); aws/scripts/sweep.sh $env_name afterwards lists what to delete by hand"
+        note "--leftovers: pre-destroy.sh did not finish, so what Kubernetes made may be left: the Load Balancer and its target groups, the DNS records of ExternalDNS, the EBS volumes of PVCs, the EC2 instances of Karpenter. destroy may get stuck on them (stuck-destroy section of docs/runbooks/session-stg.md); aws/scripts/sweep.sh $env_name afterwards lists what to delete by hand"
         mark pre-destroy-skipped
         ;;
       plan-destroy-no-cluster)
@@ -243,7 +243,7 @@ case $op in
         if ! printing; then
           if [ "$root" = gitops ]; then
             has_mark pre-destroy-done ||
-              fail "pre-destroy.sh $env_name has not finished in this session ($session): run it first (or --leftovers when the session's time is up and its step 2 or 3 is still red)"
+              fail "pre-destroy.sh $env_name has not finished in this session ($session): run it first (or --leftovers when the session's time is up and its step 2, 3 or 4 is still red)"
           else
             has_mark gitops-destroy-end ||
               fail "root gitops of $env_name is not destroyed in this session ($session): $(basename "$0") $env_name gitops plan --destroy and destroy first (or --no-cluster when no EKS cluster was ever made)"

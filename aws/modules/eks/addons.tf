@@ -1,11 +1,12 @@
 locals {
   # EKS managed add-ons. The module creates the cluster without the self-managed vpc-cni, CoreDNS and kube-proxy EKS
-  # used to install, so each of them is here. Versions: the latest release of each add-on for kubernetes_version,
-  # resolved at plan time (the plan shows it).
+  # used to install, so each of them is here. Versions are pinned, the latest of each for kubernetes_version, so stg
+  # and prd run the same build; a new minor bumps them by hand (aws/modules/eks/README.md).
   addons = {
     # Before the node group, so the first nodes come up with pod networking and with the prefix delegation setting
     # that decides their pod limit.
     vpc-cni = {
+      addon_version  = "v1.23.3-eksbuild.1"
       before_compute = true
       configuration_values = jsonencode({
         # Network policy agent on every node: the NetworkPolicies of the charts are enforced as on k3d.
@@ -20,13 +21,18 @@ locals {
     }
     # Before the node group, so a pod that relies on Pod Identity never starts on a node without the agent.
     eks-pod-identity-agent = {
+      addon_version  = "v1.4.1-eksbuild.3"
       before_compute = true
     }
     kube-proxy = {
+      addon_version  = "v1.36.0-eksbuild.65"
       before_compute = true
     }
-    coredns = {}
+    coredns = {
+      addon_version = "v1.14.7-eksbuild.35"
+    }
     aws-ebs-csi-driver = {
+      addon_version = "v1.67.2-eksbuild.1"
       pod_identity_association = [{
         role_arn        = aws_iam_role.ebs_csi.arn
         service_account = local.pod_identity.ebs_csi.service_account
@@ -41,6 +47,8 @@ locals {
     }
     # The resource metrics API (kubectl top, HorizontalPodAutoscaler on CPU), which k3s ships and EKS does not. The
     # API server reaches it on port 10251 of the node (see security-groups.tf).
-    metrics-server = {}
+    metrics-server = {
+      addon_version = "v0.9.0-eksbuild.14"
+    }
   }
 }

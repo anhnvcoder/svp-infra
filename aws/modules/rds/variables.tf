@@ -38,18 +38,23 @@ variable "allowed_security_groups" {
 variable "engine_major_version" {
   description = "Major version of PostgreSQL. RDS picks the newest minor of it and upgrades minors in the maintenance window; a major upgrade is a change of its own."
   type        = string
-  default     = "15"
+  default     = "17"
 
   validation {
     condition     = can(regex("^[0-9]{2}$", var.engine_major_version))
-    error_message = "engine_major_version must be a major version such as 15."
+    error_message = "engine_major_version must be a major version such as 17."
   }
 }
 
 variable "instance_class" {
-  description = "DB instance class."
+  description = "DB instance class: db.t4g.small (stg) or db.m7g.large (prd), the classes whose memory, vCPU count and default max_connections the alarm thresholds are written for."
   type        = string
   default     = "db.t4g.small"
+
+  validation {
+    condition     = contains(keys(local.class_alarm_thresholds), var.instance_class)
+    error_message = "instance_class must be db.t4g.small or db.m7g.large; another class needs its alarm thresholds added to the module first."
+  }
 }
 
 variable "allocated_storage" {
@@ -60,6 +65,27 @@ variable "allocated_storage" {
   validation {
     condition     = var.allocated_storage >= 20
     error_message = "allocated_storage must be at least 20 GiB."
+  }
+}
+
+variable "max_allocated_storage" {
+  description = "Upper limit, in GiB, up to which storage autoscaling grows the volume when free space runs low. At least 26 % above allocated_storage, so RDS does not warn that the limit is too close."
+  type        = number
+  default     = 40
+
+  validation {
+    condition     = var.max_allocated_storage >= ceil(var.allocated_storage * 1.26)
+    error_message = "max_allocated_storage must be at least 26 % above allocated_storage."
+  }
+}
+
+variable "alarm_topic_arn" {
+  description = "ARN of the SNS topic every CloudWatch alarm of the instance notifies, when it fires and when it clears."
+  type        = string
+
+  validation {
+    condition     = can(regex("^arn:aws[a-z-]*:sns:[a-z0-9-]+:[0-9]{12}:[A-Za-z0-9_-]+$", var.alarm_topic_arn))
+    error_message = "alarm_topic_arn must be the ARN of an SNS topic."
   }
 }
 

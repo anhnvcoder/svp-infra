@@ -1,8 +1,10 @@
 # `aws/modules/eks`: cluster EKS của một env
 
 Module nội bộ mỏng bọc [`terraform-aws-modules/eks/aws`](https://registry.terraform.io/modules/terraform-aws-modules/eks/aws/21.29.0)
-**21.29.0** (ghim chính xác): control plane, managed node group Graviton, addon EKS, security group, IAM của cluster và node; module
-nội bộ thêm role IAM và association EKS Pod Identity cho bốn controller nền tảng. Mức stg và prd chỉ khác ở biến (bảng dưới), một bộ code.
+**21.29.0** (ghim chính xác): control plane, nhóm node hệ thống (managed node group Graviton on-demand), addon EKS, security group, IAM của
+cluster và node; submodule `karpenter` cùng version tạo IAM, hàng đợi interruption và rule EventBridge cho Karpenter; module nội bộ thêm role
+IAM và association EKS Pod Identity cho bốn controller nền tảng. Mức stg và prd chỉ khác ở biến (bảng dưới), một bộ code. Thiết kế node,
+Karpenter và version ghim: [ADR-0056](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0056-eks-platform-ha.md).
 
 Không có provider nào trong module (kể cả provider Kubernetes hay Helm: StorageClass `gp3` mặc định do chart `svp-cluster` render, controller
 do Argo CD cài): root gọi nó (`aws/envs/<env>`) đặt provider, `default_tags` và ghim version provider (`~> 6.59`) trong lock file. Module không
@@ -27,6 +29,7 @@ module "eks" {
   endpoint_public_access       = true
   endpoint_public_access_cidrs = var.eks_public_access_cidrs # *.auto.tfvars không commit
   hosted_zone_id               = var.hosted_zone_id          # output zone_id của aws/accounts/stg
+  system_node_max_size         = 4
 }
 ```
 
@@ -50,6 +53,7 @@ module "eks" {
 | Name | Source | Version |
 | ---- | ------ | ------- |
 | eks | terraform-aws-modules/eks/aws | 21.29.0 |
+| karpenter | terraform-aws-modules/eks/aws//modules/karpenter | 21.29.0 |
 
 ## Resources
 
@@ -69,6 +73,7 @@ module "eks" {
 | [aws_iam_role_policy_attachment.ebs_csi](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy_attachment) | resource |
 | [aws_iam_policy_document.cert_manager](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
 | [aws_iam_policy_document.external_dns](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
+| [aws_iam_policy_document.karpenter_trust](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
 | [aws_iam_policy_document.pod_identity_trust](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
 | [aws_partition.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/partition) | data source |
 
@@ -83,13 +88,10 @@ module "eks" {
 | hosted\_zone\_id | ID of the Route 53 hosted zone of the env, in the env's account (output zone\_id of aws/accounts/<env>). ExternalDNS and cert-manager may change records of this zone only. | `string` | n/a | yes |
 | kubernetes\_version | Kubernetes minor version of the control plane and of the node group, e.g. 1.36. Pick a minor in standard support: the cluster is created with the STANDARD support policy. | `string` | n/a | yes |
 | name | Name of the EKS cluster, e.g. svp-stg, and prefix of the names of its IAM roles, policies, security groups and node group. | `string` | n/a | yes |
-| node\_capacity\_type | SPOT (cheaper, nodes can be reclaimed with two minutes of notice) or ON\_DEMAND. | `string` | `"SPOT"` | no |
-| node\_desired\_size | Number of nodes when the node group is created. Terraform ignores later changes of it (the module leaves it to whoever scales the group), so a session scales with aws eks update-nodegroup-config. | `number` | `3` | no |
-| node\_instance\_types | Graviton (arm64) instance types of the node group, all of the same size so the scheduler sees the same node whichever one runs. Several types give Spot more pools to draw from when one runs short. | `list(string)` | <pre>[<br/>  "m7g.large",<br/>  "m6g.large",<br/>  "t4g.large"<br/>]</pre> | no |
-| node\_max\_size | Largest number of nodes of the node group. | `number` | `5` | no |
-| node\_min\_size | Smallest number of nodes of the node group. | `number` | `3` | no |
 | private\_subnet\_ids | Private subnets of the VPC, one per availability zone (output private\_subnet\_ids of the network module). The control plane's network interfaces and the nodes go into every one of them, so pods spread over all these zones. | `list(string)` | n/a | yes |
 | secrets\_kms\_encryption | Envelope-encrypt Kubernetes Secrets with a customer managed KMS key the module creates (alias <name>-eks-secrets, rotated yearly, 7-day deletion window). Off by default: EKS encrypts them with an AWS owned key, and a key of our own costs a month's fee and outlives the cluster for the deletion window. | `bool` | `false` | no |
+| system\_node\_instance\_type | Graviton (arm64) instance type of the system node group, On-Demand in every env. It holds what runs before Karpenter has a node of its own (add-ons, Argo CD, Karpenter), one replica of Karpenter per node. | `string` | `"m7g.large"` | no |
+| system\_node\_max\_size | Largest number of nodes of the system node group, room to scale it by hand. It starts with one node per zone (the number of private\_subnet\_ids) and nothing scales it on its own. | `number` | n/a | yes |
 | vpc\_id | ID of the VPC of the cluster (output vpc\_id of the network module). | `string` | n/a | yes |
 
 ## Outputs
@@ -102,6 +104,8 @@ module "eks" {
 | cluster\_primary\_security\_group\_id | Security group EKS creates for the cluster and attaches to the control plane's network interfaces. |
 | cluster\_security\_group\_id | Security group the module adds to the control plane's network interfaces. |
 | cluster\_service\_cidr | IPv4 range of Kubernetes Services, chosen by EKS when the cluster is created; the API server's Service takes its first address. |
+| karpenter\_node\_iam\_role\_name | IAM role of the nodes Karpenter launches: spec.role of the EC2NodeClass (Karpenter makes the instance profile from it). |
+| karpenter\_queue\_name | SQS queue of the interruption events Karpenter handles (Spot interruption, rebalance, health, state change): settings.interruptionQueue of the Karpenter chart. |
 | node\_security\_group\_id | Security group of every node and, with the VPC CNI, of every pod: the source a database security group lets in. |
 <!-- END_TF_DOCS -->
 <!-- markdownlint-enable MD033 -->
@@ -118,19 +122,25 @@ module "eks" {
 | `endpoint_public_access_cidrs` | CIDR của người học (`/32`) | CIDR của người học hay `[]` |
 | `control_plane_log_types` | `[]` (tắt) | `["api", "audit"]` |
 | `control_plane_log_retention_days` | (không dùng) | chốt khi dựng prd |
-| `node_instance_types` | mặc định | theo số đo khi dựng prd |
-| `node_capacity_type` | `SPOT` | `ON_DEMAND` |
-| `node_min_size` / `node_desired_size` / `node_max_size` | `3` / `3` / `5` | theo số đo khi dựng prd |
+| `system_node_instance_type` | mặc định | như stg |
+| `system_node_max_size` | 2 × số AZ | 2 × số AZ |
 | `hosted_zone_id` | output `zone_id` của `aws/accounts/stg` (zone `stg.aws.<domain>`) | output `zone_id` của `aws/accounts/prd` (zone `aws.<domain>`) |
 
 Endpoint public mặc định tắt để module an toàn khi gọi thiếu biến; root của stg bật và đưa CIDR. **Vì sao private luôn bật:** giới hạn
 CIDR public mà tắt private thì node trong subnet private gọi API qua IP của NAT, IP đó không nằm trong danh sách, node không join được
 (tài liệu EKS khuyên bật private khi giới hạn CIDR). Pod tới API qua ENI của control plane trong VPC, cổng 443.
 
-**Đổi số node trong buổi:** module EKS bỏ qua thay đổi `desired_size` sau khi tạo (để autoscaler, hay người vận hành, quyết), nên tăng
-node cho k6 bằng lệnh người học chạy, không bằng biến:
-`AWS_PROFILE=anhnv-sso aws eks update-nodegroup-config --cluster-name svp-stg --nodegroup-name <tên node group> --scaling-config minSize=3,maxSize=5,desiredSize=5 --region ap-southeast-1`
-(tên node group: `aws eks list-nodegroups --cluster-name svp-stg`, có tiền tố `default-`).
+**Node:** nhóm node hệ thống `system` chạy on-demand ở mọi env, mỗi AZ một node (min = desired = số subnet private), không taint, không gì
+tự scale nó; nó giữ những gì phải chạy trước khi Karpenter có node (addon, Argo CD, chính Karpenter). Node cho workload do Karpenter dựng
+theo pod đang chờ (NodePool, EC2NodeClass của chart `svp-cluster`), không nằm trong state. Module EKS bỏ qua thay đổi `desired_size` sau khi
+tạo, nên scale tay nhóm hệ thống bằng lệnh người học chạy, không bằng biến:
+`AWS_PROFILE=anhnv-stg aws eks update-nodegroup-config --cluster-name svp-stg --nodegroup-name <tên node group> --scaling-config minSize=2,maxSize=4,desiredSize=3 --region ap-southeast-1`
+(tên node group: `aws eks list-nodegroups --cluster-name svp-stg --region ap-southeast-1`, có tiền tố `system-`).
+
+**Version ghim:** AMI của nhóm hệ thống (`local.ami_release_version` ở `nodes.tf`, `use_latest_ami_release_version = false`) và `addon_version`
+của mọi addon (`addons.tf`) ghim, nên stg và prd chạy cùng bản. `kubernetes_version` chỉ nhận đúng minor của bản AMI ghim (validation):
+nâng minor thì đổi cả ba trong cùng thay đổi, cùng alias AMI của EC2NodeClass ở chart `svp-cluster`, theo runbook `docs/runbooks/eks-upgrade.md`.
+Renovate không cập nhật chúng: datasource của addon và AMI cần credential AWS.
 
 Không output OIDC: không dùng IRSA (`enable_irsa = false`), Pod Identity không cần OIDC provider.
 
@@ -145,14 +155,26 @@ người học chạy.
 | IAM role của cluster | `<name>-cluster-<hậu tố>` | EKS (`eks.amazonaws.com`, `sts:AssumeRole` + `sts:TagSession`) quản ENI, security group của control plane; gắn `AmazonEKSClusterPolicy` |
 | Access entry + policy association | `cluster_creator` | identity chạy `apply` (role SSO của người học, đọc bằng `aws_iam_session_context` lúc plan) nhận `AmazonEKSClusterAdminPolicy` phạm vi cluster; không ARN nào ghi trong git |
 | Security group cluster | `<name>-cluster-<hậu tố>` | gắn vào ENI của control plane, nhận 443 từ security group node |
-| Security group node | `<name>-node-<hậu tố>`, tag `kubernetes.io/cluster/<name>=owned` | gắn vào mọi node (và vì VPC CNI, vào mọi pod); rule ở mục Cổng dưới đây |
+| Security group node | `<name>-node-<hậu tố>`, tag `kubernetes.io/cluster/<name>=owned`, `karpenter.sh/discovery=<name>` | gắn vào mọi node (và vì VPC CNI, vào mọi pod); rule ở mục Cổng dưới đây |
 | Tag trên security group chính | `aws_ec2_tag` | chép tag của module (`Project=svp`) lên security group EKS tự tạo |
 | `time_sleep` | | chờ 30 s sau khi control plane xong rồi mới tạo node group và addon thường |
-| IAM role của node | `default-eks-node-group-<hậu tố>` | EC2 assume; gắn `AmazonEKSWorkerNodePolicy`, `AmazonEC2ContainerRegistryReadOnly` và `AmazonEKS_CNI_Policy` (VPC CNI dùng role của node: pod thường không tới được IMDS, xem IMDS dưới đây) |
-| Launch template | `default-<hậu tố>` | AMI `AL2023_ARM_64_STANDARD` mới nhất của minor, IMDSv2 bắt buộc, hop limit 1, ổ gốc gp3 30 GiB mã hoá; tag `Project=svp` lên instance, volume, ENI |
-| `aws_eks_node_group` | `default-<hậu tố>` | `capacity_type`, loại instance, cỡ theo biến; trải mọi subnet private |
+| IAM role của node | `system-eks-node-group-<hậu tố>` | EC2 assume; gắn `AmazonEKSWorkerNodePolicy`, `AmazonEC2ContainerRegistryReadOnly` và `AmazonEKS_CNI_Policy` (VPC CNI dùng role của node: pod thường không tới được IMDS, xem IMDS dưới đây) |
+| Launch template | `system-<hậu tố>` | AMI `AL2023_ARM_64_STANDARD` bản ghim, IMDSv2 bắt buộc, hop limit 1, ổ gốc gp3 30 GiB mã hoá; tag `Project=svp` lên instance, volume, ENI |
+| `aws_eks_node_group` | `system-<hậu tố>` | `ON_DEMAND`, `release_version` ghim, loại instance và `max_size` theo biến; trải mọi subnet private |
 | `aws_eks_addon` | 6 addon | mục Addon |
 | Log group CloudWatch | `/aws/eks/<name>/cluster` | chỉ khi `control_plane_log_types` khác rỗng, retention theo biến |
+
+Submodule `karpenter` (`modules/karpenter/main.tf`, `policy.tf`), tên nguyên văn (`*_use_name_prefix = false`) vì chart Karpenter và
+EC2NodeClass suy tên từ tên cluster:
+
+| Tài nguyên | Tên | Vì sao |
+| --- | --- | --- |
+| IAM role controller | `<name>-karpenter` | trust `pods.eks.amazonaws.com`, statement `PodIdentity` thay bằng statement của module nội bộ (`karpenter.tf`): chỉ cluster này, `kube-system` / `karpenter` như bốn role dưới; policy `<name>-karpenter-<hậu tố>` của submodule giữ nguyên: `RunInstances`, `CreateFleet`, `CreateLaunchTemplate`, tag, xoá chỉ trên tài nguyên mang `kubernetes.io/cluster/<name>=owned`; `iam:PassRole` role node chỉ cho EC2; tạo, xoá instance profile theo tag cluster; đọc, xoá message của hàng đợi; `eks:DescribeCluster`, đọc giá, SSM, Describe EC2 |
+| Pod Identity association | `kube-system` / `karpenter` | do submodule tạo (`create_pod_identity_association` mặc định); không nằm trong `local.pod_identity` |
+| IAM role node | `<name>-karpenter-node` | EC2 assume; `AmazonEKSWorkerNodePolicy`, `AmazonEC2ContainerRegistryPullOnly`, `AmazonEKS_CNI_Policy`; EC2NodeClass đặt `spec.role` là tên này, Karpenter tự tạo instance profile |
+| Access entry | role node, loại `EC2_LINUX` | node Karpenter dựng join được cluster |
+| Hàng đợi SQS | `<name>-karpenter` | sự kiện interruption (Spot, rebalance, health, đổi trạng thái), giữ 5 phút, mã hoá SSE-SQS, policy chỉ cho EventBridge gửi và chặn không TLS |
+| Rule EventBridge | `Karpenter<sự kiện>-<hậu tố>` (5 rule) | đẩy sự kiện vào hàng đợi |
 
 Module cộng đồng **không** tạo: KMS key (`create_kms_key = false`: $1/tháng mỗi key và còn sống qua thời gian chờ xoá; EKS mã hoá dữ liệu
 API, gồm Secret, bằng key do AWS sở hữu theo mặc định), OIDC provider (`enable_irsa = false`), Fargate profile, node group tự quản.
@@ -173,7 +195,7 @@ ServiceAccount ở bảng (Pod Identity không cần annotation trên ServiceAcc
 
 ## Addon
 
-Mọi addon lấy bản mới nhất của addon cho `kubernetes_version`, chọn lúc plan (plan in ra version).
+Mỗi addon ghim `addon_version` ở `addons.tf` (bản và nguồn: ADR-0056 §8).
 
 | Addon | Trước node group | Cấu hình |
 | --- | --- | --- |
@@ -184,9 +206,9 @@ Mọi addon lấy bản mới nhất của addon cho `kubernetes_version`, chọ
 | `aws-ebs-csi-driver` | không | Pod Identity như trên; `controller.extraVolumeTags: {Project: svp}`; không tạo StorageClass nào (EKS từ 1.30 không đánh dấu `gp2` mặc định: `gp3` mặc định do `svp-cluster` render) |
 | `metrics-server` | không | addon community của EKS (AWS chỉ hỗ trợ cài, gỡ qua API): API metrics cho `kubectl top` và HPA CPU của gateway, feed-service; k3s có sẵn, EKS không |
 
-**Số pod mỗi node:** không prefix delegation, `m7g.large`, `m6g.large` giữ 29 pod, `t4g.large` 35 (3 ENI × (IP mỗi ENI − 1) + 2), node group
-nhiều loại lấy số nhỏ nhất: 29. Bật prefix delegation mỗi ENI nhận các khối `/28` nên số tính ra vượt 400, managed node group chặn ở
-**110 pod** cho instance dưới 30 vCPU. vpc-cni được tạo trước node group để node đầu tiên đã có giá trị này. Mỗi node giữ thêm một `/28` trống
+**Số pod mỗi node:** không prefix delegation, `m7g.large` giữ 29 pod (3 ENI × (IP mỗi ENI − 1) + 2). Bật prefix delegation mỗi ENI nhận các khối `/28` nên số tính ra vượt 400, managed node group chặn ở
+**110 pod** cho instance dưới 30 vCPU (EC2NodeClass đặt cùng `kubelet.maxPods`). vpc-cni được tạo trước node group để node đầu tiên đã có
+giá trị này. Mỗi node giữ thêm một `/28` trống
 (`WARM_PREFIX_TARGET=1`); subnet private phải còn khối `/28` liền nhau (subnet `/19` của `network` dư nhiều).
 
 **IMDS:** IMDSv2 bắt buộc, hop limit 1: container (cách instance một hop) không đọc được credential của node, nên role của node (gồm
@@ -242,16 +264,25 @@ tìm phần sót theo tag:
 | Snapshot EBS | EBS CSI, Velero | như volume |
 | ENI của VPC CNI | `aws-node` trên mỗi node | `cluster.k8s.amazonaws.com/name=<name>`, `node.k8s.amazonaws.com/instance_id`; mô tả `aws-K8S-…`; tìm theo VPC id; tự gỡ khi node xoá, sót thì chặn xoá subnet |
 | Instance, ổ gốc, ENI chính của node | Auto Scaling group của node group (trong state qua node group) | `Project=svp`, `eks:cluster-name=<name>`, `eks:nodegroup-name`, `kubernetes.io/cluster/<name>=owned` |
+| Instance, ổ gốc, ENI chính, launch template của node Karpenter | Karpenter (NodePool, EC2NodeClass) | `karpenter.sh/nodepool`, `karpenter.sh/nodeclaim`, `kubernetes.io/cluster/<name>=owned`; `Project=svp` do EC2NodeClass đặt (không phải module này) |
+| Instance profile của role `<name>-karpenter-node` | Karpenter (từ `spec.role` của EC2NodeClass) | `kubernetes.io/cluster/<name>=owned`, `karpenter.k8s.aws/ec2nodeclass`; còn gắn role thì `terraform destroy` không xoá được role node |
 | Log group `/aws/eks/<name>/cluster` | EKS khi bật log control plane | module tạo trước (trong state) khi `control_plane_log_types` khác rỗng; sót nếu bật log ngoài Terraform: tìm theo tên |
 | Bản ghi Route 53 (A, TXT owner của ExternalDNS; TXT `_acme-challenge` khi DNS-01 lỗi) | ExternalDNS, cert-manager | bản ghi của zone của env ngoài NS/SOA ở đỉnh zone và bản ghi NS uỷ quyền zone con (do `aws/accounts/<env>` tạo) |
+
+**Destroy cần xoá NodePool trước:** node Karpenter dựng không nằm trong state, còn chạy thì giữ ENI trong subnet private và instance profile
+trên role node, `terraform destroy` kẹt ở subnet và role. `pre-destroy.sh` xoá NodePool rồi EC2NodeClass khi controller còn chạy, chờ tới khi
+hết NodeClaim và instance; giới hạn chờ ở ADR-0056 §9.
 
 ## Kiểm ở buổi AWS
 
 `make check` chỉ kiểm tĩnh; các điểm sau chỉ chứng minh được khi người học `apply`:
 
-- Addon `metrics-server` có cho 1.36: `aws eks describe-addon-versions --addon-name metrics-server --kubernetes-version 1.36 --region ap-southeast-1`
-  có ít nhất một version (không có thì plan đỏ ở data source `aws_eks_addon_version`); `kubectl top node` chạy, HPA của gateway và
-  feed-service không `FailedGetResourceMetric`.
+- Bản ghim của mỗi addon có cho `kubernetes_version`:
+  `aws eks describe-addon-versions --addon-name <addon> --kubernetes-version 1.36 --region ap-southeast-1` liệt kê đúng `addon_version`
+  của `addons.tf` (không có thì `apply` đỏ ở `aws_eks_addon`); `kubectl top node` chạy, HPA của gateway và feed-service không
+  `FailedGetResourceMetric`.
+- Karpenter: pod `karpenter` lấy được credential của role `<name>-karpenter` (log không `AccessDenied`), đọc được hàng đợi `<name>-karpenter`;
+  NodeClaim của pod Pending lên `Ready` trong subnet private.
 - Access entry của role SSO: `kubectl get ns` bằng kubeconfig của người tạo chạy được ngay sau `apply`.
 - Trust policy theo session tag: pod của LBC, ExternalDNS, cert-manager, EBS CSI lấy được credential (log không `AccessDenied` khi
   `AssumeRoleForPodIdentity`); PVC `gp3` Bound.

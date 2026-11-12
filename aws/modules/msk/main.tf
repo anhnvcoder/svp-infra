@@ -167,6 +167,39 @@ resource "aws_msk_cluster" "this" {
   tags = {
     Name = var.name
   }
+
+  # Storage autoscaling grows the volumes outside Terraform; without this the next apply would try to shrink them,
+  # which MSK refuses.
+  lifecycle {
+    ignore_changes = [broker_node_group_info[0].storage_info[0].ebs_storage_info[0].volume_size]
+  }
+}
+
+# Grows the volume of every broker when its use passes the target, up to the ceiling. MSK never shrinks a volume, so
+# scale-in stays off. Destroy removes the policy, and with it the alarm it made, before the cluster.
+resource "aws_appautoscaling_target" "storage" {
+  service_namespace  = "kafka"
+  resource_id        = aws_msk_cluster.this.arn
+  scalable_dimension = "kafka:broker-storage:VolumeSize"
+  min_capacity       = var.broker_volume_size
+  max_capacity       = var.broker_volume_max_size
+}
+
+resource "aws_appautoscaling_policy" "storage" {
+  name               = "${var.name}-broker-storage"
+  policy_type        = "TargetTrackingScaling"
+  service_namespace  = aws_appautoscaling_target.storage.service_namespace
+  resource_id        = aws_appautoscaling_target.storage.resource_id
+  scalable_dimension = aws_appautoscaling_target.storage.scalable_dimension
+
+  target_tracking_scaling_policy_configuration {
+    predefined_metric_specification {
+      predefined_metric_type = "KafkaBrokerStorageUtilization"
+    }
+
+    target_value     = var.broker_storage_target_utilization
+    disable_scale_in = true
+  }
 }
 
 # MSK writes to an existing log group only; made here, it keeps the retention below and goes away with destroy.

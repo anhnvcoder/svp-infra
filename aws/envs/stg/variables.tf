@@ -53,9 +53,10 @@ variable "acme_email" {
   }
 }
 
-variable "eks_public_access_cidrs" {
-  description = "IPv4 ranges allowed to call the public endpoint of the Kubernetes API, usually the learner's address as a /32. Ranges shorter than /8 are refused by the eks module."
-  type        = list(string)
+variable "alarm_email" {
+  description = "Email subscribed to the SNS topic of the CloudWatch alarms of RDS, MSK and ElastiCache; nothing is delivered until the confirmation link SNS sends is opened."
+  type        = string
+  sensitive   = true
 }
 
 ################################################################################
@@ -100,9 +101,9 @@ variable "kubernetes_version" {
   type        = string
 }
 
-variable "eks_endpoint_public_access" {
-  description = "Open the public endpoint of the Kubernetes API to eks_public_access_cidrs; the private endpoint is always on."
-  type        = bool
+variable "api_tunnel_port" {
+  description = "Port on 127.0.0.1 of the learner's machine where the SSM tunnel to the private endpoint of the Kubernetes API listens (api_tunnel_command, kubeconfig_command): one port per env, so that a command for one env never reaches the cluster of another."
+  type        = number
 }
 
 variable "control_plane_log_types" {
@@ -122,34 +123,14 @@ variable "eks_secrets_kms_encryption" {
   default     = false
 }
 
-variable "node_instance_types" {
-  description = "Graviton instance types of the node group, all of one size."
-  type        = list(string)
-}
-
-variable "node_capacity_type" {
-  description = "SPOT or ON_DEMAND."
-  type        = string
-}
-
-variable "node_min_size" {
-  description = "Smallest number of nodes."
-  type        = number
-}
-
-variable "node_desired_size" {
-  description = "Number of nodes when the node group is created (later changes are ignored by the eks module)."
-  type        = number
-}
-
-variable "node_max_size" {
-  description = "Largest number of nodes."
-  type        = number
-}
-
 variable "rds_instance_class" {
   description = "DB instance class of the shared PostgreSQL instance."
   type        = string
+}
+
+variable "rds_max_allocated_storage" {
+  description = "Upper limit in GiB up to which storage autoscaling grows the DB instance's volume."
+  type        = number
 }
 
 variable "rds_multi_az" {
@@ -233,6 +214,11 @@ variable "msk_broker_logs_retention_days" {
   default     = 1
 }
 
+variable "msk_broker_volume_max_size" {
+  description = "Upper limit in GiB up to which storage autoscaling grows the volume of each broker."
+  type        = number
+}
+
 variable "valkey_node_type" {
   description = "Node type of the Valkey nodes (cache.t4g.micro, cache.m7g.large)."
   type        = string
@@ -240,6 +226,16 @@ variable "valkey_node_type" {
 
 variable "valkey_node_count" {
   description = "Valkey nodes, the primary included: 1 has no replica; 2 or more run Multi-AZ with automatic failover."
+  type        = number
+}
+
+variable "valkey_apply_immediately" {
+  description = "Apply a change of the Valkey replication group at once (true) or in its maintenance window (false)."
+  type        = bool
+}
+
+variable "valkey_slow_log_retention_days" {
+  description = "Days CloudWatch keeps the slow log of Valkey."
   type        = number
 }
 

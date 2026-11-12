@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from drawio_lib import ACCOUNT, ANA, AZ, BAND, CLOUD, COMP, DB, K8S, MUTED, NET, PRIVATE, PUBLIC, REGION, SEC, STO, STROKE, VPC, VPC_PURPLE, Page, bullets, export, write  # noqa: E402
+from drawio_lib import ACCOUNT, ANA, AZ, BAND, CLOUD, COMP, DB, INTEG, K8S, MUTED, NET, PRIVATE, PUBLIC, REGION, SEC, STO, STROKE, VPC, VPC_PURPLE, Page, bullets, export, write  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[4]
 OUT = ROOT / "docs/diagrams/svp-aws.drawio"
@@ -62,7 +62,7 @@ class Env:
     cidr: str
     az_count: int
     single_nat: bool
-    capacity: str          # SPOT | ON_DEMAND
+    capacity: str          # capacity type of Karpenter's NodePool: Spot | on-demand (NODEPOOL below)
     multi_az: bool         # RDS standby in a second AZ
     cache_nodes: int       # ElastiCache nodes: a primary, then replicas in the next AZs
     logs: tuple            # what writes to CloudWatch Logs; empty: no log group
@@ -91,13 +91,19 @@ def envs() -> list[Env]:
         root = ROOT / f"aws/envs/{name}"
         given = tfvars(root / f"{name}.tfvars")
         v = lambda var: given[var] if var in given else var_default(root / "variables.tf", var)   # noqa: E731
+        # The slow log of Valkey goes to a log group of the elasticache module in every env (no variable turns it off).
         logs = tuple(what for what, on in (("flow log", v("flow_log_enabled")), ("control plane", bool(v("control_plane_log_types"))),
-                                           ("RDS", bool(v("rds_cloudwatch_logs_exports"))), ("MSK brokers", v("msk_broker_logs_enabled")))
+                                           ("RDS", bool(v("rds_cloudwatch_logs_exports"))), ("MSK brokers", v("msk_broker_logs_enabled")),
+                                           ("Valkey slow log", True))
                      if on)
-        out.append(Env(name, v("region"), cidr, v("az_count"), v("single_nat_gateway"), v("node_capacity_type"), v("rds_multi_az"),
+        out.append(Env(name, v("region"), cidr, v("az_count"), v("single_nat_gateway"), NODEPOOL[name], v("rds_multi_az"),
                        v("valkey_node_count"), logs, v("eks_secrets_kms_encryption"), zone_label(name)))
     return out
 
+
+# Capacity type of the NodePool of Karpenter per env. It lives in svp-gitops (another repository, so it is typed here,
+# not read): karpenter.sh/capacity-type of envs/<env>/svp-cluster.yaml. The system node group is on-demand in every env.
+NODEPOOL = {"stg": "Spot", "prd": "on-demand"}
 
 # Workloads drawn as Kubernetes icons, with their replicas per env. The numbers live in svp-gitops (another repository,
 # so they are typed here, not read): base/services/<svc>.yaml, then envs/<env>/<svc>.yaml, over the svp-service chart's
@@ -120,9 +126,10 @@ def expected(env: Env) -> dict[str, int]:
     """What the page of `env` must hold, by check_diagram.kind_counts() kind — derived from the sizes, not from the drawing."""
     n = env.az_count
     want = {"users": 1, "route_53": 1, "cloudfront": 1, "waf": 1, "internet_gateway": 1, "elastic_load_balancing": 1, "eks": 1,
-            "nat_gateway": len(env.nat_rows), "ec2": n, "rds": 2 if env.multi_az else 1, "managed_streaming_for_kafka": n,
+            "nat_gateway": len(env.nat_rows), "ec2": 2 * n, "instance2": 1, "rds": 2 if env.multi_az else 1, "managed_streaming_for_kafka": n,
             "elasticache": env.cache_nodes, "endpoints": 1, "s3": 2, "secrets_manager": 1, "key_management_service": 1,
-            "elastic_block_store": n, "account": 1, "region": 1, "az": n, "subnet": 3 * n,
+            "elastic_block_store": n, "sns": 1, "sqs": 1, "eventbridge": 1, "systems_manager": 1,
+            "account": 1, "region": 1, "az": n, "subnet": 3 * n,
             # Kubernetes: a ns icon per frame; a workload icon per svp service, per svp-data workload, and Envoy's
             # proxy Deployment and the Service the NLB targets
             "k8s_ns": FRAMES, "k8s_deploy": len(SVP) + 1 + sum(k == "deploy" for k, _ in SVP_DATA),
@@ -139,7 +146,7 @@ def expected(env: Env) -> dict[str, int]:
 # crosses a replication line).
 CLOUD_X, ACCT_X, GLOBAL_X, REGION_X, IGW_X, VPC_X, AZ_X = 160, 200, 240, 400, 440, 560, 600
 PUB_X, PUB_W, NAT_X, NLB_X, EBS_X = 640, 360, 680, 880, 1040
-PRIV_X, EKS_X, NODE_X = 1160, 1400, 1440
+PRIV_X, EKS_X, NODE_X, BASTION_X = 1160, 1400, 1440, 1200
 COL, COL_W = (1560, 1800, 2040, 2280), 200
 EKS_R, PRIV_R = 2520, 2560
 DB_X, DB_R = 2600, 3320
@@ -202,21 +209,22 @@ def env_page(env: Env) -> Page:
     region_b = lane + 40
     acct_b, cloud_b = region_b + 40, region_b + 80
     priv, pub, data = cidrs(env)
-    spot = env.capacity == "SPOT"
 
     p = Page(env.name, PAGE_W, cloud_b + 40)
     p.text(f"{env.name} — EKS cluster svp-{env.name}", 40, 0, 920, 40, size=17, bold=1)
     nat = "one NAT gateway, in the first AZ, for every private subnet" if env.single_nat else "one NAT gateway per AZ"
-    p.text(f"{env.region} · {n} AZs, each with a public, a private and a database subnet · {nat} · managed node group "
-           f"{'Spot' if spot else 'on-demand'}, one icon per AZ · one NLB across all public subnets, made by the AWS Load "
-           "Balancer Controller · EBS volumes in the AZ of their pod's node · TLS certificates from Let's Encrypt "
+    p.text(f"{env.region} · {n} AZs, each with a public, a private and a database subnet · {nat} · system node group "
+           f"on-demand and Karpenter's nodes ({env.capacity}), one icon each per AZ · API endpoint private only, reached "
+           "through Systems Manager port forwarding to the SSM bastion · one NLB across all public subnets, made by the AWS "
+           "Load Balancer Controller · EBS volumes in the AZ of their pod's node · TLS certificates from Let's Encrypt "
            "(cert-manager), no ACM", 40, 40, PAGE_W - 80, 40, color=MUTED)
     rds = ("RDS single-AZ" if not env.multi_az else "RDS Multi-AZ primary/standby")
     cache = ("ElastiCache for Valkey one node" if env.cache_nodes == 1
              else f"ElastiCache for Valkey primary and {env.cache_nodes - 1} replica(s), Multi-AZ, automatic failover")
     p.text(f"Database subnets, no route to the Internet: {rds} · Amazon MSK one broker per AZ, SASL/SCRAM-SHA-512 over TLS · "
-           f"{cache} · AWS picks the AZs of RDS and ElastiCache (drawn from the first) · KMS, Secrets Manager, "
-           "CloudWatch Logs regional", 40, 80, PAGE_W - 80, 40, color=MUTED)
+           f"{cache} · AWS picks the AZs of RDS and ElastiCache (drawn from the first) · CloudWatch alarms of RDS, MSK and "
+           "ElastiCache notify an SNS topic encrypted with a customer managed key, which emails the learner · KMS, Secrets "
+           "Manager, CloudWatch, SNS, SQS, EventBridge regional", 40, 80, PAGE_W - 80, 40, color=MUTED)
     p.text("Kubernetes: a frame per namespace, an icon per workload with its replicas · the scheduler puts each pod on any "
            "node of any AZ, so the row of a frame or an icon says nothing about where its pods run (svp is drawn across "
            "the first two AZs to show it) · third-party tools as text · EKS add-ons (CoreDNS, kube-proxy, VPC CNI) not drawn",
@@ -253,7 +261,7 @@ def env_page(env: Env) -> Page:
         workload(p, "deploy", f"{name}<br>{stg if env.name == 'stg' else prd}", x, y)
 
     csi = frame(p, "kube-system", COL[0], b + 160, COL_W, 80)
-    p.text("AWS Load Balancer Controller,<br>EBS CSI driver", COL[0], b + 200, COL_W, 40, align="center")
+    p.text("AWS Load Balancer Controller,<br>EBS CSI driver, Karpenter", COL[0], b + 200, COL_W, 40, align="center")
     # three one-line workloads, 40 apart: the frame has room for three rows of icons above the box's bottom margin
     frame(p, "svp-data", COL[1], b + 160, COL_W, 200)
     for i, (kind, label) in enumerate(SVP_DATA):
@@ -274,7 +282,11 @@ def env_page(env: Env) -> Page:
     ep = p.flat("S3 gateway endpoint", "endpoints", mid - 40, ep_y, VPC_PURPLE, cid="s3ep")
 
     nats = {k: p.flat("NAT gateway", "nat_gateway", NAT_X, sub[k] + 40, VPC_PURPLE, cid=f"nat{k}") for k in env.nat_rows}
-    nodes = [p.icon(f"Node group · {'Spot' if spot else 'on-demand'}", "ec2", NODE_X, sub[k] + 40, COMP, cid=f"node{k}") for k in range(n)]
+    nodes = [p.icon("System node group<br>on-demand", "ec2", NODE_X, sub[k] + 40, COMP, cid=f"node{k}") for k in range(n)]
+    # below the system node, clear of the kube-system → EBS line that crosses the node column of the second AZ at +200
+    karpenter = [p.icon(f"Karpenter node<br>{env.capacity}", "ec2", NODE_X, sub[k] + 240, COMP, cid=f"karp{k}") for k in range(n)]
+    # private subnet of the first AZ, left of the cluster box, below the node → NAT line
+    bastion = p.flat("SSM bastion · t4g.nano", "instance2", BASTION_X, a + 160, COMP[0], cid="bastion")
     ebs = [p.icon("EBS gp3 · PVCs", "elastic_block_store", EBS_X, sub[k] + 160, STO, cid=f"ebs{k}") for k in range(n)]
 
     # database tier: RDS, ElastiCache nodes (primary first), one MSK broker per AZ
@@ -287,11 +299,17 @@ def env_page(env: Env) -> Page:
     media = p.icon("S3 media", "s3", 600, row, STO, cid="media")
     uploads = p.icon("S3 uploads", "s3", 760, row, STO, cid="uploads", label_top=True)   # entered from below by the browser
     p.icon(f"Secrets Manager<br>RDS master, svp/{env.name}/*,<br>AmazonMSK_*", "secrets_manager", 1000, row, SEC, cid="sm")
-    keys = "Terraform state,<br>MSK (SCRAM secrets, volumes)" + ("<br>EKS Secrets" if env.kms_eks else "")
-    p.icon(f"KMS keys<br>{keys}", "key_management_service", 1280, row, SEC, cid="kms")
+    keys = "Terraform state, RDS,<br>MSK, SNS of the alarms" + ("<br>EKS Secrets" if env.kms_eks else "")
+    p.icon(f"KMS keys, customer managed<br>{keys}", "key_management_service", 1280, row, SEC, cid="kms")
+    cw = None
     if env.logs:
-        lines = ["CloudWatch Logs", ", ".join(env.logs[:2]), ", ".join(env.logs[2:])]
-        p.icon("<br>".join(x for x in lines if x), "cloudwatch_2", 1560, row, SEC, cid="cw")
+        lines = ["CloudWatch: alarms, Logs", ", ".join(env.logs[:2]), ", ".join(env.logs[2:])]
+        cw = p.icon("<br>".join(x for x in lines if x), "cloudwatch_2", 1560, row, SEC, cid="cw")
+    sns = p.icon(f"SNS svp-{env.name}-alarms<br>email to the learner", "sns", 1840, row, INTEG, cid="sns")
+    events = p.icon("EventBridge rules<br>Spot interruption, rebalance,<br>instance state", "eventbridge", 2120, row, INTEG,
+                    cid="events")
+    queue = p.icon(f"SQS svp-{env.name}-karpenter<br>read by Karpenter", "sqs", 2400, row, INTEG, cid="sqs")
+    p.icon("Systems Manager<br>port forwarding to the bastion", "systems_manager", 2680, row, SEC, cid="ssm")
 
     # request path: DNS, IGW, NLB, Envoy, services, databases. IGW → NLB → Envoy run 20 above the shared AZ border,
     # in the bottom margin of the first AZ, never on the dashed line itself (the controllers' edge runs 20 below it).
@@ -316,6 +334,8 @@ def env_page(env: Env) -> Page:
     for k in range(1, env.cache_nodes):
         p.edge(caches[0], caches[k], STROKE["db"], dashed=True, exit_=(0.5, 1), entry=(0.5, 0))
     p.edge(cp, eks, COMP[0], exit_=(0.5, 1), entry=((CP_X + 40 - EKS_X) / (EKS_R - EKS_X), 0))
+    # the bastion reaches the private endpoint of the API, whose network interfaces sit in the private subnets (not drawn)
+    p.edge(bastion, eks, COMP[0], label="443 · API", exit_=(1, 0.5), entry=(0, (a + 200 - a) / (sub[-1] + SUB_H - a)))
 
     # egress: nodes → NAT of their AZ (stg: only the first AZ has one), the first NAT → IGW
     for k in env.nat_rows:
@@ -328,6 +348,7 @@ def env_page(env: Env) -> Page:
     p.edge(csi, nlb, STROKE["net"], dashed=True, label="creates NLB", exit_=(0.25, 0), entry=(1, 0.75),
            points=[(COL[0] + 50, nlb_y + 60)], label_pos=0.33)
     p.edge(csi, ebs[1], STROKE["sto"], dashed=True, label="volumes", exit_=(0, 0.5), entry=(1, 0.5))
+    p.edge(csi, karpenter[1], COMP[0], dashed=True, exit_=(0.25, 1), entry=(1, 0.5), points=[(COL[0] + 50, b + 280)])
     p.edge(dns, r53, STROKE["net"], dashed=True, label="records, DNS-01", exit_=(0.5, 0), entry=(0.5, 0),
            points=[(COL[1] + 100, DNS_LANE), (GLOBAL_X + 40, DNS_LANE)])
 
@@ -345,6 +366,11 @@ def env_page(env: Env) -> Page:
     p.edge(users, cf, STROKE["net"], label="GET HLS", exit_=(0.75, 1), entry=(0, 0.5), points=[(100, row + 40)])
     p.edge(waf, cf, STROKE["sec"], dashed=True, arrow=False, exit_=(0.5, 1), entry=(0.5, 0))
     p.edge(cf, media, STROKE["sto"], label="OAC")
+
+    # alarms and interruptions, inside the band
+    if cw:
+        p.edge(cw, sns, STROKE["integ"], label="alarm, OK")
+    p.edge(events, queue, STROKE["integ"])
     return p
 
 

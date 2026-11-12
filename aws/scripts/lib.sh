@@ -14,7 +14,7 @@ global_region=us-east-1
 # hosted zone 1/- (env_zone), Stack tags kept between sessions (sweep.sh), local port of the SSM tunnel to a private API
 # endpoint, file of aws/envs/<name> that lifts the protections a destroy needs, k6 ladder 1/-, session roots 1/-.
 env_table='mgmt anhnv-sso SVP_AWS_MGMT_ACCOUNT_ID - bootstrap,org - - - -
-stg anhnv-stg SVP_AWS_STG_ACCOUNT_ID 1 baseline - - 1 1
+stg anhnv-stg SVP_AWS_STG_ACCOUNT_ID 1 baseline 6444 - 1 1
 prd anhnv-prd SVP_AWS_PRD_ACCOUNT_ID 1 baseline 6443 teardown.tfvars - 1'
 
 scripts_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)

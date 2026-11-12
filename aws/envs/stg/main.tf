@@ -1,5 +1,5 @@
 locals {
-  # Identity of this root, the only line of code the prd root changes besides what prd alone has: sizes and
+  # Identity of this root, the only line of code in which the roots of stg and prd differ: sizes and
   # protections differ in <env>.tfvars, the backend key is given at init. Every name below starts with svp-<env>.
   env  = "stg"
   name = "svp-${local.env}"
@@ -19,41 +19,19 @@ module "network" {
   s3_endpoint_buckets     = concat([module.media.uploads_bucket, module.media.media_bucket], var.s3_endpoint_extra_buckets)
 }
 
-# Findings of trivy on the cluster the module builds with the values of this root, each a deliberate choice:
-
-# - AWS-0040: the public endpoint of the Kubernetes API is on, so the learner's machine needs no VPN or bastion. It
-#   answers only eks_public_access_cidrs (the module refuses ranges shorter than /8); the private endpoint stays on for
-#   nodes and pods.
-#   Scope: stg only; prd: endpoint_public_access = false (private endpoint only), which clears AWS-0041 as well.
-
-# - AWS-0041: fires on any public range, a single /32 included; the ranges are the learner's own (an uncommitted
-#   *.auto.tfvars), limited as under AWS-0040.
-#   Scope: stg only; prd: no public range at all, the public endpoint off.
-
-# - AWS-0039: Kubernetes Secrets of stg stay encrypted with the AWS owned key of EKS: a key of our own costs a month's
-#   fee and outlives a cluster that lives a few hours. The module holds the same exception with a condition on the
-#   attribute, which trivy matches only when it scans the module.
-#   Scope: stg only; prd: secrets_kms_encryption = true, Secrets envelope-encrypted with a customer managed KMS key.
-#trivy:ignore:AWS-0039
-#trivy:ignore:AWS-0040
-#trivy:ignore:AWS-0041
 module "eks" {
   source = "../../modules/eks"
 
-  name                         = local.name
-  kubernetes_version           = var.kubernetes_version
-  vpc_id                       = module.network.vpc_id
-  private_subnet_ids           = module.network.private_subnet_ids
-  endpoint_public_access       = var.eks_endpoint_public_access
-  endpoint_public_access_cidrs = var.eks_public_access_cidrs
-  control_plane_log_types      = var.control_plane_log_types
-  secrets_kms_encryption       = var.eks_secrets_kms_encryption
-  node_instance_types          = var.node_instance_types
-  node_capacity_type           = var.node_capacity_type
-  node_min_size                = var.node_min_size
-  node_desired_size            = var.node_desired_size
-  node_max_size                = var.node_max_size
-  hosted_zone_id               = var.hosted_zone_id
+  name                    = local.name
+  kubernetes_version      = var.kubernetes_version
+  vpc_id                  = module.network.vpc_id
+  private_subnet_ids      = module.network.private_subnet_ids
+  control_plane_log_types = var.control_plane_log_types
+  secrets_kms_encryption  = var.eks_secrets_kms_encryption
+  hosted_zone_id          = var.hosted_zone_id
+
+  # One system node per zone, room for as many again when scaled by hand; Karpenter makes the other nodes.
+  system_node_max_size = 2 * var.az_count
 
   control_plane_log_retention_days = var.control_plane_log_retention_days
 }
@@ -68,13 +46,15 @@ module "rds" {
   # Pods carry addresses of their node's network interfaces (VPC CNI), so they connect with the node security group.
   # The cluster security group EKS creates sits on the control plane's network interfaces, and EKS also gives it to
   # what it launches without a security group of its own (Fargate pods, nodes of a group with no launch template).
-  # The node group here does not carry it: its launch template names the node security group.
+  # The nodes here do not carry it: the system node group's launch template names the node security group, and
+  # Karpenter's EC2NodeClass selects that group by its discovery tag.
   allowed_security_groups = {
     node    = module.eks.node_security_group_id
     cluster = module.eks.cluster_primary_security_group_id
   }
 
   instance_class           = var.rds_instance_class
+  max_allocated_storage    = var.rds_max_allocated_storage
   multi_az                 = var.rds_multi_az
   backup_retention_period  = var.rds_backup_retention_period
   delete_automated_backups = var.rds_delete_automated_backups
@@ -86,6 +66,8 @@ module "rds" {
   monitoring_interval                   = var.rds_monitoring_interval
   cloudwatch_logs_exports               = var.rds_cloudwatch_logs_exports
   cloudwatch_logs_retention_days        = var.rds_cloudwatch_logs_retention_days
+
+  alarm_topic_arn = module.alarms.topic_arn
 }
 
 # Kafka of the env: one broker per zone, reached on 9096 (SASL/SCRAM over TLS) by the pods like RDS. The module writes
@@ -104,6 +86,7 @@ module "msk" {
 
   broker_count               = var.az_count
   broker_instance_type       = var.msk_broker_instance_type
+  broker_volume_max_size     = var.msk_broker_volume_max_size
   replication_factor         = var.msk_replication_factor
   min_insync_replicas        = var.msk_min_insync_replicas
   broker_logs_enabled        = var.msk_broker_logs_enabled
@@ -112,6 +95,8 @@ module "msk" {
 
   kafka_admin_secret_id = module.external_secrets.secret_arns["kafka-admin"]
   kafka_users_secret_id = module.external_secrets.secret_arns["kafka-users"]
+
+  alarm_topic_arn = module.alarms.topic_arn
 }
 
 # Valkey of the env, reached on 6379 over TLS by the same security groups; the module writes the passwords of its users
@@ -128,11 +113,23 @@ module "elasticache" {
     cluster = module.eks.cluster_primary_security_group_id
   }
 
-  node_type        = var.valkey_node_type
-  node_count       = var.valkey_node_count
-  password_version = var.valkey_password_version
+  node_type               = var.valkey_node_type
+  node_count              = var.valkey_node_count
+  apply_immediately       = var.valkey_apply_immediately
+  slow_log_retention_days = var.valkey_slow_log_retention_days
+  password_version        = var.valkey_password_version
 
   valkey_users_secret_id = module.external_secrets.secret_arns["valkey-users"]
+  alarm_topic_arn        = module.alarms.topic_arn
+}
+
+# SNS topic every CloudWatch alarm of RDS, MSK and ElastiCache notifies: alarms live outside the cluster, so they still
+# fire when the cluster is down.
+module "alarms" {
+  source = "../../modules/alarms"
+
+  name        = local.name
+  alarm_email = var.alarm_email
 }
 
 module "media" {

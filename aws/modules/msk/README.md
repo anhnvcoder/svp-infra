@@ -2,7 +2,8 @@
 
 Một cluster Amazon MSK provisioned cho một env: broker Standard chế độ KRaft, client chỉ vào được bằng SASL/SCRAM-SHA-512 trên TLS cổng
 9096, mỗi client một user SCRAM. Thiết kế: [ADR-0053](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0053-msk-elasticache-valkey.md)
-§2, §5, §6, §12.
+§2, §5, §6, §12; tự tăng dung lượng và alarm: [ADR-0058](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0058-managed-data-operations.md)
+§1, §2, §4.
 
 Tạo:
 
@@ -25,6 +26,10 @@ Tạo:
   `svp/<env>/kafka-users` (khoá `SVP_KAFKA_<USER>_PASSWORD` của bảy user còn lại).
 - Log group `/aws/msk/<name>` với retention `broker_logs_retention_days`, chỉ khi `broker_logs_enabled` (MSK không tự tạo đích log; tạo ở
   đây thì `destroy` gỡ được).
+- Storage autoscaling: `aws_appautoscaling_target` (`kafka:broker-storage:VolumeSize`, từ `broker_volume_size` tới `broker_volume_max_size`)
+  và policy target tracking `KafkaBrokerStorageUtilization` ở mức `broker_storage_target_utilization`, `disable_scale_in = true`.
+- Alarm CloudWatch `<name>-<alarm>` của bảng ADR-0058 §2 (các dòng `msk-*`): tag `Severity`, alarm `page` có URL runbook
+  `docs/runbooks/<alarm>.md` của repo code trong `alarm_description`, `alarm_actions` và `ok_actions` tới `alarm_topic_arn`.
 
 User: `svp-admin`, `svp-user-service`, `svp-video-service`, `svp-engagement-service`, `svp-feed-service`, `svp-media-worker`, `svp-keda`,
 `svp-otelcol`; khoá trong entry là tên user bỏ `svp-`, viết hoa, `-` thành `_`, kẹp giữa `SVP_KAFKA_` và `_PASSWORD`, cùng tên biến của `.env`
@@ -53,6 +58,24 @@ local.
   phiên bản Kafka tạo configuration mới tên theo phiên bản trước khi cluster chuyển sang.
 - MSK gắn resource policy của nó vào mỗi secret `AmazonMSK_*`; module không quản policy đó.
 
+## Dung lượng broker
+
+- MSK tăng volume khi mức dùng vượt mức đích, mỗi lần max(10 GiB, 10 %), và không bao giờ giảm: dung lượng đã tăng giữ tới khi cluster bị xoá.
+  Sau một lần tăng, lần sau bị khoá 6 giờ, nên một env sống một buổi tăng được tối đa một lần
+  ([MSK automatic scaling](https://docs.aws.amazon.com/msk/latest/developerguide/msk-autoexpand.html)).
+- Volume đổi ngoài Terraform: `aws_msk_cluster` bỏ qua `volume_size` (`lifecycle.ignore_changes`), để apply sau không tìm cách thu nhỏ.
+  Đổi `broker_volume_size` sau khi cluster đã có thì chỉ đổi mức sàn của autoscaling, không đổi volume.
+- Policy tạo một alarm target tracking của Application Auto Scaling. Destroy xoá policy trước cluster; xoá cluster ngoài Terraform thì alarm đó
+  còn lại.
+
+## Alarm
+
+- Metric theo broker (dimension `Cluster Name`, `Broker ID`) gộp bằng metric math `MAX` qua mọi broker: một alarm mỗi loại, tên không đổi theo số
+  broker. Broker ID của MSK đánh từ 1 nên module sinh từ `broker_count`. `msk-cpu-high` cộng `CpuUser` và `CpuSystem` của từng broker trước `MAX`;
+  `msk-offline-partitions` đọc metric cấp cluster (chỉ `Cluster Name`).
+- Một alarm đọc tối đa 10 metric: precondition từ chối số broker làm `msk-cpu-high` vượt mức đó (từ 6 broker).
+- Ngưỡng, số chu kỳ, mức và nguồn ở ADR-0058 §2, §3; code giữ cùng số trong `alarms.tf`.
+
 <!-- markdownlint-disable MD033 -->
 <!-- BEGIN_TF_DOCS -->
 ## Requirements
@@ -73,7 +96,10 @@ local.
 
 | Name | Type |
 | ---- | ---- |
+| [aws_appautoscaling_policy.storage](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/appautoscaling_policy) | resource |
+| [aws_appautoscaling_target.storage](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/appautoscaling_target) | resource |
 | [aws_cloudwatch_log_group.this](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_log_group) | resource |
+| [aws_cloudwatch_metric_alarm.this](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_metric_alarm) | resource |
 | [aws_kms_alias.this](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/kms_alias) | resource |
 | [aws_kms_key.this](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/kms_key) | resource |
 | [aws_msk_cluster.this](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/msk_cluster) | resource |
@@ -90,11 +116,14 @@ local.
 
 | Name | Description | Type | Default | Required |
 | ---- | ----------- | ---- | ------- | :------: |
+| alarm\_topic\_arn | ARN of the SNS topic every CloudWatch alarm of the cluster notifies, when it fires and when it clears. | `string` | n/a | yes |
 | allowed\_security\_groups | Security groups whose members may connect on 9096, the SASL/SCRAM port (the EKS node and cluster security groups), keyed by a fixed label such as node or cluster: the keys name the rules, so they are known at plan time even when the ids are not. | `map(string)` | n/a | yes |
 | broker\_count | Number of brokers: a multiple of the number of subnets, since MSK puts the same number of brokers in each zone (one per zone in this lab). | `number` | n/a | yes |
 | broker\_instance\_type | Instance type of every broker (kafka.t3.small for a lab env, kafka.m7g.large for production). | `string` | `"kafka.t3.small"` | no |
 | broker\_logs\_enabled | Send the broker logs to the CloudWatch log group /aws/msk/<name>, which this module creates. Off by default: ingestion is billed per GB. | `bool` | `false` | no |
 | broker\_logs\_retention\_days | Days CloudWatch keeps the broker logs when broker\_logs\_enabled is true. | `number` | `1` | no |
+| broker\_storage\_target\_utilization | Percentage of the broker volume in use (KafkaBrokerStorageUtilization) that storage autoscaling keeps the brokers under. | `number` | `60` | no |
+| broker\_volume\_max\_size | Ceiling of the EBS volume of each broker, in GiB, up to which storage autoscaling grows it (at least broker\_volume\_size, at most 16384). | `number` | n/a | yes |
 | broker\_volume\_size | Size of the EBS volume of each broker, in GiB (1 to 16384). | `number` | `10` | no |
 | kafka\_admin\_secret\_id | ARN of the External Secrets entry svp/<env>/kafka-admin (output secret\_arns of the external-secrets module); this module writes its value, key SVP\_KAFKA\_ADMIN\_PASSWORD. | `string` | n/a | yes |
 | kafka\_users\_secret\_id | ARN of the External Secrets entry svp/<env>/kafka-users (output secret\_arns of the external-secrets module); this module writes its value, one key SVP\_KAFKA\_<USER>\_PASSWORD per user other than svp-admin. | `string` | n/a | yes |
@@ -125,6 +154,8 @@ local.
 | `broker_instance_type` | `kafka.t3.small` | `kafka.m7g.large` |
 | `broker_count` | `2` | `3` |
 | `broker_volume_size` | `10` | `10` |
+| `broker_volume_max_size` | `20` | `100` |
+| `alarm_topic_arn` | output topic của module `alarms` | như stg |
 | `replication_factor` / `min_insync_replicas` | `2` / `1` | `3` / `2` |
 | `broker_logs_enabled` / `broker_logs_retention_days` | `false` / — | `true` / `30` |
 | `kafka_admin_secret_id`, `kafka_users_secret_id` | `secret_arns["kafka-admin"]`, `secret_arns["kafka-users"]` của module `external-secrets` | như stg |
@@ -137,3 +168,4 @@ hơn RF (khi RF > 1) và số broker không chia hết số subnet.
 - **KMS key:** vào `PendingDeletion` 7 ngày, không tính phí lúc chờ; alias xoá ngay.
 - **Secret `AmazonMSK_*`:** xoá ngay (`recovery_window_in_days = 0`); destroy dở thì còn, quét Secrets Manager theo tiền tố `AmazonMSK_svp-`.
 - **Configuration MSK:** không xoá được khi cluster còn dùng; destroy dở (cluster chưa xoá xong) thì còn.
+- **Alarm target tracking** của storage autoscaling (`TargetTracking-arn:aws:kafka:…`): còn khi cluster bị xoá trước policy.
