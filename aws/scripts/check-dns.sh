@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Second step of every AWS session, before any plan or apply: public resolvers must answer the delegation of the
-# environment's hosted zone (made by the baseline aws/accounts/<env>). Let's Encrypt checks DNS-01 and the web reaches
-# its names through public resolvers, so a delegation not yet propagated (or undone) fails the session later, after the
-# cluster is paid for; this stops it before. Only the output name_servers of aws/accounts/<env> is read from AWS.
+# environment's hosted zone (made by the baseline aws/accounts/<env>). ACM validates the session's certificates by DNS
+# and viewers reach its names through public resolvers, so a delegation not yet propagated (or undone) fails the session
+# later, after the cluster is paid for; this stops it before. Only output name_servers of aws/accounts/<env> is read.
 
 # Usage: aws/scripts/check-dns.sh [--print] stg|prd
 set -euo pipefail

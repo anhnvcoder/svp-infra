@@ -29,7 +29,7 @@ variable "security_account_id" {
 }
 
 variable "stg_account_id" {
-  description = "The account svp-stg (12 digits), whose flow logs and WAF logs are kept for a shorter time. Set it with TF_VAR_stg_account_id from SVP_AWS_STG_ACCOUNT_ID; it never goes into a committed file."
+  description = "The account svp-stg (12 digits), whose flow logs, WAF logs and CloudFront logs are kept for a shorter time, and the only account allowed to deliver to the destination svp-cloudfront-stg. Set it with TF_VAR_stg_account_id from SVP_AWS_STG_ACCOUNT_ID; it never goes into a committed file."
   type        = string
 
   validation {
@@ -38,8 +38,18 @@ variable "stg_account_id" {
   }
 }
 
+variable "prd_account_id" {
+  description = "The account svp-prd (12 digits), the only account allowed to deliver to the destination svp-cloudfront-prd. Set it with TF_VAR_prd_account_id from SVP_AWS_PRD_ACCOUNT_ID; it never goes into a committed file."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[0-9]{12}$", var.prd_account_id))
+    error_message = "prd_account_id must be the 12 digits of an AWS account id."
+  }
+}
+
 variable "region" {
-  description = "Home region of the organization: every log bucket and the first KMS key, except the WAF log bucket and its key in us-east-1."
+  description = "Home region of the organization: every log bucket and the first KMS key, except the WAF and CloudFront log buckets, their key and the CloudFront delivery destinations in us-east-1."
   type        = string
   default     = "ap-southeast-1"
 }

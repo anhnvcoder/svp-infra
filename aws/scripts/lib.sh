@@ -5,8 +5,8 @@
 # Design notes: README.md.
 
 region=ap-southeast-1
-# CloudFront's web ACLs (scope CLOUDFRONT) and the Pricing Plan Manager (CloudFront flat-rate plans) live in us-east-1
-# whatever the region of the distribution.
+# CloudFront's web ACLs (scope CLOUDFRONT), certificates and log delivery sources, and the Pricing Plan Manager
+# (CloudFront flat-rate plans) live in us-east-1 whatever the region of the distribution.
 global_region=us-east-1
 
 # The environments, one line each: the only place where they differ; no script branches on an environment's name.
@@ -120,8 +120,8 @@ env_arg() {
 }
 
 # session_dir: the directory of this session's files, $SVP_SESSION_DIR, which must sit under .session/ of this
-# repository (ignored by git: it holds the cluster values with the ACME email, and the measurements). With --print
-# nothing is created.
+# repository (ignored by git: its cluster values and plan texts name the real domain). With --print nothing is
+# created.
 session_dir() {
   if printing; then
     session=${SVP_SESSION_DIR:-$infra_root/.session/<time>}

@@ -11,22 +11,22 @@ variables {
   cluster_endpoint = "https://0123456789ABCDEF0123456789ABCDEF.gr7.ap-southeast-1.eks.amazonaws.com"
 
   cluster_values = {
-    name          = "svp-stg"
-    region        = "ap-southeast-1"
-    vpcId         = "vpc-00000000000000000"
-    vpcCidr       = "10.0.0.0/16"
-    serviceCidr   = "172.20.0.0/16"
-    dbCidrs       = ["10.0.192.0/22", "10.0.196.0/22"]
-    domain        = "stg.aws.svp.example"
-    hostedZoneId  = "Z0123456789ABCDEFGHIJ"
-    acmeEmail     = "acme@svp.example"
-    rdsAddress    = "svp-stg.000000000000.ap-southeast-1.rds.amazonaws.com"
-    kafkaBrokers  = "b-1.svpstg.abc123.c2.kafka.ap-southeast-1.amazonaws.com:9096,b-2.svpstg.abc123.c2.kafka.ap-southeast-1.amazonaws.com:9096"
-    valkeyHost    = "master.svp-stg.abc123.apse1.cache.amazonaws.com"
-    uploadsBucket = "svp-stg-uploads-111111111111-ap-southeast-1"
-    mediaBucket   = "svp-stg-media-111111111111-ap-southeast-1"
-    mediaDomain   = "d000000000000.cloudfront.net"
-    s3Cidrs       = ["198.51.100.0/24", "203.0.113.0/24"]
+    name               = "svp-stg"
+    region             = "ap-southeast-1"
+    vpcId              = "vpc-00000000000000000"
+    vpcCidr            = "10.0.0.0/16"
+    serviceCidr        = "172.20.0.0/16"
+    dbCidrs            = ["10.0.192.0/22", "10.0.196.0/22"]
+    edgeCidrs          = ["10.0.240.0/23", "10.0.242.0/23"]
+    edgeTargetGroupArn = "arn:aws:elasticloadbalancing:ap-southeast-1:111111111111:targetgroup/svp-stg-envoy/0123456789abcdef"
+    domain             = "stg.aws.svp.example"
+    rdsAddress         = "svp-stg.000000000000.ap-southeast-1.rds.amazonaws.com"
+    kafkaBrokers       = "b-1.svpstg.abc123.c2.kafka.ap-southeast-1.amazonaws.com:9096,b-2.svpstg.abc123.c2.kafka.ap-southeast-1.amazonaws.com:9096"
+    valkeyHost         = "master.svp-stg.abc123.apse1.cache.amazonaws.com"
+    uploadsBucket      = "svp-stg-uploads-111111111111-ap-southeast-1"
+    mediaBucket        = "svp-stg-media-111111111111-ap-southeast-1"
+    mediaDomain        = "d000000000000.cloudfront.net"
+    s3Cidrs            = ["198.51.100.0/24", "203.0.113.0/24"]
     externalSecretsRoles = {
       svp      = "arn:aws:iam::111111111111:role/svp-stg-external-secrets-svp"
       svp-data = "arn:aws:iam::111111111111:role/svp-stg-external-secrets-svp-data"
@@ -337,6 +337,27 @@ run "cluster_value_wrong_kind" {
 
   variables {
     cluster_values = merge(var.cluster_values, { dbCidrs = "10.0.192.0/22" })
+  }
+
+  expect_failures = [var.cluster_values]
+}
+
+run "cluster_value_edge_cidrs_string" {
+  command = plan
+
+  variables {
+    cluster_values = merge(var.cluster_values, { edgeCidrs = "10.0.240.0/23" })
+  }
+
+  expect_failures = [var.cluster_values]
+}
+
+# DNS records of the edge live in Terraform, so the cluster gets no hosted zone: a root still sending one is refused.
+run "cluster_value_hosted_zone_id" {
+  command = plan
+
+  variables {
+    cluster_values = merge(var.cluster_values, { hostedZoneId = "Z0123456789ABCDEFGHIJ" })
   }
 
   expect_failures = [var.cluster_values]

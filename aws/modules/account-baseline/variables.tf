@@ -72,3 +72,32 @@ variable "budget_emails" {
     error_message = "budget_emails must hold at least one email address."
   }
 }
+
+variable "dnssec_enabled" {
+  description = "Sign the zone with DNSSEC: a KMS key in us-east-1 (kept with prevent_destroy), a key signing key, zone signing and two page alarms to alarm_topic_arn. Turning it off once on: the steps of the module README, never this variable alone."
+  type        = bool
+  default     = false
+}
+
+variable "dnssec_signing" {
+  description = "With dnssec_enabled, whether the zone is signed (SIGNING) or not (NOT_SIGNING); the key signing key and the KMS key stay either way. Set it to false only after the DS record at the parent is gone and its TTL has passed."
+  type        = bool
+  default     = true
+}
+
+variable "alarm_topic_arn" {
+  description = "SNS topic in us-east-1 the DNSSEC alarms notify (topic_arn of the alarms module called with region us-east-1). Required when dnssec_enabled."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = !var.dnssec_enabled || can(regex("^arn:aws:sns:us-east-1:[0-9]{12}:[A-Za-z0-9_-]+$", var.alarm_topic_arn))
+    error_message = "With dnssec_enabled, alarm_topic_arn must be the ARN of an SNS topic in us-east-1."
+  }
+}
+
+variable "query_log_enabled" {
+  description = "Log the public DNS queries of the zone to the CloudWatch Logs group /aws/route53/<zone_name> in us-east-1, kept 90 days."
+  type        = bool
+  default     = false
+}

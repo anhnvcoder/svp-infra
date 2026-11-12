@@ -31,7 +31,7 @@ locals {
 }
 
 # Both keys: the account manages and reads through IAM (readers get kms:Decrypt by their own policy); the log delivery
-# service of CloudWatch (flow logs, WAF logs) encrypts for any account of the organization.
+# service of CloudWatch (flow logs, WAF and CloudFront logs) encrypts for any account of the organization.
 data "aws_iam_policy_document" "key_common" {
   statement {
     sid       = "EnableIamPermissions"

@@ -1,7 +1,7 @@
 # `aws/envs/stg`: cấu hình gốc của env stg
 
-Tầng platform của stg trên AWS (ADR-0034 §2, ADR-0024 §6A, ADR-0048, ADR-0053, ADR-0055…0058, ADR-0060): ghép các module `network`, `eks`, `rds`,
-`msk`, `elasticache`, `alarms`, `media`, `waf`, `ssm-bastion`, `external-secrets`, thêm role IAM và Pod Identity association cho
+Tầng platform của stg trên AWS (ADR-0034 §2, ADR-0024 §6A, ADR-0048, ADR-0053, ADR-0055…0058, ADR-0060, ADR-0061): ghép các module `network`,
+`eks`, `rds`, `msk`, `elasticache`, `alarms`, `media`, `edge`, `waf`, `ssm-bastion`, `external-secrets`, thêm role IAM và Pod Identity association cho
 `svp/video-service`, `svp/media-worker`, xuất output `cluster_values` theo hợp đồng `cluster.*` và các output của cluster cho root bootstrap
 `aws/gitops/stg`. Ứng dụng trong cluster không ở đây: Argo CD triển khai từ `svp-gitops`.
 
@@ -12,26 +12,24 @@ Tầng platform của stg trên AWS (ADR-0034 §2, ADR-0024 §6A, ADR-0048, ADR-
 | Account | `svp-stg`, account thành viên của org (OU `Workloads`), không phải management account |
 | Profile SSO | `anhnv-stg` (permission set `SvpAdmin`), người học tự tạo bằng `aws configure sso` |
 | Biến account | `SVP_AWS_STG_ACCOUNT_ID`, export trong terminal của buổi; mọi lệnh đặt `TF_VAR_account_id` từ nó (`allowed_account_ids`) |
-| Biến account Log Archive | `SVP_AWS_LOG_ACCOUNT_ID` (output `log_archive_account_id` của `aws/org`), export cùng terminal; mọi lệnh đặt `TF_VAR_log_archive_account_id` từ nó (tên bucket flow log và log WAF, mục "Log và phát hiện") |
+| Biến account Log Archive | `SVP_AWS_LOG_ACCOUNT_ID` (output `log_archive_account_id` của `aws/org`), export cùng terminal; mọi lệnh đặt `TF_VAR_log_archive_account_id` từ nó (tên bucket flow log, log WAF và delivery destination của log CloudFront, mục "Log và phát hiện") |
 | Backend | `../../backend-stg.hcl` (bucket `svp-tfstate-<account stg>-<region>`, KMS key `alias/svp-tfstate`, lock file S3), sinh từ output `backend_hcl` của `aws/accounts/stg`, dạng ở `backend.hcl.example` |
 | Key của state | `aws/stg/terraform.tfstate`, truyền bằng `-backend-config` thứ hai lúc `init`; khối `backend "s3" {}` trong `versions.tf` trống |
 | Zone | `stg.aws.<domain>` của account stg (output `zone_id` của `aws/accounts/stg`), uỷ quyền từ zone `aws.<domain>` của account prd (bản ghi `NS` do `aws/accounts/prd` tạo) |
 
 Root chạy được khi baseline `aws/accounts/stg` đã apply, uỷ quyền DNS đã xong
-([`aws/accounts/README.md`](../../accounts/README.md)) và root `aws/log-archive` đã apply (bucket nhận flow log và log WAF,
-[`aws/log-archive/README.md`](../../log-archive/README.md)).
+([`aws/accounts/README.md`](../../accounts/README.md)) và root `aws/log-archive` đã apply (bucket nhận flow log, log WAF, log CloudFront và
+delivery destination `svp-cloudfront-stg`, [`aws/log-archive/README.md`](../../log-archive/README.md)).
 
 ## Cái gì khác giữa các env
 
 Root prd chép thư mục này: mọi `*.tf` giống hệt, trừ dòng `env = "<env>"` của `locals` (`main.tf`); prd thêm `teardown.tfvars`. Mọi lời gọi
 module chỉ tham chiếu biến hay output; khác biệt giữa hai env chỉ là dữ liệu ở `<env>.tfvars`
 ([ADR-0055](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0055-environment-matrix.md) §6, lệnh `diff` kiểm ở đó). Cả hai
-root có web ACL AWS WAF trước CloudFront (`waf.tf`, module `waf` tên `svp-<env>-media`, provider alias `us_east_1` ở `providers.tf`: CloudFront chỉ nhận web
-ACL ở `us-east-1`), vì gói CloudFront flat-rate Free của distribution media bắt buộc có web ACL
-([ADR-0052](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0052-cloudfront-flat-rate-free.md)). Mọi tên tài nguyên bắt đầu
+root có cùng đường vào (mục [Đường vào](#đường-vào)) với ba web ACL AWS WAF giống hệt nhau. Mọi tên tài nguyên bắt đầu
 bằng `svp-<env>` (cluster, role IAM, bucket, instance RDS, cluster MSK, replication group Valkey, entry Secrets Manager), trừ secret SCRAM
 của MSK: `AmazonMSK_svp-<env>-<user>` (MSK chỉ đọc secret có tiền tố `AmazonMSK_`).
-Cỡ, mức bảo vệ, log và mã hoá nằm ở `<env>.tfvars`:
+Cỡ, mức bảo vệ, log, mã hoá và gói CloudFront của media nằm ở `<env>.tfvars`:
 
 | Tệp | Commit | Nội dung |
 | --- | --- | --- |
@@ -39,20 +37,22 @@ Cỡ, mức bảo vệ, log và mã hoá nằm ở `<env>.tfvars`:
 | `stg.auto.tfvars` | **không** (git bỏ qua) | giá trị cá nhân, chép từ `example.auto.tfvars.example` |
 | `../../backend-stg.hcl` | **không** | phần chung của backend trong account stg |
 | `TF_VAR_account_id` | biến môi trường, đặt ngay trong lệnh | account được phép đổi (`allowed_account_ids`) |
-| `TF_VAR_log_archive_account_id` | biến môi trường, đặt ngay trong lệnh | account `svp-log-archive`, chủ bucket flow log và log WAF |
+| `TF_VAR_log_archive_account_id` | biến môi trường, đặt ngay trong lệnh | account `svp-log-archive`, chủ bucket flow log, log WAF, log CloudFront |
 
 **Vì sao `stg.tfvars` mà không `terraform.tfvars`:** repo bỏ qua mọi `terraform.tfvars` và `*.auto.tfvars` (hai tên Terraform tự nạp) vì
 chúng là chỗ giá trị cá nhân hay nằm. Tệp cỡ của env cần commit nên mang tên khác và phải truyền bằng `-var-file=stg.tfvars` ở **mọi**
 `plan`, `apply`, `destroy`. Quên thì Terraform dừng ngay ở "No value for required variable" (các biến cỡ có từ đầu không có mặc định),
 không dựng gì sai.
 
-Mỗi nhóm biến của `stg.tfvars` và `prd.tfvars` (mạng, `eks`, `rds`, `msk`, `valkey`, `media`) có một comment nói vì sao; hai file cùng thứ
+Mỗi nhóm biến của `stg.tfvars` và `prd.tfvars` (mạng, `eks`, `rds`, `msk`, `valkey`, `media`, `edge`) có một comment nói vì sao; hai file cùng thứ
 tự dòng để đọc cạnh nhau. Thành phần nào phải giống prd, được giảm hay giảm có điều kiện (mất gì, kiểm bù ở đâu) và nguồn của từng quyết
 định: bảng của [`environments.md`](https://github.com/anhnvcoder/svp-backend/blob/main/docs/explanation/environments.md) ở repo code. Tóm tắt: stg giữ cùng dịch vụ, version,
 cấu hình, xác thực, mã hoá (KMS key cho Secret của EKS, RDS, MSK, SNS), loại log (năm loại log control plane, flow log, export log RDS,
 Database Insights, enhanced monitoring, broker log MSK, slow-log Valkey, access log media), cùng bộ alarm và cùng đường tới API (tunnel SSM);
-stg giảm số AZ (2), NAT (một), lớp và số lượng (RDS một AZ, MSK RF 2, Valkey một node), retention của log CloudWatch (1 ngày) và bảo vệ
-xoá. Flow log và log WAF nằm ở Log Archive, retention theo mục [Log và phát hiện](#log-và-phát-hiện).
+stg giảm số AZ (2), NAT (một), lớp và số lượng (RDS một AZ, MSK RF 2, Valkey một node), retention của log CloudWatch (1 ngày), bảo vệ
+xoá (cả ALB edge: `edge_alb_deletion_protection = false`) và distribution media (gói flat-rate Free, không log chuẩn:
+`media_flat_rate_free = true`); mọi phần khác của đường vào giống prd. Flow log, log WAF và log CloudFront nằm ở Log Archive, retention theo
+mục [Log và phát hiện](#log-và-phát-hiện).
 
 Số broker MSK là `az_count` (một broker mỗi AZ); phiên bản Kafka (`4.1.x.kraft`), Valkey (`9.1`) và EBS khởi đầu mỗi broker lấy mặc định
 của module, như ADR-0053 §2, §7; trần dung lượng broker (`msk_broker_volume_max_size`) là của env. Nhóm node hệ thống (loại, min = desired =
@@ -66,9 +66,8 @@ Giá trị cá nhân (`stg.auto.tfvars` hay `TF_VAR_*`):
 
 | Biến | Lấy ở đâu |
 | --- | --- |
-| `hosted_zone_id` | output `zone_id` của `aws/accounts/stg`, dán tay (root này không đọc state của root khác) |
-| `domain` | tên zone stg (`stg.aws.<domain>`, web ở apex) hay một tên trong zone đó; API là `api.<tên này>`; plan dừng ở precondition của `cluster_values` nếu tên khác |
-| `acme_email` | email tài khoản Let's Encrypt của cert-manager (biến `sensitive`) |
+| `hosted_zone_id` | output `zone_id` của `aws/accounts/stg`, dán tay (root này không đọc state của root khác); module `edge`, `media` ghi bản ghi alias và bản ghi validation ACM vào zone này |
+| `domain` | tên zone stg (`stg.aws.<domain>`, web ở apex) hay một tên trong zone đó; API là `api.<tên này>`, media là `media.<tên này>`; plan dừng ở precondition của `cluster_values` nếu tên khác |
 | `alarm_email` | hộp thư nhận CloudWatch alarm (subscription email của topic `svp-stg-alarms`, biến `sensitive`); người học mở link xác nhận SNS gửi sau apply |
 
 Không có IP của máy người học: endpoint công khai của API tắt.
@@ -90,7 +89,7 @@ echo "$SVP_AWS_STG_ACCOUNT_ID"
 Dựng:
 
 ```sh
-cp example.auto.tfvars.example stg.auto.tfvars          # rồi sửa bốn giá trị
+cp example.auto.tfvars.example stg.auto.tfvars          # rồi sửa ba giá trị
 AWS_PROFILE=anhnv-stg terraform init -reconfigure -backend-config=../../backend-stg.hcl -backend-config=key=aws/stg/terraform.tfstate
 AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
   terraform plan -var-file=stg.tfvars -out=stg.tfplan
@@ -133,7 +132,35 @@ AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_log_arc
 Instance, launch template và instance profile do Karpenter tạo nằm ngoài state: `pre-destroy.sh` gỡ chúng khi controller
 còn chạy, `sweep.sh stg` tìm phần sót. `destroy` gỡ cả plan Malware Protection (GuardDuty gỡ theo rule EventBridge
 `DO-NOT-DELETE-AmazonGuardDutyMalwareProtectionS3*` nó quản), endpoint `guardduty-data` và cấu hình log của web ACL;
-`sweep.sh stg` liệt kê plan và endpoint còn sót của một `destroy` dở.
+`sweep.sh stg` liệt kê plan và endpoint còn sót của một `destroy` dở. Distribution CloudFront tắt mất nhiều phút trước khi xoá được; ENI và
+security group `CloudFront-VPCOrigins-Service-SG` do CloudFront tạo cho VPC origin nằm ngoài state và giữ subnet edge, VPC tới khi chúng mất
+(mục "Thứ tự gỡ" của [README module `edge`](../../modules/edge/README.md)).
+
+## Đường vào
+
+Web, API và media chỉ vào từ internet qua CloudFront; không load balancer nào internet-facing, tầng public chỉ còn NAT gateway. Thiết kế:
+[ADR-0061](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0061-edge-cloudfront-waf-acm.md).
+
+```mermaid
+flowchart LR
+    V[Người xem] --> W[CloudFront svp-stg-web<br/>web ACL svp-stg-web]
+    V --> A[CloudFront svp-stg-api<br/>web ACL svp-stg-api]
+    V --> M[CloudFront svp-stg-media<br/>web ACL svp-stg-media]
+    W --> O[VPC origin svp-stg-edge]
+    A --> O
+    O --> ALB[ALB internal svp-stg-edge<br/>subnet edge]
+    ALB --> E[Pod Envoy<br/>target group svp-stg-envoy]
+    M --> S3[(Bucket media, OAC)]
+```
+
+| Phần | Ở đâu | Ghi chú |
+| --- | --- | --- |
+| Distribution `svp-<env>-web` (`<domain>`), `svp-<env>-api` (`api.<domain>`), VPC origin, ALB internal, target group, cert ACM, bản ghi DNS | module `edge` (`main.tf`) | ALB ở `edge_subnet_ids` của `network`; SG ALB tới SG node của `eks`; `edge_alb_deletion_protection` |
+| Distribution `svp-<env>-media` (`media.<domain>`), cert ACM, bản ghi DNS | module `media` (`main.tf`) | gói theo `media_flat_rate_free` |
+| Web ACL `svp-<env>-web`, `-api`, `-media` | module `waf` gọi ba lần (`waf.tf`, provider `aws.us_east_1`: CloudFront chỉ nhận web ACL ở `us-east-1`) | web: `SizeRestrictions_BODY` chỉ đếm, Bot Control `COMMON` chỉ gắn nhãn; api: ATP cho `POST /auth/login` |
+
+Output `target_group_arn` của `edge` vào `cluster_values` (`edgeTargetGroupArn`): `TargetGroupBinding` của Envoy đăng ký pod vào đó. Không
+controller nào trong cluster ghi zone hay xin cert công khai.
 
 ## Log và phát hiện
 
@@ -145,7 +172,8 @@ nào ở `stg.tfvars` ([ADR-0060](https://github.com/anhnvcoder/svp-backend/blob
 | Log | Đích | Ghi bởi |
 | --- | --- | --- |
 | Flow log của VPC (mọi lưu lượng, Parquet) | `svp-flowlogs-<account log>-<region>` | module `network`, giao thẳng vào S3, không role IAM |
-| Log web ACL (che header `authorization`, `cookie`) | `aws-waf-logs-svp-<account log>-us-east-1` | module `waf` (`waf.tf`) |
+| Log web ACL (che header `authorization`, `cookie`) | `aws-waf-logs-svp-<account log>-us-east-1` | module `waf` (`waf.tf`), ba ACL |
+| Log chuẩn v2 của CloudFront (web, api; media khi `media_flat_rate_free = false`), không trường `cs(Cookie)` | `svp-cloudfront-<account log>-us-east-1`, qua delivery destination `svp-cloudfront-<env>` của account log (`local.cloudfront_log_destination_arn`) | module `edge`, `media`: delivery source và delivery ở account env |
 
 GuardDuty bật ở mức tổ chức (root `aws/security`). Root này thêm phần GuardDuty không tự quản:
 
@@ -157,7 +185,7 @@ GuardDuty bật ở mức tổ chức (root `aws/security`). Root này thêm ph�
 
 | Output | Nội dung |
 | --- | --- |
-| `cluster_values` | map hợp đồng `cluster.*` (ADR-0034 §7), `sensitive` vì có `acmeEmail`: `terraform output` in `<sensitive>`, `terraform output -json cluster_values` in đủ |
+| `cluster_values` | map hợp đồng `cluster.*` (ADR-0034 §7), đọc bằng `terraform output -json cluster_values` |
 | `cluster_name`, `cluster_endpoint`, `cluster_certificate_authority_data` | tên cluster, URL API server, CA (base64 PEM) |
 | `rds_master_user_secret_arn` | ARN secret Secrets Manager giữ mật khẩu master của RDS (ARN không phải bí mật) |
 | `api_tunnel_command` | `AWS_PROFILE=anhnv-stg aws ssm start-session --region ap-southeast-1 --target <bastion> --document-name AWS-StartPortForwardingSessionToRemoteHost --parameters '…'` |
@@ -176,7 +204,9 @@ Khoá của `cluster_values`:
 | `vpcId`, `vpcCidr` | `module.network` |
 | `serviceCidr` | `module.eks.cluster_service_cidr` |
 | `dbCidrs` | `module.network.database_subnet_cidrs` (subnet database của VPC: RDS, broker MSK, node ElastiCache) |
-| `domain`, `hostedZoneId`, `acmeEmail` | biến cá nhân |
+| `edgeCidrs` | `module.network.edge_subnet_cidrs` (subnet edge: chỉ ALB của đường vào có địa chỉ ở đó, nên NetworkPolicy của Envoy nhận đúng các dải này) |
+| `edgeTargetGroupArn` | `module.edge.target_group_arn` (target group `svp-stg-envoy`) |
+| `domain` | biến cá nhân |
 | `rdsAddress` | `module.rds.address` |
 | `kafkaBrokers` | `module.msk.bootstrap_brokers`: một chuỗi `host:9096,host:9096` (SASL/SCRAM trên TLS), một mục mỗi broker |
 | `valkeyHost` | `module.elasticache.primary_endpoint_address`: tên host của node primary, không cổng (client nối TLS cổng 6379) |
@@ -228,4 +258,5 @@ của ADR-0055; luật ghi ngoại lệ ở mục "Ngoại lệ trivy" của [`A
 
 Ước tính và trần một buổi ở mục "Giới hạn" của runbook [`session-stg.md`](../../../docs/runbooks/session-stg.md) (ADR-0034 §12, ADR-0053
 §16, cộng phần ADR-0055, ADR-0056 thêm: nhóm node hệ thống on-demand, bastion, KMS key, log, alarm); chi tiết từng module ở README của module.
-CloudFront của media và web ACL WAF nằm trong gói flat-rate Free: $0 ([ADR-0052](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0052-cloudfront-flat-rate-free.md)).
+Distribution media và web ACL của nó nằm trong gói flat-rate Free: $0 ([ADR-0052](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0052-cloudfront-flat-rate-free.md));
+distribution web, api, hai web ACL của chúng (ATP, Bot Control) và ALB edge tính theo giờ và request, bảng ở mục "Chi phí edge" của [ADR-0061](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0061-edge-cloudfront-waf-acm.md).

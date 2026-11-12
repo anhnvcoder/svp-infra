@@ -11,8 +11,8 @@ locals {
   partition = data.aws_partition.current.partition
   org_id    = data.aws_organizations_organization.this.id
 
-  # Web ACLs of CloudFront live in us-east-1 and deliver their logs from there; SSE-KMS needs a key of the bucket's
-  # region, hence one key per region under the same alias.
+  # Web ACLs and distributions of CloudFront deliver their logs from us-east-1; SSE-KMS needs a key of the bucket's
+  # region, hence one key per region under the same alias. The us-east-1 key keeps its first name, waf.
   key_regions = {
     home = var.region
     waf  = "us-east-1"
@@ -89,6 +89,21 @@ locals {
       cold_after_days = null
       stg_prefix      = "AWSLogs/${var.stg_account_id}/"
     }
+    cloudfront = {
+      name            = "svp-cloudfront-${var.log_archive_account_id}-${local.key_regions.waf}"
+      region          = local.key_regions.waf
+      key             = "waf"
+      object_lock     = false
+      retention_days  = local.network_retention_days
+      cold_after_days = null
+      stg_prefix      = "AWSLogs/${var.stg_account_id}/"
+    }
+  }
+
+  # The env accounts whose CloudFront distributions deliver standard logs here, each through a destination of its own.
+  env_account_ids = {
+    stg = var.stg_account_id
+    prd = var.prd_account_id
   }
 
   bucket_arns = { for k, b in local.buckets : k => "arn:${local.partition}:s3:::${b.name}" }

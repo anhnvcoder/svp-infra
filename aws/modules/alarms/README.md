@@ -8,6 +8,12 @@ Root `aws/security` gọi module với `name = "svp-security"` và `publisher_se
 nhận sự kiện bảo mật của org từ rule EventBridge
 ([ADR-0060](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0060-org-detection-logging.md) §10).
 
+Biến `region` (mặc định `null`: region của provider) đặt region của mọi tài nguyên của module; `<region>` trong ARN của topic và của
+`aws:SourceArn` theo nó. CloudWatch alarm chỉ gửi tới topic cùng region, nên alarm ở region khác region của provider cần topic riêng ở region đó:
+root `aws/accounts/prd` gọi module với `name = "svp-prd-dns"`, `region = "us-east-1"` cho hai alarm DNSSEC của module
+[`account-baseline`](../account-baseline/README.md) (metric DNSSEC của Route 53 chỉ ở `us-east-1`). Topic này sống cùng zone, tách khỏi topic
+`svp-prd-alarms` của buổi.
+
 Tạo:
 
 - Một KMS key customer managed (symmetric, xoay vòng bật, deletion window 7 ngày, alias `alias/<name>-alarms`). CloudWatch và EventBridge không
@@ -85,6 +91,7 @@ của root env không đổi.
 | alarm\_email | Email address subscribed to the topic; SNS sends it a confirmation link and delivers nothing until the link is opened. | `string` | n/a | yes |
 | name | Name of the env or stack (svp-stg, svp-prd, svp-security): prefix of the SNS topic <name>-alarms and of the KMS alias alias/<name>-alarms. | `string` | n/a | yes |
 | publisher\_services | Service principals that publish to the topic and use its key, each limited to its own resources of this account and region: cloudwatch.amazonaws.com (alarms), events.amazonaws.com (EventBridge rules). | `list(string)` | <pre>[<br/>  "cloudwatch.amazonaws.com"<br/>]</pre> | no |
+| region | Region of the topic, its key and the alarms that may notify it (CloudWatch alarm actions reach a topic of their own region only). Null: the region of the provider. | `string` | `null` | no |
 
 ## Outputs
 

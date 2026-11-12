@@ -10,3 +10,6 @@ rds_deletion_protection = false
 
 # Versioning keeps every object, so the buckets are never empty; destroy deletes them with all their versions.
 media_force_destroy = true
+
+# The internal ALB of the edge refuses deletion while its protection is on; the apply turns it off first.
+edge_alb_deletion_protection = false

@@ -17,14 +17,16 @@ locals {
   # The VPC range splits into eight equal blocks. Blocks 0 to 5 are the private subnets, one per zone: the largest
   # ones, because every pod takes a VPC address from them (VPC CNI, with /28 prefixes per node when prefix
   # delegation is on). Block 6 splits eight ways for the database subnets, one per zone (RDS, MSK, ElastiCache). Block 7
-  # splits again into 32 small public subnets, one per zone: only the NAT gateways and the load balancers live there.
+  # holds the public subnets (NAT gateways only) at its start and the edge subnets (internal ALB) in its back half.
   private_subnets  = [for i in range(var.az_count) : cidrsubnet(var.cidr, 3, i)]
   database_subnets = [for i in range(var.az_count) : cidrsubnet(cidrsubnet(var.cidr, 3, 6), 3, i)]
   public_subnets   = [for i in range(var.az_count) : cidrsubnet(cidrsubnet(var.cidr, 3, 7), 5, i)]
+  edge_subnets     = [for i in range(var.az_count) : cidrsubnet(cidrsubnet(var.cidr, 3, 7), 4, 8 + i)]
 
   # Subnet discovery of the AWS Load Balancer Controller: an internet-facing load balancer goes to the subnets
-  # tagged role/elb, an internal one to those tagged role/internal-elb. "shared" lets other clusters use them too
-  # and tells the controller the subnets are not its to delete.
+  # tagged role/elb, an internal one to those tagged role/internal-elb. No subnet carries role/elb, so the controller
+  # can make no internet-facing one. "shared" lets other clusters use the subnets too and tells the controller they are
+  # not its to delete.
   cluster_tag = { "kubernetes.io/cluster/${var.cluster_name}" = "shared" }
 
   # The data tier gets a route table of its own with only the local route: no path to the internet either way. With
@@ -53,12 +55,12 @@ locals {
   nacl_icmp = [
     { rule_number = 160, rule_action = "allow", protocol = "icmp", from_port = 0, to_port = 0, icmp_type = -1, icmp_code = -1, cidr_block = "0.0.0.0/0" },
   ]
-  nacl_https = [
-    { rule_number = 110, rule_action = "allow", protocol = "tcp", from_port = 443, to_port = 443, cidr_block = "0.0.0.0/0" },
-  ]
+  # No tier takes TCP 443 from the internet: the public tier holds only NAT gateways, and inbound NACL rules do not
+  # evaluate the traffic of CloudFront to the internal ALB in the edge tier.
   nacl_inbound = {
-    public   = concat(local.nacl_from_vpc, local.nacl_https, local.nacl_return_traffic, local.nacl_icmp)
+    public   = concat(local.nacl_from_vpc, local.nacl_return_traffic, local.nacl_icmp)
     private  = concat(local.nacl_from_vpc, local.nacl_return_traffic, local.nacl_icmp)
+    edge     = local.nacl_from_vpc
     database = local.nacl_from_vpc
   }
 
@@ -98,6 +100,12 @@ module "vpc" {
   database_subnets = local.database_subnets
   public_subnets   = local.public_subnets
 
+  # The edge tier is the registry module's intra tier: one route table with only the local route, since the ALB answers
+  # CloudFront and reaches the pods inside the VPC. No node or pod takes an address there (VPC CNI uses the node's
+  # subnet), so every connection from this range to Envoy comes from the ALB.
+  intra_subnets       = local.edge_subnets
+  intra_subnet_suffix = "edge"
+
   create_database_subnet_route_table     = local.database_routes.own_route_table
   create_database_nat_gateway_route      = local.database_routes.nat_gateway_route
   create_database_internet_gateway_route = local.database_routes.internet_gateway_route
@@ -105,7 +113,7 @@ module "vpc" {
   create_database_subnet_group = false
 
   # Nothing in a public subnet gets a public address by itself: nodes run in the private subnets, and the NAT
-  # gateways and load balancers get their addresses explicitly.
+  # gateways get their Elastic IPs explicitly.
   map_public_ip_on_launch = false
 
   enable_dns_support   = true
@@ -122,7 +130,7 @@ module "vpc" {
   default_security_group_ingress = []
   default_security_group_egress  = []
 
-  public_subnet_tags = merge(local.cluster_tag, { "kubernetes.io/role/elb" = "1" })
+  public_subnet_tags = local.cluster_tag
   # karpenter.sh/discovery: the EC2NodeClass of Karpenter launches nodes into the subnets with this tag.
   private_subnet_tags = merge(local.cluster_tag, {
     "kubernetes.io/role/internal-elb" = "1"
@@ -139,6 +147,9 @@ module "vpc" {
   private_dedicated_network_acl  = true
   private_inbound_acl_rules      = local.nacl_inbound.private
   private_outbound_acl_rules     = local.nacl_outbound
+  intra_dedicated_network_acl    = true
+  intra_inbound_acl_rules        = local.nacl_inbound.edge
+  intra_outbound_acl_rules       = local.nacl_outbound
   database_dedicated_network_acl = true
   database_inbound_acl_rules     = local.nacl_inbound.database
   database_outbound_acl_rules    = local.nacl_outbound

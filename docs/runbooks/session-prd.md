@@ -8,10 +8,13 @@ có điều kiện" ở stg ([ADR-0055](https://github.com/anhnvcoder/svp-backen
 [ADR-0048](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0048-prd-aws.md) (§4 truy cập API, §6 bootstrap EKS, §7 ghim revision,
 §8 promote, §9 kết thúc buổi, §10 chi phí), [ADR-0053](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0053-msk-elasticache-valkey.md)
 (Kafka là Amazon MSK, Valkey là ElastiCache; prd mất một AZ không mất event đã xác nhận), [ADR-0051](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0051-dns-prd-apex.md) (zone của mỗi env),
-[ADR-0052](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0052-cloudfront-flat-rate-free.md) (gói CloudFront flat-rate Free, web ACL WAF ở cả hai env),
+[ADR-0052](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0052-cloudfront-flat-rate-free.md) (web ACL WAF; gói flat-rate
+Free chỉ ở media của stg),
 [ADR-0056](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0056-eks-platform-ha.md) (Karpenter, Envoy và Kyverno HA, trải zone),
 [ADR-0057](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0057-postgres17-verify-full.md) (PostgreSQL 17, `verify-full`, không proxy kết nối),
-[ADR-0058](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0058-managed-data-operations.md) (CloudWatch alarm tới email).
+[ADR-0058](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0058-managed-data-operations.md) (CloudWatch alarm tới email),
+[ADR-0061](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0061-edge-cloudfront-waf-acm.md) (edge: CloudFront, VPC origin, ALB
+internal, WAF, cert ACM, log CloudFront, DNS).
 
 Buổi prd đi đúng chuỗi script của buổi stg; khác biệt là dữ liệu (dòng `prd` của `env_table` trong `aws/scripts/lib.sh`: profile `anhnv-prd`,
 biến `SVP_AWS_PRD_ACCOUNT_ID`, tunnel cổng 6443, file `teardown.tfvars`, không thang k6) và các bước tay ở đây. Mọi mục chung (luật chạy lệnh,
@@ -30,13 +33,14 @@ aws/scripts/session.sh --print prd                 # mọi lệnh script của b
 
 - **Trần một buổi C ≈ $11,0** = 4 giờ × (H₀ $0,90 + H_k $1,09)/giờ + O₀ $2,8 + O_k $0,22 (ADR-0053 §16 và bảng ở phụ lục của nó; H_k là
   3 broker `kafka.m7g.large` cộng 2 node `cache.m7g.large` cộng phần nhỏ; H₀, O₀ ở phụ lục ADR-0048), cộng node Karpenter on-demand ngoài
-  nhóm hệ thống, KMS key và CloudWatch alarm (ADR-0056, ADR-0058); buổi prd đầu đo số thật ở Cost Explorer. **Phí giữ R ≈ $4,6/tháng** giữa
-  các buổi (trail, KMS, bucket state của management; bucket state, KMS key, zone của hai baseline), báo riêng, không cộng vào C.
+  nhóm hệ thống, KMS key và CloudWatch alarm (ADR-0056, ADR-0058), cộng phần edge (ALB, ba web ACL, log; bảng "Thêm mỗi buổi" ở phụ lục
+  ADR-0061 §13); buổi prd đầu đo số thật ở Cost Explorer. **Phí giữ R ≈ $4,6/tháng** giữa các buổi (trail, KMS, bucket state của management;
+  bucket state, KMS key, zone của hai baseline), cộng phần edge lúc không buổi (key DNSSEC, topic và alarm DNSSEC, query log: bảng "Lúc không
+  buổi" ở phụ lục ADR-0061 §13), báo riêng, không cộng vào C.
 - **Cả buổi 4 giờ**, từ cổng promote tới hai lượt `sweep.sh` sạch. Quá 3 giờ mà chưa đo xong thì bỏ phần đo còn lại, sang gỡ. Quên gỡ 24
   giờ ≈ $48 (24 × (H₀ + H_k)); budget `svp-prd-monthly` và budget tổng của org gửi email ở 50 %, 80 %, 100 %.
-- CloudFront và web ACL WAF của media nằm trong gói flat-rate Free như stg (`session-stg.md`, mục "Giới hạn"); web ACL sót sau khi gói huỷ
-  tính pay-as-you-go theo giờ.
-- Chứng chỉ Let's Encrypt production, giới hạn như stg (`session-stg.md`, mục "Giới hạn"); prd có bộ tên riêng.
+- Ba distribution của prd (web, api, media) và ba web ACL là pay-as-you-go, có access log; prd không đăng ký gói flat-rate nào. Web ACL sót
+  tính phí theo giờ, nên `sweep.sh` bắt nó.
 - MSK và ElastiCache dựng, gỡ lâu như stg (`session-stg.md`, mục "Giới hạn"; số giả định của ADR-0053 §16, số đo của buổi stg thay nó khi
   đã có).
 
@@ -75,24 +79,24 @@ aws/scripts/session.sh --print prd                 # mọi lệnh script của b
    cat > aws/envs/prd/prd.auto.tfvars <<EOF
    hosted_zone_id = "$zone"
    domain         = "aws.<domain>"
-   acme_email     = "<email>"
    alarm_email    = "<email>"
    EOF
    ```
 
-7. **Gói CloudFront flat-rate Free** (điều kiện như stg: account không ở AWS Free Tier, tối đa 3 gói Free mỗi account, `session-stg.md`
-   điều kiện 1). Mỗi buổi, trước bước 3, phép kiểm (a) của ADR-0052 (chỉ đọc):
+7. **Không gói CloudFront nào**: prd không đăng ký gói flat-rate, nên một gói còn ở account là sót (của buổi trước hay của console), giữ
+   distribution của nó. Mỗi buổi, trước bước 3 (chỉ đọc):
 
    ```sh
    AWS_PROFILE=anhnv-prd aws pricing-plan-manager list-subscriptions --region us-east-1 --query 'subscriptionSummaries[].[arn,planTier,status]' --output json
-   AWS_PROFILE=anhnv-prd aws freetier get-account-plan-state --region us-east-1 --query accountPlanType --output text
    ```
 
-   Mong `[]` và `PAID`; dán lại cả hai. Còn gói: huỷ theo `session-stg.md`, mục **Lệnh xoá tay theo loại** (CloudFront), với
-   `AWS_PROFILE=anhnv-prd`; `FREE`: không bắt đầu buổi, dán output cho AI.
+   Mong `[]`; dán lại. Còn gói: huỷ theo `session-stg.md`, mục **Lệnh xoá tay theo loại** (CloudFront), với `AWS_PROFILE=anhnv-prd`.
 8. **Nền bảo mật của org đã áp** tới ít nhất bước (3) của [`org-security-setup.md`](org-security-setup.md#thứ-tự-áp-lần-đầu), và biến
    `SVP_AWS_LOG_ACCOUNT_ID` đặt trong terminal của buổi: như `session-stg.md` điều kiện 6 (root env prd ghi flow log, log WAF vào bucket
    của `svp-log-archive`).
+9. **Edge đã áp lần đầu** theo [`edge-setup.md`](edge-setup.md#thứ-tự-áp-lần-đầu) tới hết bước (3), như `session-stg.md` điều kiện 7 (destination
+   `svp-cloudfront-prd`, `CAA`, zone `aws.<domain>` ký và có `DS` ở DNS cha); file có sẵn từ trước còn dòng `acme_email` thì xoá như
+   `session-stg.md` điều kiện 5.
 
 ## Mở terminal của buổi
 
@@ -110,8 +114,8 @@ export SVP_SESSION_DIR="$PWD/.session/$(date -u +%Y%m%dT%H%M%SZ)"
 ## Thứ tự
 
 Các bước script, theo đúng thứ tự `session.sh --print prd`; bước tay của prd chen giữa, ở các mục dưới (cổng promote trước bước 1, email
-của alarm và tunnel sau bước 5, gói Free, phép kiểm nền tảng, commit status và diễn tập sau bước 11, finding bảo mật trước bước 12, final
-snapshot sau bước 18):
+của alarm và tunnel sau bước 5, CORS của media, phép kiểm edge, phép kiểm nền tảng, commit status và diễn tập sau bước 11, finding bảo
+mật trước bước 12, final snapshot sau bước 18):
 
 | # | Lệnh | Hạn | Dán lại cho AI |
 | --- | --- | --- | --- |
@@ -166,11 +170,12 @@ Như `session-stg.md` bước 1–5, với `prd`. `check-account.sh prd` phải 
 `zone_name` của `aws/accounts/prd/prd.auto.tfvars`) ở `1.1.1.1` và `8.8.8.8` và so với output `name_servers` của `aws/accounts/prd`; `FAIL`
 thì bốn bản ghi `NS` `aws` ở DNS cha chưa lan hay sai: sửa theo `aws/accounts/README.md` (mục 5), không bắt đầu buổi. Zone stg nằm dưới zone
 prd nên `check-dns.sh stg` cũng phải xanh trước buổi stg. Plan của root env đọc `prd.tfvars` (mức prd); đọc
-file text `prd-env-plan.txt`: chỉ `to add`, có web ACL `module.waf.aws_wafv2_web_acl.this` (`us-east-1`) và gói
-`module.media.aws_pricingplanmanager_subscription.media` (`plan_tier = "FREE"`) như stg, bastion SSM, ba NAT gateway, RDS `multi_az = true`,
+file text `prd-env-plan.txt`: chỉ `to add`, có ba web ACL và `module.edge` như stg (`session-stg.md`, mục 3–5) với ALB `svp-prd-edge`
+`enable_deletion_protection = true`, distribution `svp-prd-media` không gói flat-rate (không `aws_pricingplanmanager_subscription`) với
+response headers policy `svp-prd-media` và delivery log, bastion SSM, ba NAT gateway, RDS `multi_az = true`,
 cluster MSK ba broker `kafka.m7g.large` (configuration RF 3, min ISR 2) cùng log group `/aws/msk/svp-prd`, replication group ElastiCache hai
 node `cache.m7g.large` (`automatic_failover_enabled`, `multi_az_enabled` `true`). Apply ~65–70 phút (MSK là phần dài nhất). `apply` đỏ giữa
-chừng và lỗi apply đã biết (gói vượt hạn `ServiceQuotaExceededException`, account chưa xác minh, ElastiCache không nhận access string) theo
+chừng và lỗi apply đã biết (account chưa xác minh, delivery destination chưa có, ElastiCache không nhận access string) theo
 `session-stg.md`, mục 3–5: lượt đỏ đã ghi một tài nguyên mang mật khẩu của nhóm Kafka hay Valkey thì tăng `msk_password_version` hay
 `valkey_password_version` trong `aws/envs/prd/prd.auto.tfvars` trước khi `plan` lại, rồi `bootstrap.sh prd secrets` ở bước 6. Plan có cùng
 các tài nguyên của Karpenter, bastion, KMS key, SNS và alarm như stg (`session-stg.md`, mục 3–5), tên `svp-prd-*`. Sau apply, xác nhận email
@@ -200,12 +205,15 @@ như `make eks-secrets` đọc). Lệnh `kubectl` tay vào prd ghi profile và c
 AWS_PROFILE=anhnv-prd kubectl --context svp-prd -n argocd get applications.argoproj.io
 ```
 
-## Bước 11: smoke, gói Free, commit status
+## Bước 11: smoke, edge, commit status
 
 `measure.sh prd` chỉ chạy smoke (`make eks-smoke CONTEXT=svp-prd DOMAIN=<domain>`), không seed, không thang k6 (số đo của prd là các diễn tập
-dưới). Sau smoke, phép kiểm (c) và (d) của ADR-0052 theo `session-stg.md`, mục
-[Gói Free và CORS của media](session-stg.md#gói-free-và-cors-của-media), với `AWS_PROFILE=anhnv-prd` và `aws/envs/prd` (web ACL
-`svp-prd-media`; playlist là của video smoke vừa tải lên), và phép kiểm (a)–(e) của ADR-0053 theo mục
+dưới). Sau smoke: phép (d) của mục [Gói Free và CORS của media](session-stg.md#gói-free-và-cors-của-media) của `session-stg.md` với
+`AWS_PROFILE=anhnv-prd` (playlist là của video smoke vừa tải lên; mong `access-control-allow-origin: https://<domain>` của policy
+`svp-prd-media`, không `*`; prd không có gói nên không phép (c)); phép kiểm edge (a)–(f) theo mục
+[Phép kiểm edge](session-stg.md#phép-kiểm-edge) với `anhnv-prd`, `$SVP_AWS_PRD_ACCOUNT_ID`, `svp-prd-edge`, đích `svp-cloudfront-prd` (media có
+HSTS, nosniff; log CloudFront có cả media, chưa có trong buổi thì ghi `chờ giao` và kiểm lại sau buổi như phép (e) đó); phép kiểm (a)–(e) của
+ADR-0053 theo mục
 [Kafka và Valkey managed](session-stg.md#kafka-và-valkey-managed), với `anhnv-prd`, `--context svp-prd`, tên `svp-prd` (mong `kafka.m7g.large`,
 `3` broker; replication group `2` node), phép kiểm (a)–(f) của mục
 [Nền tảng EKS, TLS Postgres và alarm](session-stg.md#nền-tảng-eks-tls-postgres-và-alarm) với `anhnv-prd`, `--context svp-prd`, `svp-prd`
@@ -216,7 +224,8 @@ của `prd.tfvars`), gồm plan lần hai sau apply, phải cho `No changes` (`o
 aws/scripts/tf.sh prd env plan
 ```
 
-Output vào phụ lục của ADR-0052, một dòng kết luận vào mục "Xác nhận". Sau đó kiểm commit status `argocd/prd` (Argo CD Notifications của prd) có trên commit `svp-root`
+Output vào phụ lục của ADR tương ứng, một dòng kết luận vào mục "Xác nhận". Sau đó kiểm commit status `argocd/prd` (Argo CD
+Notifications của prd) có trên commit `svp-root`
 đã sync (`main` của `svp-gitops`):
 
 ```sh
@@ -299,8 +308,9 @@ Deployment `svp-data/svp-ops`); một truy vấn tay vào database của service
    `Cannot evict pod as it would violate the pod's disruption budget` kéo quá `--timeout`; không pod nào Pending quá vài phút. Dán lại: zone đã
    drain, dòng cuối của smoke, ba output đọc pod, NodeClaim mới (zone, thời gian tới `Ready`), các dòng `evicting`/`error` của log drain.
 
-4. **Khởi động lại một broker MSK khi đang ghi, không mất event** (phép kiểm (g) của ADR-0053): tải thật qua `https://api.<domain>` của prd
-   (k6 profile `cloud`, view ghi vào `engagement.views.v1`), cộng một producer đếm được trên topic thử `svp-durability-check` (`acks=all`,
+4. **Khởi động lại một broker MSK khi đang ghi, không mất event** (phép kiểm (g) của ADR-0053): tải k6 profile `cloud` từ trong cluster (Job
+   `svp-k6` tới Service `svp-envoy`, không qua CloudFront, WAF: `session-stg.md` bước 11; view ghi vào `engagement.views.v1`), cộng một
+   producer đếm được trên topic thử `svp-durability-check` (`acks=all`,
    idempotent, như producer của service), cả hai chạy trong lúc một broker khởi động lại. Target `k8s-traffic-*` của repo code chỉ dành cho
    k3d. Terminal của buổi, tunnel mở; dữ liệu cho k6 rồi tải 2 pod, giữ 20 phút (seed và đặt lại rate limit là việc của chính lab, **LOCAL
    LAB ONLY**: xoá khoá `svp:gw:rl:register:*` ở db 10 của ElastiCache prd):
@@ -410,15 +420,16 @@ dòng của stg: dòng của stg chạy ở terminal prd thì đọc finding c�
 Theo thứ tự, mỗi bước xong mới sang bước sau:
 
 1. **Destroy root gitops rồi root env** (bước 12–18, tunnel còn mở tới hết bước 14). Bảo vệ của prd được nhấc trước: bước 15 đọc
-   `terraform state list` của `aws/envs/prd` rồi plan với `prd.tfvars` và `teardown.tfvars`, chỉ nhắm (`-target`) DB instance và bucket có
-   trong state (đọc `prd-env-teardown-plan.txt`: chỉ `to change`, deletion protection của RDS về `false`, `force_destroy` của bucket; cảnh báo
+   `terraform state list` của `aws/envs/prd` rồi plan với `prd.tfvars` và `teardown.tfvars`, chỉ nhắm (`-target`) DB instance, ALB edge và
+   bucket có trong state (đọc `prd-env-teardown-plan.txt`: chỉ `to change`, deletion protection của RDS và của ALB `svp-prd-edge` về `false`,
+   `force_destroy` của bucket; cảnh báo
    "Resource targeting is in effect" của Terraform là đúng ý), bước 16 apply nó; `tf.sh prd env plan --destroy` dừng với `FAIL the protections
    of aws/envs/prd are still on` khi chưa có mốc `env-teardown-applied`, rồi plan `-destroy` với cả hai file, không `-target`. Destroy vẫn ghi
    final snapshot của RDS (`skip_final_snapshot` giữ `false`) và giữ backup tự động.
 
    Apply của bước 5 đỏ giữa chừng (vd thiếu quota): vẫn làm bước 15, 16 trước `plan --destroy` (với `--no-cluster` khi chưa có cluster EKS,
    điều kiện ở `session-stg.md`, mục 15–18). Plan chỉ nhắm những gì đã được tạo nên không tạo thêm phần còn thiếu và không gặp lại lỗi
-   cũ; state không có DB instance hay bucket nào thì bước 15 in `skip`, ghi mốc `env-teardown-applied` (không có gì để nhấc) và bước 16 in
+   cũ; state không có DB instance, ALB hay bucket nào thì bước 15 in `skip`, ghi mốc `env-teardown-applied` (không có gì để nhấc) và bước 16 in
    `skip`.
 2. **Final snapshot và backup tự động**: đọc final snapshot có thật (dán tên và thời điểm: bằng chứng bảo vệ chạy), rồi xoá nó; đọc backup
    tự động được giữ, rồi xoá từng cái:
@@ -434,11 +445,11 @@ Theo thứ tự, mỗi bước xong mới sang bước sau:
    ```
 
 3. **`aws/scripts/sweep.sh prd`** (profile `anhnv-prd`): chỉ còn dòng `kept` (`Stack=baseline`: bucket state, KMS key state, zone
-   `aws.<domain>` cùng bản ghi `NS` uỷ quyền `stg.aws.<domain>` dưới đỉnh của nó; `Stack=security-baseline`: CMK EBS) và `pending deletion` (KMS key của root env: RDS, MSK, alarm,
-   Secrets của EKS; 7 ngày), exit 0; không còn dòng MSK, ElastiCache, `AmazonMSK_*`, log group `/aws/msk/svp-prd` (phép kiểm (f) của ADR-0053),
+   `aws.<domain>` cùng `CAA` và bản ghi `NS` uỷ quyền `stg.aws.<domain>` dưới đỉnh của nó, ở `us-east-1` key DNSSEC, hai alarm DNSSEC, log
+   group query log, topic `svp-prd-dns-alarms` và key của nó; `Stack=security-baseline`: CMK EBS) và `pending deletion` (KMS key của root
+   env: RDS, MSK, alarm, Secrets của EKS; 7 ngày), exit 0; không còn dòng MSK, ElastiCache, `AmazonMSK_*`, log group `/aws/msk/svp-prd` (phép kiểm (f) của ADR-0053),
    không còn instance, launch template, instance profile, hàng đợi SQS hay rule EventBridge nào của Karpenter.
-   Còn gì khác: chạy lệnh `delete:` nó in, rồi chạy lại. Phép kiểm (e) của ADR-0052 (output vào phụ lục của nó, kết luận vào "Xác nhận"): gói của account
-   rỗng (mong `[]`), cùng lượt sweep sạch này:
+   Còn gì khác: chạy lệnh `delete:` nó in, rồi chạy lại. Gói của account rỗng (mong `[]`), cùng lượt sweep sạch này:
 
    ```sh
    AWS_PROFILE=anhnv-prd aws pricing-plan-manager list-subscriptions --region us-east-1 --query 'subscriptionSummaries[].[arn,planTier,status]' --output json
@@ -453,7 +464,7 @@ Explorer của account prd theo dịch vụ, so với C.
 
 ### Web ACL WAF sót
 
-Lệnh xoá web ACL (sau khi gói đã huỷ, distribution đã xoá) dùng chung cho hai env: `session-stg.md`, mục
+Lệnh xoá web ACL (sau khi distribution đã xoá) dùng chung cho hai env: `session-stg.md`, mục
 [Lệnh xoá tay theo loại](session-stg.md#lệnh-xoá-tay-theo-loại), với `AWS_PROFILE=anhnv-prd`.
 
 Loại sót khác: `session-stg.md`, mục **Lệnh xoá tay theo loại**, với `AWS_PROFILE=anhnv-prd`.

@@ -49,6 +49,8 @@ Nâng minor EKS của cả hai env theo runbook [`docs/runbooks/eks-upgrade.md`]
 Áp nền bảo mật của tổ chức lần đầu (account Log Archive, Security Tooling, policy, dịch vụ phát hiện, baseline) theo runbook
 [`docs/runbooks/org-security-setup.md`](docs/runbooks/org-security-setup.md); đường vào khẩn cấp ở
 [`docs/runbooks/break-glass.md`](docs/runbooks/break-glass.md).
+Áp phần sống lâu của edge lần đầu (log CloudFront, `CAA`, DNSSEC của zone prd, chuỗi tin cậy ở DNS cha) và tắt ký DNSSEC theo runbook
+[`docs/runbooks/edge-setup.md`](docs/runbooks/edge-setup.md).
 Cài đặt GitHub của các repo (Terraform `github/`, GitHub App từ manifest, phần provider không quản) theo runbook
 [`docs/runbooks/github-setup.md`](docs/runbooks/github-setup.md); `make github-check` đọc lại phần ngoài Terraform.
 
@@ -70,24 +72,25 @@ renovate.json                 provider, module, ruleset tflint, image ghim của
 aws/
   bootstrap/                  management account, một lần, giữ giữa các buổi: bucket state (KMS key), budget, Cost Anomaly Detection, tag phân bổ chi phí của org; không hosted zone nào
   org/                        management account: Organizations, OU Security và Workloads/Prod, Workloads/NonProd, bốn account thành viên, policy của tổ chức, delegated admin, root tập trung, liên hệ SECURITY, IAM Identity Center (SvpAdmin, SvpReadOnly, SvpLogReader), organization trail
-  log-archive/                account svp-log-archive (chạy từ management qua OrganizationAccountAccessRole): bucket log của org và hai KMS key
+  log-archive/                account svp-log-archive (chạy từ management qua OrganizationAccountAccessRole): bucket log của org (cả log CloudFront), hai KMS key, delivery destination svp-cloudfront-<env> của log CloudFront
   security/                   account svp-security (như trên): GuardDuty, Security Hub CSPM, aggregator Config, Access Analyzer của org; bus và SNS cảnh báo bảo mật
   baseline/                   năm account (như trên): baseline bảo mật của mỗi account, CMK EBS của stg, prd
-  accounts/<env>/             baseline của mỗi account thành viên (stg, prd), giữ giữa các buổi: bucket state, KMS key của nó, zone của env (prd aws.<domain>, giữ cả bản ghi NS uỷ quyền stg.aws.<domain>; stg stg.aws.<domain>), budget
+  accounts/<env>/             baseline của mỗi account thành viên (stg, prd), giữ giữa các buổi: bucket state, KMS key của nó, zone của env với CAA (prd aws.<domain>, giữ cả bản ghi NS uỷ quyền stg.aws.<domain>, DNSSEC, query log, topic alarm DNSSEC; stg stg.aws.<domain>), budget
   envs/<env>/                 cấu hình gốc của mỗi env (stg, prd: cùng *.tf kể cả bastion SSM, khác ở <env>.tfvars; prd thêm teardown.tfvars)
   gitops/<env>/               bootstrap GitOps của cluster EKS của env (GitOps Bridge): namespace, Argo CD, AppProject, cluster Secret, ApplicationSet svp-bootstrap
   modules/                    module nội bộ; lock file không commit
-    network, eks, rds, media  nền của mỗi env (network: ba tầng subnet mỗi AZ, public, private, database, NACL không mở 22, 3389, flow log về Log Archive, endpoint guardduty-data; eks: nhóm node hệ thống, IAM, SQS, EventBridge của Karpenter, add-on agent GuardDuty; media: Malware Protection cho uploads)
+    network, eks, rds, media  nền của mỗi env (network: bốn tầng subnet mỗi AZ, public chỉ NAT, private, database, edge chỉ ALB edge, NACL không mở 22, 3389, flow log về Log Archive, endpoint guardduty-data; eks: nhóm node hệ thống, IAM, SQS, EventBridge của Karpenter, add-on agent GuardDuty; media: bucket, distribution media.<domain>, Malware Protection cho uploads)
+    edge                      đường vào của web và API: distribution svp-<env>-web, svp-<env>-api, VPC origin, ALB internal svp-<env>-edge ở tầng edge, target group của Envoy, cert ACM, response headers policy, log chuẩn v2, bản ghi DNS
     msk                       Kafka của env: Amazon MSK provisioned, một broker mỗi AZ ở subnet database, SASL/SCRAM-SHA-512 trên TLS 9096
     elasticache               Valkey của env: ElastiCache for Valkey, cluster mode tắt, ở subnet database, TLS 6379, user RBAC theo db và tiền tố
-    alarms                    topic SNS mã hoá bằng KMS key của module, subscription email: svp-<env>-alarms nhận alarm của RDS, MSK, ElastiCache; svp-security-alarms (root security) nhận sự kiện bảo mật
-    waf                       web ACL của CloudFront (cả hai root env gọi, provider us-east-1; gói flat-rate Free của media đòi nó), log về bucket WAF của Log Archive
+    alarms                    topic SNS mã hoá bằng KMS key của module, subscription email: svp-<env>-alarms nhận alarm của RDS, MSK, ElastiCache; svp-prd-dns-alarms (root accounts/prd, us-east-1) nhận alarm DNSSEC; svp-security-alarms (root security) nhận sự kiện bảo mật
+    waf                       web ACL của CloudFront (mỗi root env gọi ba lần: web, api, media; provider us-east-1), log về bucket WAF của Log Archive
     ssm-bastion               bastion SSM tới endpoint private của API EKS (cả hai env)
     external-secrets          vỏ entry Secrets Manager svp/<env>/*, role của External Secrets theo namespace, Pod Identity
     gitops-bridge             giá trị của bootstrap GitOps (không resource): cluster Secret, values Argo CD, root
     org-policies              mọi policy của tổ chức: SCP, RCP data perimeter, declarative policy EC2, tag policy
     security-baseline         baseline bảo mật của một account: S3 BPA cấp account, EBS mã hoá mặc định, Config recorder, rule svp-security-*
-    account-baseline          bucket state, KMS key, zone (cùng bản ghi NS uỷ quyền zone con, chỉ prd dùng), budget của một account thành viên
+    account-baseline          bucket state, KMS key, zone (cùng bản ghi NS uỷ quyền zone con, chỉ prd dùng), CAA, DNSSEC và query log (prd bật), budget của một account thành viên
   backend.hcl                 backend của management (bucket của aws/bootstrap; không commit, sinh từ output backend_hcl)
   backend-<env>.hcl           backend của account stg, prd (bucket, region, KMS; không key, mỗi root truyền key riêng; không commit, sinh từ output của accounts/<env>)
   scripts/                    script buổi AWS theo bảng env (mgmt, stg, prd) của lib.sh: kiểm account, DNS, Terraform hai root, secret và chờ Argo CD, đo, pre-destroy, sweep
@@ -229,11 +232,14 @@ Hai đường vào:
   [`docs/runbooks/break-glass.md`](docs/runbooks/break-glass.md).
 - **Một lần mỗi account thành viên:** [`aws/accounts/README.md`](aws/accounts/README.md) (baseline, uỷ quyền zone của env: zone gốc `aws.<domain>`
   của prd ở DNS cha, zone `stg.aws.<domain>` ở zone prd).
+- **Edge, một lần:** runbook [`docs/runbooks/edge-setup.md`](docs/runbooks/edge-setup.md) (`aws/log-archive`, `aws/org`, hai root
+  `aws/accounts/<env>`, `DS` ở DNS cha), trước buổi đầu có edge; tắt ký DNSSEC ở cùng runbook.
 - **Cài đặt GitHub** (thêm repo hay App): runbook [`docs/runbooks/github-setup.md`](docs/runbooks/github-setup.md).
 - **Mỗi buổi dựng, đo, gỡ một env:** runbook [`docs/runbooks/session-stg.md`](docs/runbooks/session-stg.md) (stg, cùng mọi mục chung) và
   [`docs/runbooks/session-prd.md`](docs/runbooks/session-prd.md) (prd: cổng promote, diễn tập, final snapshot). Xem trước
   toàn bộ lệnh của buổi, không chạy gì và không cần credential: `aws/scripts/session.sh --print stg` (hay `prd`). Chi phí và trần một buổi
-  4 giờ: mục "Giới hạn" của `session-stg.md`, "Chi phí và giới hạn" của `session-prd.md`.
+  4 giờ: mục "Giới hạn" của `session-stg.md`, "Chi phí và giới hạn" của `session-prd.md`; phần edge mỗi buổi và lúc không buổi:
+  [phụ lục ADR-0061 §13](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0061-edge-cloudfront-waf-acm.md#13-chi-phí-edge).
 - **Nâng minor EKS:** runbook [`docs/runbooks/eks-upgrade.md`](docs/runbooks/eks-upgrade.md).
 
 Chỉ người học chạy, từ máy, bằng SSO, theo script và runbook của repo. Mỗi account một biến chứa 12 số của account (export trong terminal
@@ -252,10 +258,13 @@ của buổi, không ghi vào file nào); mọi lệnh viết sẵn ghi profile 
 management; provider của mỗi account đích assume `OrganizationAccountAccessRole` của account đó, `allowed_account_ids` đúng account đó, id
 từ `TF_VAR_<log_archive|security|stg|prd>_account_id` đặt trong lệnh từ biến tương ứng. Hai account bảo mật không có profile ghi, bucket state
 riêng hay root riêng: baseline áp từ một chỗ, như execution role của Control Tower. Root `aws/envs/<env>` cần thêm `SVP_AWS_LOG_ACCOUNT_ID`
-(tên bucket flow log và log WAF của account Log Archive); `tf.sh` đặt `TF_VAR_log_archive_account_id` từ nó và dừng khi rỗng.
+(tên bucket flow log, log WAF và ARN delivery destination của log CloudFront ở account Log Archive); `tf.sh` đặt
+`TF_VAR_log_archive_account_id` từ nó và dừng khi rỗng.
 
-Region `ap-southeast-1` cho dịch vụ theo region và STS, `us-east-1` cho Organizations, IAM, Cost Explorer, WAF của CloudFront, Pricing Plan
-Manager và API Free Tier, region của instance Identity Center cho `sso-admin`, `identitystore`. Terraform của máy (Homebrew) phải nằm trong `required_version` của root (`~> 1.15`). Backend S3,
+Region `ap-southeast-1` cho dịch vụ theo region và STS, `us-east-1` cho Organizations, IAM, Cost Explorer, WAF, cert ACM và log chuẩn của
+CloudFront (delivery destination ở `aws/log-archive`, delivery source và delivery ở account env), KMS key, alarm và query log của DNSSEC
+Route 53, Pricing Plan Manager và API Free Tier, region của instance Identity Center cho `sso-admin`, `identitystore`. Terraform của
+máy (Homebrew) phải nằm trong `required_version` của root (`~> 1.15`). Backend S3,
 khoá bằng lock file native của S3 (`use_lockfile`): root của management đọc `aws/backend.hcl` (sinh từ output của `aws/bootstrap`); root
 của account thành viên đọc `aws/backend-<env>.hcl` (sinh từ output `backend_hcl` của `aws/accounts/<env>`, không có `key`) cộng một
 `-backend-config=key=<key của root>` thứ hai, `init -reconfigure` (script buổi `tf.sh` làm vậy). Không file nào trong hai loại được commit.
@@ -302,7 +311,23 @@ vì finalizer và webhook của chúng cần cho việc xoá object của worklo
 
 ## Luồng vận hành
 
-Ba luồng của một buổi; tên tài nguyên khớp code (trong sơ đồ, `ENV` là `stg` hay `prd`), bước và lệnh ở runbook buổi.
+Bốn luồng của một buổi; tên tài nguyên khớp code (trong sơ đồ, `ENV` là `stg` hay `prd`), bước và lệnh ở runbook buổi.
+
+**Đường vào của người xem.** Web, API và media chỉ vào từ internet qua CloudFront, mỗi tên một distribution có web ACL riêng và cert ACM ở
+`us-east-1`; không load balancer nào internet-facing. Web và API đi qua VPC origin tới ALB internal ở tầng edge, rồi tới pod Envoy mà
+`TargetGroupBinding` của chart đăng ký vào target group; media đọc bucket qua OAC. Chi tiết từng chặng: README module
+[`edge`](aws/modules/edge/README.md), [`media`](aws/modules/media/README.md).
+
+```mermaid
+flowchart LR
+    V[Người xem] --> W[CloudFront svp-ENV-web, svp-ENV-api<br/>web ACL cùng tên]
+    V --> M[CloudFront svp-ENV-media<br/>web ACL svp-ENV-media]
+    W --> O[VPC origin svp-ENV-edge]
+    O --> ALB[ALB internal svp-ENV-edge<br/>subnet edge]
+    ALB --> E[Pod Envoy<br/>target group svp-ENV-envoy]
+    M --> S3[(Bucket media, OAC)]
+    W -. log chuẩn v2 .-> L[(Bucket log CloudFront<br/>account Log Archive)]
+```
 
 **Đường tới API EKS.** Endpoint công khai của API tắt ở cả hai env. Máy của người học mở phiên port forwarding của Session Manager tới
 bastion `t4g.nano` trong subnet private (module `ssm-bastion`, output `api_tunnel_command`); security group của API nhận 443 từ security group
@@ -326,7 +351,8 @@ sequenceDiagram
 **Đường alarm.** CloudWatch alarm của RDS, MSK, ElastiCache (trong module của mỗi dịch vụ, tên `svp-<env>-<alarm>`) gửi `ALARM` và `OK` tới
 topic `svp-<env>-alarms` của module `alarms`; topic mã hoá bằng KMS key của module, key policy cho `cloudwatch.amazonaws.com` giải và sinh
 data key; subscription email từ `alarm_email` của `<env>.auto.tfvars`, người học xác nhận sau mỗi apply. Alarm sống ngoài cluster: cluster
-chết vẫn báo.
+chết vẫn báo. Hai alarm DNSSEC của zone prd sống lâu như zone: ở `us-east-1` (nơi Route 53 gửi metric), gửi topic `svp-prd-dns-alarms` của root
+`aws/accounts/prd` ([`edge-setup.md`](docs/runbooks/edge-setup.md#alarm-dnssec)).
 
 ```mermaid
 flowchart LR
@@ -339,16 +365,17 @@ flowchart LR
 ```
 
 **Thứ tự gỡ.** Thứ Kubernetes tạo trong account đi trước, khi controller tạo ra nó còn chạy; cluster đi trước mạng. `pre-destroy.sh` xoá
-Application workload và Gateway (NLB, bản ghi DNS), PVC (volume EBS), rồi NodePool và EC2NodeClass (Karpenter drain và tắt node của nó,
-trần `terminationGracePeriod`), rồi controller nền tảng; root gitops gỡ qua tunnel; root env gỡ cluster, node group hệ thống, dịch vụ dữ liệu,
-rồi VPC; `sweep.sh` tìm phần còn sót (instance, launch template, instance profile của Karpenter cả).
+Application workload và Gateway (target của Envoy trong target group edge), PVC (volume EBS), rồi NodePool và EC2NodeClass (Karpenter drain và
+tắt node của nó, trần `terminationGracePeriod`), rồi controller nền tảng; root gitops gỡ qua tunnel; root env gỡ edge (bản ghi DNS, ba
+distribution, VPC origin, ALB, web ACL), cluster, node group hệ thống, dịch vụ dữ liệu, rồi VPC; `sweep.sh` tìm phần còn sót (instance, launch
+template, instance profile của Karpenter, ENI và security group mà CloudFront tạo cho VPC origin cả).
 
 ```mermaid
 flowchart TD
-    A["pre-destroy.sh 1-3: Application workload, Gateway, PVC"] --> B["pre-destroy.sh 4: NodePool, EC2NodeClass; chờ hết NodeClaim, instance"]
+    A["pre-destroy.sh 1-3: Application workload, Gateway, TargetGroupBinding, PVC"] --> B["pre-destroy.sh 4: NodePool, EC2NodeClass; chờ hết NodeClaim, instance"]
     B --> C["pre-destroy.sh 5: svp-cluster, controller nền tảng (Karpenter cuối cùng)"]
     C --> D["tf.sh ENV gitops destroy: Argo CD, namespace (qua tunnel)"]
-    D --> E["tf.sh ENV env destroy: cluster EKS, node group system, Karpenter IAM, SQS, EventBridge"]
+    D --> E["tf.sh ENV env destroy: DNS, distribution, VPC origin, ALB edge, web ACL; cluster EKS, node group system, Karpenter"]
     E --> F["cùng destroy: RDS, MSK, ElastiCache, bastion, VPC, NAT"]
     F --> G["sweep.sh ENV, sweep.sh mgmt: exit 0"]
 ```

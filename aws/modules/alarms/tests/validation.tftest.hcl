@@ -201,6 +201,55 @@ run "both_publishers" {
   }
 }
 
+# A topic in another region than the provider's (the DNSSEC alarms of us-east-1): every resource is made there, and the
+# topic ARN and the alarm ARNs of the policies name that region. Without region, the run "valid" above keeps the
+# provider's region in both policies.
+run "region" {
+  command = plan
+
+  variables {
+    name   = "svp-prd-dns"
+    region = "us-east-1"
+  }
+
+  assert {
+    condition = alltrue([
+      aws_kms_key.this.region == "us-east-1",
+      aws_sns_topic.this.region == "us-east-1",
+      aws_sns_topic_policy.this.region == "us-east-1",
+      aws_sns_topic_subscription.email.region == "us-east-1",
+    ])
+    error_message = "With region, the key, the topic, its policy and the subscription must all be made in that region."
+  }
+
+  assert {
+    condition = alltrue([for s in data.aws_iam_policy_document.topic.statement :
+      toset(s.resources) == toset(["arn:aws:sns:us-east-1:000000000000:svp-prd-dns-alarms"])
+    ])
+    error_message = "The topic policy must name the topic in the given region."
+  }
+
+  assert {
+    condition = alltrue([for doc in [data.aws_iam_policy_document.key, data.aws_iam_policy_document.topic] : alltrue([for s in doc.statement :
+      s.effect == "Deny" || length(s.condition) == 0 || toset([for c in s.condition : "${c.test} ${c.variable} ${join(",", c.values)}"]) == toset([
+        "StringEquals aws:SourceAccount 000000000000",
+        "ArnLike aws:SourceArn arn:aws:cloudwatch:us-east-1:000000000000:alarm:*",
+      ])
+    ])])
+    error_message = "With region, only CloudWatch alarms of that region may publish to the topic and use its key."
+  }
+}
+
+run "region_uppercase" {
+  command = plan
+
+  variables {
+    region = "US-EAST-1"
+  }
+
+  expect_failures = [var.region]
+}
+
 run "name_double_hyphen" {
   command = plan
 

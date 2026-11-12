@@ -3,8 +3,8 @@
 Module nội bộ mỏng bọc [`terraform-aws-modules/eks/aws`](https://registry.terraform.io/modules/terraform-aws-modules/eks/aws/21.29.0)
 **21.29.0** (ghim chính xác): control plane, nhóm node hệ thống (managed node group Graviton on-demand), addon EKS, security group, IAM của
 cluster và node; submodule `karpenter` cùng version tạo IAM, hàng đợi interruption và rule EventBridge cho Karpenter; module nội bộ thêm role
-IAM và association EKS Pod Identity cho bốn controller nền tảng. Mức stg và prd chỉ khác ở biến (bảng dưới), một bộ code. Thiết kế node,
-Karpenter và version ghim: [ADR-0056](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0056-eks-platform-ha.md).
+IAM và association EKS Pod Identity cho hai controller nền tảng (Load Balancer Controller, EBS CSI driver); không controller nào của cluster
+ghi DNS. Mức stg và prd chỉ khác ở biến (bảng dưới), một bộ code. Thiết kế node, Karpenter và version ghim: [ADR-0056](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0056-eks-platform-ha.md).
 
 Không có provider nào trong module (kể cả provider Kubernetes hay Helm: StorageClass `gp3` mặc định do chart `svp-cluster` render, controller
 do Argo CD cài): root gọi nó (`aws/envs/<env>`) đặt provider, `default_tags` và ghim version provider (`~> 6.59`) trong lock file. Module không
@@ -28,7 +28,6 @@ module "eks" {
   private_subnet_ids           = module.network.private_subnet_ids
   endpoint_public_access       = true
   endpoint_public_access_cidrs = var.eks_public_access_cidrs # *.auto.tfvars không commit
-  hosted_zone_id               = var.hosted_zone_id          # output zone_id của aws/accounts/stg
   system_node_max_size         = 4
 }
 ```
@@ -61,19 +60,11 @@ module "eks" {
 | ---- | ---- |
 | [aws_eks_addon.guardduty_agent](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/eks_addon) | resource |
 | [aws_eks_pod_identity_association.aws_load_balancer_controller](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/eks_pod_identity_association) | resource |
-| [aws_eks_pod_identity_association.cert_manager](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/eks_pod_identity_association) | resource |
-| [aws_eks_pod_identity_association.external_dns](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/eks_pod_identity_association) | resource |
 | [aws_iam_policy.aws_load_balancer_controller](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_policy) | resource |
 | [aws_iam_role.aws_load_balancer_controller](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role) | resource |
-| [aws_iam_role.cert_manager](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role) | resource |
 | [aws_iam_role.ebs_csi](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role) | resource |
-| [aws_iam_role.external_dns](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role) | resource |
-| [aws_iam_role_policy.cert_manager](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy) | resource |
-| [aws_iam_role_policy.external_dns](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy) | resource |
 | [aws_iam_role_policy_attachment.aws_load_balancer_controller](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy_attachment) | resource |
 | [aws_iam_role_policy_attachment.ebs_csi](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy_attachment) | resource |
-| [aws_iam_policy_document.cert_manager](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
-| [aws_iam_policy_document.external_dns](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
 | [aws_iam_policy_document.karpenter_trust](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
 | [aws_iam_policy_document.pod_identity_trust](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
 | [aws_partition.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/partition) | data source |
@@ -87,7 +78,6 @@ module "eks" {
 | endpoint\_public\_access | Open the public endpoint of the Kubernetes API, reachable only from endpoint\_public\_access\_cidrs. The private endpoint is always on, so nodes and pods reach the API inside the VPC either way. | `bool` | `false` | no |
 | endpoint\_public\_access\_cidrs | IPv4 ranges allowed to call the public endpoint of the Kubernetes API, e.g. the address of the learner's machine as a /32. Personal data of a public repository: set it in an uncommitted *.auto.tfvars or TF\_VAR\_endpoint\_public\_access\_cidrs. | `list(string)` | `[]` | no |
 | guardduty\_data\_endpoint\_id | ID of the interface endpoint guardduty-data of the VPC (output guardduty\_data\_endpoint\_id of the network module). The GuardDuty agent add-on is created after it, so the agent's first reports have a way out. | `string` | n/a | yes |
-| hosted\_zone\_id | ID of the Route 53 hosted zone of the env, in the env's account (output zone\_id of aws/accounts/<env>). ExternalDNS and cert-manager may change records of this zone only. | `string` | n/a | yes |
 | kubernetes\_version | Kubernetes minor version of the control plane and of the node group, e.g. 1.36. Pick a minor in standard support: the cluster is created with the STANDARD support policy. | `string` | n/a | yes |
 | name | Name of the EKS cluster, e.g. svp-stg, and prefix of the names of its IAM roles, policies, security groups and node group. | `string` | n/a | yes |
 | private\_subnet\_ids | Private subnets of the VPC, one per availability zone (output private\_subnet\_ids of the network module). The control plane's network interfaces and the nodes go into every one of them, so pods spread over all these zones. | `list(string)` | n/a | yes |
@@ -102,7 +92,7 @@ module "eks" {
 | ---- | ----------- |
 | cluster\_certificate\_authority\_data | Certificate authority of the Kubernetes API server, base64-encoded PEM: cluster.certificate-authority-data of a kubeconfig, cluster\_ca\_certificate (after base64decode) of the helm and kubernetes providers. |
 | cluster\_endpoint | URL of the Kubernetes API server. |
-| cluster\_name | Name of the EKS cluster: clusterName of the AWS Load Balancer Controller, txtOwnerId of ExternalDNS, aws eks update-kubeconfig --name. |
+| cluster\_name | Name of the EKS cluster: clusterName of the AWS Load Balancer Controller, aws eks update-kubeconfig --name. |
 | cluster\_primary\_security\_group\_id | Security group EKS creates for the cluster and attaches to the control plane's network interfaces. |
 | cluster\_security\_group\_id | Security group the module adds to the control plane's network interfaces. |
 | cluster\_service\_cidr | IPv4 range of Kubernetes Services, chosen by EKS when the cluster is created; the API server's Service takes its first address. |
@@ -126,7 +116,6 @@ module "eks" {
 | `control_plane_log_retention_days` | (không dùng) | chốt khi dựng prd |
 | `system_node_instance_type` | mặc định | như stg |
 | `system_node_max_size` | 2 × số AZ | 2 × số AZ |
-| `hosted_zone_id` | output `zone_id` của `aws/accounts/stg` (zone `stg.aws.<domain>`) | output `zone_id` của `aws/accounts/prd` (zone `aws.<domain>`) |
 
 Endpoint public mặc định tắt để module an toàn khi gọi thiếu biến; root của stg bật và đưa CIDR. **Vì sao private luôn bật:** giới hạn
 CIDR public mà tắt private thì node trong subnet private gọi API qua IP của NAT, IP đó không nằm trong danh sách, node không join được
@@ -186,11 +175,9 @@ API, gồm Secret, bằng key do AWS sở hữu theo mặc định), OIDC provid
 | Controller | Namespace / ServiceAccount | Role | Quyền |
 | --- | --- | --- | --- |
 | AWS Load Balancer Controller | `kube-system` / `aws-load-balancer-controller` | `<name>-aws-load-balancer-controller` | managed policy cùng tên, nội dung là `docs/install/iam_policy.json` của tag **v3.6.2** giữ nguyên ở `policies/aws-load-balancer-controller-v3.6.2.json`; chart `eks/aws-load-balancer-controller` phải ghim **3.6.2** (appVersion v3.6.2), nâng controller thì thay file bằng policy của tag mới trong cùng thay đổi |
-| ExternalDNS | `external-dns` / `external-dns` | `<name>-external-dns` | inline: `ChangeResourceRecordSets` chỉ trên `arn:aws:route53:::hostedzone/<hosted_zone_id>`, chỉ bản ghi `A`, `AAAA`, `CNAME`, `TXT` (condition `route53:ChangeResourceRecordSetsRecordTypes`; `TXT` cho registry của ExternalDNS; không ghi được `NS` uỷ quyền zone con hay `SOA`); `ListResourceRecordSets`, `ListTagsForResources` trên zone; `ListHostedZones` trên `*` tách riêng (không có quyền theo resource) |
-| cert-manager (DNS-01) | `cert-manager` / `cert-manager` | `<name>-cert-manager` | inline: `ChangeResourceRecordSets` chỉ trên zone của env, chỉ bản ghi `TXT` có tên `_acme-challenge.*` (condition `route53:ChangeResourceRecordSetsRecordTypes`, `…NormalizedRecordNames`); `ListResourceRecordSets` trên zone; `GetChange` trên `change/*`; `ListHostedZonesByName` trên `*` tách riêng. Issuer dùng credential ambient (ClusterIssuer) |
 | EBS CSI driver | `kube-system` / `ebs-csi-controller-sa` | `<name>-ebs-csi-driver` | managed `service-role/AmazonEBSCSIDriverPolicy`; association do chính addon tạo (`pod_identity_association`) |
 
-Trust policy của bốn role: `pods.eks.amazonaws.com`, `sts:AssumeRole` + `sts:TagSession`, kèm condition trên session tag mà Pod Identity
+Trust policy của hai role: `pods.eks.amazonaws.com`, `sts:AssumeRole` + `sts:TagSession`, kèm condition trên session tag mà Pod Identity
 đặt (`aws:RequestTag/eks-cluster-name` = `name`, `…/kubernetes-namespace`, `…/kubernetes-service-account` đúng cặp ở bảng): association
 của cluster khác hay ServiceAccount khác không dùng được role dù có ai tạo. Chart cài controller phải dùng đúng namespace và tên
 ServiceAccount ở bảng (Pod Identity không cần annotation trên ServiceAccount).
@@ -243,9 +230,8 @@ Module luôn bật: 443 hai chiều giữa node và cluster, 10250, và TCP/UDP 
 | node ↔ node | TCP/UDP 53, TCP 1025–65535 | CoreDNS, pod tới pod |
 | node → mọi nơi | tất cả | kéo image qua NAT, gọi API AWS (finding trivy `AWS-0104` bỏ qua có lý do ở `cluster.tf`) |
 
-Webhook hay aggregated API ở cổng khác sẽ quá hạn tới khi thêm rule ở `security-groups.tf`. Rule cho lưu lượng và health check của NLB do
-LBC tự thêm vào security group node (security group duy nhất của node có tag `kubernetes.io/cluster/<name>`; security group chính mà EKS
-tạo cho cluster không gắn vào node).
+Webhook hay aggregated API ở cổng khác sẽ quá hạn tới khi thêm rule ở `security-groups.tf`. Rule cho lưu lượng và health check từ ALB edge
+tới Envoy do module `edge` thêm vào security group node; LBC không thêm rule nào (`TargetGroupBinding` của Envoy không có khối `networking`).
 
 ## Ngoại lệ trivy của module registry
 
@@ -267,8 +253,6 @@ tìm phần sót theo tag:
 
 | Tài nguyên | Ai tạo | Tag hay dấu nhận diện |
 | --- | --- | --- |
-| NLB, listener, target group | LBC (Service `LoadBalancer` của Envoy) | `elbv2.k8s.aws/cluster=<name>`, `service.k8s.aws/stack=<namespace>/<service>`, `service.k8s.aws/resource` |
-| Security group frontend, backend của NLB; rule LBC thêm vào security group node | LBC | `elbv2.k8s.aws/cluster=<name>`, `elbv2.k8s.aws/resource` (rule nằm trong security group node: đi cùng nó khi destroy, nhưng security group backend còn được tham chiếu thì không xoá được) |
 | Volume EBS của PVC | EBS CSI (StorageClass `gp3`) | `Project=svp` (`extraVolumeTags`), `ebs.csi.aws.com/cluster=true`, `kubernetes.io/created-for/pvc/name`, `…/namespace`, `kubernetes.io/created-for/pv/name` |
 | Snapshot EBS | EBS CSI, Velero | như volume |
 | ENI của VPC CNI | `aws-node` trên mỗi node | `cluster.k8s.amazonaws.com/name=<name>`, `node.k8s.amazonaws.com/instance_id`; mô tả `aws-K8S-…`; tìm theo VPC id; tự gỡ khi node xoá, sót thì chặn xoá subnet |
@@ -276,7 +260,6 @@ tìm phần sót theo tag:
 | Instance, ổ gốc, ENI chính, launch template của node Karpenter | Karpenter (NodePool, EC2NodeClass) | `karpenter.sh/nodepool`, `karpenter.sh/nodeclaim`, `kubernetes.io/cluster/<name>=owned`; `Project=svp` do EC2NodeClass đặt (không phải module này) |
 | Instance profile của role `<name>-karpenter-node` | Karpenter (từ `spec.role` của EC2NodeClass) | `kubernetes.io/cluster/<name>=owned`, `karpenter.k8s.aws/ec2nodeclass`; còn gắn role thì `terraform destroy` không xoá được role node |
 | Log group `/aws/eks/<name>/cluster` | EKS khi bật log control plane | module tạo trước (trong state) khi `control_plane_log_types` khác rỗng; sót nếu bật log ngoài Terraform: tìm theo tên |
-| Bản ghi Route 53 (A, TXT owner của ExternalDNS; TXT `_acme-challenge` khi DNS-01 lỗi) | ExternalDNS, cert-manager | bản ghi của zone của env ngoài NS/SOA ở đỉnh zone và bản ghi NS uỷ quyền zone con (do `aws/accounts/<env>` tạo) |
 
 **Destroy cần xoá NodePool trước:** node Karpenter dựng không nằm trong state, còn chạy thì giữ ENI trong subnet private và instance profile
 trên role node, `terraform destroy` kẹt ở subnet và role. `pre-destroy.sh` xoá NodePool rồi EC2NodeClass khi controller còn chạy, chờ tới khi
@@ -294,7 +277,6 @@ hết NodeClaim và instance; giới hạn chờ ở ADR-0056 §9.
 - Karpenter: pod `karpenter` lấy được credential của role `<name>-karpenter` (log không `AccessDenied`), đọc được hàng đợi `<name>-karpenter`;
   NodeClaim của pod Pending lên `Ready` trong subnet private.
 - Access entry của role SSO: `kubectl get ns` bằng kubeconfig của người tạo chạy được ngay sau `apply`.
-- Trust policy theo session tag: pod của LBC, ExternalDNS, cert-manager, EBS CSI lấy được credential (log không `AccessDenied` khi
+- Trust policy theo session tag: pod của LBC, EBS CSI lấy được credential (log không `AccessDenied` khi
   `AssumeRoleForPodIdentity`); PVC `gp3` Bound.
-- DNS-01 với condition tên `_acme-challenge.*`: Certificate `Ready`, không `AccessDenied` trong log cert-manager.
 - Số pod tối đa: `kubectl get node -o jsonpath='{.items[*].status.allocatable.pods}'` in `110` mỗi node.

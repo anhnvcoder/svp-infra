@@ -14,7 +14,7 @@ nguồn ở dòng đầu, cộng các thay đổi ở mục "Khác bản gốc";
 | --- | --- |
 | [`scripts/drawio_lib.py`](scripts/drawio_lib.py) | Thư viện vẽ: `Page` (group / icon / flat / k8s / badge / text / box / edge / table), bảng màu và style aws4, `write()`, `export()` (PDF/PNG qua CLI draw.io). Từ chối ngay mọi toạ độ lệch lưới 40px. |
 | [`scripts/check_diagram.py`](scripts/check_diagram.py) | Cổng hình học cho mọi file `.drawio` (11 phép, liệt kê trong docstring), exit 1 khi có lỗi; `--counts` in số mỗi loại (icon, AZ, subnet) mỗi trang, `kind_counts()` cho spec import. |
-| [`scripts/build_svp.py`](scripts/build_svp.py) | Spec của [`docs/diagrams/svp-aws.drawio`](../../../docs/diagrams/svp-aws.drawio): trang `stg`, `prd`, `org`, `flows`. |
+| [`scripts/build_svp.py`](scripts/build_svp.py) | Spec của [`docs/diagrams/svp-aws.drawio`](../../../docs/diagrams/svp-aws.drawio): trang `stg`, `prd`, `org`, `flows` (phát hành, upload tới phát lại, request tới web và API). |
 | [`scripts/check_svp_counts.py`](scripts/check_svp_counts.py) | Đếm icon mỗi trang env so với cỡ của Terraform (AZ, subnet, NAT, node group, RDS, broker MSK, node ElastiCache và mọi loại khác) và trang `org` so với `org_expected()` (năm account, dịch vụ mỗi account), offline. |
 
 ## Vòng làm
@@ -45,22 +45,26 @@ inventory thì đặt `cid` của icon là id tài nguyên và `cid` của box s
 0. **Lồng nhóm theo AWS Architecture Icons:** AWS Cloud → AWS Account (account của env) → Region → VPC → AZ → subnet, mỗi tầng một
    group aws4 (`CLOUD`, `ACCOUNT`, `REGION`, `VPC`, `AZ` của `drawio_lib`). Người dùng ngoài Cloud.
 1. **Tài nguyên vẽ trong box của subnet nó thuộc về.** Một hàng mỗi AZ, một box mỗi subnet, nhãn có CIDR; **mọi subnet của một AZ nằm
-   trong khung AZ đó** theo tầng từ trái sang phải: public, private, database (subnet không có route ra Internet, kiểu box của private
+   trong khung AZ đó** theo tầng từ trái sang phải: public (chỉ NAT), edge (chỉ ALB internal; không route ra ngoài VPC, không node,
+   không pod, nhãn `Edge subnet`), private, database (subnet không có route ra Internet, kiểu box của private
    như AWS vẽ, nhãn `Database subnet`); không có box subnet nào ngoài khung AZ. NAT và bastion theo subnet của chúng, task hay EC2 theo
    subnet của instance, RDS, ElastiCache, broker MSK theo subnet group (ở `svp-aws`: tầng database). Không gộp nhiều subnet vào một box,
    không đoán vị trí. Chỗ AWS chọn AZ (một task, primary RDS, primary ElastiCache) thì ghi quy ước trong dòng phụ đề. Không tài nguyên
    nào nằm ở khe giữa hai AZ hay ngoài mọi subnet trừ loại của luật 3.
-2. **Mọi load balancer ELB (ALB, NLB) internet-facing là một icon, vắt qua biên của hai box subnet public kề nhau.** Node theo subnet của
-   load balancer do ELB tạo và quản, người dùng không thấy; sơ đồ của AWS vẽ một icon. Một icon mỗi subnet đọc thành nhiều load balancer.
-   Hai box public bật viền để thấy biên. Box public nằm trong khung AZ (luật 1) thì hai hàng AZ đầu chạm nhau (không khe) và icon bắc qua
-   biên chung: cạnh trên tựa đáy box public của AZ đầu, cạnh dưới tựa đỉnh box public của AZ sau. Có ba AZ trở lên thì icon vẫn bắc qua
-   hai AZ đầu, phụ đề ghi "một NLB trên mọi subnet public".
+2. **Mọi load balancer ELB (ở `svp-aws`: ALB internal `svp-<env>-edge`) là một icon, vắt qua biên của hai box subnet edge kề nhau.** Node
+   theo subnet của load balancer do ELB tạo và quản, người dùng không thấy; sơ đồ của AWS vẽ một icon. Một icon mỗi subnet đọc thành
+   nhiều load balancer. Hai box edge bật viền để thấy biên. Box edge nằm trong khung AZ (luật 1) thì hai hàng AZ đầu chạm nhau (không
+   khe) và icon bắc qua biên chung: cạnh trên tựa đáy box edge của AZ đầu, cạnh dưới tựa đỉnh box edge của AZ sau. Có ba AZ trở lên thì
+   icon vẫn bắc qua hai AZ đầu, phụ đề ghi "một ALB trên mọi subnet edge".
 3. **Tài nguyên ngoài subnet nằm ở tầng riêng:** WAF regional (gắn ALB) trong Region ngoài VPC; VPC endpoint (cả gateway endpoint S3)
    trong VPC ngoài các subnet; IGW trong Region cạnh VPC; control plane EKS trong Region ngoài VPC; **tài nguyên theo AZ mà không theo
    subnet (volume EBS) trong khung AZ, ngoài các box subnet, một icon mỗi AZ**; dịch vụ regional (S3, Secrets Manager, KMS, CloudWatch
-   Logs) trong dải "Regional services" dưới VPC; dịch vụ toàn cầu của account (Route 53, CloudFront, web ACL WAF của CloudFront) trong
-   Account ngoài Region, ở trang env bên trái, web ACL là một icon trên CloudFront nối bằng đường đứt không mũi tên; trang luồng không có
-   Account, Region, dịch vụ toàn cầu theo chiều luồng. Dịch vụ không dùng (ACM khi chứng chỉ đến từ chỗ khác) không vẽ, phụ đề nói vậy.
+   Logs, ACM của ALB) trong dải "Regional services" dưới VPC; dịch vụ toàn cầu của account (Route 53, mỗi distribution CloudFront, web ACL
+   WAF của distribution đó) trong Account ngoài Region, ở trang env bên trái, mỗi distribution một icon với web ACL của nó là một icon
+   nối bằng đường đứt không mũi tên, nhãn của icon web ACL đặt trên (`label_top`) để đường đứt không cắt chữ; distribution tới ALB
+   bằng một đường vào mép trái của ALB (VPC origin), mỗi distribution một điểm vào (`entry` 0,25 và 0,75), đi trong lề dưới AZ đầu và lề
+   trên AZ sau; trang luồng không có Account, Region, dịch vụ toàn cầu theo chiều luồng. Cert ACM của distribution (us-east-1) không
+   thêm icon: nhãn ACM trong dải regional nói vậy. Dịch vụ không dùng không vẽ, phụ đề nói vậy.
 4. Nhãn ngắn, không tên tài nguyên, không id, không account ID, IP, email hay tên miền thật (`aws.&lt;domain&gt;`). Người đọc cần hình
    dạng; danh mục nằm ở inventory.
 5. Số icon mỗi loại bằng inventory (NAT, EC2, RDS, cache, load balancer, WAF, endpoint…). Bảng giá (khi có) và hình nói cùng một điều.
@@ -86,12 +90,12 @@ inventory thì đặt `cid` của icon là id tài nguyên và `cid` của box s
 10. **Phần AWS dùng `aws4`, phần Kubernetes dùng thư viện Kubernetes chính thức của draw.io** (`mxgraph.kubernetes.icon2`, bản có chữ
     viết tắt trong icon, qua `Page.k8s()`). Box cluster là group aws4 mang icon Amazon EKS (`gr="eks"`), managed node group là icon
     `ec2` mỗi AZ. Mỗi khung namespace có icon `ns`. **Mỗi workload một icon** theo kind (`deploy` cho Deployment, `sts` cho StatefulSet,
-    `svc` cho Service mà NLB nhắm tới, cạnh từ load balancer vào thẳng icon đó), chữ bên phải icon hai dòng: tên, rồi số replica theo
+    `svc` cho Service, cạnh từ load balancer vào thẳng icon pod nó nhắm tới), chữ bên phải icon hai dòng: tên, rồi số replica theo
     values (`×2`, `×2–4 · HPA`, `×1–2 · KEDA`); kind không có icon (Argo Rollout) dùng icon gần nhất (`deploy`) và ghi kind vào chữ
     (`×2 · Rollout`). Không gộp nhiều service vào một dòng chữ: người đọc tưởng mỗi service là một node. **Công cụ bên thứ ba** (Argo CD,
     Kyverno, Prometheus…) là chữ trong khung namespace có icon; không nhúng logo ảnh ngoài thư viện chuẩn.
 11. **Add-on của EKS không vẽ** (CoreDNS, kube-proxy, VPC CNI; phụ đề nói vậy). **Controller tạo tài nguyên AWS** có khung namespace của nó
-    với đường đứt nét tới tài nguyên nó tạo (AWS Load Balancer Controller → NLB, ExternalDNS và cert-manager → Route 53, EBS CSI → EBS);
+    với đường đứt nét tới tài nguyên nó tạo (AWS Load Balancer Controller → ALB: đăng ký target, EBS CSI → EBS);
     tài nguyên có một icon mỗi AZ (EBS) thì một đường tới icon gần nhất là đủ (luật hình học 12).
 
 ### Một spec nhiều env
@@ -160,26 +164,31 @@ inventory thì đặt `cid` của icon là id tài nguyên và `cid` của box s
     luồng phát hiện (đỏ): GuardDuty, Access Analyzer → Security Hub → bus `svp-security-events` ← rule `svp-security-*` của mọi account →
     SNS → email. Đường từ nguồn ngoài vào đi theo hành lang dọc (waypoint chung x) để không xuyên icon; chỗ hai đường cắt nhau chấp nhận.
     Số icon mỗi loại ở `org_expected()`, `check_svp_counts.py` so với file.
-15b. **Trang env vẽ phần account `svp-log-archive` chỉ cho bucket mà env ghi vào** (flow log, log WAF), dưới account của env, trong Cloud;
-    đường WAF đi hành lang trái account, đường VPC đi hành lang giữa Region và Account bên phải. Endpoint `guardduty-data` (interface) cạnh
-    gateway endpoint S3, trong VPC ngoài các subnet; cạnh đứt từ box cluster (agent add-on của GuardDuty).
+15b. **Trang env vẽ phần account `svp-log-archive` chỉ cho bucket mà env ghi vào** (flow log, log WAF, log
+    CloudFront), dưới account của env, trong Cloud; mỗi web ACL một đường log, ba đường chung hành lang x 360 (giữa cột
+    toàn cục và Region; bên trái là đường của users), đường VPC đi hành lang giữa Region và Account bên phải. Endpoint
+    `guardduty-data` (interface) cạnh gateway endpoint S3, trong VPC ngoài các subnet; cạnh đứt từ box cluster (agent
+    add-on của GuardDuty).
 
 ## Bố cục chuẩn (trang env của `svp-aws`)
 
 ```text
-x:  40 users │ Cloud 160 · Account 200 · Route 53, WAF, CloudFront 240 │ Region 400 · IGW 440 │ VPC 560 · AZ 600..3360
-    public 640..1000 (NAT 680, NLB 880) · EBS 1040 (trong AZ, ngoài subnet) · private 1160..2560 (bastion 1200, AZ đầu)
-    cluster 1400..2520: node 1440, cột namespace 1560 / 1800 / 2040 / 2280 (rộng 200; svp 3 cột, platform 2 cột)
-    database 2600..3320: hành lang 2640 (MSK), 2680 (ElastiCache); RDS 2840, ElastiCache 3000, MSK 3160
-y:  phụ đề 40, 80, 120 · Cloud 160 · Account 200 · Region 240 · control plane 320 (nhãn trên) · hành lang DNS 420 · VPC 440
+x:  40 users │ Cloud 160 · Account 200 · Route 53, WAF, CloudFront 240 │ Region 400 · IGW 440 │ VPC 560 · AZ 600..3520
+    public 640..880 (NAT 680) · edge 920..1160 (ALB 1000) · EBS 1200 (trong AZ, ngoài subnet) · private 1320..2720 (bastion 1360, AZ đầu)
+    cluster 1560..2680: node 1600, cột namespace 1720 / 1960 / 2200 / 2440 (rộng 200; svp 3 cột, platform 2 cột)
+    database 2760..3480: hành lang 2800 (MSK), 2840 (ElastiCache); RDS 3000, ElastiCache 3160, MSK 3320
+y:  phụ đề 40, 80, 120 · Cloud 160 · Account 200 · Region 240 · ghi chú edge 280 · control plane 320 (nhãn trên) · VPC 440
+    cột toàn cục (x 240): Route 53 +0, WAF web +200, CloudFront web +360, WAF api +560, CloudFront api +720 (cùng gốc `a` = đỉnh box
+    subnet đầu); WAF media và CloudFront media ở hàng dải regional (-200, +0)
     AZ k ở 480 + 480k, các hàng chạm nhau; ba box subnet +40 (cao 400): MSK, NAT, node group +80, ElastiCache +160, bastion +200,
     EBS +200, node Karpenter +280 (dưới đường kube-system → EBS ở +240), RDS +280
     hàng khung namespace của AZ đầu +200, +320, của AZ sau +160, +280; svp-data ba workload cách 40
-    NLB ở biên hai AZ đầu (đỉnh = đáy box public đầu), IGW → NLB → Envoy chạy 20 trên biên, kube-system → NLB 20 dưới biên
+    ALB ở biên hai AZ đầu (đỉnh = đáy box edge đầu), CloudFront web → ALB → Envoy chạy 20 trên biên, CloudFront api và
+    kube-system → ALB 20 dưới biên; IGW ngang NAT đầu (+40), cạnh NAT → IGW thẳng
     svp từ +320 của AZ đầu tới +160 của AZ sau (hàng icon 4 + 3); svp → RDS thẳng ở +320, svp → ElastiCache, MSK ra ở +300, +290
     RDS standby, ElastiCache replica ở AZ sau, cùng cột với primary
     gateway endpoint S3 dưới AZ cuối (+80) · dải regional dưới VPC, icon: media 600, uploads 760, Secrets Manager 1000, KMS 1280,
-    CloudWatch 1560 (log, alarm) → SNS 1840, EventBridge 2120 → SQS 2400, Systems Manager 2680 · WAF 160 trên CloudFront · hành lang
+    CloudWatch 1560 (log, alarm) → SNS 1840, EventBridge 2120 → SQS 2400, Systems Manager 2680, ACM 2960 · hành lang
     users → uploads dưới dải, trong Region
 ```
 

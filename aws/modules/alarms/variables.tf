@@ -30,3 +30,14 @@ variable "publisher_services" {
     error_message = "publisher_services must list, without repeats, at least one of cloudwatch.amazonaws.com and events.amazonaws.com."
   }
 }
+
+variable "region" {
+  description = "Region of the topic, its key and the alarms that may notify it (CloudWatch alarm actions reach a topic of their own region only). Null: the region of the provider."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.region == null || can(regex("^[a-z]{2}(-[a-z]+)+-[0-9]$", var.region))
+    error_message = "region must be an AWS region name, e.g. us-east-1, or null."
+  }
+}

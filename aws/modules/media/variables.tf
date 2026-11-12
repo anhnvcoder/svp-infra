@@ -31,7 +31,7 @@ variable "region" {
 }
 
 variable "cors_allowed_origins" {
-  description = "Origins of the web client (https://<domain>) that the CORS rules of the two buckets allow: POST of upload forms to the uploads bucket, GET and HEAD on the media bucket. The distribution answers CORS for media itself, for every origin."
+  description = "Origins of the web client (https://<domain>) that the CORS rules of the two buckets allow: POST of upload forms to the uploads bucket, GET and HEAD on the media bucket. Off the flat-rate Free plan the distribution allows the same origins for GET and HEAD; on it, every origin."
   type        = list(string)
 
   validation {
@@ -61,12 +61,55 @@ variable "access_logging_enabled" {
 }
 
 variable "web_acl_arn" {
-  description = "ARN of the AWS WAF web ACL of scope CLOUDFRONT (in us-east-1, output web_acl_arn of the waf module) in front of the distribution. The flat-rate plan of the distribution requires one and covers it; AWS refuses to detach or replace it while the plan lasts."
+  description = "ARN of the AWS WAF web ACL of scope CLOUDFRONT (in us-east-1, output web_acl_arn of the waf module) in front of the distribution. With flat_rate_free the plan requires one and covers it, and AWS refuses to detach or replace it while the plan lasts."
   type        = string
   nullable    = false
 
   validation {
     condition     = can(regex("^arn:aws[a-z-]*:wafv2:us-east-1:[0-9]{12}:global/webacl/[A-Za-z0-9_-]+/[0-9a-f-]+$", var.web_acl_arn))
     error_message = "web_acl_arn must be the ARN of a WAF web ACL of scope CLOUDFRONT, arn:aws:wafv2:us-east-1:<account>:global/webacl/<name>/<id>."
+  }
+}
+
+variable "domain" {
+  description = "Name of the env's hosted zone (svp.example): the distribution answers at `media.<domain>`, with its own certificate."
+  type        = string
+
+  validation {
+    # ACM takes a domain name of at most 64 characters, media.<domain> included.
+    condition     = can(regex("^([a-z0-9]([a-z0-9-]*[a-z0-9])?\\.)+[a-z]{2,63}$", var.domain)) && length(var.domain) <= 58
+    error_message = "domain must be a lowercase DNS name of at most 58 characters without a trailing dot, e.g. svp.example."
+  }
+}
+
+variable "hosted_zone_id" {
+  description = "ID of the Route 53 public hosted zone of domain: the module writes the ACM validation record and the A and AAAA alias records of `media.<domain>` there."
+  type        = string
+
+  validation {
+    condition     = can(regex("^Z[A-Z0-9]{1,31}$", var.hosted_zone_id))
+    error_message = "hosted_zone_id must be a Route 53 hosted zone ID such as Z0123456789ABCDEFGHIJ, without the /hostedzone/ prefix."
+  }
+}
+
+# No default: each env states its plan.
+variable "flat_rate_free" {
+  description = "Subscribe the distribution to the CloudFront flat-rate Free plan (managed Managed-SimpleCORS headers policy, no access log). false: pay-as-you-go, with the module's own CORS and security headers policy and standard logs to log_delivery_destination_arn."
+  type        = bool
+}
+
+variable "log_delivery_destination_arn" {
+  description = "ARN of the CloudWatch Logs delivery destination (us-east-1, in the Log Archive account) that receives the standard logs of the distribution, `arn:aws:logs:us-east-1:<account>:delivery-destination:svp-cloudfront-<env>`. Required when flat_rate_free is false; unused when it is true (the Free plan has no access log)."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.flat_rate_free || var.log_delivery_destination_arn != null
+    error_message = "log_delivery_destination_arn is required when flat_rate_free is false: a pay-as-you-go distribution writes standard logs."
+  }
+
+  validation {
+    condition     = var.log_delivery_destination_arn == null || can(regex("^arn:aws[a-z-]*:logs:us-east-1:[0-9]{12}:delivery-destination:[A-Za-z0-9._-]+$", var.log_delivery_destination_arn))
+    error_message = "log_delivery_destination_arn must be the ARN of a CloudWatch Logs delivery destination in us-east-1, arn:aws:logs:us-east-1:<account>:delivery-destination:<name>."
   }
 }

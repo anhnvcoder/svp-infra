@@ -1,7 +1,7 @@
 # `aws/modules/network`: VPC của một env
 
 Module nội bộ mỏng bọc [`terraform-aws-modules/vpc/aws`](https://registry.terraform.io/modules/terraform-aws-modules/vpc/aws/6.7.3)
-**6.7.3** (ghim chính xác): VPC ba tầng trên `az_count` AZ (subnet public, private và database), Internet Gateway, route table, NAT
+**6.7.3** (ghim chính xác): VPC bốn tầng trên `az_count` AZ (subnet public, private, edge và database), Internet Gateway, route table, NAT
 gateway và Elastic IP theo `single_nat_gateway`, S3 gateway endpoint trên mọi route table private, interface endpoint `guardduty-data` cho
 agent GuardDuty của node EKS, mỗi tầng một NACL riêng không mở 22, 3389 ra Internet, security group và NACL mặc định không rule nào, flow log
 ghi thẳng vào bucket của account Log Archive. Mức stg và prd chỉ khác ở biến (bảng dưới), một bộ code.
@@ -67,9 +67,9 @@ module "network" {
 
 | Name | Description | Type | Default | Required |
 | ---- | ----------- | ---- | ------- | :------: |
-| az\_count | Number of availability zones, taken in order from the zones of the region that need no opt-in. Each zone gets one public, one private and one database subnet. EKS needs subnets in at least two zones. | `number` | `2` | no |
+| az\_count | Number of availability zones, taken in order from the zones of the region that need no opt-in. Each zone gets one public, one private, one edge and one database subnet. EKS needs subnets in at least two zones. | `number` | `2` | no |
 | cidr | IPv4 range of the VPC, a /16 to /20. Pods take their addresses from the private subnets (VPC CNI), so the range must not overlap any network the cluster talks to. | `string` | `"10.0.0.0/16"` | no |
-| cluster\_name | Name of the EKS cluster that runs in this VPC. The subnets get the tag kubernetes.io/cluster/<name> = shared, which the AWS Load Balancer Controller reads to pick subnets; the private subnets also get karpenter.sh/discovery = <name>, which the EC2NodeClass of Karpenter reads. | `string` | n/a | yes |
+| cluster\_name | Name of the EKS cluster that runs in this VPC. The public and private subnets get the tag kubernetes.io/cluster/<name> = shared, which the AWS Load Balancer Controller reads to pick subnets; the private subnets also get karpenter.sh/discovery = <name>, which the EC2NodeClass of Karpenter reads. | `string` | n/a | yes |
 | flow\_log\_bucket\_arn | ARN of the S3 bucket of the log archive account that receives the VPC flow logs (accepted and rejected traffic), e.g. arn:aws:s3:::svp-flowlogs-000000000000-ap-southeast-1. The bucket ARN alone, no prefix: the logs land under AWSLogs/aws-account-id=<account>/, which the bucket's retention rules match. | `string` | n/a | yes |
 | name | Name of the VPC and prefix of the names of its subnets, route tables, NAT gateways and Elastic IPs, e.g. svp-stg. | `string` | n/a | yes |
 | s3\_endpoint\_buckets | Names of the buckets of the env (uploads and media) reachable through the S3 gateway endpoint when s3\_endpoint\_restricted is true. | `list(string)` | `[]` | no |
@@ -83,11 +83,13 @@ module "network" {
 | azs | Availability zones of the subnets, in the order of the subnet lists. |
 | database\_subnet\_cidrs | IPv4 ranges of the database subnets, in the order of azs; network policies that allow traffic to a database use them. |
 | database\_subnet\_ids | IDs of the database subnets, one per zone, in the order of azs: RDS, MSK and ElastiCache. Their route table holds only the local route. |
+| edge\_subnet\_cidrs | IPv4 ranges of the edge subnets, in the order of azs: every connection from them to Envoy comes from the ALB, so the network policy of Envoy lets in these ranges. |
+| edge\_subnet\_ids | IDs of the edge subnets, one per zone, in the order of azs: the internal ALB that CloudFront reaches through a VPC origin. No node or pod takes an address there; their route table holds only the local route. |
 | guardduty\_data\_endpoint\_id | ID of the interface endpoint guardduty-data the GuardDuty agent of the EKS nodes reports to; the eks module installs the agent only once it exists. |
 | nat\_public\_ips | Public IPv4 addresses of the NAT gateways: every connection from the nodes and pods to the internet leaves from one of them. |
 | private\_subnet\_cidrs | IPv4 ranges of the private subnets, in the order of azs. |
 | private\_subnet\_ids | IDs of the private subnets, one per zone, in the order of azs: nodes and pods. |
-| public\_subnet\_ids | IDs of the public subnets, one per zone, in the order of azs: NAT gateways and internet-facing load balancers. |
+| public\_subnet\_ids | IDs of the public subnets, one per zone, in the order of azs: the NAT gateways and nothing else. |
 | vpc\_cidr | IPv4 range of the VPC. |
 | vpc\_id | ID of the VPC. |
 <!-- END_TF_DOCS -->
@@ -105,9 +107,22 @@ module "network" {
 | `flow_log_bucket_arn` | ARN bucket `svp-flowlogs-<log>-ap-southeast-1` | cùng bucket |
 
 **Chia dải** (`cidr` chia 8 khối bằng nhau): khối 0–5 là subnet private, mỗi AZ một khối (`/19` với `/16`: 8 192 địa chỉ, vì VPC CNI cấp
-IP pod từ subnet private, prefix delegation lấy từng `/28` cho mỗi node); khối 7 chia tiếp 32 phần, mỗi AZ một subnet public (`/24` với
-`/16`: chỉ NAT gateway và NLB nằm đây); khối 6 chia tiếp 8 phần, mỗi AZ một subnet database (`/22` với `/16`) cho RDS, MSK và ElastiCache. Với mặc định và 2 AZ: private
-`10.0.0.0/19`, `10.0.32.0/19`; database `10.0.192.0/22`, `10.0.196.0/22`; public `10.0.224.0/24`, `10.0.225.0/24`.
+IP pod từ subnet private, prefix delegation lấy từng `/28` cho mỗi node); khối 6 chia tiếp 8 phần, mỗi AZ một subnet database (`/22` với
+`/16`) cho RDS, MSK và ElastiCache; khối 7 chứa hai tầng nhỏ: subnet public là phần 0 đến `az_count - 1` khi chia khối 32 phần (`/24` với
+`/16`: chỉ NAT gateway nằm đây), subnet edge là phần 8 đến `7 + az_count` khi chia khối 16 phần, tức nửa sau của khối (`/23` với `/16`,
+`/27` với `/20`). Subnet public dùng tối đa 6 phần trên 32, tức chưa tới phần 3 trên 16, nên hai tầng không chồng nhau ở mọi `az_count`.
+Với mặc định và 2 AZ: private `10.0.0.0/19`, `10.0.32.0/19`; database `10.0.192.0/22`, `10.0.196.0/22`; public `10.0.224.0/24`,
+`10.0.225.0/24`; edge `10.0.240.0/23`, `10.0.242.0/23`.
+
+**Tầng edge** ([ADR-0061](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0061-edge-cloudfront-waf-acm.md) §3): nơi đặt
+ALB internal mà CloudFront tới qua VPC origin (module `edge` nhận `edge_subnet_ids`); CloudFront đặt ENI của VPC origin trong chính các
+subnet này. Tầng là `intra_subnets` của module `vpc` (tên `<name>-edge-<az>`): một route table chỉ có route `local`, vì ALB chỉ trả lời
+CloudFront và gọi tới pod trong VPC. Không tag `kubernetes.io/role/*` hay `karpenter.sh/discovery`, nên Load Balancer Controller không đặt
+load balancer và Karpenter không dựng node ở đây; node group của module `eks` cũng chỉ dùng subnet private. VPC CNI cấp IP pod từ subnet của
+node, nên không pod nào có địa chỉ trong dải edge. Vì vậy NetworkPolicy của Envoy chỉ cần mở cổng listener và health check cho
+`edge_subnet_cidrs` để nhận đúng lưu lượng của ALB: ALB là proxy, Envoy thấy địa chỉ của ALB, không thấy địa chỉ của client hay CloudFront.
+Tầng riêng thay vì đặt ALB ở subnet private vì dải private chứa IP của mọi pod, nên mở dải đó là mở cho mọi pod. Cỡ tối thiểu `/27` theo
+[yêu cầu subnet của ALB](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/application-load-balancers.html).
 
 **Tầng database** ([ADR-0054](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0054-data-subnet-tier.md)): subnet
 database có route table riêng chỉ với route `local` của VPC (`create_database_subnet_route_table = true`, không route NAT, không route
@@ -126,12 +141,16 @@ entry inbound ở local `nacl_inbound`:
 
 | Tầng | Từ `0.0.0.0/0` | Từ CIDR VPC |
 | --- | --- | --- |
-| public | TCP 443 (listener của NLB); TCP, UDP 1024–3388 và 3390–65535; ICMP mọi loại | TCP, UDP mọi cổng; ICMP mọi loại |
+| public | TCP, UDP 1024–3388 và 3390–65535; ICMP mọi loại | TCP, UDP mọi cổng; ICMP mọi loại |
 | private | TCP, UDP 1024–3388 và 3390–65535; ICMP mọi loại | TCP, UDP mọi cổng; ICMP mọi loại |
+| edge | không | TCP, UDP mọi cổng; ICMP mọi loại |
 | database | không | TCP, UDP mọi cổng; ICMP mọi loại |
 
-Dải 1024–65535 trừ 3389 là lưu lượng trả về: NAT gateway nhận gói trả về trên cổng nó chọn (1024–65535), node nhận trên cổng tạm của
-Linux (32768–60999), và NLB giữ IP client nên gói tới pod Envoy mang địa chỉ Internet. Outbound của ba NACL (local `nacl_outbound`): TCP,
+Không tầng nào nhận TCP 443 từ Internet: tầng public chỉ có NAT gateway, còn NACL inbound không xét lưu lượng CloudFront tới VPC origin
+([tài liệu VPC origins](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/private-content-vpc-origins.html)), nên NACL edge
+chỉ nhận từ CIDR VPC mà CloudFront vẫn tới được ALB; security group của ALB (module `edge`) mới là chỗ giới hạn nguồn. Dải 1024–65535 trừ 3389
+là lưu lượng trả về: NAT gateway nhận gói trả về trên cổng nó chọn (1024–65535), node nhận trên cổng tạm của
+Linux (32768–60999). Outbound của bốn NACL (local `nacl_outbound`): TCP,
 UDP mọi cổng và ICMP mọi loại tới mọi đích. Mọi entry ghi rõ TCP, UDP, ICMP thay vì giao thức `-1`: trong VPC không gì dùng giao thức IP
 khác, và trivy (AWS-0102) chặn entry `-1`. NACL mặc định không còn entry nào (`default_network_acl_ingress`, `default_network_acl_egress` rỗng): không
 subnet nào gắn nó, và subnet tạo sau mà quên NACL thì không nhận, không gửi được gì. Giá phải trả: kết nối qua NAT gateway được NAT gán cổng
@@ -159,16 +178,17 @@ cùng tên của module `eks`, add-on agent tạo sau endpoint.
 | --- | --- | --- |
 | `aws_vpc` | 1 | DNS support và DNS hostnames bật (EKS cần) |
 | `aws_internet_gateway` | 1 | |
-| `aws_subnet` public / private / database | `az_count` mỗi loại | public: không tự cấp IP công khai (`map_public_ip_on_launch = false`) |
+| `aws_subnet` public / private / edge / database | `az_count` mỗi loại | public: không tự cấp IP công khai (`map_public_ip_on_launch = false`) |
 | `aws_route_table` public | 1 | route `0.0.0.0/0` tới Internet Gateway |
 | `aws_route_table` private | 1 (stg) hay `az_count` (prd) | route `0.0.0.0/0` tới NAT (cùng AZ ở prd); mỗi subnet private một association |
 | `aws_route_table` database | 1 (stg) hay `az_count` (prd) | chỉ route `local`, không `0.0.0.0/0`; mỗi subnet database một association |
+| `aws_route_table` edge (`intra` của module `vpc`) | 1 | chỉ route `local`; mỗi subnet edge một association |
 | `aws_eip`, `aws_nat_gateway` | 1 (stg) hay `az_count` (prd) | NAT nằm ở subnet public cùng AZ |
 | `aws_vpc_endpoint` `s3` | 1 | loại Gateway, gắn mọi route table private: dữ liệu S3 không qua NAT (NAT tính tiền theo GB); miễn phí |
 | `aws_vpc_endpoint` `guardduty_data` | 1 | loại Interface, một ENI mỗi subnet private; private DNS; policy chỉ account của env |
 | `aws_security_group` `guardduty_data`, `aws_vpc_security_group_ingress_rule` | 1 mỗi loại | `<name>-guardduty-data`: TCP 443 từ CIDR VPC, không rule egress |
 | `aws_default_security_group` | 1 | module nhận quản lý và xoá mọi rule: tài nguyên tạo mà quên gán security group không nhận, không gửi được gì |
-| `aws_network_acl` public / private / database, `aws_network_acl_rule` | 1 mỗi tầng; rule theo bảng NACL ở trên cộng ba outbound mỗi tầng (TCP, UDP, ICMP tới mọi đích) | gắn mọi subnet của tầng |
+| `aws_network_acl` public / private / edge / database, `aws_network_acl_rule` | 1 mỗi tầng; rule theo bảng NACL ở trên cộng ba outbound mỗi tầng (TCP, UDP, ICMP tới mọi đích) | gắn mọi subnet của tầng |
 | `aws_default_network_acl`, `aws_default_route_table` | 1 mỗi loại | module quản lý mặc định của VPC; NACL mặc định không còn entry nào |
 | `aws_flow_log` | 1 | đích S3 `flow_log_bucket_arn`, Parquet; không log group, không role IAM |
 
@@ -184,14 +204,13 @@ nguồn của từng thành phần (nhánh chính, tính đến 2026-10-31); bu�
 
 | Tài nguyên | Ai tạo | Tag hay dấu hiệu nhận diện |
 | --- | --- | --- |
-| NLB, target group, listener | AWS Load Balancer Controller từ Service của Envoy | `elbv2.k8s.aws/cluster=<cluster_name>`, `service.k8s.aws/stack=<namespace>/<service>`, `service.k8s.aws/resource`; thêm tag mặc định nếu chart của controller đặt `defaultTags` (`Project=svp`) |
-| Security group của LBC (frontend của NLB, backend dùng chung) | AWS Load Balancer Controller | `elbv2.k8s.aws/cluster=<cluster_name>`; SG backend thêm `elbv2.k8s.aws/resource=backend-sg` |
-| ENI của NLB trong subnet public | AWS (theo NLB) | mô tả `ELB net/k8s-…`; tự mất khi NLB bị xoá |
+| ENI của ALB `<name>-edge` trong subnet edge | AWS (theo ALB của module `edge`) | mô tả `ELB app/<name>-edge/…`; tự mất khi ALB bị xoá |
+| ENI của VPC origin trong subnet edge, security group `CloudFront-VPCOrigins-Service-SG` | CloudFront (theo `aws_cloudfront_vpc_origin` của module `edge`) | ENI do dịch vụ quản lý; tên security group |
 | ENI phụ của node (IP pod) | VPC CNI | `cluster.k8s.amazonaws.com/name=<cluster_name>`, `node.k8s.amazonaws.com/instance_id`, `eks:eni:owner=amazon-vpc-cni`; mô tả `aws-K8S-<instance-id>`; ENI `available` còn sót sau khi node mất |
 | ENI của control plane EKS trong subnet private | EKS | mô tả `Amazon EKS <cluster_name>`; EKS xoá khi xoá cluster |
 | Volume EBS của PVC | EBS CSI driver | `ebs.csi.aws.com/cluster=true`, `CSIVolumeName`, `kubernetes.io/created-for/pvc/namespace`, `kubernetes.io/created-for/pvc/name`, `kubernetes.io/created-for/pv/name`; `Project=svp` khi addon đặt `extraVolumeTags` (module EKS) |
 | Instance, ổ gốc, ENI chính của node do Karpenter dựng | Karpenter (NodePool, EC2NodeClass) | `karpenter.sh/nodepool`, `karpenter.sh/nodeclaim`, `kubernetes.io/cluster/<cluster_name>=owned`; `Project=svp` do EC2NodeClass đặt |
 | Log group `/aws/eks/<cluster_name>/cluster` | EKS khi bật log control plane | tên log group (module EKS quản lý nếu tạo trước) |
 
-Thứ tự xoá an toàn: xoá Service `LoadBalancer`, PVC và NodePool của Karpenter trong cluster khi controller còn chạy, chờ NLB, volume
-và node mất, rồi mới `terraform destroy`; sau đó quét các tag trên trong region.
+Thứ tự xoá an toàn: xoá PVC và NodePool của Karpenter trong cluster khi controller còn chạy, chờ volume và node mất, rồi mới
+`terraform destroy` (ALB và VPC origin nằm trong state của module `edge`, bị xoá trước subnet); sau đó quét các tag trên trong region.

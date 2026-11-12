@@ -10,6 +10,7 @@ locals {
     flowlogs          = data.aws_iam_policy_document.log_delivery_bucket["flowlogs"].json
     guardduty         = data.aws_iam_policy_document.guardduty_bucket.json
     waf               = data.aws_iam_policy_document.log_delivery_bucket["waf"].json
+    cloudfront        = data.aws_iam_policy_document.cloudfront_bucket.json
   }
 }
 
@@ -256,6 +257,40 @@ data "aws_iam_policy_document" "guardduty_bucket" {
       test     = "ArnLike"
       variable = "aws:SourceArn"
       values   = local.guardduty_detector_arns
+    }
+  }
+}
+
+# Standard logs (v2) of CloudFront: the log delivery service writes for a delivery source of us-east-1 in an account
+# of the organization; each env's destination fixes its own AWSLogs/<account>/CloudFront prefix.
+data "aws_iam_policy_document" "cloudfront_bucket" {
+  statement {
+    sid       = "AWSLogDeliveryWrite"
+    effect    = "Allow"
+    actions   = ["s3:PutObject"]
+    resources = ["${local.bucket_arns.cloudfront}/AWSLogs/*"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["delivery.logs.amazonaws.com"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "s3:x-amz-acl"
+      values   = ["bucket-owner-full-control"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceOrgID"
+      values   = [local.org_id]
+    }
+
+    condition {
+      test     = "ArnLike"
+      variable = "aws:SourceArn"
+      values   = ["arn:${local.partition}:logs:${local.key_regions.waf}:*:delivery-source:*"]
     }
   }
 }

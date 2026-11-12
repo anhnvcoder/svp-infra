@@ -11,6 +11,10 @@
 # list in env_table of lib.sh) is printed as "kept", and KMS keys in PendingDeletion as "pending deletion", not counted;
 # an alias of the lab still on such a key is counted: it keeps its name, so the next session cannot make it again.
 
+# Reads the home region, and us-east-1 for what CloudFront keeps there (web ACLs, pricing plans, certificates, log
+# deliveries) and for the kinds a baseline keeps there too (the DNSSEC alarms of prd, its query log group, their SNS
+# topic and KMS keys): each of those kinds reads the Stack tag, so what a baseline keeps is "kept" in either region.
+
 # Design notes: README.md.
 
 # Usage: aws/scripts/sweep.sh [--print] mgmt|stg|prd
@@ -45,6 +49,18 @@ q_global() {
 }
 KEPT=$(printf '%s' "$kept_stacks" | jq -Rc 'split(",")')
 export KEPT
+
+# global FUNCTION ARGS...: FUNCTION with $region set to us-east-1, so that its aws calls, and the delete commands
+# found prints for it, name that region.
+global() {
+  local region=$global_region
+  "$@"
+}
+
+# is_kept STACK: STACK is one of the Stack tags this account keeps.
+is_kept() { [ -n "$1" ] && case ",$kept_stacks," in *",$1,"*) true ;; *) false ;; esac; }
+# stack_tag: the value of tag Stack in the JSON on stdin ({"Tags": [{"Key", "Value"}]}), empty without one.
+stack_tag() { jq -r '[.Tags[]? | select(.Key == "Stack") | .Value][0] // ""'; }
 
 # found KIND LINES DELETE: one line ok or FAIL for KIND, then each leftover indented, with the command that deletes it:
 # DELETE with {} for the first word of the leftover's line and {rest} for the words after it, run with the account's
@@ -168,7 +184,18 @@ interfaces() {
 security_groups() {
   local f
   for f in "$svp_tag" "$k8s_tag" 'Name=tag:elbv2.k8s.aws/cluster,Values=svp-*' $(vpc_filter); do
-    q '.SecurityGroups[] | "\(.GroupId) \(.GroupName)"' ec2 describe-security-groups --filters "$f" || return 1
+    q '.SecurityGroups[] | select(.GroupName | startswith("CloudFront-VPCOrigins-Service-SG") | not) | "\(.GroupId) \(.GroupName)"' \
+      ec2 describe-security-groups --filters "$f" || return 1
+  done
+}
+
+# The security group CloudFront makes in the VPC of a VPC origin, outside any state: it goes with the VPC origin, some
+# time after it, so one left here is a kind of its own, deleted by hand only once no VPC origin is left.
+vpc_origin_security_groups() {
+  local f
+  for f in $(vpc_filter); do
+    q '.SecurityGroups[] | select(.GroupName | startswith("CloudFront-VPCOrigins-Service-SG")) | "\(.GroupId) \(.GroupName) \(.VpcId)"' \
+      ec2 describe-security-groups --filters "$f" || return 1
   done
 }
 
@@ -192,6 +219,27 @@ elbv2_tagged() {
 }
 load_balancers() { elbv2_tagged '.LoadBalancers[].LoadBalancerArn' elbv2 describe-load-balancers; }
 target_groups() { elbv2_tagged '.TargetGroups[].TargetGroupArn' elbv2 describe-target-groups; }
+
+# ACM certificates tagged Project=svp (an untagged one is never touched): the ALB's in the home region, the viewer
+# certificates of CloudFront in us-east-1. list-certificates leaves out every key type but RSA 2048 unless told.
+certificates() {
+  local lines arn domain tags stack
+  lines=$(q '.CertificateSummaryList[] | "\(.CertificateArn) \(.DomainName)"' acm list-certificates \
+    --includes keyTypes=RSA_1024,RSA_2048,RSA_3072,RSA_4096,EC_prime256v1,EC_secp384r1,EC_secp521r1) || return 1
+  printing && lines='<each-certificate-above> <its-domain>'
+  while read -r arn domain; do
+    [ -n "$arn" ] || continue
+    tags=$(aws_ acm list-tags-for-certificate --certificate-arn "$arn" --output json) || return 1
+    printing && continue
+    jq -e 'any(.Tags[]?; .Key == "Project" and .Value == "svp")' <<<"$tags" >/dev/null || continue
+    stack=$(stack_tag <<<"$tags")
+    if is_kept "$stack"; then
+      keep "kept  ACM certificate $arn $domain (Stack=$stack)"
+    else
+      echo "$arn $domain${stack:+ Stack=$stack}"
+    fi
+  done <<<"$lines"
+}
 
 rds_instances() {
   q '.DBInstances[] | select((.DBInstanceIdentifier | startswith("svp-")) or any(.TagList[]?; .Key == "Project" and .Value == "svp"))
@@ -243,10 +291,33 @@ event_rules() {
 }
 
 # Alarms of the lab (svp-<env>-<alarm>) and the target tracking alarms Application Auto Scaling makes for the storage of
-# an MSK cluster svp-*, which deleting the cluster before its scaling policy leaves behind.
+# an MSK cluster svp-*, which deleting the cluster before its scaling policy leaves behind; an alarm tagged with a kept
+# Stack (the DNSSEC alarms of aws/accounts/prd) goes to the kept list.
 alarms() {
-  q '.MetricAlarms[].AlarmName | select(startswith("svp-") or (startswith("TargetTracking-") and contains(":cluster/svp-")))' \
-    cloudwatch describe-alarms
+  local lines name arn tags stack
+  lines=$(q '.MetricAlarms[] | select(.AlarmName | startswith("svp-") or (startswith("TargetTracking-") and contains(":cluster/svp-")))
+    | "\(.AlarmName)\t\(.AlarmArn)"' cloudwatch describe-alarms) || return 1
+  printing && lines=$(printf '%s\t%s' '<each-alarm-above>' '<its-ARN>')
+  while IFS=$'\t' read -r name arn; do
+    [ -n "$name" ] || continue
+    tags=$(aws_ cloudwatch list-tags-for-resource --resource-arn "$arn" --output json) || return 1
+    printing && continue
+    stack=$(stack_tag <<<"$tags")
+    if is_kept "$stack"; then keep "kept  alarm $name (Stack=$stack)"; else echo "$name"; fi
+  done <<<"$lines"
+}
+
+# SNS topics of the lab (svp-*): the alarm topic of a root; one tagged with a kept Stack goes to the kept list.
+sns_topics() {
+  local arns arn tags stack
+  arns=$(q '.Topics[].TopicArn | select(sub("^.*:"; "") | startswith("svp-"))' sns list-topics) || return 1
+  printing && arns='<each-topic-above>'
+  for arn in $arns; do
+    tags=$(aws_ sns list-tags-for-resource --resource-arn "$arn" --output json) || return 1
+    printing && continue
+    stack=$(stack_tag <<<"$tags")
+    if is_kept "$stack"; then keep "kept  SNS topic $arn (Stack=$stack)"; else echo "$arn"; fi
+  done
 }
 
 # GuardDuty Malware Protection plans on a bucket of the lab (uploads of the media module): one left keeps scanning, and
@@ -297,10 +368,13 @@ subscriptions() {
     | "kept  pricing plan \(.arn) (\(.planFamily) \(.planTier)): cancellation scheduled \(.scheduledChange.effectiveDate // "?")"' <<<"$out")
 }
 
+# Distributions svp-<env>-<web|api|media> by their comment, or with an origin of the lab (a bucket svp-*): the origin
+# of web and api is a VPC origin, whose domain is the ALB's.
 distributions() {
-  q '.DistributionList.Items[]? | select(((.Comment // "") | startswith("Media of svp-")) or any(.Origins.Items[]?; .DomainName | startswith("svp-")))
-    | "\(.Id) \(.Status) enabled=\(.Enabled) \(.DomainName)"' cloudfront list-distributions
+  q '.DistributionList.Items[]? | select(((.Comment // "") | startswith("svp-")) or any(.Origins.Items[]?; .DomainName | startswith("svp-")))
+    | "\(.Id) \(.Status) enabled=\(.Enabled) \(.DomainName) \(.Comment // "")"' cloudfront list-distributions
 }
+vpc_origins() { q '.VpcOriginList.Items[]? | select(.Name | startswith("svp-")) | "\(.Id) \(.Name) \(.Status)"' cloudfront list-vpc-origins; }
 cloudfront_policies() {
   q '.OriginAccessControlList.Items[]? | select(.Name | startswith("svp-")) | "\(.Id) origin access control \(.Name)"' \
     cloudfront list-origin-access-controls || return 1
@@ -311,15 +385,35 @@ web_acls() {
   q_global '.WebACLs[] | select(.Name | startswith("svp-")) | "\(.Name) \(.Id)"' wafv2 list-web-acls --scope CLOUDFRONT
 }
 
+# Standard logs of CloudFront (us-east-1): each distribution's delivery source svp-<env>-<name> and its delivery, which
+# goes first. The delivery destinations svp-cloudfront-<env> live in the log archive account: one here is left too.
+log_deliveries() {
+  q '.deliveries[]? | select(.deliverySourceName | startswith("svp-")) | "\(.id) \(.deliverySourceName) \(.deliveryDestinationArn // "")"' \
+    logs describe-deliveries
+}
+log_delivery_sources() {
+  q '.deliverySources[]? | select(.name | startswith("svp-")) | "\(.name) \(.service // "") \(.logType // "")"' logs describe-delivery-sources
+}
+log_delivery_destinations() {
+  q '.deliveryDestinations[]? | select(.name | startswith("svp-")) | "\(.name) \(.deliveryDestinationType // "")"' \
+    logs describe-delivery-destinations
+}
+
 # Log groups EKS or RDS make under the lab's names (untagged: they write them outside Terraform's state, and again
 # after a destroy while the last logs arrive), the broker log group of MSK by name as well, RDS's Enhanced Monitoring
-# group, and any tagged Project=svp but with a kept Stack (the groups the rds module makes).
+# group, and any tagged Project=svp (the groups the rds module makes); one with a kept Stack (the query log group of
+# aws/accounts/prd) goes to the kept list.
 log_groups() {
+  local lines name stack
   q '.logGroups[].logGroupName | select(test("^/aws/eks/svp-|^/aws/rds/instance/svp-|^/aws/msk/svp-|^RDSOSMetrics$"))' logs describe-log-groups || return 1
-  # shellcheck disable=SC2016 # $ENV is jq's, not the shell's
-  q '.ResourceTagMappingList[] | select(any(.Tags[]?; .Key == "Stack" and (.Value | IN($ENV.KEPT | fromjson[]))) | not)
-    | .ResourceARN | sub("^arn:aws:logs:[^:]*:[^:]*:log-group:"; "") | sub(":\\*$"; "")' \
-    resourcegroupstaggingapi get-resources --resource-type-filters logs:log-group --tag-filters Key=Project,Values=svp
+  # shellcheck disable=SC2016 # $stack is jq's, not the shell's
+  lines=$(q '.ResourceTagMappingList[] | ([.Tags[]? | select(.Key == "Stack") | .Value][0] // "") as $stack
+    | "\(.ResourceARN | sub("^arn:aws:logs:[^:]*:[^:]*:log-group:"; "") | sub(":\\*$"; ""))\t\($stack)"' \
+    resourcegroupstaggingapi get-resources --resource-type-filters logs:log-group --tag-filters Key=Project,Values=svp) || return 1
+  while IFS=$'\t' read -r name stack; do
+    [ -n "$name" ] || continue
+    if is_kept "$stack"; then keep "kept  log group $name (Stack=$stack)"; else echo "$name"; fi
+  done <<<"$lines"
 }
 
 # Secrets of the lab (the SCRAM secrets of MSK included), and the master secret RDS keeps for an instance svp-* (tag
@@ -373,8 +467,9 @@ kms_aliases() {
   done <<<"$lines"
 }
 
-# Records of the account's hosted zone but NS and SOA at its apex and the NS records below it, which delegate a child
-# zone (delegated_subdomains of the baseline) and stay with the zone: ExternalDNS and cert-manager never write NS.
+# Records of the account's hosted zone but what the baseline keeps with the zone: NS, SOA and CAA at its apex, and the
+# NS records below it, which delegate a child zone (delegated_subdomains). The session's records (aliases, ACM
+# validation) are root env's, and go with its destroy.
 records() {
   local ids id
   export SVP_SWEEP_ZONE=$zone
@@ -383,10 +478,10 @@ records() {
     return 1
   printing && ids='<id-of-the-zone>'
   for id in $ids; do
-    keep "kept  hosted zone $zone ($id), NS and SOA at its apex, NS records below it"
+    keep "kept  hosted zone $zone ($id), NS, SOA and CAA at its apex, NS records below it"
     # shellcheck disable=SC2016 # $ENV is jq's, not the shell's
     q '($ENV.SVP_SWEEP_ZONE + ".") as $apex | .ResourceRecordSets[]
-      | select((.Name == $apex and .Type == "SOA") | not)
+      | select((.Name == $apex and (.Type == "SOA" or .Type == "CAA")) | not)
       | select((.Type == "NS" and (.Name == $apex or (.Name | endswith("." + $apex)))) | not)
       | "\(.Name) \(.Type)"' route53 list-resource-record-sets --hosted-zone-id "$id" || return 1
   done
@@ -418,8 +513,11 @@ sweep_kind "Elastic IPs" addresses "aws ec2 release-address --allocation-id {}"
 sweep_kind "VPC endpoints" vpc_endpoints "aws ec2 delete-vpc-endpoints --vpc-endpoint-ids {}"
 sweep_kind "network interfaces" interfaces "aws ec2 delete-network-interface --network-interface-id {}"
 sweep_kind "security groups" security_groups "aws ec2 delete-security-group --group-id {}"
+sweep_kind "security groups of CloudFront VPC origins" vpc_origin_security_groups \
+  "$runbook (CloudFront deletes it after its VPC origin; once no VPC origin is left, delete-security-group)"
 sweep_kind "ELBv2 load balancers" load_balancers "aws elbv2 delete-load-balancer --load-balancer-arn {}"
 sweep_kind "ELBv2 target groups" target_groups "aws elbv2 delete-target-group --target-group-arn {}"
+sweep_kind "ACM certificates" certificates "aws acm delete-certificate --certificate-arn {}"
 sweep_kind "RDS instances" rds_instances \
   "aws rds delete-db-instance --db-instance-identifier {} --skip-final-snapshot --delete-automated-backups"
 sweep_kind "RDS snapshots" rds_snapshots "aws rds delete-db-snapshot --db-snapshot-identifier {}"
@@ -438,17 +536,30 @@ sweep_kind "S3 buckets" buckets "$runbook (versioned: every version first)"
 sweep_kind "CloudFront pricing plan subscriptions" subscriptions \
   "$runbook (cancel the plan first: cancel-subscription takes the eTag of get-subscription, both in us-east-1)"
 sweep_kind "CloudFront distributions" distributions "$runbook (disable, wait, then delete)"
+sweep_kind "CloudFront VPC origins" vpc_origins \
+  "$runbook (after the distributions that use it: delete-vpc-origin takes the ETag of get-vpc-origin)"
 sweep_kind "CloudFront origin access controls and response headers policies" cloudfront_policies "$runbook"
 sweep_kind "WAF web ACLs of CloudFront" web_acls "$runbook (delete-web-acl takes the lock token of get-web-acl)"
+global sweep_kind "ACM certificates in us-east-1" certificates "aws acm delete-certificate --certificate-arn {}"
+global sweep_kind "CloudWatch Logs deliveries in us-east-1" log_deliveries "aws logs delete-delivery --id {}"
+global sweep_kind "CloudWatch Logs delivery sources in us-east-1" log_delivery_sources "aws logs delete-delivery-source --name {}"
+global sweep_kind "CloudWatch Logs delivery destinations in us-east-1" log_delivery_destinations \
+  "aws logs delete-delivery-destination --name {}"
 sweep_kind "SQS queues" queues "aws sqs delete-queue --queue-url {}"
 sweep_kind "EventBridge rules of Karpenter" event_rules \
   "aws events remove-targets --rule {} --ids {rest} --region $region && AWS_PROFILE=$profile aws events delete-rule --name {}"
 sweep_kind "CloudWatch alarms" alarms "aws cloudwatch delete-alarms --alarm-names {}"
 sweep_kind "CloudWatch log groups" log_groups "aws logs delete-log-group --log-group-name {}"
+sweep_kind "SNS topics" sns_topics "aws sns delete-topic --topic-arn {}"
 sweep_kind "Secrets Manager secrets (scheduled for deletion included)" secrets \
   "aws secretsmanager delete-secret --secret-id {} --force-delete-without-recovery"
 sweep_kind "KMS keys" kms_keys "aws kms schedule-key-deletion --key-id {} --pending-window-in-days 7"
 sweep_kind "KMS aliases on keys pending deletion" kms_aliases "aws kms delete-alias --alias-name {}"
+global sweep_kind "CloudWatch alarms in us-east-1" alarms "aws cloudwatch delete-alarms --alarm-names {}"
+global sweep_kind "CloudWatch log groups in us-east-1" log_groups "aws logs delete-log-group --log-group-name {}"
+global sweep_kind "SNS topics in us-east-1" sns_topics "aws sns delete-topic --topic-arn {}"
+global sweep_kind "KMS keys in us-east-1" kms_keys "aws kms schedule-key-deletion --key-id {} --pending-window-in-days 7"
+global sweep_kind "KMS aliases on keys pending deletion in us-east-1" kms_aliases "aws kms delete-alias --alias-name {}"
 [ -z "$zone" ] || sweep_kind "records of $zone" records "$runbook (change-resource-record-sets DELETE)"
 
 printing && exit 0

@@ -53,7 +53,12 @@ valkey_apply_immediately       = true
 valkey_slow_log_retention_days = 1
 
 # media: destroy empties and deletes both buckets; no earlier versions kept, S3 access logs in a log bucket of the env,
-# the web ACL of waf.tf in front of CloudFront.
+# its web ACL of waf.tf in front of CloudFront. The distribution stays on the flat-rate Free plan, so it writes no
+# standard logs; every other part of the edge is prd's.
 media_force_destroy          = true
 media_versioning_enabled     = false
 media_access_logging_enabled = true
+media_flat_rate_free         = true
+
+# edge: the internal ALB behind CloudFront is deleted with the env.
+edge_alb_deletion_protection = false

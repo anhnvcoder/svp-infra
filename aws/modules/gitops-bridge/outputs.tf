@@ -36,9 +36,8 @@ output "platform_values_chart" {
 }
 
 output "svp_cluster_platform_values" {
-  description = "Values for chart platform-values: platforms/eks/svp-cluster.values.tpl and cluster_values. What it prints is the valuesObject of Application svp-cluster, which Argo CD reads after its values files. Sensitive: cluster_values holds acmeEmail."
+  description = "Values for chart platform-values: platforms/eks/svp-cluster.values.tpl and cluster_values. What it prints is the valuesObject of Application svp-cluster, which Argo CD reads after its values files."
   value       = yamlencode({ template = var.svp_cluster_values_template, cluster = var.cluster_values })
-  sensitive   = true
 }
 
 ################################################################################
@@ -120,9 +119,8 @@ output "cluster_secret" {
 }
 
 output "cluster_secret_annotations" {
-  description = "Annotations of the cluster Secret: svp.io/cluster-values (JSON of cluster_values) and svp.io/telegram-chat-id. Sensitive: cluster_values holds acmeEmail."
+  description = "Annotations of the cluster Secret: svp.io/cluster-values (JSON of cluster_values) and svp.io/telegram-chat-id."
   value       = local.cluster_secret_annotations
-  sensitive   = true
 }
 
 output "root_release" {

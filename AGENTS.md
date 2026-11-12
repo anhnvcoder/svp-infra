@@ -34,9 +34,10 @@ quyết định chung của lab nằm ở `docs/` của repo code (bản clone `
   | `svp-stg`, `svp-prd` | `anhnv-<env>` | `anhnv-<env>-ro` | `SVP_AWS_STG_ACCOUNT_ID`, `SVP_AWS_PRD_ACCOUNT_ID` | `aws/accounts/<env>`, `aws/envs/<env>`, `aws/gitops/<env>` |
 
   Lệnh viết sẵn ghi profile của đúng account đó ngay trong lệnh, `TF_VAR_account_id` từ biến của account đó, và `--region` (`ap-southeast-1`
-  cho dịch vụ theo region và STS, `us-east-1` cho Organizations, IAM, Cost Explorer, WAF của CloudFront, Pricing Plan Manager và API Free
-  Tier, region của Identity Center cho `sso-admin`, `identitystore`); không dựa vào region của profile, không một `AWS_PROFILE` chung cho cả
-  repo. Root qua role (`aws/log-archive`, `aws/security`, `aws/baseline`) chạy bằng `anhnv-sso` với `TF_VAR_account_id` của management; provider
+  cho dịch vụ theo region và STS, `us-east-1` cho Organizations, IAM, Cost Explorer, WAF, cert ACM và log chuẩn của CloudFront (delivery
+  destination ở `aws/log-archive`, delivery source và delivery ở account env), KMS key, alarm và query log của DNSSEC Route 53, Pricing Plan
+  Manager và API Free Tier, region của Identity Center cho `sso-admin`, `identitystore`); không dựa vào region của profile, không một
+  `AWS_PROFILE` chung cho cả repo. Root qua role (`aws/log-archive`, `aws/security`, `aws/baseline`) chạy bằng `anhnv-sso` với `TF_VAR_account_id` của management; provider
   của account đích assume `OrganizationAccountAccessRole`, id đích từ `TF_VAR_<log_archive|security|stg|prd>_account_id` đặt trong lệnh từ
   biến tương ứng. Root `aws/envs/<env>` cần thêm `SVP_AWS_LOG_ACCOUNT_ID` (`tf.sh` đặt `TF_VAR_log_archive_account_id`). Hai account bảo
   mật không có profile ghi, bucket state hay root riêng; không thêm. Trước mọi lệnh ghi: `aws sts get-caller-identity` với **cùng profile** (`aws/scripts/check-account.sh

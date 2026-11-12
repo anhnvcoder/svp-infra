@@ -9,16 +9,17 @@ data "aws_caller_identity" "current" {}
 
 locals {
   topic_name = "${var.name}-alarms"
+  region     = coalesce(var.region, data.aws_region.current.region)
 
   # Built from its parts rather than read from the topic, so both policies are known at plan time.
-  topic_arn = "arn:${data.aws_partition.current.partition}:sns:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:${local.topic_name}"
+  topic_arn = "arn:${data.aws_partition.current.partition}:sns:${local.region}:${data.aws_caller_identity.current.account_id}:${local.topic_name}"
 
   # Confused deputy conditions of the service guides: each publisher acts only for its own resources (CloudWatch alarms,
   # EventBridge rules) of this account and region. SNS does not support them in the key policy for EventBridge to an
   # encrypted topic, so for EventBridge only the topic policy carries them.
   source_account = data.aws_caller_identity.current.account_id
   arn_prefix     = "arn:${data.aws_partition.current.partition}"
-  account_region = "${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}"
+  account_region = "${local.region}:${data.aws_caller_identity.current.account_id}"
   publishers = {
     "cloudwatch.amazonaws.com" = { sid = "CloudWatchAlarms", label = "CloudWatch alarms", source_arn = "${local.arn_prefix}:cloudwatch:${local.account_region}:alarm:*", key_source_conditions = true }
     "events.amazonaws.com"     = { sid = "EventBridgeRules", label = "EventBridge rules", source_arn = "${local.arn_prefix}:events:${local.account_region}:rule/*", key_source_conditions = false }
@@ -77,6 +78,7 @@ data "aws_iam_policy_document" "key" {
 }
 
 resource "aws_kms_key" "this" {
+  region                   = var.region
   description              = "SNS topic ${local.topic_name}: ${join(" and ", [for p in var.publisher_services : local.publishers[p].label])} of ${var.name}"
   key_usage                = "ENCRYPT_DECRYPT"
   customer_master_key_spec = "SYMMETRIC_DEFAULT"
@@ -86,6 +88,7 @@ resource "aws_kms_key" "this" {
 }
 
 resource "aws_kms_alias" "this" {
+  region        = var.region
   name          = "alias/${var.name}-alarms"
   target_key_id = aws_kms_key.this.key_id
 }
@@ -97,6 +100,7 @@ resource "aws_kms_alias" "this" {
 # The topic names the key by its alias: SNS takes an alias, and the alias name is known at plan time where the key ARN
 # is not. The alias belongs to this module and points at the key above only.
 resource "aws_sns_topic" "this" {
+  region            = var.region
   name              = local.topic_name
   kms_master_key_id = aws_kms_alias.this.name
 }
@@ -151,12 +155,14 @@ data "aws_iam_policy_document" "topic" {
 }
 
 resource "aws_sns_topic_policy" "this" {
+  region = var.region
   arn    = aws_sns_topic.this.arn
   policy = data.aws_iam_policy_document.topic.json
 }
 
 # Stays "pending confirmation" until the link SNS emails is opened; Terraform cannot confirm an email subscription.
 resource "aws_sns_topic_subscription" "email" {
+  region    = var.region
   topic_arn = aws_sns_topic.this.arn
   protocol  = "email"
   endpoint  = var.alarm_email

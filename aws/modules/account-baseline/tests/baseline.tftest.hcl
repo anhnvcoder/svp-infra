@@ -22,6 +22,15 @@ variables {
   # Four name servers of a child zone, in the form Route 53 gives them.
   child_servers = ["ns-1.awsdns-00.org", "ns-2.awsdns-01.net", "ns-3.awsdns-02.com", "ns-4.awsdns-03.co.uk"]
 
+  # CAA values of the zone apex: the four CAs of ACM, for single names and wildcards.
+  caa_records = [
+    "0 issue \"amazon.com\"", "0 issue \"amazontrust.com\"", "0 issue \"awstrust.com\"", "0 issue \"amazonaws.com\"",
+    "0 issuewild \"amazon.com\"", "0 issuewild \"amazontrust.com\"", "0 issuewild \"awstrust.com\"", "0 issuewild \"amazonaws.com\"",
+  ]
+
+  # Topic of the DNSSEC alarms, in us-east-1 as the Route 53 metrics.
+  dns_topic = "arn:aws:sns:us-east-1:222222222222:svp-prd-dns-alarms"
+
   # Every action that reads or writes data with a KMS key; none may reach anyone but the SvpAdmin roles.
   crypto_actions = ["kms:Encrypt", "kms:Decrypt", "kms:ReEncrypt*", "kms:ReEncryptFrom", "kms:ReEncryptTo", "kms:GenerateDataKey", "kms:GenerateDataKey*", "kms:GenerateDataKeyWithoutPlaintext", "kms:*"]
 }
@@ -139,6 +148,28 @@ run "stg" {
     ])
     error_message = "The budget must alert at 50, 80 and 100 percent of actual cost and 100 percent of forecast cost."
   }
+
+  assert {
+    condition = (
+      aws_route53_record.caa.name == "stg.aws.svp.example" && aws_route53_record.caa.type == "CAA" &&
+      toset(aws_route53_record.caa.records) == toset(var.caa_records) && length(aws_route53_record.caa.records) == 8
+    )
+    error_message = "The zone apex must hold CAA issue and issuewild for exactly the four CAs of ACM."
+  }
+
+  # DNSSEC and the query log are off by default (the stg zone).
+  assert {
+    condition = alltrue([
+      length(aws_kms_key.dnssec) == 0,
+      length(aws_route53_key_signing_key.this) == 0,
+      length(aws_route53_hosted_zone_dnssec.this) == 0,
+      length(aws_cloudwatch_metric_alarm.dnssec) == 0,
+      length(aws_cloudwatch_log_group.query_log) == 0,
+      length(aws_cloudwatch_log_resource_policy.query_log) == 0,
+      length(aws_route53_query_log.this) == 0,
+    ])
+    error_message = "Without dnssec_enabled and query_log_enabled, the zone must have no DNSSEC key, signing, alarm or query log."
+  }
 }
 
 run "prd" {
@@ -175,6 +206,140 @@ run "prd" {
       [for c in s.condition : alltrue([for v in c.values : startswith(v, "arn:aws:iam::222222222222:role/aws-reserved/sso.amazonaws.com/")])],
     )]))
     error_message = "The key policy must name only the account of the baseline."
+  }
+
+  assert {
+    condition     = aws_route53_record.caa.name == "aws.svp.example" && toset(aws_route53_record.caa.records) == toset(var.caa_records)
+    error_message = "The prd zone apex must hold the same CAA values."
+  }
+}
+
+# The prd zone: DNSSEC signing with its key in us-east-1, two page alarms and the query log.
+run "dnssec_query_log" {
+  command = plan
+
+  variables {
+    env               = "prd"
+    account_id        = "222222222222"
+    zone_name         = "aws.svp.example"
+    dnssec_enabled    = true
+    query_log_enabled = true
+    alarm_topic_arn   = var.dns_topic
+  }
+
+  assert {
+    condition = (
+      length(aws_kms_key.dnssec) == 1 &&
+      aws_kms_key.dnssec[0].region == "us-east-1" &&
+      aws_kms_key.dnssec[0].customer_master_key_spec == "ECC_NIST_P256" &&
+      aws_kms_key.dnssec[0].key_usage == "SIGN_VERIFY" &&
+      aws_kms_key.dnssec[0].deletion_window_in_days == 30
+    )
+    error_message = "DNSSEC must use an ECC_NIST_P256 SIGN_VERIFY key in us-east-1, the key Route 53 requires."
+  }
+
+  # Key policy: the account administers through IAM; the DNSSEC service signs for hosted zones of this account only and
+  # creates grants for AWS resources only.
+  assert {
+    condition = alltrue([for s in data.aws_iam_policy_document.dnssec_key[0].statement :
+      anytrue([for p in s.principals : p.type == "AWS" && toset(p.identifiers) == toset(["arn:aws:iam::222222222222:root"])]) ||
+      (
+        alltrue([for p in s.principals : p.type == "Service" && toset(p.identifiers) == toset(["dnssec-route53.amazonaws.com"])]) &&
+        (
+          (toset(s.actions) == toset(["kms:DescribeKey", "kms:GetPublicKey", "kms:Sign"]) &&
+            toset([for c in s.condition : "${c.test} ${c.variable} ${join(",", c.values)}"]) == toset([
+              "StringEquals aws:SourceAccount 222222222222",
+              "ArnLike aws:SourceArn arn:aws:route53:::hostedzone/*",
+          ])) ||
+          (toset(s.actions) == toset(["kms:CreateGrant"]) &&
+          toset([for c in s.condition : "${c.test} ${c.variable} ${join(",", c.values)}"]) == toset(["Bool kms:GrantIsForAWSResource true"]))
+        )
+      )
+    ]) && length(data.aws_iam_policy_document.dnssec_key[0].statement) == 3
+    error_message = "The DNSSEC key policy must hold the account statement and the two statements of the Route 53 DNSSEC guide, with their conditions."
+  }
+
+  assert {
+    condition = (
+      aws_route53_key_signing_key.this[0].status == "ACTIVE" &&
+      aws_route53_key_signing_key.this[0].name == "svp_prd_ksk" &&
+      aws_route53_hosted_zone_dnssec.this[0].signing_status == "SIGNING"
+    )
+    error_message = "With dnssec_enabled the zone must be signed by an ACTIVE key signing key."
+  }
+
+  # The mock does not check the name against the API, which takes 3 to 128 letters, digits and underscores.
+  assert {
+    condition     = can(regex("^[a-zA-Z0-9_]{3,128}$", aws_route53_key_signing_key.this[0].name))
+    error_message = "The key signing key name must be 3 to 128 letters, digits and underscores, as CreateKeySigningKey requires."
+  }
+
+  assert {
+    condition = (
+      toset(keys(aws_cloudwatch_metric_alarm.dnssec)) == toset(["dnssec-internal-failure", "dnssec-ksk-action-needed"]) &&
+      alltrue([for k, a in aws_cloudwatch_metric_alarm.dnssec :
+        a.alarm_name == "svp-prd-${k}" &&
+        a.region == "us-east-1" &&
+        a.namespace == "AWS/Route53" &&
+        a.tags["Severity"] == "page" &&
+        strcontains(a.alarm_description, "https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks/${k}.md") &&
+        a.alarm_actions == toset([var.dns_topic]) && a.ok_actions == toset([var.dns_topic]) &&
+        a.comparison_operator == "GreaterThanOrEqualToThreshold" && a.threshold == 1 && a.statistic == "Sum"
+      ]) &&
+      aws_cloudwatch_metric_alarm.dnssec["dnssec-internal-failure"].metric_name == "DNSSECInternalFailure" &&
+      aws_cloudwatch_metric_alarm.dnssec["dnssec-ksk-action-needed"].metric_name == "DNSSECKeySigningKeysNeedingAction"
+    )
+    error_message = "DNSSEC must have the two page alarms svp-<env>-dnssec-internal-failure and svp-<env>-dnssec-ksk-action-needed in us-east-1, with the runbook of the same name, to alarm_topic_arn."
+  }
+
+  assert {
+    condition = (
+      aws_cloudwatch_log_group.query_log[0].region == "us-east-1" &&
+      aws_cloudwatch_log_group.query_log[0].name == "/aws/route53/aws.svp.example" &&
+      aws_cloudwatch_log_group.query_log[0].retention_in_days == 90 &&
+      aws_cloudwatch_log_resource_policy.query_log[0].region == "us-east-1" &&
+      length(aws_route53_query_log.this) == 1
+    )
+    error_message = "The query log must go to /aws/route53/<zone_name> in us-east-1, kept 90 days, under a resource policy of us-east-1."
+  }
+
+  assert {
+    condition = alltrue([for s in data.aws_iam_policy_document.query_log[0].statement :
+      toset(s.actions) == toset(["logs:CreateLogStream", "logs:PutLogEvents"]) &&
+      toset(s.resources) == toset(["arn:aws:logs:us-east-1:222222222222:log-group:/aws/route53/aws.svp.example:*"]) &&
+      alltrue([for p in s.principals : p.type == "Service" && toset(p.identifiers) == toset(["route53.amazonaws.com"])]) &&
+      anytrue([for c in s.condition : c.test == "StringEquals" && c.variable == "aws:SourceAccount" && toset(c.values) == toset(["222222222222"])]) &&
+      anytrue([for c in s.condition : c.test == "ArnEquals" && c.variable == "aws:SourceArn"])
+    ])
+    error_message = "Only Route 53, for the zone of this account, may write to the query log group."
+  }
+}
+
+# Signing stopped (the way back after the DS record is gone): the key signing key stays ACTIVE and the key stays.
+run "dnssec_not_signing" {
+  command = plan
+
+  variables {
+    env             = "prd"
+    account_id      = "222222222222"
+    zone_name       = "aws.svp.example"
+    dnssec_enabled  = true
+    dnssec_signing  = false
+    alarm_topic_arn = var.dns_topic
+  }
+
+  assert {
+    condition = (
+      aws_route53_hosted_zone_dnssec.this[0].signing_status == "NOT_SIGNING" &&
+      aws_route53_key_signing_key.this[0].status == "ACTIVE" &&
+      length(aws_kms_key.dnssec) == 1
+    )
+    error_message = "dnssec_signing = false must stop signing only: the key signing key stays ACTIVE and the KMS key stays."
+  }
+
+  assert {
+    condition     = length(aws_route53_query_log.this) == 0
+    error_message = "query_log_enabled is separate from DNSSEC."
   }
 }
 
@@ -288,4 +453,25 @@ run "budget_emails_empty" {
   }
 
   expect_failures = [var.budget_emails]
+}
+
+run "dnssec_without_topic" {
+  command = plan
+
+  variables {
+    dnssec_enabled = true
+  }
+
+  expect_failures = [var.alarm_topic_arn]
+}
+
+run "dnssec_topic_other_region" {
+  command = plan
+
+  variables {
+    dnssec_enabled  = true
+    alarm_topic_arn = "arn:aws:sns:ap-southeast-1:111111111111:svp-stg-alarms"
+  }
+
+  expect_failures = [var.alarm_topic_arn]
 }

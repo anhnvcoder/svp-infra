@@ -43,8 +43,9 @@ if [ "$2" = secrets ]; then
   step "bootstrap.sh secrets: cluster values"
   values=$(tf_ "$env_root" output -json cluster_values) || fail "terraform output cluster_values of aws/envs/$env_name"
   if ! printing; then
-    jq -e --arg name "$cluster" '.name == $name and (.domain | type == "string" and length > 0)' <<<"$values" >/dev/null 2>&1 ||
-      fail "output cluster_values of aws/envs/$env_name is not a map of cluster $cluster with a domain"
+    jq -e --arg name "$cluster" '.name == $name and (.domain | type == "string" and length > 0)
+      and (.edgeTargetGroupArn | type == "string" and startswith("arn:"))' <<<"$values" >/dev/null 2>&1 ||
+      fail "output cluster_values of aws/envs/$env_name is not a map of cluster $cluster with a domain and an edgeTargetGroupArn"
     (umask 077 && printf '%s\n' "$values" >"$values_file") || fail "write $values_file"
     ok "cluster values in $values_file"
   fi
@@ -118,4 +119,31 @@ step "bootstrap.sh wait: Application svp-root Synced and Healthy"
 wait_until "Application svp-root is Synced and Healthy" "$app_limit" synced_healthy svp-root ||
   fail "Application svp-root not Synced and Healthy after $app_limit s ($(app_status svp-root || true)): kubectl --context $context -n argocd get applications.argoproj.io; then this again"
 mark svp-root-healthy
-ok "every Application Synced and Healthy on $context; next: aws/scripts/measure.sh $env_name"
+ok "every Application Synced and Healthy on $context"
+
+# The TargetGroupBinding of Envoy can exist while the ALB's health check has not yet passed on any pod, and measure.sh
+# goes through CloudFront and that ALB right after: it starts once the edge's target group has a healthy target.
+if printing; then
+  target_group='<edgeTargetGroupArn of cluster-values.json>'
+else
+  target_group=$(jq -r '.edgeTargetGroupArn // empty' "$values_file" 2>/dev/null) || target_group=
+  [ -n "$target_group" ] ||
+    fail "no edgeTargetGroupArn in $values_file: aws/scripts/bootstrap.sh $env_name secrets writes it from output cluster_values of aws/envs/$env_name"
+fi
+target_health() {
+  local out
+  out=$(aws_ elbv2 describe-target-health --target-group-arn "$target_group" --output json) || return 1
+  printing && return 0
+  jq -r '.TargetHealthDescriptions[]? | "\(.Target.Id) \(.TargetHealth.State)"' <<<"$out"
+}
+edge_healthy() {
+  local targets
+  targets=$(target_health) || return 1
+  printing || grep -q ' healthy$' <<<"$targets"
+}
+
+step "bootstrap.sh wait: a healthy target in the edge's target group"
+wait_until "a pod of Envoy is a healthy target of the edge's ALB" "$app_limit" edge_healthy ||
+  fail "no healthy target in $target_group after $app_limit s (targets: $(target_health | oneline || true)): kubectl --context $context -n envoy-gateway-system describe targetgroupbinding svp-envoy; then this again"
+mark edge-healthy
+ok "the edge's target group has a healthy target; next: aws/scripts/measure.sh $env_name"

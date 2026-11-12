@@ -190,7 +190,7 @@ run "nacl" {
   }
 
   # Return traffic from the internet reaches the NAT gateway and the nodes on every port from 1024 except 3389, for TCP
-  # and UDP; the NLB listener takes TCP 443 in the public tier only.
+  # and UDP.
   assert {
     condition = alltrue([for tier in ["public", "private"] : alltrue([for proto in ["tcp", "udp"] : alltrue([for p in [1024, 3388, 3390, 32768, 60999, 65535] :
       anytrue([for r in local.nacl_inbound[tier] : r.rule_action == "allow" && r.cidr_block == "0.0.0.0/0" && r.protocol == proto && r.from_port <= p && p <= r.to_port])
@@ -198,10 +198,16 @@ run "nacl" {
     error_message = "The public and private NACLs must let in TCP and UDP return traffic on 1024-3388 and 3390-65535."
   }
 
+  # Nothing listens to the internet: the public tier holds only NAT gateways, and CloudFront reaches the edge tier
+  # through a VPC origin, which inbound NACL rules do not evaluate.
   assert {
-    condition = (anytrue([for r in local.nacl_inbound.public : r.protocol == "tcp" && r.from_port == 443 && r.to_port == 443 && r.cidr_block == "0.0.0.0/0"]) &&
-    !anytrue([for r in local.nacl_inbound.private : r.cidr_block == "0.0.0.0/0" && r.from_port <= 443 && 443 <= r.to_port && r.protocol != "icmp"]))
-    error_message = "TCP 443 from the internet must reach the public subnets (NLB listener) and no other tier."
+    condition     = !anytrue([for r in flatten(values(local.nacl_inbound)) : r.cidr_block == "0.0.0.0/0" && r.from_port <= 443 && 443 <= r.to_port && r.protocol != "icmp"])
+    error_message = "No NACL may let in TCP or UDP 443 from 0.0.0.0/0: no tier holds a listener open to the internet."
+  }
+
+  assert {
+    condition     = length(local.nacl_inbound.edge) > 0 && alltrue([for r in local.nacl_inbound.edge : r.cidr_block == "10.0.0.0/16"])
+    error_message = "The edge NACL must let in nothing from outside the VPC."
   }
 
   assert {
@@ -403,5 +409,97 @@ run "database_subnets_six_zones" {
   assert {
     condition     = module.vpc.private_subnets_cidr_blocks[5] == "10.0.10.0/23" && module.vpc.public_subnets_cidr_blocks[0] == "10.0.14.0/28"
     error_message = "The private subnets must end below block 6 and the public ones start above it."
+  }
+}
+
+# The edge tier with the defaults (two zones, a /16): one subnet per zone in the back half of block 7, a route table
+# with only the local route, and no tag that would let the Load Balancer Controller or Karpenter use it.
+run "edge_subnets" {
+  command = plan
+
+  assert {
+    condition     = output.edge_subnet_cidrs == tolist(["10.0.240.0/23", "10.0.242.0/23"])
+    error_message = "The edge subnets must take slots 8 and 9 of 16 in block 7 (10.0.224.0/19) of the VPC range."
+  }
+
+  assert {
+    condition     = [for s in module.vpc.intra_subnet_objects : s.tags["Name"]] == ["svp-stg-edge-ap-southeast-1a", "svp-stg-edge-ap-southeast-1b"]
+    error_message = "The edge subnets must be named <name>-edge-<zone>."
+  }
+
+  assert {
+    condition = alltrue([for s in module.vpc.intra_subnet_objects : !anytrue([for k in keys(s.tags) :
+    startswith(k, "kubernetes.io/role/") || k == "karpenter.sh/discovery"])])
+    error_message = "The edge subnets must carry no kubernetes.io/role/* or karpenter.sh/discovery tag: no load balancer of the controller, no node."
+  }
+
+  assert {
+    condition     = alltrue([for s in concat(module.vpc.public_subnet_objects, module.vpc.private_subnet_objects, module.vpc.database_subnet_objects) : !contains(keys(s.tags), "kubernetes.io/role/elb")])
+    error_message = "No subnet may carry kubernetes.io/role/elb: the Load Balancer Controller must not make an internet-facing load balancer."
+  }
+
+  # The registry module adds no route to its intra route table; the NAT routes and the internet gateway route belong to
+  # the private and public route tables only.
+  assert {
+    condition = (length(module.vpc.intra_route_table_ids) == 1 &&
+      length(module.vpc.private_nat_gateway_route_ids) == length(module.vpc.private_route_table_ids) &&
+    length(module.vpc.public_route_table_ids) == 1)
+    error_message = "The edge subnets must share one route table that holds only the local route."
+  }
+
+  assert {
+    condition     = local.nacl_inbound.edge == local.nacl_from_vpc
+    error_message = "The edge NACL must let in TCP, UDP and ICMP from the VPC range and nothing else."
+  }
+}
+
+# Every tier on the smallest range and the most zones the variables allow: the edge subnets keep the /27 an ALB needs
+# and overlap no other subnet.
+run "edge_subnets_six_zones" {
+  command = plan
+
+  variables {
+    cidr     = "10.0.0.0/20"
+    az_count = 6
+  }
+
+  assert {
+    condition     = output.edge_subnet_cidrs == tolist(["10.0.15.0/27", "10.0.15.32/27", "10.0.15.64/27", "10.0.15.96/27", "10.0.15.128/27", "10.0.15.160/27"])
+    error_message = "Six zones on a /20 must get six /27 edge subnets in slots 8 to 13 of block 7 (10.0.14.0/23)."
+  }
+
+  assert {
+    condition     = alltrue([for c in output.edge_subnet_cidrs : tonumber(split("/", c)[1]) <= 27])
+    error_message = "Every edge subnet must be at least a /27, the smallest subnet an ALB accepts."
+  }
+
+  # Two aligned ranges overlap when their networks match at the shorter prefix of the two.
+  assert {
+    condition = alltrue([for i, a in concat(module.vpc.private_subnets_cidr_blocks, module.vpc.database_subnets_cidr_blocks, module.vpc.public_subnets_cidr_blocks, module.vpc.intra_subnets_cidr_blocks) :
+      alltrue([for j, b in concat(module.vpc.private_subnets_cidr_blocks, module.vpc.database_subnets_cidr_blocks, module.vpc.public_subnets_cidr_blocks, module.vpc.intra_subnets_cidr_blocks) :
+        i == j || cidrsubnet("${cidrhost(a, 0)}/${min(tonumber(split("/", a)[1]), tonumber(split("/", b)[1]))}", 0, 0) != cidrsubnet("${cidrhost(b, 0)}/${min(tonumber(split("/", a)[1]), tonumber(split("/", b)[1]))}", 0, 0)
+    ])])
+    error_message = "No two subnets of the VPC may overlap."
+  }
+}
+
+run "edge_subnets_six_zones_large_range" {
+  command = plan
+
+  variables {
+    az_count = 6
+  }
+
+  assert {
+    condition     = alltrue([for c in output.edge_subnet_cidrs : tonumber(split("/", c)[1]) <= 27]) && output.edge_subnet_cidrs[5] == "10.0.250.0/23"
+    error_message = "Six zones on a /16 must get six /23 edge subnets in slots 8 to 13 of block 7."
+  }
+
+  assert {
+    condition = alltrue([for i, a in concat(module.vpc.private_subnets_cidr_blocks, module.vpc.database_subnets_cidr_blocks, module.vpc.public_subnets_cidr_blocks, module.vpc.intra_subnets_cidr_blocks) :
+      alltrue([for j, b in concat(module.vpc.private_subnets_cidr_blocks, module.vpc.database_subnets_cidr_blocks, module.vpc.public_subnets_cidr_blocks, module.vpc.intra_subnets_cidr_blocks) :
+        i == j || cidrsubnet("${cidrhost(a, 0)}/${min(tonumber(split("/", a)[1]), tonumber(split("/", b)[1]))}", 0, 0) != cidrsubnet("${cidrhost(b, 0)}/${min(tonumber(split("/", a)[1]), tonumber(split("/", b)[1]))}", 0, 0)
+    ])])
+    error_message = "No two subnets of the VPC may overlap."
   }
 }

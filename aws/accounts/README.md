@@ -1,8 +1,10 @@
 # `aws/accounts`: baseline của account stg và prd (chạy một lần mỗi account)
 
 Mỗi account thành viên của org (`svp-stg`, `svp-prd`) có một root ở đây, gọi module
-[`account-baseline`](../modules/account-baseline/README.md): bucket state và KMS key của nó, zone DNS của env, budget tháng. Mọi thứ sống
-giữa các buổi AWS, mang tag `Stack=baseline` (script quét sót của buổi giữ lại tag này).
+[`account-baseline`](../modules/account-baseline/README.md): bucket state và KMS key của nó, zone DNS của env với bản ghi `CAA` ở đỉnh,
+budget tháng. Root prd bật thêm DNSSEC (key KMS, KSK, hai alarm `page`) và query log cho zone prd, cùng topic SNS `svp-prd-dns-alarms` ở
+`us-east-1` (module [`alarms`](../modules/alarms/README.md)) nhận hai alarm đó. Mọi thứ sống giữa các buổi AWS, mang tag `Stack=baseline`
+(script quét sót của buổi giữ lại tag này).
 
 Zone của prd là zone gốc của lab, `aws.<domain>` (web prd ở đỉnh zone, API `api.aws.<domain>`), được DNS của domain cha (Cloudflare) uỷ
 quyền bằng bốn bản ghi `NS` tên `aws`. Zone của stg là `stg.aws.<domain>`, zone con mà zone prd uỷ quyền bằng bản ghi `NS` của biến
@@ -14,8 +16,10 @@ quyền bằng bốn bản ghi `NS` tên `aws`. Zone của stg là `stg.aws.<dom
 | `stg/` | `anhnv-stg` | `SVP_AWS_STG_ACCOUNT_ID` | key `aws/accounts/stg/terraform.tfstate` trong bucket của account stg |
 | `prd/` | `anhnv-prd` | `SVP_AWS_PRD_ACCOUNT_ID` | key `aws/accounts/prd/terraform.tfstate` trong bucket của account prd |
 
-Hai root chỉ khác `local.env` (`main.tf`), `key` của backend (`versions.tf`), biến `delegated_subdomains` (chỉ prd khai báo và truyền vào
-module) và mô tả của biến, output theo zone của env. Trong bucket của mỗi account còn có state của root
+Hai root chỉ khác `local.env` (`main.tf`), `key` của backend (`versions.tf`), những gì chỉ prd có (biến `delegated_subdomains`,
+`dnssec_signing`, `alarm_email`; `dnssec_enabled = true`, `query_log_enabled = true` và module `alarms` trong `main.tf`) và mô tả của biến,
+output theo zone của env. stg không DNSSEC, không query log (lý do:
+[ADR-0061](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0061-edge-cloudfront-waf-acm.md) §11). Trong bucket của mỗi account còn có state của root
 `aws/envs/<env>` (key `aws/<env>/terraform.tfstate`) và `aws/gitops/<env>` (key `aws/gitops/<env>/terraform.tfstate`), cả hai đọc
 `-backend-config=../../backend-<env>.hcl`.
 
@@ -32,7 +36,11 @@ Mỗi account, trong khi baseline còn:
 | Budget `svp-<env>-monthly` | miễn phí (budget không có action) | [AWS Budgets pricing](https://aws.amazon.com/aws-cost-management/aws-budgets/pricing/), đọc 2026-11-05 |
 
 Tổng R mỗi account khoảng $1,51/tháng năm đầu ($3,02 cho hai account), tăng lên $2,51 rồi $3,51 sau mỗi lần xoay key. Key đang chờ xoá
-(`PendingDeletion`) không tính phí. Management account không giữ hosted zone: mỗi account prd, stg đúng một zone, tổng hai zone.
+(`PendingDeletion`) không tính phí. Management account không giữ hosted zone: mỗi account prd, stg đúng một zone, tổng hai zone. Bản ghi
+`CAA` nằm trong phí zone.
+
+Account prd giữ thêm key KMS DNSSEC, key KMS và topic của alarm DNSSEC, hai alarm và log query DNS; phí của chúng (có nguồn) ở bảng chi phí
+lúc không buổi của [ADR-0061](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0061-edge-cloudfront-waf-acm.md) §13.
 
 ## Dựng baseline
 
@@ -62,7 +70,7 @@ cp stg.auto.tfvars.example stg.auto.tfvars
 ```
 
 Sửa `stg.auto.tfvars` (git bỏ qua): `budget_emails`, `zone_name` (không dấu chấm cuối: `stg.aws.<domain>` ở stg, `aws.<domain>` ở prd),
-`budget_limit_usd` nếu muốn khác $20. Ở prd bỏ khối `delegated_subdomains` của file ví dụ cho tới mục 5 (zone stg chưa có).
+`budget_limit_usd` nếu muốn khác $20; ở prd thêm `alarm_email` (hộp thư của topic `svp-prd-dns-alarms`). Ở prd bỏ khối `delegated_subdomains` của file ví dụ cho tới mục 5 (zone stg chưa có).
 
 ### 3. Apply lần đầu, state local
 
@@ -74,8 +82,11 @@ AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform init
 AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform plan -out=stg.tfplan
 ```
 
-Đọc plan: `Plan: 10 to add, 0 to change, 0 to destroy` (KMS key và alias, bucket cùng 5 cấu hình của nó, hosted zone, budget; không bản
-ghi `delegation` nào). Rồi:
+Đọc plan: ở stg `Plan: 11 to add, 0 to change, 0 to destroy` (KMS key và alias, bucket cùng 5 cấu hình của nó, hosted zone, bản ghi `caa`,
+budget; không bản ghi `delegation` nào). Ở prd `Plan: 25 to add, 0 to change, 0 to destroy`: 11 như stg, thêm 6 của DNSSEC (`aws_kms_key.dnssec`
+và alias ở `us-east-1`, `aws_route53_key_signing_key.this`, `aws_route53_hosted_zone_dnssec.this`, hai `aws_cloudwatch_metric_alarm.dnssec`), 3
+của query log (log group, resource policy, `aws_route53_query_log.this`) và 5 của `module.alarms` (key KMS, alias, topic, topic policy,
+subscription email). Rồi:
 
 ```sh
 AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform apply stg.tfplan
@@ -173,6 +184,33 @@ xoá, nên thứ tự là:
 
 Từ bước 1 tới khi apply ở bước 3 xong, `stg.aws.<domain>` không phân giải.
 
+### 6. Alarm và DNSSEC của prd
+
+Apply của prd tạo subscription email của topic `svp-prd-dns-alarms` ở trạng thái chờ: mở link trong thư "AWS Notification - Subscription
+Confirmation" gửi tới `alarm_email`, rồi kiểm (`SubscriptionArn` là ARN thật, không còn `PendingConfirmation`):
+
+```sh
+AWS_PROFILE=anhnv-prd aws sns list-subscriptions --region us-east-1 \
+  --query "Subscriptions[?ends_with(TopicArn, ':svp-prd-dns-alarms')].[Protocol,SubscriptionArn]" --output text
+```
+
+Zone prd ký ngay sau apply, nhưng chuỗi tin cậy chỉ nối khi DNS cha của `<domain>` có bản ghi `DS` tên `aws`. Xem trạng thái ký, KSK và bản ghi
+`DS` của nó:
+
+```sh
+cd infra/aws/accounts/prd
+AWS_PROFILE=anhnv-prd aws route53 get-dnssec --region us-east-1 \
+  --hosted-zone-id "$(AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform output -raw zone_id)" \
+  --query '{Signing:Status.ServeSignature,KSK:KeySigningKeys[].[Name,Status,DSRecord]}' --output json
+```
+
+Mong đợi `Signing` là `SIGNING`, KSK `svp_prd_ksk` ở `ACTIVE`; `DSRecord` là giá trị bản ghi `DS` cần đặt ở DNS cha. Thứ tự đặt `DS` (domain cha ký
+trước, TTL, kiểm `dig +dnssec`, `delv`) và đường lui ở runbook `docs/runbooks/edge-setup.md` của repo này; tắt ký và gỡ DNSSEC ở mục
+[Tắt ký DNSSEC](../modules/account-baseline/README.md#tắt-ký-dnssec) của module.
+
+Account đã dựng baseline trước khi có `CAA`, DNSSEC và query log: plan của stg mong đợi `1 to add` (bản ghi `caa`), của prd `15 to add` (bản
+ghi `caa`, 6 của DNSSEC, 3 của query log, 5 của `module.alarms`), `0 to change, 0 to destroy` ở cả hai.
+
 ## Gỡ baseline (có chủ đích)
 
 Chỉ khi bỏ hẳn env đó: bucket giữ state của mọi root của account, key giữ quyền đọc state. Trước hết mọi root của account đã `destroy`
@@ -185,20 +223,28 @@ Chỉ khi bỏ hẳn env đó: bucket giữ state của mọi root của account
      `0 to add, 0 to change, 1 to destroy`, đúng `module.baseline.aws_route53_record.delegation["stg.aws.<domain>"]`), rồi
      `AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform apply prd.tfplan && rm prd.tfplan` (kiểm account prd
      bằng `AWS_PROFILE=anhnv-prd aws sts get-caller-identity --region ap-southeast-1` trước).
-   - prd: gỡ stg trước (zone prd chứa uỷ quyền của stg; bước 3 đòi zone chỉ còn `NS`, `SOA` ở đỉnh). Rồi xoá bốn bản ghi `NS` `aws` trong
-     Cloudflare; `dig NS aws.<domain> +short @1.1.1.1` không còn ra name server nào của zone prd (cache có thể giữ tới 48 giờ).
+   - prd: gỡ stg trước (zone prd chứa uỷ quyền của stg; bước 3 đòi zone chỉ còn `NS`, `SOA`, `CAA` ở đỉnh). Rồi theo đường lui của
+     [Tắt ký DNSSEC](../modules/account-baseline/README.md#tắt-ký-dnssec): gỡ bản ghi `DS` `aws`, chờ TTL của nó, apply
+     `-var dnssec_signing=false`. Rồi xoá bốn bản ghi `NS` `aws` trong Cloudflare; `dig NS aws.<domain> +short @1.1.1.1` không còn ra name server nào của zone prd (cache có thể giữ tới 48 giờ).
 2. Kiểm account của env trước lệnh đầu tiên bằng profile env (các bước dưới đây ghi vào account đó):
    `AWS_PROFILE=anhnv-stg aws sts get-caller-identity --region ap-southeast-1 --query '[Account,Arn]' --output text`:
    `Account` phải bằng `$SVP_AWS_STG_ACCOUNT_ID`, `Arn` là role SSO `SvpAdmin`. Khác thì dừng.
-3. Kiểm zone chỉ còn `NS`, `SOA` ở đỉnh (bản ghi sót của ExternalDNS hay `_acme-challenge` chặn việc xoá zone; xoá chúng trước):
+3. Kiểm zone chỉ còn `NS`, `SOA` và `CAA` ở đỉnh (`CAA` thuộc baseline, `destroy` xoá nó; bản ghi sót của buổi chặn việc xoá zone, xoá
+   chúng trước):
    `AWS_PROFILE=anhnv-stg aws route53 list-resource-record-sets --region ap-southeast-1 --hosted-zone-id "$(AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform output -raw zone_id)" --query 'ResourceRecordSets[].[Name,Type]' --output text`
 4. Đưa state về local (bucket và key sắp bị xoá): tạo lại `local_override.tf` như bước 3 của mục dựng, rồi
    `AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform init -migrate-state` (trả lời yes).
 5. Gỡ bảo vệ, chỉ trong bản sửa local này (không commit): trong `aws/modules/account-baseline/state.tf` và `kms.tf` đổi
    `prevent_destroy = true` thành `false`, thêm `force_destroy = true` vào `aws_s3_bucket.state` (xoá được bucket còn version cũ và state
-   của các root khác). Rồi `AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform apply` (chỉ đổi `force_destroy`),
-   `AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform destroy`. Key vào `PendingDeletion` 30 ngày (không tính
-   phí), huỷ được trong thời gian đó (id key in ở output của `destroy`):
+   của các root khác). Rồi `AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform apply` (chỉ đổi `force_destroy`).
+6. Chỉ prd: Terraform không bao giờ xoá key DNSSEC (`dnssec.tf` giữ `prevent_destroy`). Ngay trước `destroy`, bỏ key và alias của nó khỏi
+   state như bước 1 của mục Gỡ hẳn ở [Tắt ký DNSSEC](../modules/account-baseline/README.md#tắt-ký-dnssec):
+   `AWS_PROFILE=anhnv-prd terraform state rm 'module.baseline.aws_kms_key.dnssec[0]' 'module.baseline.aws_kms_alias.dnssec[0]'`. Không
+   apply sau lệnh này: config còn DNSSEC thì Terraform tạo key mới.
+7. `AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform destroy` (ở prd: tắt DNSSEC của zone trước, rồi xoá KSK).
+   Key của state vào `PendingDeletion` 30 ngày (không tính phí), huỷ được trong thời gian đó (id key in ở output của `destroy`):
    `AWS_PROFILE=anhnv-stg aws kms cancel-key-deletion --key-id <id key> --region ap-southeast-1`.
-6. `rm -f terraform.tfstate* ../../backend-stg.hcl stg.auto.tfvars local_override.tf`, hoàn tác sửa của bước 5
+8. Chỉ prd: lên lịch xoá key DNSSEC (còn ở AWS, ngoài state) bằng hai lệnh ở bước 3 của mục Gỡ hẳn đó (profile `anhnv-prd`,
+   `--region us-east-1`, chờ 30 ngày, huỷ được trong thời gian đó).
+9. `rm -f terraform.tfstate* ../../backend-stg.hcl stg.auto.tfvars local_override.tf`, hoàn tác sửa của bước 5
    (`git checkout -- ../../modules/account-baseline`).

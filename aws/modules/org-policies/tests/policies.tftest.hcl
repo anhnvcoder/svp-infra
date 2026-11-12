@@ -501,7 +501,7 @@ run "ec2_baseline" {
     error_message = "ec2-baseline must turn the EC2 serial console off."
   }
 
-  # The NAT gateways and the NLB need an internet gateway.
+  # The NAT gateways need an internet gateway, and CloudFront accepts a VPC origin only in a VPC that has one.
   assert {
     condition     = keys(jsondecode(aws_organizations_policy.this["ec2-baseline"].content).ec2_attributes) == ["image_block_public_access", "instance_metadata_defaults", "serial_console_access", "snapshot_block_public_access"]
     error_message = "ec2-baseline must set exactly AMI and snapshot public access, instance metadata defaults and the serial console (no VPC block public access)."

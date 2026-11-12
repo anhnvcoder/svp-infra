@@ -5,7 +5,8 @@
 # of their profile (anhnv-sso 000000000000, anhnv-stg 111111111111, anhnv-prd 222222222222).
 
 # Covers --print of the whole session and each script of the directory: the account and DNS guards, the order rules of
-# tf.sh and pre-destroy.sh, the secret handling of bootstrap.sh, the ladder of measure.sh and the leftovers of sweep.sh.
+# tf.sh and pre-destroy.sh, the secret handling and the edge's wait of bootstrap.sh, the ladder of measure.sh and the
+# leftovers of sweep.sh in both regions.
 
 # Usage: aws/scripts/session-test.sh
 #
@@ -61,7 +62,8 @@ expect() {
 
 # --- fakes -------------------------------------------------------------------------------------------------------
 # Each fake logs its call to $FAKE_LOG. aws and terraform answer as the account of their profile, and log the profile
-# to $FAKE_LOG.profiles; aws checks the region (us-east-1 for WAF of CloudFront and the Pricing Plan Manager).
+# to $FAKE_LOG.profiles; aws checks the region (us-east-1 for WAF of CloudFront, the Pricing Plan Manager and the log
+# deliveries of CloudFront; either for the kinds the sweep reads in both) and answers as that region.
 cat >"$bin/aws" <<'EOF'
 #!/usr/bin/env bash
 echo "aws $*" >>"$FAKE_LOG"
@@ -74,8 +76,16 @@ esac
 echo "$AWS_PROFILE" >>"$FAKE_LOG.profiles"
 # FAKE_ACCOUNT: the profile signs in to another account (a profile pointing at the wrong account).
 account=${FAKE_ACCOUNT:-$account}
-case "$1" in wafv2 | pricing-plan-manager) want=us-east-1 ;; *) want=ap-southeast-1 ;; esac
-case " $* " in *" --region $want "*) ;; *) echo "fake aws: no --region $want" >&2; exit 97 ;; esac
+region= prev=
+for a in "$@"; do [ "$prev" != --region ] || region=$a; prev=$a; done
+case "$1 $2" in
+  wafv2\ * | pricing-plan-manager\ * | "logs describe-deliver"*) want=us-east-1 ;;
+  kms\ * | cloudwatch\ * | sns\ * | acm\ * | resourcegroupstaggingapi\ * | logs\ *) want="ap-southeast-1 us-east-1" ;;
+  *) want=ap-southeast-1 ;;
+esac
+case " $want " in *" $region "*) ;; *) echo "fake aws: --region '$region', not $want" >&2; exit 97 ;; esac
+us=
+[ "$region" != us-east-1 ] || us=1
 left=${FAKE_LEFTOVER:-}
 # The management account has no hosted zone.
 [ "$1" != route53 ] || [ -n "$zone" ] || { echo "fake aws: no hosted zone in account $account" >&2; exit 98; }
@@ -101,28 +111,46 @@ case "$1 $2" in
   "route53 list-hosted-zones-by-name") echo "{\"HostedZones\":[{\"Id\":\"/hostedzone/Z0FAKE\",\"Name\":\"$zone.\"}]}" ;;
   "route53 list-resource-record-sets")
     {
-      printf '{"Name":"%s.","Type":"NS"}\n{"Name":"%s.","Type":"SOA"}\n' "$zone" "$zone"
+      printf '{"Name":"%s.","Type":"NS"}\n{"Name":"%s.","Type":"SOA"}\n{"Name":"%s.","Type":"CAA"}\n' "$zone" "$zone" "$zone"
       # The zone of prd delegates the zone of stg.
       [ "$zone" != aws.svp.example ] || printf '{"Name":"stg.aws.svp.example.","Type":"NS"}\n'
-      [ "$left" != record ] || printf '{"Name":"api.%s.","Type":"A"}\n' "$zone"
+      # FAKE_LEFTOVER=record: records of a root env a destroy left (alias, ACM validation), and a CAA below the apex.
+      [ "$left" != record ] || printf '{"Name":"api.%s.","Type":"%s"}\n' "$zone" A "$zone" AAAA "$zone" CAA
+      [ "$left" != record ] || printf '{"Name":"_0fake.api.%s.","Type":"CNAME"}\n' "$zone"
     } | jq -s '{ResourceRecordSets: .}' ;;
+  # In us-east-1 of prd, what aws/accounts/prd keeps there (Stack=baseline): the KMS keys of DNSSEC and of the alarm
+  # topic, the query log group of the zone.
   "resourcegroupstaggingapi get-resources")
-    case " $* " in
+    case "$us $zone $* " in
+      "1 aws.svp.example "*" kms:key "*)
+        for k in key-dnssec key-dns-alarms; do printf '{"ResourceARN":"arn:aws:kms:us-east-1:%s:key/%s","Tags":[{"Key":"Project","Value":"svp"},{"Key":"Stack","Value":"baseline"}]}\n' "$account" "$k"; done |
+          jq -s '{ResourceTagMappingList: .}' ;;
+      "1 aws.svp.example "*" logs:log-group "*)
+        printf '{"ResourceARN":"arn:aws:logs:us-east-1:%s:log-group:/aws/route53/aws.svp.example:*","Tags":[{"Key":"Project","Value":"svp"},{"Key":"Stack","Value":"baseline"}]}\n' "$account" |
+          jq -s '{ResourceTagMappingList: .}' ;;
+      1\ *) echo '{"ResourceTagMappingList":[]}' ;;
       *" kms:key "*)
         for k in key-eks key-msk; do printf '{"ResourceARN":"arn:aws:kms:ap-southeast-1:%s:key/%s","Tags":[{"Key":"Project","Value":"svp"}]}\n' "$account" "$k"; done |
+          jq -s '{ResourceTagMappingList: .}' ;;
+      *" logs:log-group "*)
+        # The log group of the rds module, kept by no Stack: a leftover once its root is destroyed.
+        [ "$left" != log-group ] || printf '{"ResourceARN":"arn:aws:logs:ap-southeast-1:%s:log-group:/aws/rds/svp-stg/postgresql:*","Tags":[{"Key":"Project","Value":"svp"},{"Key":"Stack","Value":"stg"}]}\n' "$account" |
           jq -s '{ResourceTagMappingList: .}' ;;
       *) echo '{"ResourceTagMappingList":[]}' ;;
     esac ;;
   # A destroy deletes the alias of a root's key; it is left with the key (FAKE_LEFTOVER=kms, msk-kms), or alone on a key
   # scheduled for deletion by hand after a lost state (msk-alias).
   "kms list-aliases")
-    {
+    if [ -n "$us" ]; then
+      [ "$zone" != aws.svp.example ] ||
+        printf '{"AliasName":"alias/svp-dnssec","TargetKeyId":"key-dnssec"}\n{"AliasName":"alias/svp-prd-dns-alarms","TargetKeyId":"key-dns-alarms"}\n'
+    else
       printf '{"AliasName":"alias/aws/ebs","TargetKeyId":"key-aws"}\n{"AliasName":"alias/svp-tfstate","TargetKeyId":"key-state"}\n'
       [ "$left" != kms ] || printf '{"AliasName":"alias/svp-prd-eks-secrets","TargetKeyId":"key-eks"}\n'
       # The EBS key of aws/baseline, in the accounts that run EC2 alone.
       [ -z "$zone" ] || printf '{"AliasName":"alias/svp-ebs","TargetKeyId":"key-ebs"}\n'
       case $left in msk-kms | msk-alias) printf '{"AliasName":"alias/svp-prd-msk-scram","TargetKeyId":"key-msk"}\n' ;; esac
-    } | jq -s '{Aliases: .}' ;;
+    fi | jq -s '{Aliases: .}' ;;
   "kms describe-key")
     # key-eks: the key of the cluster's Secrets, key-msk: the key of MSK (SCRAM secrets and broker volumes), each
     # PendingDeletion after a destroy (FAKE_LEFTOVER=kms, msk-kms: still Enabled).
@@ -136,6 +164,7 @@ case "$1 $2" in
   "kms list-resource-tags")
     if [ "$4" = key-state ]; then echo "{\"Tags\":[{\"TagKey\":\"Project\",\"TagValue\":\"svp\"},{\"TagKey\":\"Stack\",\"TagValue\":\"$stack\"}]}"
     elif [ "$4" = key-ebs ]; then echo '{"Tags":[{"TagKey":"Project","TagValue":"svp"},{"TagKey":"Stack","TagValue":"security-baseline"}]}'
+    elif [ "$4" = key-dnssec ] || [ "$4" = key-dns-alarms ]; then echo '{"Tags":[{"TagKey":"Project","TagValue":"svp"},{"TagKey":"Stack","TagValue":"baseline"}]}'
     else echo '{"Tags":[{"TagKey":"Project","TagValue":"svp"},{"TagKey":"Stack","TagValue":"prd"}]}'; fi ;;
   "ec2 describe-volumes")
     if [ "$left" = volume ] && [[ "$*" == *tag:Project* ]]; then
@@ -178,17 +207,74 @@ case "$1 $2" in
       [ "$left" != karpenter ] || echo '{"Name":"KarpenterSpotInterrupt-2026"}'
     } | jq -s --arg p "$prefix" '{Rules: map(select(.Name | startswith($p)))}' ;;
   "events list-targets-by-rule") echo '{"Targets":[{"Id":"KarpenterInterruptionQueueTarget"}]}' ;;
-  # FAKE_LEFTOVER=alarm: an alarm of the lab and the target tracking alarm of MSK's storage, beside another one's.
+  # FAKE_LEFTOVER=alarm: an alarm of the lab and the target tracking alarm of MSK's storage, beside another one's. In
+  # us-east-1 of prd, the DNSSEC alarms aws/accounts/prd keeps; FAKE_LEFTOVER=us-east-1, an alarm of root env there.
   "cloudwatch describe-alarms")
     {
       echo '{"AlarmName":"other-alarm"}'
-      if [ "$left" = alarm ]; then
+      if [ -n "$us" ]; then
+        [ "$zone" != aws.svp.example ] || printf '{"AlarmName":"svp-prd-dnssec-%s"}\n' internal-failure ksk-action-needed
+        [ "$left" != us-east-1 ] || echo '{"AlarmName":"svp-prd-edge-5xx"}'
+      elif [ "$left" = alarm ]; then
         echo '{"AlarmName":"svp-stg-rds-storage-low"}'
         echo "{\"AlarmName\":\"TargetTracking-arn:aws:kafka:ap-southeast-1:$account:cluster/svp-stg/c-fake-AlarmHigh-0a1b\"}"
       fi
-    } | jq -s '{MetricAlarms: .}' ;;
+    } | jq -s --arg p "arn:aws:cloudwatch:$region:$account:alarm:" '{MetricAlarms: map(. + {AlarmArn: ($p + .AlarmName)})}' ;;
+  # The DNSSEC alarms carry Stack=baseline, the alarms of root env their env's Stack, Application Auto Scaling's none.
+  "cloudwatch list-tags-for-resource")
+    case $4 in
+      *:alarm:svp-prd-dnssec-*) echo '{"Tags":[{"Key":"Project","Value":"svp"},{"Key":"Stack","Value":"baseline"}]}' ;;
+      *:alarm:svp-*) echo '{"Tags":[{"Key":"Project","Value":"svp"},{"Key":"Stack","Value":"stg"}]}' ;;
+      *) echo '{"Tags":[]}' ;;
+    esac ;;
+  # Another project's topic always; in us-east-1 of prd, the topic of the DNSSEC alarms aws/accounts/prd keeps;
+  # FAKE_LEFTOVER=sns, the alarm topic of root env stg; FAKE_LEFTOVER=us-east-1, one of root env prd in us-east-1.
+  "sns list-topics")
+    {
+      echo other-topic
+      if [ -n "$us" ]; then
+        [ "$zone" != aws.svp.example ] || echo svp-prd-dns-alarms
+        [ "$left" != us-east-1 ] || echo svp-prd-edge-alarms
+      else
+        [ "$left" != sns ] || echo svp-stg-alarms
+      fi
+    } | jq -R --arg p "arn:aws:sns:$region:$account:" '{TopicArn: ($p + .)}' | jq -s '{Topics: .}' ;;
+  "sns list-tags-for-resource")
+    case $4 in
+      *:svp-prd-dns-alarms) echo '{"Tags":[{"Key":"Project","Value":"svp"},{"Key":"Stack","Value":"baseline"}]}' ;;
+      *) echo '{"Tags":[{"Key":"Project","Value":"svp"},{"Key":"Stack","Value":"stg"}]}' ;;
+    esac ;;
+  # Another project's certificate always (no tag Project=svp); FAKE_LEFTOVER=cert: the ALB's in the home region, the
+  # viewer certificate of web in us-east-1, both ECDSA P-256, which list-certificates leaves out unless asked for.
+  "acm list-certificates")
+    {
+      echo '{"CertificateArn":"arn:aws:acm:'"$region"':'"$account"':certificate/other","DomainName":"other.example","KeyAlgorithm":"RSA-2048"}'
+      case " $* " in *EC_prime256v1*) [ "$left" != cert ] ||
+        echo '{"CertificateArn":"arn:aws:acm:'"$region"':'"$account"':certificate/svp-fake","DomainName":"stg.aws.svp.example","KeyAlgorithm":"EC-prime256v1"}' ;; esac
+    } | jq -s '{CertificateSummaryList: .}' ;;
+  "acm list-tags-for-certificate")
+    case $4 in
+      *:certificate/other) echo '{"Tags":[{"Key":"Name","Value":"other"}]}' ;;
+      *) echo '{"Tags":[{"Key":"Project","Value":"svp"},{"Key":"Stack","Value":"stg"}]}' ;;
+    esac ;;
+  # FAKE_LEFTOVER=delivery: the standard logs of distribution svp-stg-web, beside another one's.
+  "logs describe-deliveries")
+    {
+      echo '{"id":"other-delivery","deliverySourceName":"other-source"}'
+      [ "$left" != delivery ] ||
+        echo '{"id":"dlv-fake","deliverySourceName":"svp-stg-web","deliveryDestinationArn":"arn:aws:logs:us-east-1:333333333333:delivery-destination:svp-cloudfront-stg"}'
+    } | jq -s '{deliveries: .}' ;;
+  "logs describe-delivery-sources")
+    {
+      echo '{"name":"other-source","service":"cloudfront","logType":"ACCESS_LOGS"}'
+      [ "$left" != delivery ] || echo '{"name":"svp-stg-web","service":"cloudfront","logType":"ACCESS_LOGS"}'
+    } | jq -s '{deliverySources: .}' ;;
+  "logs describe-delivery-destinations")
+    if [ "$left" = delivery ]; then echo '{"deliveryDestinations":[{"name":"svp-cloudfront-stg","deliveryDestinationType":"S3"}]}'
+    else echo '{"deliveryDestinations":[]}'; fi ;;
   "ec2 describe-snapshots") echo '{"Snapshots":[]}' ;;
-  "ec2 describe-vpcs") echo '{"Vpcs":[]}' ;;
+  "ec2 describe-vpcs")
+    if [ "$left" = vpc-origin-sg ]; then echo '{"Vpcs":[{"VpcId":"vpc-0fake","CidrBlock":"10.20.0.0/16"}]}'; else echo '{"Vpcs":[]}'; fi ;;
   "ec2 describe-nat-gateways") echo '{"NatGateways":[]}' ;;
   "ec2 describe-addresses") echo '{"Addresses":[]}' ;;
   # FAKE_LEFTOVER=endpoint: the interface endpoint guardduty-data, and a deleted one AWS still lists for a while.
@@ -212,9 +298,38 @@ case "$1 $2" in
     jq -n --arg a "arn:aws:guardduty:ap-southeast-1:$account:malware-protection-plan/$4" --arg b "$b" --argjson t "$t" \
       '{Arn: $a, ProtectedResource: {S3Bucket: {BucketName: $b}}, Status: "ACTIVE", Tags: $t}' ;;
   "ec2 describe-network-interfaces") echo '{"NetworkInterfaces":[]}' ;;
-  "ec2 describe-security-groups") echo '{"SecurityGroups":[]}' ;;
-  "elbv2 describe-load-balancers") echo '{"LoadBalancers":[]}' ;;
-  "elbv2 describe-target-groups") echo '{"TargetGroups":[]}' ;;
+  # FAKE_LEFTOVER=vpc-origin-sg: the VPC of the lab is left with the group CloudFront made for a VPC origin in it.
+  "ec2 describe-security-groups")
+    if [ "$left" = vpc-origin-sg ] && [[ "$*" == *vpc-id* ]]; then
+      echo '{"SecurityGroups":[{"GroupId":"sg-0cf","GroupName":"CloudFront-VPCOrigins-Service-SG-0fake","VpcId":"vpc-0fake"}]}'
+    else
+      echo '{"SecurityGroups":[]}'
+    fi ;;
+  # FAKE_LEFTOVER=edge: the ALB and the target group of the edge module (tag Project=svp of root env), beside another
+  # one's; FAKE_TG_STATES: the states of the targets of the edge's target group, one call after another ("initial
+  # healthy" by default: healthy at the second read).
+  "elbv2 describe-load-balancers")
+    if [ "$left" = edge ]; then
+      echo "{\"LoadBalancers\":[{\"LoadBalancerArn\":\"arn:aws:elasticloadbalancing:ap-southeast-1:$account:loadbalancer/app/svp-stg-edge/0a1b\"},{\"LoadBalancerArn\":\"arn:aws:elasticloadbalancing:ap-southeast-1:$account:loadbalancer/app/other/9z\"}]}"
+    else echo '{"LoadBalancers":[]}'; fi ;;
+  "elbv2 describe-target-groups")
+    if [ "$left" = edge ]; then echo "{\"TargetGroups\":[{\"TargetGroupArn\":\"arn:aws:elasticloadbalancing:ap-southeast-1:$account:targetgroup/svp-stg-envoy/2c3d\"}]}"
+    else echo '{"TargetGroups":[]}'; fi ;;
+  "elbv2 describe-tags")
+    shift 3
+    for arn in "$@"; do
+      case $arn in
+        --*) break ;;
+        */svp-*) jq -n --arg a "$arn" '{ResourceArn: $a, Tags: [{Key: "Project", Value: "svp"}, {Key: "Stack", Value: "stg"}]}' ;;
+        *) jq -n --arg a "$arn" '{ResourceArn: $a, Tags: []}' ;;
+      esac
+    done | jq -s '{TagDescriptions: .}' ;;
+  "elbv2 describe-target-health")
+    c=$(( $(cat "$FAKE_STATE/tg-calls" 2>/dev/null || echo 0) + 1 )); echo "$c" >"$FAKE_STATE/tg-calls"
+    set -- ${FAKE_TG_STATES:-initial healthy}
+    [ "$c" -le $# ] || c=$#
+    eval "st=\${$c}"
+    jq -n --arg s "$st" '{TargetHealthDescriptions: [{Target: {Id: "10.0.4.20", Port: 10443}, TargetHealth: {State: $s}}]}' ;;
   "rds describe-db-instances") echo '{"DBInstances":[]}' ;;
   "rds describe-db-snapshots")
     if [ "$left" = snapshot ]; then
@@ -230,11 +345,22 @@ case "$1 $2" in
     fi ;;
   "s3api list-buckets") echo "{\"Buckets\":[{\"Name\":\"svp-tfstate-$account-ap-southeast-1\"},{\"Name\":\"someone-else\"}]}" ;;
   "s3api get-bucket-tagging") echo "{\"TagSet\":[{\"Key\":\"Project\",\"Value\":\"svp\"},{\"Key\":\"Stack\",\"Value\":\"$stack\"}]}" ;;
-  "cloudfront list-distributions") echo '{"DistributionList":{"Items":[]}}' ;;
+  # FAKE_LEFTOVER=distribution: distribution svp-stg-web, whose origin is the VPC origin to the internal ALB, beside
+  # another one's.
+  "cloudfront list-distributions")
+    {
+      echo '{"Id":"EOTHER","Status":"Deployed","Enabled":true,"DomainName":"d0other.cloudfront.net","Comment":"other","Origins":{"Items":[{"DomainName":"other.s3.amazonaws.com"}]}}'
+      [ "$left" != distribution ] ||
+        echo '{"Id":"EWEB","Status":"Deployed","Enabled":false,"DomainName":"d0web.cloudfront.net","Comment":"svp-stg-web","Origins":{"Items":[{"DomainName":"internal-svp-stg-edge-1.ap-southeast-1.elb.amazonaws.com"}]}}'
+    } | jq -s '{DistributionList: {Items: .}}' ;;
+  "cloudfront list-vpc-origins")
+    if [ "$left" = vpc-origin ]; then echo '{"VpcOriginList":{"Items":[{"Id":"vo_0fake","Name":"svp-stg-edge","Status":"Deployed"},{"Id":"vo_other","Name":"other","Status":"Deployed"}]}}'
+    else echo '{"VpcOriginList":{"Items":[]}}'; fi ;;
   "cloudfront list-origin-access-controls") echo '{"OriginAccessControlList":{"Items":[]}}' ;;
   "cloudfront list-response-headers-policies") echo '{"ResponseHeadersPolicyList":{"Items":[]}}' ;;
   "wafv2 list-web-acls")
-    if [ "$left" = waf ]; then echo '{"WebACLs":[{"Name":"svp-prd-media","Id":"waf-fake"}]}'; else echo '{"WebACLs":[]}'; fi ;;
+    if [ "$left" = waf ]; then echo '{"WebACLs":[{"Name":"svp-prd-web","Id":"waf-web"},{"Name":"svp-prd-api","Id":"waf-api"},{"Name":"svp-prd-media","Id":"waf-fake"}]}'
+    else echo '{"WebACLs":[]}'; fi ;;
   # FAKE_LEFTOVER=subscription: a Free plan left; cancellation: a paid plan whose cancellation is scheduled;
   # subscription-error: the API answers with an error.
   "pricing-plan-manager list-subscriptions")
@@ -245,7 +371,7 @@ case "$1 $2" in
       *) echo '{"subscriptionSummaries":[]}' ;;
     esac ;;
   "logs describe-log-groups")
-    if [ "$left" = msk-log ]; then echo '{"logGroups":[{"logGroupName":"/aws/msk/svp-prd"}]}'; else echo '{"logGroups":[]}'; fi ;;
+    if [ "$left" = msk-log ] && [ -z "$us" ]; then echo '{"logGroups":[{"logGroupName":"/aws/msk/svp-prd"}]}'; else echo '{"logGroups":[]}'; fi ;;
   # FAKE_LEFTOVER=msk: a cluster and its configuration; elasticache: a replication group and what it used.
   "kafka list-clusters-v2")
     if [ "$left" = msk ]; then
@@ -306,7 +432,12 @@ case "${args#-chdir=* }" in
     echo '["ns-1.awsdns-01.org","ns-2.awsdns-02.co.uk","ns-3.awsdns-03.com","ns-4.awsdns-04.net"]' ;;
   "output -json cluster_values")
     domain=$(sed -n 's/^domain *= *"\(.*\)"$/\1/p' "$dir/$env.auto.tfvars")
-    echo "{\"name\":\"svp-$env\",\"domain\":\"$domain\",\"hostedZoneId\":\"Z0FAKE\",\"acmeEmail\":\"you@svp.example\"}" ;;
+    # FAKE_TF_OLD_VALUES: the values of a root before the edge, without the target group of Envoy.
+    if [ -n "${FAKE_TF_OLD_VALUES:-}" ]; then
+      echo "{\"name\":\"svp-$env\",\"domain\":\"$domain\",\"hostedZoneId\":\"Z0FAKE\"}"
+    else
+      echo "{\"name\":\"svp-$env\",\"domain\":\"$domain\",\"edgeTargetGroupArn\":\"arn:aws:elasticloadbalancing:ap-southeast-1:111111111111:targetgroup/svp-$env-envoy/2c3d\",\"edgeCidrs\":[\"10.20.240.0/27\"]}"
+    fi ;;
   "output -raw rds_master_user_secret_arn") printf 'arn:aws:secretsmanager:ap-southeast-1:000000000000:secret:rds!db-fake' ;;
   "show -no-color "*.destroy.tfplan) printf '%s\n' 'Terraform will perform the following actions:' '  # aws_vpc.this will be destroyed' \
     'Plan: 0 to add, 0 to change, 3 to destroy.' ;;
@@ -315,14 +446,14 @@ case "${args#-chdir=* }" in
   "show -no-color "*.tfplan) printf '%s\n' 'Terraform will perform the following actions:' '  # aws_vpc.this will be created' \
     'Plan: 1 to add, 0 to change, 0 to destroy.' ;;
   plan\ *) [ -z "$out" ] || : >"$dir/$out" ;;
-  # FAKE_TF_STATE: eks, the state of a whole apply: the cluster (and a data source of it), the DB instance, the buckets
-  # (and a read of one, and a resource of a type that starts like it); partial, an apply that failed before the cluster
-  # and the DB instance, with the buckets made; fail, no readable state; else, neither cluster nor DB instance nor
-  # bucket.
+  # FAKE_TF_STATE: eks, a whole apply: cluster (and a data source of it), DB instance, edge ALB (with listener and
+  # target group), buckets (a read of one, a resource of a type that starts like it); partial, an apply that failed
+  # before the cluster and DB instance, with the buckets made; fail, no readable state; else, none of them.
   "state list")
     case ${FAKE_TF_STATE:-} in
       eks) printf '%s\n' 'module.eks.module.eks.data.aws_eks_cluster.this[0]' 'module.eks.module.eks.aws_eks_cluster.this[0]' \
-        'module.network.module.vpc.aws_vpc.this[0]' 'module.rds.aws_db_instance.this' 'module.media.aws_s3_bucket.this["media"]' \
+        'module.network.module.vpc.aws_vpc.this[0]' 'module.rds.aws_db_instance.this' 'module.edge.aws_lb.this' \
+        'module.edge.aws_lb_listener.https' 'module.edge.aws_lb_target_group.envoy' 'module.media.aws_s3_bucket.this["media"]' \
         'module.media.aws_s3_bucket.this["uploads"]' 'module.media.aws_s3_bucket.logs[0]' 'module.media.data.aws_s3_bucket.read' \
         'module.media.aws_s3_bucket_versioning.this["media"]' ;;
       partial) printf '%s\n' 'module.network.module.vpc.aws_vpc.this[0]' 'module.media.aws_s3_bucket.this["media"]' \
@@ -408,7 +539,8 @@ case "$*" in
     while read -r w n; do [ -z "$n" ] || jq -n --arg w "$w" --arg n "$n" \
       '{metadata: {name: $n, annotations: {"argocd.argoproj.io/sync-wave": $w}}}'; done <"$s/apps" | items ;;
   "-n argocd delete application "*" --wait=false")
-    name=$5; grep -v " $name\$" "$s/apps" >"$s/apps.new" || true; mv "$s/apps.new" "$s/apps" ;;
+    name=$5; grep -v " $name\$" "$s/apps" >"$s/apps.new" || true; mv "$s/apps.new" "$s/apps"
+    [ "$name" != svp-cluster ] || rm -f "$s/tgb" ;;
   "-n argocd get application "*" --ignore-not-found -o name") ! grep -q " $5\$" "$s/apps" || echo "application.argoproj.io/$5" ;;
   "-n argocd get applications.argoproj.io "*" --ignore-not-found -o json")
     # svp-observability turns Healthy at the second read; svp-root is Synced and Healthy unless FAKE_ROOT_NEVER.
@@ -432,7 +564,12 @@ case "$*" in
       <"$s/nodeclaims" | items ;;
   "get crd targetgroupbindings.elbv2.k8s.aws --ignore-not-found -o name")
     [ -n "${FAKE_NO_ARGOCD:-}" ] || echo customresourcedefinition.apiextensions.k8s.io/targetgroupbindings.elbv2.k8s.aws ;;
-  "get targetgroupbindings.elbv2.k8s.aws -A -o json") if [ -e "$s/lb" ]; then echo '{"items":[{}]}'; else echo '{"items":[]}'; fi ;;
+  # TargetGroupBinding svp-envoy ($s/tgb) is svp-cluster's: deleting the Gateway leaves it. With FAKE_TGB_STUCK, LBC
+  # never lets it go, and kubectl's wait times out.
+  "-n envoy-gateway-system delete targetgroupbindings.elbv2.k8s.aws svp-envoy --ignore-not-found --wait=true --timeout="*)
+    [ -z "${FAKE_TGB_STUCK:-}" ] || { echo "error: timed out waiting for the condition on targetgroupbindings/svp-envoy" >&2; exit 1; }
+    rm -f "$s/tgb" ;;
+  "get targetgroupbindings.elbv2.k8s.aws -A -o json") if [ -e "$s/tgb" ]; then echo '{"items":[{}]}'; else echo '{"items":[]}'; fi ;;
   "get pvc -A -o json")
     while read -r ns n; do [ -z "$n" ] || jq -n --arg ns "$ns" --arg n "$n" '{metadata: {namespace: $ns, name: $n}}'; done <"$s/pvcs" | items ;;
   "-n "*" delete pvc --all --wait=false") grep -v "^$2 " "$s/pvcs" >"$s/pvcs.new" || true; mv "$s/pvcs.new" "$s/pvcs" ;;
@@ -600,12 +737,18 @@ done
 expect "--print prd: the tunnel checked before the first kubectl to the API" before "$work/print-prd.out" '^\+ nc -z -w 3 127.0.0.1 6443' 'kubectl --context svp-prd'
 expect "--print prd: the tunnel checked before the plan of root gitops" before "$work/print-prd.out" '^\+ nc -z' 'aws/gitops/prd plan '
 expect "--print prd: the kubeconfig points at the tunnel" grep -q "^+ kubectl config set-cluster .* --server=https://127.0.0.1:6443 '--tls-server-name=" "$work/print-prd.out"
-expect "--print prd: teardown plan with both var files, targeting the DB instance and buckets of the state, applied, before the destroy plan with both" \
+expect "--print prd: teardown plan with both var files, targeting the DB instance, ALB and buckets of the state, applied, before the destroy plan with both" \
   sh -c 'before() { a=$(grep -nE -- "$2" "$1" | head -n 1 | cut -d: -f1); c=$(grep -nE -- "$3" "$1" | head -n 1 | cut -d: -f1); [ -n "$a" ] && [ -n "$c" ] && [ "$a" -lt "$c" ]; }
     before "$1" "aws/envs/prd state list$" "aws/envs/prd plan -input=false -var-file=prd.tfvars -var-file=teardown.tfvars" &&
-    grep -qF "aws/envs/prd plan -input=false -var-file=prd.tfvars -var-file=teardown.tfvars '"'"'-target=<each aws_db_instance and aws_s3_bucket of the state>'"'"' -out=prd.teardown.tfplan" "$1" &&
+    grep -qF "aws/envs/prd plan -input=false -var-file=prd.tfvars -var-file=teardown.tfvars '"'"'-target=<each aws_db_instance and aws_lb and aws_s3_bucket of the state>'"'"' -out=prd.teardown.tfplan" "$1" &&
     grep -q "aws/envs/prd apply -input=false prd.teardown.tfplan$" "$1" &&
     grep -q "aws/envs/prd plan -destroy -input=false -var-file=prd.tfvars -var-file=teardown.tfvars -out=prd.destroy.tfplan$" "$1"' _ "$work/print-prd.out"
+for e in stg prd; do
+  expect "--print $e: the target health of the edge read after svp-root, before the smoke" \
+    sh -c 'b() { a=$(grep -nE -- "$2" "$1" | head -n 1 | cut -d: -f1); c=$(grep -nE -- "$3" "$1" | head -n 1 | cut -d: -f1); [ -n "$a" ] && [ -n "$c" ] && [ "$a" -lt "$c" ]; }
+      b "$1" "applications.argoproj.io svp-root" "AWS_PROFILE=anhnv-$2 aws elbv2 describe-target-health --target-group-arn .<edgeTargetGroupArn of cluster-values.json>. --output json --region ap-southeast-1" &&
+      b "$1" "elbv2 describe-target-health" "eks-smoke CONTEXT=svp-$2"' _ "$work/print-$e.out" "$e"
+done
 expect "--print prd: no k6 level, the smoke alone" sh -c '! grep -q "eks-rl-reset" "$1" && grep -q "eks-smoke CONTEXT=svp-prd" "$1"' _ "$work/print-prd.out"
 expect "--print stg: the tunnel on 6444 checked before the first kubectl to the API, the kubeconfig points at it" \
   sh -c 'b() { a=$(grep -nE -- "$2" "$1" | head -n 1 | cut -d: -f1); c=$(grep -nE -- "$3" "$1" | head -n 1 | cut -d: -f1); [ -n "$a" ] && [ -n "$c" ] && [ "$a" -lt "$c" ]; }
@@ -797,11 +940,11 @@ expect "tf.sh prd env plan --destroy refuses while the protections are on, befor
     ! grep -q "^terraform .* plan" "$3"' _ "$here" "$work/out" "$log"
 expect "tf.sh prd env apply --teardown refuses without the teardown plan" sh -c '! bash "$1/tf.sh" prd env apply --teardown >/dev/null 2>&1' _ "$here"
 expect "tf.sh prd env plan --teardown runs" bash "$here/tf.sh" prd env plan --teardown >"$work/out" 2>&1
-expect "tf.sh prd env plan --teardown: prd.tfvars and teardown.tfvars, the DB instance and the buckets of the state as targets, into prd.teardown.tfplan, its text in the session" \
-  sh -c 'grep -qxF "terraform -chdir=$3/prd plan -input=false -var-file=prd.tfvars -var-file=teardown.tfvars -target=module.rds.aws_db_instance.this -target=module.media.aws_s3_bucket.this[\"media\"] -target=module.media.aws_s3_bucket.this[\"uploads\"] -target=module.media.aws_s3_bucket.logs[0] -out=prd.teardown.tfplan" "$1" &&
+expect "tf.sh prd env plan --teardown: prd.tfvars and teardown.tfvars, the DB instance, the ALB and the buckets of the state as targets, into prd.teardown.tfplan, its text in the session" \
+  sh -c 'grep -qxF "terraform -chdir=$3/prd plan -input=false -var-file=prd.tfvars -var-file=teardown.tfvars -target=module.rds.aws_db_instance.this -target=module.edge.aws_lb.this -target=module.media.aws_s3_bucket.this[\"media\"] -target=module.media.aws_s3_bucket.this[\"uploads\"] -target=module.media.aws_s3_bucket.logs[0] -out=prd.teardown.tfplan" "$1" &&
     grep -q "^Plan: 0 to add, 2 to change" "$2/prd-env-teardown-plan.txt"' _ "$log" "$SVP_SESSION_DIR" "$envs"
 expect "tf.sh prd env plan --teardown: no target of a data source, of another type or of the cluster" \
-  sh -c '! grep "^terraform .* -out=prd.teardown.tfplan$" "$1" | grep -qE "target=[^ ]*(data\.|aws_s3_bucket_versioning|aws_eks_cluster|aws_vpc)"' _ "$log"
+  sh -c '! grep "^terraform .* -out=prd.teardown.tfplan$" "$1" | grep -qE "target=[^ ]*(data\.|aws_s3_bucket_versioning|aws_lb_listener|aws_lb_target_group|aws_eks_cluster|aws_vpc)"' _ "$log"
 expect "tf.sh prd env plan --teardown read the state first" before "$log" 'terraform .*/aws/envs/prd state list' 'terraform .* -out=prd.teardown.tfplan'
 expect "tf.sh prd env plan --destroy still refuses: the teardown plan is not applied" sh -c '! bash "$1/tf.sh" prd env plan --destroy >/dev/null 2>&1' _ "$here"
 expect "tf.sh prd env apply --teardown applies it and marks env-teardown-applied" \
@@ -832,8 +975,8 @@ rm -f "$envs/prd/prd.destroy.tfplan"
 # An apply that failed before any DB instance or bucket: nothing to lift, no teardown plan.
 new_session
 add_mark env-apply-start
-expect "tf.sh prd env plan --teardown with no DB instance or bucket in the state skips, and records env-teardown-applied" \
-  sh -c 'bash "$1/tf.sh" prd env plan --teardown >"$2" 2>&1 && grep -q "^skip  the state of aws/envs/prd holds no aws_db_instance or aws_s3_bucket" "$2" &&
+expect "tf.sh prd env plan --teardown with no DB instance, ALB or bucket in the state skips, and records env-teardown-applied" \
+  sh -c 'bash "$1/tf.sh" prd env plan --teardown >"$2" 2>&1 && grep -q "^skip  the state of aws/envs/prd holds no aws_db_instance or aws_lb or aws_s3_bucket" "$2" &&
     ! grep -q "^terraform .* plan" "$3" && [ ! -e "$4/prd/prd.teardown.tfplan" ]' _ "$here" "$work/out" "$log" "$envs"
 expect "tf.sh prd env plan --teardown with nothing to lift marks env-teardown-applied" has_mark env-teardown-applied
 expect "tf.sh prd env apply --teardown skips once env-teardown-applied is recorded and no teardown plan is left" \
@@ -905,9 +1048,18 @@ new_session
 expect "bootstrap.sh prd wait refuses while the tunnel is closed" \
   sh -c '! FAKE_TUNNEL=closed bash "$1/bootstrap.sh" prd wait >"$2" 2>&1 && grep -q "no tunnel on 127.0.0.1:6443" "$2"' _ "$here" "$work/out"
 expect "bootstrap.sh prd wait with the tunnel closed: no kubectl, no make" test -z "$(grep -E '^(kubectl|make) ' "$log")"
-rm -f "$state"/app-calls-*
+rm -f "$state"/app-calls-* "$state/tg-calls"
+tg_arn=arn:aws:elasticloadbalancing:ap-southeast-1:222222222222:targetgroup/svp-prd-envoy/2c3d
+echo "{\"name\":\"svp-prd\",\"domain\":\"aws.svp.example\",\"edgeTargetGroupArn\":\"$tg_arn\"}" >"$SVP_SESSION_DIR/cluster-values.json"
 clear_log
 expect "bootstrap.sh prd wait runs with the tunnel open" bash "$here/bootstrap.sh" prd wait >"$work/out" 2>&1
+expect "bootstrap.sh wait: the target health of edgeTargetGroupArn of cluster-values.json, read after svp-root until a target is healthy" \
+  sh -c 'b() { a=$(grep -nE -- "$2" "$1" | head -n 1 | cut -d: -f1); c=$(grep -nE -- "$3" "$1" | head -n 1 | cut -d: -f1); [ -n "$a" ] && [ -n "$c" ] && [ "$a" -lt "$c" ]; }
+    b "$1" "applications.argoproj.io svp-root" "^aws elbv2 describe-target-health --target-group-arn $2 --output json --region ap-southeast-1$" &&
+    [ "$(grep -c "^aws elbv2 describe-target-health " "$1")" = 2 ]' _ "$log" "$tg_arn"
+expect "bootstrap.sh wait marks edge-healthy and says measure.sh is next" \
+  sh -c 'awk -F "\t" "\$3 == \"edge-healthy\" { f = 1 } END { exit !f }" "$1/timeline.tsv" &&
+    grep -q "^ok    the edge.s target group has a healthy target; next: aws/scripts/measure.sh prd$" "$2"' _ "$SVP_SESSION_DIR" "$work/out"
 expect "bootstrap.sh wait: svp-observability Healthy, then GlitchTip, then svp-root" \
   sh -c 'b() { a=$(grep -nE -- "$2" "$1" | head -n 1 | cut -d: -f1); c=$(grep -nE -- "$3" "$1" | head -n 1 | cut -d: -f1); [ -n "$a" ] && [ -n "$c" ] && [ "$a" -lt "$c" ]; }
     [ "$(grep -c "applications.argoproj.io svp-observability" "$1")" = 2 ] && b "$1" "applications.argoproj.io svp-observability" "eks-glitchtip-init CONTEXT=svp-prd" &&
@@ -917,17 +1069,31 @@ new_session
 expect "bootstrap.sh wait fails when svp-root never gets Synced and Healthy" \
   sh -c '! FAKE_ROOT_NEVER=1 SVP_BOOTSTRAP_LIMIT=0 bash "$1/bootstrap.sh" stg wait >"$2" 2>&1 && grep -q "svp-root not Synced and Healthy after 0 s (OutOfSync Progressing)" "$2"' _ "$here" "$work/out"
 expect "bootstrap.sh wait: no svp-root-healthy when it fails" no_mark svp-root-healthy
+new_session
+echo "{\"name\":\"svp-prd\",\"domain\":\"aws.svp.example\",\"edgeTargetGroupArn\":\"$tg_arn\"}" >"$SVP_SESSION_DIR/cluster-values.json"
+rm -f "$state/tg-calls"
+expect "bootstrap.sh wait fails when no target of the edge turns healthy, naming the targets and the TargetGroupBinding" \
+  sh -c '! FAKE_TG_STATES=unhealthy SVP_BOOTSTRAP_LIMIT=0 bash "$1/bootstrap.sh" prd wait >"$2" 2>&1 &&
+    grep -q "^FAIL  no healthy target in $3 after 0 s (targets: 10.0.4.20 unhealthy): .*describe targetgroupbinding svp-envoy" "$2"' _ "$here" "$work/out" "$tg_arn"
+expect "bootstrap.sh wait: no edge-healthy when it fails" no_mark edge-healthy
+new_session
+expect "bootstrap.sh wait without the cluster values of bootstrap.sh secrets fails, and says so" \
+  sh -c '! bash "$1/bootstrap.sh" prd wait >"$2" 2>&1 && grep -q "^FAIL  no edgeTargetGroupArn in .*cluster-values.json: aws/scripts/bootstrap.sh prd secrets writes it" "$2"' _ "$here" "$work/out"
+new_session
+expect "bootstrap.sh secrets refuses cluster values without edgeTargetGroupArn (a root before the edge)" \
+  sh -c '! FAKE_TF_OLD_VALUES=1 bash "$1/bootstrap.sh" stg secrets >"$2" 2>&1 && grep -q "not a map of cluster svp-stg with a domain and an edgeTargetGroupArn" "$2" &&
+    ! grep -q "eks-secrets" "$3"' _ "$here" "$work/out" "$log"
 
 # --- pre-destroy.sh ----------------------------------------------------------------------------------------------
 new_session
 printf '%s\n' "0 cert-manager" "0 envoy-gateway" "0 external-secrets" "0 karpenter" "1 svp-cluster" "1 aws-load-balancer-controller" \
-  "2 keda" "2 external-dns" "2 argo-rollouts" "2 kyverno" "2 kube-prometheus-stack" "3 svp-policy" "3 loki" \
+  "2 keda" "2 argo-rollouts" "2 kyverno" "2 kube-prometheus-stack" "3 svp-policy" "3 loki" \
   "4 svp-data" "5 svp-observability" "6 otel-collector" "7 gateway" "7 web" >"$state/apps"
-touch "$state/appset" "$state/root" "$state/svp-apps" "$state/lb"
+touch "$state/appset" "$state/root" "$state/svp-apps" "$state/lb" "$state/tgb"
 printf '%s\n' "svp-data data-0" "svp-obs prometheus-db-0" >"$state/pvcs"
 echo "default-x7k2p ip-10-0-9-9" >"$state/nodeclaims"
 echo "i-0karp running m7g.large default" >"$state/karpenter-instances"
-bash "$here/pre-destroy.sh" stg >"$work/pre.out" 2>&1 || bad "pre-destroy.sh stg exits 0 ($(tail -n 3 "$work/pre.out"))"
+FAKE_LEFTOVER=record bash "$here/pre-destroy.sh" stg >"$work/pre.out" 2>&1 || bad "pre-destroy.sh stg exits 0 ($(tail -n 3 "$work/pre.out"))"
 expect "pre-destroy.sh: sync and finalizers of svp-root and svp-apps cleared before the ApplicationSet is deleted" \
   sh -c 'b() { a=$(grep -nE -- "$2" "$1" | head -n 1 | cut -d: -f1); c=$(grep -nE -- "$3" "$1" | head -n 1 | cut -d: -f1); [ -n "$a" ] && [ -n "$c" ] && [ "$a" -lt "$c" ]; }
     b "$1" "patch application svp-root .*finalizers" "delete applicationset svp-bootstrap" && b "$1" "patch application svp-apps .*finalizers" "delete applicationset svp-bootstrap"' _ "$log"
@@ -940,10 +1106,19 @@ expect "pre-destroy.sh: wave 7 before wave 3, workloads before the Gateway" \
   sh -c '[ "$(grep -n "delete application gateway " "$1" | cut -d: -f1)" -lt "$(grep -n "delete application loki " "$1" | cut -d: -f1)" ]' _ "$log"
 expect "pre-destroy.sh: last workload (kube-prometheus-stack) before the Gateway" before "$log" 'delete application kube-prometheus-stack ' 'delete gateway svp'
 expect "pre-destroy.sh: Gateway before the PVCs" before "$log" 'delete gateway svp' 'delete pvc --all'
-expect "pre-destroy.sh: PVCs before every platform Application" before "$log" 'delete pvc --all' 'delete application (svp-cluster|keda|kyverno|external-dns|aws-load-balancer-controller) '
+expect "pre-destroy.sh: PVCs before every platform Application" before "$log" 'delete pvc --all' 'delete application (svp-cluster|keda|kyverno|aws-load-balancer-controller) '
 expect "pre-destroy.sh: the PVCs of both namespaces" test "$(grep -c 'delete pvc --all' "$log")" = 2
 expect "pre-destroy.sh leaves no Application, ApplicationSet or root" sh -c '[ -z "$(grep . "$1/apps")" ] && [ ! -e "$1/appset" ] && [ ! -e "$1/root" ] && [ ! -e "$1/svp-apps" ]' _ "$state"
-expect "pre-destroy.sh: the records of the zone of stg" grep -q 'route53 list-resource-record-sets --hosted-zone-id Z0TFVARS ' "$log"
+expect "pre-destroy.sh: the records root env wrote in the zone are none of its business: no call to Route 53" \
+  sh -c '! grep -q "^aws route53 " "$1" && ! grep -qi "record" "$2"' _ "$log" "$work/pre.out"
+expect "pre-destroy.sh: waits for no TargetGroupBinding and no load balancer or target group of LBC" \
+  sh -c 'grep -q "^ok    no TargetGroupBinding$" "$1" && grep -q "^ok    no load balancer or target group of svp-stg in ELBv2$" "$1" &&
+    grep -q "resourcegroupstaggingapi get-resources --resource-type-filters elasticloadbalancing:loadbalancer elasticloadbalancing:targetgroup --tag-filters Key=elbv2.k8s.aws/cluster,Values=svp-stg " "$2"' _ "$work/pre.out" "$log"
+expect "pre-destroy.sh: Gateway, then TargetGroupBinding svp-envoy of svp-cluster, then the wait for none, before the PVCs" \
+  sh -c 'b() { a=$(grep -nE -- "$2" "$1" | head -n 1 | cut -d: -f1); c=$(grep -nE -- "$3" "$1" | head -n 1 | cut -d: -f1); [ -n "$a" ] && [ -n "$c" ] && [ "$a" -lt "$c" ]; }
+    t="-n envoy-gateway-system delete targetgroupbindings.elbv2.k8s.aws svp-envoy --ignore-not-found --wait=true --timeout=600s"
+    b "$1" "delete gateway svp" "$t" && b "$1" "$t" "get targetgroupbindings.elbv2.k8s.aws -A" && b "$1" "$t" "delete pvc --all" &&
+    [ "$(grep -c "delete targetgroupbinding" "$1")" = 1 ] && grep -q "^ok    TargetGroupBinding envoy-gateway-system/svp-envoy deleted$" "$2"' _ "$log" "$work/pre.out"
 expect "pre-destroy.sh: NodePools after the PVCs, then EC2NodeClasses, then the instances of Karpenter, before Application karpenter" \
   sh -c 'b() { a=$(grep -nE -- "$2" "$1" | head -n 1 | cut -d: -f1); c=$(grep -nE -- "$3" "$1" | head -n 1 | cut -d: -f1); [ -n "$a" ] && [ -n "$c" ] && [ "$a" -lt "$c" ]; }
     b "$1" "delete pvc --all" "delete nodepools.karpenter.sh --all" && b "$1" "delete nodepools.karpenter.sh --all" "delete ec2nodeclasses.karpenter.k8s.aws --all" &&
@@ -969,15 +1144,14 @@ expect "pre-destroy.sh prd: context through the tunnel, checked before the first
   sh -c 'b() { a=$(grep -nE -- "$2" "$1" | head -n 1 | cut -d: -f1); c=$(grep -nE -- "$3" "$1" | head -n 1 | cut -d: -f1); [ -n "$a" ] && [ -n "$c" ] && [ "$a" -lt "$c" ]; }
     b "$1" "^kubectl config set-cluster .*6443" "^nc -z" && b "$1" "^nc -z" "^kubectl --context svp-prd"' _ "$log"
 expect "pre-destroy.sh without Argo CD says so" grep -q '^note  no Argo CD on svp-prd' "$work/pre.out"
-expect "pre-destroy.sh without Argo CD calls nothing of Argo CD or the Gateway" test -z "$(grep -E -- '-n argocd |delete gateway' "$log")"
-expect "pre-destroy.sh without Argo CD still waits on load balancers, records and volumes" \
-  sh -c 'grep -q "get services -A" "$1" && grep -q "route53 list-resource-record-sets" "$1" && grep -q "ec2 describe-volumes" "$1"' _ "$log"
+expect "pre-destroy.sh without Argo CD calls nothing of Argo CD, the Gateway or the TargetGroupBinding" \
+  test -z "$(grep -E -- '-n argocd |delete gateway|delete targetgroupbinding' "$log")"
+expect "pre-destroy.sh without Argo CD still waits on load balancers and volumes" \
+  sh -c 'grep -q "get services -A" "$1" && grep -q "resourcegroupstaggingapi get-resources --resource-type-filters elasticloadbalancing" "$1" && grep -q "ec2 describe-volumes" "$1"' _ "$log"
 expect "pre-destroy.sh without Argo CD marks pre-destroy-done" has_mark pre-destroy-done
 expect "pre-destroy.sh without Karpenter skips the NodePools, says so, and still checks its instances" \
   sh -c 'grep -q "^note  no Karpenter on svp-prd" "$1" && ! grep -qE "delete (nodepools|ec2nodeclasses)|nodeclaims" "$2" &&
     grep -q "ec2 describe-instances --filters Name=tag:kubernetes.io/cluster/svp-prd,Values=owned Name=tag-key,Values=karpenter.sh/nodepool " "$2"' _ "$work/pre.out" "$log"
-expect "pre-destroy.sh prd: the NS records delegating stg.aws.svp.example in its zone are no record to wait for" \
-  grep -q '^ok    no record of ExternalDNS in aws.svp.example$' "$work/pre.out"
 new_session
 expect "pre-destroy.sh prd refuses while the tunnel is closed, before any kubectl to the API" \
   sh -c '! FAKE_TUNNEL=closed bash "$1/pre-destroy.sh" prd >"$2" 2>&1 && grep -q "no tunnel on 127.0.0.1:6443" "$2" && ! grep -q "^kubectl --context" "$3"' _ "$here" "$work/out" "$log"
@@ -990,15 +1164,15 @@ clear_log
 expect "tf.sh gitops plan --destroy --leftovers runs after pre-destroy-start without pre-destroy-done" \
   bash "$here/tf.sh" stg gitops plan --destroy --leftovers >"$work/out" 2>&1
 expect "tf.sh gitops plan --destroy --leftovers says what may be left and that sweep.sh lists it" \
-  grep -q "^note  --leftovers: .*Load Balancer.*DNS records.*EBS volumes.*stuck-destroy.*sweep.sh stg" "$work/out"
+  sh -c 'grep -q "^note  --leftovers: .*EBS volumes.*EC2 instances of Karpenter.*stuck-destroy.*sweep.sh stg" "$1" && ! grep -q "ExternalDNS" "$1"' _ "$work/out"
 expect "tf.sh gitops plan --destroy --leftovers marks pre-destroy-skipped and writes the destroy plan" \
   sh -c 'awk -F "\t" "\$3 == \"pre-destroy-skipped\" { f = 1 } END { exit !f }" "$1/timeline.tsv" && [ -f "$2/stg.destroy.tfplan" ]' _ "$SVP_SESSION_DIR" "$infra_root/aws/gitops/stg"
 expect "tf.sh gitops plan --destroy without --leftovers still refuses in that session" sh -c '! bash "$1/tf.sh" stg gitops plan --destroy >/dev/null 2>&1' _ "$here"
 rm -f "$infra_root/aws/gitops/stg/stg.destroy.tfplan"
 mv "$envs/stg/stg.auto.tfvars" "$work/tfvars.aside"
-clear_log
-expect "pre-destroy.sh without stg.auto.tfvars stops before any command, and names the file" \
-  sh -c '! bash "$1/pre-destroy.sh" stg >"$2" 2>&1 && grep -q "stg.auto.tfvars" "$2" && [ ! -s "$3" ]' _ "$here" "$work/out" "$log"
+new_session
+expect "pre-destroy.sh needs no stg.auto.tfvars: it reads no zone" \
+  sh -c 'FAKE_NO_ARGOCD=1 bash "$1/pre-destroy.sh" stg >"$2" 2>&1 && grep -q "^ok    ready for: aws/scripts/tf.sh stg gitops plan --destroy" "$2"' _ "$here" "$work/out"
 mv "$work/tfvars.aside" "$envs/stg/stg.auto.tfvars"
 new_session
 FAKE_NO_ARGOCD=1 FAKE_GATEWAY_CRD_DOWN=1 bash "$here/pre-destroy.sh" stg >"$work/pre.out" 2>&1 &&
@@ -1017,6 +1191,20 @@ expect "pre-destroy.sh red at step 4: the NodeClaim left, then the way out, and 
     ! grep -q "delete application svp-cluster " "$2"' _ "$work/pre.out" "$log"
 expect "pre-destroy.sh red at step 4 marks no pre-destroy-done" no_mark pre-destroy-done
 new_session
+printf '%s\n' "1 svp-cluster" "1 aws-load-balancer-controller" "7 gateway" >"$state/apps"
+touch "$state/tgb"
+echo "svp-data data-0" >"$state/pvcs"
+FAKE_TGB_STUCK=1 bash "$here/pre-destroy.sh" stg >"$work/pre.out" 2>&1 &&
+  bad "pre-destroy.sh fails when TargetGroupBinding svp-envoy outlives the limit"
+expect "pre-destroy.sh red at step 2 on svp-envoy: the FAIL with LBC's log, the way out, no PVC, svp-cluster or pre-destroy-done" \
+  sh -c 'grep -q "^FAIL  TargetGroupBinding envoy-gateway-system/svp-envoy not deleted in 600 s (error above): .*logs deploy/aws-load-balancer-controller" "$1" &&
+    tail -n 1 "$1" | grep -q "^note  fix what the FAIL above names, then aws/scripts/pre-destroy.sh stg again; " &&
+    ! grep -qE "delete pvc|delete application (svp-cluster|aws-load-balancer-controller) " "$2" && grep -q " svp-cluster$" "$3/apps" &&
+    ! awk -F "\t" "\$3 == \"pre-destroy-done\" { f = 1 } END { exit !f }" "$4/timeline.tsv"' _ "$work/pre.out" "$log" "$state" "$SVP_SESSION_DIR"
+: >"$state/apps"
+: >"$state/pvcs"
+rm -f "$state/tgb"
+new_session
 FAKE_NO_ARGOCD=1 SVP_KARPENTER_LIMIT=0 bash "$here/pre-destroy.sh" stg >"$work/pre.out" 2>&1 &&
   bad "pre-destroy.sh fails on an instance of Karpenter left on a cluster without its CRDs"
 expect "pre-destroy.sh without Karpenter's CRDs still fails on its instance, named with the sweep" \
@@ -1027,7 +1215,7 @@ expect "pre-destroy.sh without Karpenter's CRDs still fails on its instance, nam
 # --- measure.sh ---------------------------------------------------------------------------------------------------
 start_measure() {
   new_session
-  echo "{\"name\":\"svp-$1\",\"domain\":\"$(zone_of "$1")\",\"hostedZoneId\":\"Z0FAKE\"}" >"$SVP_SESSION_DIR/cluster-values.json"
+  echo "{\"name\":\"svp-$1\",\"domain\":\"$(zone_of "$1")\",\"edgeTargetGroupArn\":\"arn:aws:elasticloadbalancing:ap-southeast-1:111111111111:targetgroup/svp-$1-envoy/2c3d\"}" >"$SVP_SESSION_DIR/cluster-values.json"
   printf '%s\t%s\t%s\n' 2026-10-31T00:00:00Z "${2:-$(date +%s)}" session-start >"$SVP_SESSION_DIR/timeline.tsv"
   rm -f "$state/node-calls" "$state/job-calls"
 }
@@ -1119,13 +1307,35 @@ for e in stg prd mgmt; do
     sh -c 'grep -q "^aws pricing-plan-manager list-subscriptions --output json --region us-east-1$" "$1"' _ "$log"
   expect "sweep.sh $e lists the pricing plan subscriptions before the CloudFront distributions" \
     before "$log" '^aws pricing-plan-manager list-subscriptions ' '^aws cloudfront list-distributions '
+  expect "sweep.sh $e reads in us-east-1 the certificates, log deliveries, alarms, log groups, SNS topics and KMS keys" \
+    sh -c 'for c in "acm list-certificates" "logs describe-deliveries" "logs describe-delivery-sources" "logs describe-delivery-destinations" \
+      "cloudwatch describe-alarms" "logs describe-log-groups" "resourcegroupstaggingapi get-resources --resource-type-filters logs:log-group" \
+      "sns list-topics" "kms list-aliases" "resourcegroupstaggingapi get-resources --resource-type-filters kms:key"; do
+        grep -q "^aws $c .*--region us-east-1$" "$1" || exit 1; done' _ "$log"
+  expect "sweep.sh $e reads the certificates of every key type, in both regions" \
+    test "$(grep -c '^aws acm list-certificates --includes keyTypes=[^ ]*EC_prime256v1' "$log")" = 2
+  if [ "$e" = prd ]; then
+    expect "sweep.sh prd prints what aws/accounts/prd keeps in us-east-1 as kept (Stack=baseline): DNSSEC alarms, query log group, topic, keys" \
+      sh -c 'grep -q "^kept  alarm svp-prd-dnssec-internal-failure (Stack=baseline)$" "$1" && grep -q "^kept  alarm svp-prd-dnssec-ksk-action-needed (Stack=baseline)$" "$1" &&
+        grep -q "^kept  log group /aws/route53/aws.svp.example (Stack=baseline)$" "$1" &&
+        grep -q "^kept  SNS topic arn:aws:sns:us-east-1:222222222222:svp-prd-dns-alarms (Stack=baseline)$" "$1" &&
+        grep -q "^kept  KMS key key-dnssec (Stack=baseline)$" "$1" && grep -q "^kept  KMS key key-dns-alarms (Stack=baseline)$" "$1" &&
+        grep -q "^ok    CloudWatch alarms in us-east-1: none$" "$1" && grep -q "^ok    CloudWatch log groups in us-east-1: none$" "$1" &&
+        grep -q "^ok    SNS topics in us-east-1: none$" "$1" && grep -q "^ok    KMS keys in us-east-1: none$" "$1"' _ "$work/sweep.out"
+  fi
+  if [ -n "$z" ]; then
+    expect "sweep.sh $e: the CAA record at the apex of $z stays with the zone" \
+      sh -c 'grep -q "^ok    records of $2: none$" "$1" && grep -q "^kept  hosted zone $2 .*NS, SOA and CAA at its apex" "$1"' _ "$work/sweep.out" "$z"
+  fi
 done
 expect "sweep.sh mgmt: no hosted zone, no call to Route 53" \
   sh -c '! grep -q "hosted zone" "$1" && ! grep -q "^aws route53 " "$2"' _ "$work/sweep.out" "$log"
 clear_log
-expect "sweep.sh prd keeps the NS records delegating stg.aws.svp.example and still fails on a leftover A record" \
-  sh -c '! FAKE_LEFTOVER=record bash "$1/sweep.sh" prd >"$2" 2>&1 && grep -q "^FAIL  records of aws.svp.example: 1 left$" "$2" &&
-    grep -q "^        api.aws.svp.example. A$" "$2" && ! grep -q "^        stg.aws.svp.example. NS" "$2" &&
+expect "sweep.sh prd keeps the NS records delegating stg.aws.svp.example and the CAA at the apex, fails on the records of root env and a CAA below" \
+  sh -c '! FAKE_LEFTOVER=record bash "$1/sweep.sh" prd >"$2" 2>&1 && grep -q "^FAIL  records of aws.svp.example: 4 left$" "$2" &&
+    grep -q "^        api.aws.svp.example. A$" "$2" && grep -q "^        api.aws.svp.example. AAAA$" "$2" &&
+    grep -q "^        api.aws.svp.example. CAA$" "$2" && grep -q "^        _0fake.api.aws.svp.example. CNAME$" "$2" &&
+    ! grep -q "^        stg.aws.svp.example. NS" "$2" && ! grep -q "^        aws.svp.example. CAA" "$2" &&
     grep -q "^kept  hosted zone aws.svp.example .*NS records below it" "$2"' _ "$here" "$work/sweep.out"
 expect "sweep.sh needs no Terraform state" test -z "$(grep '^terraform ' "$log")"
 expect "sweep.sh only reads (describe, list, get)" \
@@ -1180,8 +1390,9 @@ expect "sweep.sh stg fails on a SCRAM secret of MSK found by its name, with the 
     grep -q "delete: AWS_PROFILE=anhnv-stg aws secretsmanager delete-secret --secret-id AmazonMSK_svp-stg-svp-admin --force-delete-without-recovery --region ap-southeast-1$" "$2"' _ "$here" "$work/sweep.out"
 expect "sweep.sh prd fails on the broker log group of MSK" \
   sh -c '! FAKE_LEFTOVER=msk-log bash "$1/sweep.sh" prd >"$2" 2>&1 && grep -q "^FAIL  CloudWatch log groups: 1 left" "$2" && grep -q "^        /aws/msk/svp-prd$" "$2"' _ "$here" "$work/sweep.out"
-expect "sweep.sh prd fails on a web ACL left in us-east-1" \
-  sh -c '! FAKE_LEFTOVER=waf bash "$1/sweep.sh" prd >"$2" 2>&1 && grep -q "^FAIL  WAF web ACLs of CloudFront: 1 left" "$2" &&
+expect "sweep.sh prd fails on the web ACLs of web, api and media left in us-east-1" \
+  sh -c '! FAKE_LEFTOVER=waf bash "$1/sweep.sh" prd >"$2" 2>&1 && grep -q "^FAIL  WAF web ACLs of CloudFront: 3 left" "$2" &&
+    grep -q "^        svp-prd-web waf-web$" "$2" && grep -q "^        svp-prd-api waf-api$" "$2" && grep -q "^        svp-prd-media waf-fake$" "$2" &&
     grep -q "^          delete: docs/runbooks/session-stg.md#lệnh-xoá-tay-theo-loại (delete-web-acl takes the lock token" "$2"' _ "$here" "$work/sweep.out"
 expect "sweep.sh stg fails on a pricing plan subscription, with its resources and the runbook's manual deletion" \
   sh -c '! FAKE_LEFTOVER=subscription bash "$1/sweep.sh" stg >"$2" 2>&1 && grep -q "^FAIL  CloudFront pricing plan subscriptions: 1 left" "$2" &&
@@ -1230,6 +1441,53 @@ expect "sweep.sh prd fails on the interface endpoint guardduty-data, not on an e
     ! grep -q "vpce-0gone" "$2"' _ "$here" "$work/sweep.out"
 expect "sweep.sh stg fails on a record of its zone" \
   sh -c '! FAKE_LEFTOVER=record bash "$1/sweep.sh" stg >"$2" 2>&1 && grep -q "api.stg.aws.svp.example. A" "$2"' _ "$here" "$work/sweep.out"
+expect "sweep.sh stg fails on the distribution of web, found by its comment (its origin is the ALB's), not on another one's" \
+  sh -c '! FAKE_LEFTOVER=distribution bash "$1/sweep.sh" stg >"$2" 2>&1 && grep -q "^FAIL  CloudFront distributions: 1 left$" "$2" &&
+    grep -q "^        EWEB Deployed enabled=false d0web.cloudfront.net svp-stg-web$" "$2" && ! grep -q EOTHER "$2"' _ "$here" "$work/sweep.out"
+expect "sweep.sh stg fails on the VPC origin of the edge, with the runbook's deletion" \
+  sh -c '! FAKE_LEFTOVER=vpc-origin bash "$1/sweep.sh" stg >"$2" 2>&1 && grep -q "^FAIL  CloudFront VPC origins: 1 left$" "$2" &&
+    grep -q "^        vo_0fake svp-stg-edge Deployed$" "$2" && ! grep -q vo_other "$2" &&
+    grep -q "^          delete: docs/runbooks/session-stg.md#lệnh-xoá-tay-theo-loại (after the distributions that use it: delete-vpc-origin takes the ETag" "$2"' _ "$here" "$work/sweep.out"
+expect "sweep.sh stg fails on the group CloudFront made in the VPC for a VPC origin, as a kind of its own" \
+  sh -c '! FAKE_LEFTOVER=vpc-origin-sg bash "$1/sweep.sh" stg >"$2" 2>&1 && grep -q "^FAIL  security groups of CloudFront VPC origins: 1 left$" "$2" &&
+    grep -q "^        sg-0cf CloudFront-VPCOrigins-Service-SG-0fake vpc-0fake$" "$2" && grep -q "^ok    security groups: none$" "$2" &&
+    grep -q "^          delete: docs/runbooks/session-stg.md#lệnh-xoá-tay-theo-loại (CloudFront deletes it after its VPC origin" "$2" &&
+    grep -q "ec2 describe-security-groups --filters Name=vpc-id,Values=vpc-0fake " "$3"' _ "$here" "$work/sweep.out" "$log"
+expect "sweep.sh stg fails on the ALB and the target group of the edge (tag Project=svp), not on another one's" \
+  sh -c '! FAKE_LEFTOVER=edge bash "$1/sweep.sh" stg >"$2" 2>&1 && grep -q "^FAIL  ELBv2 load balancers: 1 left$" "$2" && grep -q "^FAIL  ELBv2 target groups: 1 left$" "$2" &&
+    grep -q "delete: AWS_PROFILE=anhnv-stg aws elbv2 delete-load-balancer --load-balancer-arn arn:aws:elasticloadbalancing:ap-southeast-1:111111111111:loadbalancer/app/svp-stg-edge/0a1b --region ap-southeast-1$" "$2" &&
+    grep -q "delete: AWS_PROFILE=anhnv-stg aws elbv2 delete-target-group --target-group-arn arn:aws:elasticloadbalancing:ap-southeast-1:111111111111:targetgroup/svp-stg-envoy/2c3d --region ap-southeast-1$" "$2" &&
+    ! grep -q "app/other" "$2"' _ "$here" "$work/sweep.out"
+expect "sweep.sh stg fails on the certificates of the lab in both regions, each deleted in its own, and leaves an untagged one" \
+  sh -c '! FAKE_LEFTOVER=cert bash "$1/sweep.sh" stg >"$2" 2>&1 && grep -q "^FAIL  ACM certificates: 1 left$" "$2" && grep -q "^FAIL  ACM certificates in us-east-1: 1 left$" "$2" &&
+    grep -q "^        arn:aws:acm:us-east-1:111111111111:certificate/svp-fake stg.aws.svp.example Stack=stg$" "$2" &&
+    grep -q "delete: AWS_PROFILE=anhnv-stg aws acm delete-certificate --certificate-arn arn:aws:acm:ap-southeast-1:111111111111:certificate/svp-fake --region ap-southeast-1$" "$2" &&
+    grep -q "delete: AWS_PROFILE=anhnv-stg aws acm delete-certificate --certificate-arn arn:aws:acm:us-east-1:111111111111:certificate/svp-fake --region us-east-1$" "$2" &&
+    ! grep -q "certificate/other" "$2"' _ "$here" "$work/sweep.out"
+expect "sweep.sh stg fails on the delivery, delivery source and delivery destination of CloudFront logs, deleted in us-east-1" \
+  sh -c '! FAKE_LEFTOVER=delivery bash "$1/sweep.sh" stg >"$2" 2>&1 && grep -q "^FAIL  CloudWatch Logs deliveries in us-east-1: 1 left$" "$2" &&
+    grep -q "^FAIL  CloudWatch Logs delivery sources in us-east-1: 1 left$" "$2" && grep -q "^FAIL  CloudWatch Logs delivery destinations in us-east-1: 1 left$" "$2" &&
+    grep -q "delete: AWS_PROFILE=anhnv-stg aws logs delete-delivery --id dlv-fake --region us-east-1$" "$2" &&
+    grep -q "delete: AWS_PROFILE=anhnv-stg aws logs delete-delivery-source --name svp-stg-web --region us-east-1$" "$2" &&
+    grep -q "delete: AWS_PROFILE=anhnv-stg aws logs delete-delivery-destination --name svp-cloudfront-stg --region us-east-1$" "$2" &&
+    ! grep -q "other-source\|other-delivery" "$2"' _ "$here" "$work/sweep.out"
+expect "sweep.sh --print stg lists the deliveries before their sources" \
+  sh -c 'bash "$1/sweep.sh" --print stg >"$2" 2>&1' _ "$here" "$work/sweep.out"
+expect "sweep.sh --print stg: describe-deliveries before describe-delivery-sources, both in us-east-1" \
+  before "$work/sweep.out" '^\+ AWS_PROFILE=anhnv-stg aws logs describe-deliveries --output json --region us-east-1$' '^\+ AWS_PROFILE=anhnv-stg aws logs describe-delivery-sources --output json --region us-east-1$'
+expect "sweep.sh prd fails on an alarm and a topic of root env in us-east-1, deleted there, and still keeps the baseline's" \
+  sh -c '! FAKE_LEFTOVER=us-east-1 bash "$1/sweep.sh" prd >"$2" 2>&1 && grep -q "^FAIL  CloudWatch alarms in us-east-1: 1 left$" "$2" &&
+    grep -q "^FAIL  SNS topics in us-east-1: 1 left$" "$2" &&
+    grep -q "delete: AWS_PROFILE=anhnv-prd aws cloudwatch delete-alarms --alarm-names svp-prd-edge-5xx --region us-east-1$" "$2" &&
+    grep -q "delete: AWS_PROFILE=anhnv-prd aws sns delete-topic --topic-arn arn:aws:sns:us-east-1:222222222222:svp-prd-edge-alarms --region us-east-1$" "$2" &&
+    grep -q "^kept  alarm svp-prd-dnssec-internal-failure (Stack=baseline)$" "$2" && grep -q "^ok    CloudWatch alarms: none$" "$2"' _ "$here" "$work/sweep.out"
+expect "sweep.sh stg fails on the alarm topic of root env in the home region, not on another one's" \
+  sh -c '! FAKE_LEFTOVER=sns bash "$1/sweep.sh" stg >"$2" 2>&1 && grep -q "^FAIL  SNS topics: 1 left$" "$2" &&
+    grep -q "delete: AWS_PROFILE=anhnv-stg aws sns delete-topic --topic-arn arn:aws:sns:ap-southeast-1:111111111111:svp-stg-alarms --region ap-southeast-1$" "$2" &&
+    ! grep -q "other-topic" "$2"' _ "$here" "$work/sweep.out"
+expect "sweep.sh stg fails on a tagged log group whose Stack is not kept" \
+  sh -c '! FAKE_LEFTOVER=log-group bash "$1/sweep.sh" stg >"$2" 2>&1 && grep -q "^FAIL  CloudWatch log groups: 1 left$" "$2" &&
+    grep -q "^        /aws/rds/svp-stg/postgresql$" "$2"' _ "$here" "$work/sweep.out"
 expect "sweep.sh stops on another account before any other command" \
   sh -c '! FAKE_ACCOUNT=000000000000 bash "$1/sweep.sh" stg >/dev/null 2>&1' _ "$here"
 
