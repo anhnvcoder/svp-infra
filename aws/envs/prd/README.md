@@ -1,10 +1,12 @@
 # `aws/envs/prd`: cấu hình gốc của env prd
 
-Tầng platform của prd trên AWS (ADR-0034 §2, ADR-0048, ADR-0055…0058): cùng `*.tf`, cùng module, cùng đối số với root stg
-([`aws/envs/stg`](../stg/README.md)), kể cả web ACL AWS WAF trước CloudFront (`waf.tf`), bastion SSM tới endpoint private của API
-(`ssm-bastion.tf`) và module `alarms`; cỡ, dự phòng, retention và bảo vệ production ở `prd.tfvars`. Ngoài phần chung đó, root này thêm đúng
-một file: `teardown.tfvars` để gỡ cuối buổi. Ứng dụng trong cluster không ở đây: Argo CD triển khai từ `svp-gitops`, bootstrap bằng root
-`aws/gitops/prd`.
+Tầng platform của prd trên AWS (ADR-0034 §2, ADR-0048, ADR-0055…0058, ADR-0060): cùng `*.tf`, cùng module, cùng đối số
+với root stg ([`aws/envs/stg`](../stg/README.md)), kể cả web ACL AWS WAF trước CloudFront (`waf.tf`), bastion SSM tới
+endpoint private của API (`ssm-bastion.tf`), module `alarms`, flow log và log WAF về bucket của account `svp-log-archive`,
+phần GuardDuty của env (agent EKS, endpoint `guardduty-data`, Malware Protection cho `uploads`; [mục "Log và phát hiện"
+của stg](../stg/README.md#log-và-phát-hiện)); cỡ, dự phòng, retention và bảo vệ production ở `prd.tfvars`. Ngoài phần
+chung đó, root này thêm đúng một file: `teardown.tfvars` để gỡ cuối buổi. Ứng dụng trong cluster không ở đây: Argo CD
+triển khai từ `svp-gitops`, bootstrap bằng root `aws/gitops/prd`.
 
 ## Account, profile, state
 
@@ -13,11 +15,14 @@ một file: `teardown.tfvars` để gỡ cuối buổi. Ứng dụng trong clust
 | Account | `svp-prd`, account thành viên của org (OU `Workloads`), không phải management account |
 | Profile SSO | `anhnv-prd` (permission set `SvpAdmin`), người học tự tạo bằng `aws configure sso` |
 | Biến account | `SVP_AWS_PRD_ACCOUNT_ID`, export trong terminal của buổi; mọi lệnh đặt `TF_VAR_account_id` từ nó (`allowed_account_ids` của cả hai provider) |
+| Biến account Log Archive | `SVP_AWS_LOG_ACCOUNT_ID` (output `log_archive_account_id` của `aws/org`), export cùng terminal; mọi lệnh đặt `TF_VAR_log_archive_account_id` từ nó (tên bucket flow log và log WAF, [mục "Log và phát hiện" của stg](../stg/README.md#log-và-phát-hiện)) |
 | Backend | `../../backend-prd.hcl` (bucket `svp-tfstate-<account prd>-<region>`, KMS key `alias/svp-tfstate`, lock file S3), sinh từ output `backend_hcl` của `aws/accounts/prd`, dạng ở `backend.hcl.example` |
 | Key của state | `aws/prd/terraform.tfstate`, truyền bằng `-backend-config` thứ hai lúc `init`; khối `backend "s3" {}` trong `versions.tf` trống |
 | Zone | `aws.<domain>` của account prd (output `zone_id` của `aws/accounts/prd`), uỷ quyền từ DNS cha của `<domain>` (bốn bản ghi `NS` `aws`, ngoài Terraform) |
 
-Root chạy được khi baseline `aws/accounts/prd` đã apply và uỷ quyền DNS đã xong ([`aws/accounts/README.md`](../../accounts/README.md)).
+Root chạy được khi baseline `aws/accounts/prd` đã apply, uỷ quyền DNS đã xong
+([`aws/accounts/README.md`](../../accounts/README.md)) và root `aws/log-archive` đã apply (bucket nhận flow log và log WAF,
+[`aws/log-archive/README.md`](../../log-archive/README.md)).
 
 ## Cái gì khác với stg
 
@@ -37,8 +42,9 @@ dòng `env` đó, `<env>.tfvars`, `teardown.tfvars`, `README.md`, `backend.hcl.e
 Giá trị của `prd.tfvars`: mỗi nhóm biến một comment nói vì sao, cùng thứ tự dòng với `stg.tfvars`; khác biệt với stg, nhóm của nó và mất
 gì ở stg: bảng của [`environments.md`](https://github.com/anhnvcoder/svp-backend/blob/main/docs/explanation/environments.md) ở repo code. Những gì chỉ prd có: ba AZ, NAT mỗi AZ, RDS
 `db.m7g` Multi-AZ, MSK RF 3 và min ISR 2 (mất một AZ không mất ghi đã `acks=all`, ADR-0053 §6), Valkey có replica ở AZ khác với failover tự
-động, `apply_immediately = false` của Valkey (thay đổi chờ cửa sổ bảo trì), retention log 30 ngày, backup 7 ngày giữ lại sau khi xoá,
-deletion protection, final snapshot, versioning của media.
+động, `apply_immediately = false` của Valkey (thay đổi chờ cửa sổ bảo trì), retention log CloudWatch 30 ngày (flow log và log WAF ở Log
+Archive: [README của stg](../stg/README.md#log-và-phát-hiện)), backup 7 ngày giữ lại sau khi xoá, deletion protection, final snapshot,
+versioning của media.
 
 Root không có `validation` ép giá trị prd: test của từng module có một `run` với giá trị prd, `make trivy DIRS=aws/envs/prd` quét với
 `prd.tfvars`.
@@ -83,8 +89,10 @@ Dựng:
 ```sh
 cp example.auto.tfvars.example prd.auto.tfvars          # rồi sửa ba giá trị
 AWS_PROFILE=anhnv-prd terraform init -reconfigure -backend-config=../../backend-prd.hcl -backend-config=key=aws/prd/terraform.tfstate
-AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform plan -var-file=prd.tfvars -out=prd.tfplan
-AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform apply prd.tfplan
+AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
+  terraform plan -var-file=prd.tfvars -out=prd.tfplan
+AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
+  terraform apply prd.tfplan
 ```
 
 Sau `apply`: xác nhận email của topic `svp-prd-alarms`, mở tunnel và kubeconfig (mục trên); `AWS_PROFILE=anhnv-prd terraform output -raw rds_master_user_secret_arn` cho script buổi.
@@ -97,8 +105,10 @@ tunnel đang mở.
 (qua tunnel), rồi root này với `teardown.tfvars`: `apply` nhấc bảo vệ, rồi `destroy`, cùng hai file:
 
 ```sh
-AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform apply -var-file=prd.tfvars -var-file=teardown.tfvars
-AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform destroy -var-file=prd.tfvars -var-file=teardown.tfvars
+AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
+  terraform apply -var-file=prd.tfvars -var-file=teardown.tfvars
+AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
+  terraform destroy -var-file=prd.tfvars -var-file=teardown.tfvars
 ```
 
 `teardown.tfvars` chỉ đặt `rds_deletion_protection = false` (RDS từ chối xoá instance còn bảo vệ) và `media_force_destroy = true` (bucket có

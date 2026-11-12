@@ -18,6 +18,9 @@
 # other. The plan texts name the real domain and IPs, so they go in the session directory, never in the repository. For
 # an environment whose API endpoint is private, every command of root gitops but init needs the tunnel open.
 
+# Root env also takes TF_VAR_log_archive_account_id from SVP_AWS_LOG_ACCOUNT_ID, the account whose buckets receive its
+# flow logs and WAF logs: without it no command of root env runs.
+
 # Usage: aws/scripts/tf.sh [--print] stg|prd env|gitops init|plan [--teardown|--destroy [--leftovers|--no-cluster]]|show|apply [--teardown]|destroy
 set -euo pipefail
 
@@ -56,6 +59,11 @@ destroy_plan_file=$env_name.destroy.tfplan
 teardown_plan_file=$env_name.teardown.tfplan
 rel=aws/${root_dir#"$infra_root"/aws/}
 step "tf.sh: terraform $cmd${flags:+ $flags} of $rel"
+if [ "$root" = env ]; then
+  printing || [[ ${SVP_AWS_LOG_ACCOUNT_ID:-} =~ ^[0-9]{12}$ ]] ||
+    fail "set SVP_AWS_LOG_ACCOUNT_ID to the 12 digits of the svp-log-archive account, output log_archive_account_id of aws/org (export SVP_AWS_LOG_ACCOUNT_ID=...; never in a committed file): root env writes its flow logs and WAF logs to that account's buckets"
+  export TF_VAR_log_archive_account_id=${SVP_AWS_LOG_ACCOUNT_ID:-}
+fi
 check_account
 export TF_VAR_account_id=${!account_var:-}
 var_files=("-var-file=$env_name.tfvars")

@@ -1,6 +1,6 @@
-# What the alarm topic of an env guarantees: encrypted with the module's own key, only CloudWatch alarms of the account
-# publish to it, over TLS only, and the email subscription; then one plan per validation rule with a value that only
-# that rule rejects. The module is the same in every env, so one valid plan covers it. The AWS provider is a mock:
+# What the alarm topic guarantees: encrypted with the module's own key, only the listed publishers (CloudWatch alarms by
+# default, EventBridge rules for the security topic) of the account publish to it, over TLS only, and the email
+# subscription; then one plan per validation rule with a value that only that rule rejects. The AWS provider is a mock:
 # nothing reaches an account. Policies are asserted through the arguments of their aws_iam_policy_document data sources.
 
 mock_provider "aws" {
@@ -110,6 +110,95 @@ run "valid" {
     condition     = aws_sns_topic_subscription.email.protocol == "email" && aws_sns_topic_subscription.email.endpoint == "ops@svp.example"
     error_message = "The topic must have an email subscription to alarm_email."
   }
+
+  # The default publisher list leaves the topic of both envs exactly as CloudWatch alone needs it: same statement ids
+  # and key description, so the plans of the env roots do not change.
+  assert {
+    condition     = aws_kms_key.this.description == "SNS topic svp-stg-alarms: CloudWatch alarms of svp-stg" && [for s in data.aws_iam_policy_document.key.statement : s.sid] == ["EnableIamUserPermissions", "CloudWatchAlarmsUseKey"] && [for s in data.aws_iam_policy_document.topic.statement : s.sid] == ["CloudWatchAlarmsPublish", "DenyPublishWithoutTls"]
+    error_message = "By default the key and topic policies must hold only the CloudWatch statements, with their statement ids and key description."
+  }
+}
+
+# The security topic: EventBridge rules of the account publish, CloudWatch does not.
+run "eventbridge_publisher" {
+  command = plan
+
+  variables {
+    name               = "svp-security"
+    publisher_services = ["events.amazonaws.com"]
+    source_conditions = [
+      "StringEquals aws:SourceAccount 000000000000",
+      "ArnLike aws:SourceArn arn:aws:events:ap-southeast-1:000000000000:rule/*",
+    ]
+  }
+
+  assert {
+    condition     = aws_sns_topic.this.name == "svp-security-alarms" && aws_kms_key.this.description == "SNS topic svp-security-alarms: EventBridge rules of svp-security"
+    error_message = "The topic must be <name>-alarms and its key described by its publisher."
+  }
+
+  # SNS does not support aws:SourceAccount, aws:SourceArn or aws:SourceOrgID in the key policy for EventBridge to an
+  # encrypted topic: with them KMS refuses the data key and no alert is delivered. The topic policy limits the rules.
+  assert {
+    condition = length(data.aws_iam_policy_document.key.statement) == 2 && alltrue([for s in data.aws_iam_policy_document.key.statement :
+      anytrue([for p in s.principals : p.type == "AWS" && toset(p.identifiers) == toset(["arn:aws:iam::000000000000:root"])]) || (
+        s.sid == "EventBridgeRulesUseKey" &&
+        toset(s.actions) == toset(["kms:Decrypt", "kms:GenerateDataKey*"]) &&
+        alltrue([for p in s.principals : p.type == "Service" && toset(p.identifiers) == toset(["events.amazonaws.com"])]) &&
+        length(s.condition) == 0
+      )
+    ])
+    error_message = "Besides the default statement, the key policy may only let EventBridge kms:Decrypt and kms:GenerateDataKey*, without aws:Source* conditions."
+  }
+
+  assert {
+    condition = length(data.aws_iam_policy_document.topic.statement) == 2 && alltrue([for s in data.aws_iam_policy_document.topic.statement :
+      s.effect == "Deny" || (
+        s.sid == "EventBridgeRulesPublish" &&
+        toset(s.actions) == toset(["sns:Publish"]) &&
+        toset(s.resources) == toset(["arn:aws:sns:ap-southeast-1:000000000000:svp-security-alarms"]) &&
+        alltrue([for p in s.principals : p.type == "Service" && toset(p.identifiers) == toset(["events.amazonaws.com"])]) &&
+        toset([for c in s.condition : "${c.test} ${c.variable} ${join(",", c.values)}"]) == toset(var.source_conditions)
+      )
+    ])
+    error_message = "The topic policy may only let EventBridge rules of this account sns:Publish, besides the TLS deny."
+  }
+}
+
+# Both publishers: one statement each in both policies, each with the conditions of its own service; on the key only
+# CloudWatch carries them.
+run "both_publishers" {
+  command = plan
+
+  variables {
+    publisher_services = ["cloudwatch.amazonaws.com", "events.amazonaws.com"]
+  }
+
+  assert {
+    condition     = [for s in data.aws_iam_policy_document.key.statement : s.sid] == ["EnableIamUserPermissions", "CloudWatchAlarmsUseKey", "EventBridgeRulesUseKey"] && [for s in data.aws_iam_policy_document.topic.statement : s.sid] == ["CloudWatchAlarmsPublish", "EventBridgeRulesPublish", "DenyPublishWithoutTls"]
+    error_message = "Each publisher must get its own key and topic statement."
+  }
+
+  assert {
+    condition = alltrue([for s in data.aws_iam_policy_document.topic.statement : s.effect == "Deny" || anytrue([for c in s.condition :
+      c.variable == "aws:SourceArn" && toset(c.values) == toset([s.sid == "CloudWatchAlarmsPublish" ? "arn:aws:cloudwatch:ap-southeast-1:000000000000:alarm:*" : "arn:aws:events:ap-southeast-1:000000000000:rule/*"])
+    ])])
+    error_message = "Each publisher statement must limit aws:SourceArn to the resources of its own service."
+  }
+
+  assert {
+    condition = alltrue([for s in data.aws_iam_policy_document.key.statement :
+      s.sid == "EnableIamUserPermissions" ||
+      (s.sid == "CloudWatchAlarmsUseKey" && toset([for c in s.condition : "${c.test} ${c.variable} ${join(",", c.values)}"]) == toset(var.source_conditions)) ||
+      (s.sid == "EventBridgeRulesUseKey" && length(s.condition) == 0)
+    ])
+    error_message = "On the key, CloudWatch must keep aws:SourceAccount and aws:SourceArn of its alarms, and EventBridge must have no condition."
+  }
+
+  assert {
+    condition     = aws_kms_key.this.description == "SNS topic svp-stg-alarms: CloudWatch alarms and EventBridge rules of svp-stg"
+    error_message = "The key description must name every publisher."
+  }
 }
 
 run "name_double_hyphen" {
@@ -130,4 +219,34 @@ run "alarm_email_not_an_address" {
   }
 
   expect_failures = [var.alarm_email]
+}
+
+run "publisher_services_unknown" {
+  command = plan
+
+  variables {
+    publisher_services = ["sns.amazonaws.com"]
+  }
+
+  expect_failures = [var.publisher_services]
+}
+
+run "publisher_services_empty" {
+  command = plan
+
+  variables {
+    publisher_services = []
+  }
+
+  expect_failures = [var.publisher_services]
+}
+
+run "publisher_services_repeated" {
+  command = plan
+
+  variables {
+    publisher_services = ["events.amazonaws.com", "events.amazonaws.com"]
+  }
+
+  expect_failures = [var.publisher_services]
 }

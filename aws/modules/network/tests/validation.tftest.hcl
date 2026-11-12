@@ -16,6 +16,12 @@ mock_provider "aws" {
     }
   }
 
+  mock_data "aws_caller_identity" {
+    defaults = {
+      account_id = "000000000000"
+    }
+  }
+
   mock_data "aws_region" {
     defaults = {
       region = "ap-southeast-1"
@@ -30,8 +36,9 @@ mock_provider "aws" {
 }
 
 variables {
-  name         = "svp-stg"
-  cluster_name = "svp-stg"
+  name                = "svp-stg"
+  cluster_name        = "svp-stg"
+  flow_log_bucket_arn = "arn:aws:s3:::svp-flowlogs-111111111111-ap-southeast-1"
 }
 
 run "valid" {
@@ -78,14 +85,24 @@ run "cluster_name_leading_dash" {
   expect_failures = [var.cluster_name]
 }
 
-run "flow_log_retention_days_not_offered" {
+run "flow_log_bucket_arn_name_only" {
   command = plan
 
   variables {
-    flow_log_retention_days = 2
+    flow_log_bucket_arn = "svp-flowlogs-111111111111-ap-southeast-1"
   }
 
-  expect_failures = [var.flow_log_retention_days]
+  expect_failures = [var.flow_log_bucket_arn]
+}
+
+run "flow_log_bucket_arn_with_prefix" {
+  command = plan
+
+  variables {
+    flow_log_bucket_arn = "arn:aws:s3:::svp-flowlogs-111111111111-ap-southeast-1/vpc"
+  }
+
+  expect_failures = [var.flow_log_bucket_arn]
 }
 
 run "s3_endpoint_buckets_arn" {
@@ -108,7 +125,7 @@ run "s3_endpoint_restricted_without_buckets" {
   expect_failures = [var.s3_endpoint_buckets]
 }
 
-# The defaults keep the network as it was: two zones, one NAT gateway, no flow log, an S3 endpoint without a policy.
+# The defaults: two zones, one NAT gateway, an S3 endpoint without a policy.
 run "defaults" {
   command = plan
 
@@ -121,15 +138,142 @@ run "defaults" {
     condition     = local.s3_endpoint_policy == null
     error_message = "By default the S3 endpoint must carry no policy."
   }
+}
+
+# Every NACL of the VPC passes the NACL check of CIS AWS Foundations and Security Hub EC2.21 (Config rule
+# nacl-no-unrestricted-ssh-rdp): no inbound allow from 0.0.0.0/0 or ::/0 for TCP, UDP or all protocols whose port range
+# holds 22 or 3389 (protocol -1 holds every port). The rules are made inside the registry module, so the run reads the
+# lists this module passes it (local.nacl_inbound, local.default_nacl).
+run "nacl" {
+  command = plan
 
   assert {
-    condition     = module.vpc.vpc_flow_log_id == null
-    error_message = "By default no flow log may be created."
+    condition = alltrue([for r in flatten(values(local.nacl_inbound)) :
+      !(r.rule_action == "allow" &&
+        anytrue([for c in [try(r.cidr_block, ""), try(r.ipv6_cidr_block, "")] : contains(["0.0.0.0/0", "::/0"], c)]) &&
+        contains(["-1", "all", "6", "tcp", "17", "udp"], r.protocol) &&
+      (contains(["-1", "all"], r.protocol) || anytrue([for p in [22, 3389] : r.from_port <= p && p <= r.to_port])))
+    ])
+    error_message = "No NACL may allow TCP or UDP to port 22 or 3389 from 0.0.0.0/0 or ::/0."
+  }
+
+  assert {
+    condition     = length(local.default_nacl.ingress) == 0 && length(local.default_nacl.egress) == 0
+    error_message = "The default NACL must keep no entry: every subnet has the NACL of its tier."
+  }
+
+  assert {
+    condition = alltrue([for tier, rules in local.nacl_inbound : alltrue([for proto in ["tcp", "udp", "icmp"] :
+      anytrue([for r in rules : r.rule_action == "allow" && r.protocol == proto && r.cidr_block == "10.0.0.0/16" &&
+      (proto == "icmp" ? r.icmp_type == -1 && r.icmp_code == -1 : r.from_port == 0 && r.to_port == 65535)])
+    ])])
+    error_message = "The NACL of every tier must still allow TCP and UDP on every port and every ICMP type from the VPC range."
+  }
+
+  assert {
+    condition = alltrue([for proto in ["tcp", "udp", "icmp"] :
+      anytrue([for r in local.nacl_outbound : r.rule_action == "allow" && r.protocol == proto && r.cidr_block == "0.0.0.0/0" &&
+      (proto == "icmp" ? r.icmp_type == -1 && r.icmp_code == -1 : r.from_port == 0 && r.to_port == 65535)])
+    ])
+    error_message = "Every NACL must let TCP, UDP and ICMP out to anywhere."
+  }
+
+  # Protocol -1 would also let through IP protocols nothing in the VPC uses (trivy AWS-0102).
+  assert {
+    condition     = !anytrue([for r in concat(flatten(values(local.nacl_inbound)), local.nacl_outbound) : contains(["-1", "all"], r.protocol)])
+    error_message = "No NACL entry may use protocol -1: name TCP, UDP and ICMP."
+  }
+
+  assert {
+    condition     = alltrue([for r in local.nacl_inbound.database : r.cidr_block == "10.0.0.0/16"])
+    error_message = "The database NACL must let in nothing from outside the VPC."
+  }
+
+  # Return traffic from the internet reaches the NAT gateway and the nodes on every port from 1024 except 3389, for TCP
+  # and UDP; the NLB listener takes TCP 443 in the public tier only.
+  assert {
+    condition = alltrue([for tier in ["public", "private"] : alltrue([for proto in ["tcp", "udp"] : alltrue([for p in [1024, 3388, 3390, 32768, 60999, 65535] :
+      anytrue([for r in local.nacl_inbound[tier] : r.rule_action == "allow" && r.cidr_block == "0.0.0.0/0" && r.protocol == proto && r.from_port <= p && p <= r.to_port])
+    ])])])
+    error_message = "The public and private NACLs must let in TCP and UDP return traffic on 1024-3388 and 3390-65535."
+  }
+
+  assert {
+    condition = (anytrue([for r in local.nacl_inbound.public : r.protocol == "tcp" && r.from_port == 443 && r.to_port == 443 && r.cidr_block == "0.0.0.0/0"]) &&
+    !anytrue([for r in local.nacl_inbound.private : r.cidr_block == "0.0.0.0/0" && r.from_port <= 443 && 443 <= r.to_port && r.protocol != "icmp"]))
+    error_message = "TCP 443 from the internet must reach the public subnets (NLB listener) and no other tier."
+  }
+
+  assert {
+    condition     = alltrue([for tier, rules in local.nacl_inbound : length(distinct([for r in rules : r.rule_number])) == length(rules)])
+    error_message = "Rule numbers must be unique within each NACL."
   }
 }
 
-# Values of the prd root: three zones, one NAT gateway each, flow log, and the S3 endpoint limited to the env's
-# buckets and the ECR layer bucket of the region.
+# Flow logs go straight to the bucket of the log archive account: Parquet, Hive-style prefixes, hourly partitions,
+# 60-second aggregation, every field an investigation reads; no CloudWatch log group or IAM role.
+run "flow_log" {
+  command = plan
+
+  assert {
+    condition     = module.vpc.vpc_flow_log_destination_type == "s3" && module.vpc.vpc_flow_log_destination_arn == "arn:aws:s3:::svp-flowlogs-111111111111-ap-southeast-1"
+    error_message = "The flow log must be delivered to the S3 bucket given in flow_log_bucket_arn."
+  }
+
+  assert {
+    condition     = module.vpc.vpc_flow_log_cloudwatch_iam_role_arn == ""
+    error_message = "The flow log must need no IAM role or CloudWatch log group."
+  }
+
+  assert {
+    condition = (local.flow_log.file_format == "parquet" && local.flow_log.hive_compatible_partitions &&
+    local.flow_log.per_hour_partition && local.flow_log.max_aggregation_interval == 60 && local.flow_log.traffic_type == "ALL")
+    error_message = "The flow log must hold all traffic in Parquet, with Hive-compatible hourly partitions and 60-second aggregation."
+  }
+
+  assert {
+    condition     = startswith(local.flow_log.log_format, "$${version} $${account-id} $${interface-id} $${srcaddr} $${dstaddr} $${srcport} $${dstport} $${protocol} $${packets} $${bytes} $${start} $${end} $${action} $${log-status} ")
+    error_message = "The flow log format must start with the default fields in their order."
+  }
+
+  assert {
+    condition = alltrue([for f in ["vpc-id", "subnet-id", "instance-id", "tcp-flags", "type", "pkt-srcaddr", "pkt-dstaddr", "az-id", "pkt-src-aws-service", "pkt-dst-aws-service", "flow-direction", "traffic-path"] :
+    contains(split(" ", local.flow_log.log_format), "$${${f}}")])
+    error_message = "The flow log format must add the fields an investigation reads."
+  }
+}
+
+# The interface endpoint of the GuardDuty agent: private DNS on, HTTPS from the VPC only, a policy that denies every
+# principal of another account.
+run "guardduty_data_endpoint" {
+  command = plan
+
+  assert {
+    condition = (aws_vpc_endpoint.guardduty_data.service_name == "com.amazonaws.ap-southeast-1.guardduty-data" &&
+      aws_vpc_endpoint.guardduty_data.vpc_endpoint_type == "Interface" &&
+    aws_vpc_endpoint.guardduty_data.private_dns_enabled)
+    error_message = "guardduty-data must be an interface endpoint with private DNS, so the agent resolves the service name to it."
+  }
+
+  assert {
+    condition = (aws_vpc_security_group_ingress_rule.guardduty_data_https.ip_protocol == "tcp" &&
+      aws_vpc_security_group_ingress_rule.guardduty_data_https.from_port == 443 &&
+      aws_vpc_security_group_ingress_rule.guardduty_data_https.to_port == 443 &&
+    aws_vpc_security_group_ingress_rule.guardduty_data_https.cidr_ipv4 == "10.0.0.0/16")
+    error_message = "The endpoint's security group must let in TCP 443 from the VPC range only."
+  }
+
+  assert {
+    condition = (jsondecode(aws_vpc_endpoint.guardduty_data.policy).Statement[0].Effect == "Allow" &&
+      jsondecode(aws_vpc_endpoint.guardduty_data.policy).Statement[1].Effect == "Deny" &&
+      jsondecode(aws_vpc_endpoint.guardduty_data.policy).Statement[1].Condition.StringNotEquals["aws:PrincipalAccount"] == "000000000000" &&
+    length(jsondecode(aws_vpc_endpoint.guardduty_data.policy).Statement) == 2)
+    error_message = "The endpoint policy must deny every principal outside the env's account."
+  }
+}
+
+# Values of the prd root: three zones, one NAT gateway each, and the S3 endpoint limited to the env's buckets and the
+# ECR layer bucket of the region.
 run "prd_values" {
   command = plan
 
@@ -138,7 +282,6 @@ run "prd_values" {
     cluster_name           = "svp-prd"
     az_count               = 3
     single_nat_gateway     = false
-    flow_log_enabled       = true
     s3_endpoint_restricted = true
     s3_endpoint_buckets    = ["svp-prd-uploads-222222222222-ap-southeast-1", "svp-prd-media-222222222222-ap-southeast-1"]
   }

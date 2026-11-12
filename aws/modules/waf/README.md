@@ -22,6 +22,22 @@ Mỗi luật và web ACL gửi metric CloudWatch và giữ request mẫu (xem �
 nằm trong gói ($0); web ACL còn lại sau khi gói huỷ thì tính pay-as-you-go theo tháng mỗi ACL, mỗi luật và theo số request, nên script quét
 sót bắt nó. Gói còn hiệu lực thì AWS không cho gỡ hay thay web ACL: đổi `name` (thay web ACL) phải huỷ gói trước.
 
+## Log
+
+`aws_wafv2_web_acl_logging_configuration` ghi **mọi request** (không logging filter) vào bucket `log_bucket_arn`: bucket log WAF
+`aws-waf-logs-svp-<log>-us-east-1` của account `svp-log-archive`
+([ADR-0060](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0060-org-detection-logging.md) §7, §9). WAF chỉ giao log tới
+bucket tên bắt đầu `aws-waf-logs-`, nên biến kiểm ARN S3 với tiền tố đó. Header `authorization` và `cookie` bị che (`SingleHeader`): log
+giữ IP, URI, header khác của người xem, không giữ credential hay cookie phiên.
+
+- **Bucket ở account khác:** module chỉ nhận ARN. Bucket policy của root `aws/log-archive` cho `delivery.logs.amazonaws.com` ghi với điều
+  kiện `aws:SourceOrgID` của org, và key `alias/svp-log-archive` ở `us-east-1` cho dịch vụ đó `kms:GenerateDataKey*`; account của web ACL
+  không cần quyền đọc hay ghi policy của bucket. Bucket chưa có (Log Archive chưa áp) thì `apply` của root env lỗi ở tài nguyên này.
+- **Gói flat-rate Free:** gói không chặn log WAF; phí giao log tới S3 nằm ngoài gói (vended log của CloudWatch, `us-east-1`), log gửi mỗi 5
+  phút.
+- **Gỡ:** destroy xoá cấu hình log trước web ACL (tham chiếu ARN của nó); object log đã giao ở lại bucket Log Archive theo retention của
+  bucket đó.
+
 <!-- markdownlint-disable MD033 -->
 <!-- BEGIN_TF_DOCS -->
 ## Requirements
@@ -42,11 +58,13 @@ sót bắt nó. Gói còn hiệu lực thì AWS không cho gỡ hay thay web ACL
 | Name | Type |
 | ---- | ---- |
 | [aws_wafv2_web_acl.this](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/wafv2_web_acl) | resource |
+| [aws_wafv2_web_acl_logging_configuration.this](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/wafv2_web_acl_logging_configuration) | resource |
 
 ## Inputs
 
 | Name | Description | Type | Default | Required |
 | ---- | ----------- | ---- | ------- | :------: |
+| log\_bucket\_arn | ARN of the S3 bucket that receives the web ACL's logs: the WAF log bucket of the Log Archive account, arn:aws:s3:::aws-waf-logs-svp-<log account>-us-east-1. | `string` | n/a | yes |
 | name | Name of the web ACL and prefix of the CloudWatch metric names of its rules, e.g. svp-prd-media. | `string` | n/a | yes |
 | rate\_limit | Requests one client IP address may send within 5 minutes before the web ACL blocks it, until its rate falls back under the limit. A viewer of HLS fetches a segment every few seconds, a few hundred requests in 5 minutes; the default leaves room for several viewers behind one address. | `number` | `2000` | no |
 

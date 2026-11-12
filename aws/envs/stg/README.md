@@ -1,6 +1,6 @@
 # `aws/envs/stg`: cấu hình gốc của env stg
 
-Tầng platform của stg trên AWS (ADR-0034 §2, ADR-0024 §6A, ADR-0048, ADR-0053, ADR-0055…0058): ghép các module `network`, `eks`, `rds`,
+Tầng platform của stg trên AWS (ADR-0034 §2, ADR-0024 §6A, ADR-0048, ADR-0053, ADR-0055…0058, ADR-0060): ghép các module `network`, `eks`, `rds`,
 `msk`, `elasticache`, `alarms`, `media`, `waf`, `ssm-bastion`, `external-secrets`, thêm role IAM và Pod Identity association cho
 `svp/video-service`, `svp/media-worker`, xuất output `cluster_values` theo hợp đồng `cluster.*` và các output của cluster cho root bootstrap
 `aws/gitops/stg`. Ứng dụng trong cluster không ở đây: Argo CD triển khai từ `svp-gitops`.
@@ -12,11 +12,14 @@ Tầng platform của stg trên AWS (ADR-0034 §2, ADR-0024 §6A, ADR-0048, ADR-
 | Account | `svp-stg`, account thành viên của org (OU `Workloads`), không phải management account |
 | Profile SSO | `anhnv-stg` (permission set `SvpAdmin`), người học tự tạo bằng `aws configure sso` |
 | Biến account | `SVP_AWS_STG_ACCOUNT_ID`, export trong terminal của buổi; mọi lệnh đặt `TF_VAR_account_id` từ nó (`allowed_account_ids`) |
+| Biến account Log Archive | `SVP_AWS_LOG_ACCOUNT_ID` (output `log_archive_account_id` của `aws/org`), export cùng terminal; mọi lệnh đặt `TF_VAR_log_archive_account_id` từ nó (tên bucket flow log và log WAF, mục "Log và phát hiện") |
 | Backend | `../../backend-stg.hcl` (bucket `svp-tfstate-<account stg>-<region>`, KMS key `alias/svp-tfstate`, lock file S3), sinh từ output `backend_hcl` của `aws/accounts/stg`, dạng ở `backend.hcl.example` |
 | Key của state | `aws/stg/terraform.tfstate`, truyền bằng `-backend-config` thứ hai lúc `init`; khối `backend "s3" {}` trong `versions.tf` trống |
 | Zone | `stg.aws.<domain>` của account stg (output `zone_id` của `aws/accounts/stg`), uỷ quyền từ zone `aws.<domain>` của account prd (bản ghi `NS` do `aws/accounts/prd` tạo) |
 
-Root chạy được khi baseline `aws/accounts/stg` đã apply và uỷ quyền DNS đã xong ([`aws/accounts/README.md`](../../accounts/README.md)).
+Root chạy được khi baseline `aws/accounts/stg` đã apply, uỷ quyền DNS đã xong
+([`aws/accounts/README.md`](../../accounts/README.md)) và root `aws/log-archive` đã apply (bucket nhận flow log và log WAF,
+[`aws/log-archive/README.md`](../../log-archive/README.md)).
 
 ## Cái gì khác giữa các env
 
@@ -36,6 +39,7 @@ Cỡ, mức bảo vệ, log và mã hoá nằm ở `<env>.tfvars`:
 | `stg.auto.tfvars` | **không** (git bỏ qua) | giá trị cá nhân, chép từ `example.auto.tfvars.example` |
 | `../../backend-stg.hcl` | **không** | phần chung của backend trong account stg |
 | `TF_VAR_account_id` | biến môi trường, đặt ngay trong lệnh | account được phép đổi (`allowed_account_ids`) |
+| `TF_VAR_log_archive_account_id` | biến môi trường, đặt ngay trong lệnh | account `svp-log-archive`, chủ bucket flow log và log WAF |
 
 **Vì sao `stg.tfvars` mà không `terraform.tfvars`:** repo bỏ qua mọi `terraform.tfvars` và `*.auto.tfvars` (hai tên Terraform tự nạp) vì
 chúng là chỗ giá trị cá nhân hay nằm. Tệp cỡ của env cần commit nên mang tên khác và phải truyền bằng `-var-file=stg.tfvars` ở **mọi**
@@ -47,7 +51,8 @@ tự dòng để đọc cạnh nhau. Thành phần nào phải giống prd, đư
 định: bảng của [`environments.md`](https://github.com/anhnvcoder/svp-backend/blob/main/docs/explanation/environments.md) ở repo code. Tóm tắt: stg giữ cùng dịch vụ, version,
 cấu hình, xác thực, mã hoá (KMS key cho Secret của EKS, RDS, MSK, SNS), loại log (năm loại log control plane, flow log, export log RDS,
 Database Insights, enhanced monitoring, broker log MSK, slow-log Valkey, access log media), cùng bộ alarm và cùng đường tới API (tunnel SSM);
-stg giảm số AZ (2), NAT (một), lớp và số lượng (RDS một AZ, MSK RF 2, Valkey một node), retention (1 ngày) và bảo vệ xoá.
+stg giảm số AZ (2), NAT (một), lớp và số lượng (RDS một AZ, MSK RF 2, Valkey một node), retention của log CloudWatch (1 ngày) và bảo vệ
+xoá. Flow log và log WAF nằm ở Log Archive, retention theo mục [Log và phát hiện](#log-và-phát-hiện).
 
 Số broker MSK là `az_count` (một broker mỗi AZ); phiên bản Kafka (`4.1.x.kraft`), Valkey (`9.1`) và EBS khởi đầu mỗi broker lấy mặc định
 của module, như ADR-0053 §2, §7; trần dung lượng broker (`msk_broker_volume_max_size`) là của env. Nhóm node hệ thống (loại, min = desired =
@@ -87,8 +92,10 @@ Dựng:
 ```sh
 cp example.auto.tfvars.example stg.auto.tfvars          # rồi sửa bốn giá trị
 AWS_PROFILE=anhnv-stg terraform init -reconfigure -backend-config=../../backend-stg.hcl -backend-config=key=aws/stg/terraform.tfstate
-AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform plan -var-file=stg.tfvars -out=stg.tfplan
-AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform apply stg.tfplan
+AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
+  terraform plan -var-file=stg.tfvars -out=stg.tfplan
+AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
+  terraform apply stg.tfplan
 ```
 
 `-reconfigure` bỏ cấu hình backend cũ trong `.terraform` (kể cả của bucket management trước đây) và không migrate state.
@@ -115,11 +122,36 @@ AWS_PROFILE=anhnv-stg kubectl --context svp-stg get nodes
 Root `aws/gitops/stg` tới API qua cùng tunnel (`api_server_url` của `aws/gitops/stg/stg.tfvars`, TLS server name tính từ `cluster_endpoint` của
 state root này).
 
-Kết thúc buổi: `aws/scripts/pre-destroy.sh stg` (tunnel mở; nó xoá cả NodePool, EC2NodeClass và chờ hết node của Karpenter), destroy
-`aws/gitops/stg`, rồi
-`AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform destroy -var-file=stg.tfvars`, rồi lệnh quét tài nguyên sót.
-Instance, launch template và instance profile do Karpenter tạo nằm ngoài state: `pre-destroy.sh` gỡ chúng khi controller còn chạy,
-`sweep.sh stg` tìm phần sót.
+Kết thúc buổi: `aws/scripts/pre-destroy.sh stg` (tunnel mở; nó xoá cả NodePool, EC2NodeClass và chờ hết node của
+Karpenter), destroy `aws/gitops/stg`, rồi root này, rồi lệnh quét tài nguyên sót:
+
+```sh
+AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
+  terraform destroy -var-file=stg.tfvars
+```
+
+Instance, launch template và instance profile do Karpenter tạo nằm ngoài state: `pre-destroy.sh` gỡ chúng khi controller
+còn chạy, `sweep.sh stg` tìm phần sót. `destroy` gỡ cả plan Malware Protection (GuardDuty gỡ theo rule EventBridge
+`DO-NOT-DELETE-AmazonGuardDutyMalwareProtectionS3*` nó quản), endpoint `guardduty-data` và cấu hình log của web ACL;
+`sweep.sh stg` liệt kê plan và endpoint còn sót của một `destroy` dở.
+
+## Log và phát hiện
+
+Log của env không nằm trong account stg mà trong bucket của account `svp-log-archive`. Tên bucket suy trong `main.tf`
+(`local.log_archive_buckets`) theo khuôn của root `aws/log-archive`; retention do lifecycle của bucket đó giữ, không biến
+nào ở `stg.tfvars` ([ADR-0060](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0060-org-detection-logging.md)
+§7, §9):
+
+| Log | Đích | Ghi bởi |
+| --- | --- | --- |
+| Flow log của VPC (mọi lưu lượng, Parquet) | `svp-flowlogs-<account log>-<region>` | module `network`, giao thẳng vào S3, không role IAM |
+| Log web ACL (che header `authorization`, `cookie`) | `aws-waf-logs-svp-<account log>-us-east-1` | module `waf` (`waf.tf`) |
+
+GuardDuty bật ở mức tổ chức (root `aws/security`). Root này thêm phần GuardDuty không tự quản:
+
+- add-on `aws-guardduty-agent` của module `eks` (Runtime Monitoring), cài sau interface endpoint `guardduty-data` của
+  module `network` (output `guardduty_data_endpoint_id`), để agent có đường gửi ngay từ đầu;
+- plan Malware Protection for S3 của module `media` trên bucket `uploads`.
 
 ## Output
 

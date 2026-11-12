@@ -14,8 +14,8 @@ nguồn ở dòng đầu, cộng các thay đổi ở mục "Khác bản gốc";
 | --- | --- |
 | [`scripts/drawio_lib.py`](scripts/drawio_lib.py) | Thư viện vẽ: `Page` (group / icon / flat / k8s / badge / text / box / edge / table), bảng màu và style aws4, `write()`, `export()` (PDF/PNG qua CLI draw.io). Từ chối ngay mọi toạ độ lệch lưới 40px. |
 | [`scripts/check_diagram.py`](scripts/check_diagram.py) | Cổng hình học cho mọi file `.drawio` (11 phép, liệt kê trong docstring), exit 1 khi có lỗi; `--counts` in số mỗi loại (icon, AZ, subnet) mỗi trang, `kind_counts()` cho spec import. |
-| [`scripts/build_svp.py`](scripts/build_svp.py) | Spec của [`docs/diagrams/svp-aws.drawio`](../../../docs/diagrams/svp-aws.drawio): trang `stg`, `prd`, `flows`. |
-| [`scripts/check_svp_counts.py`](scripts/check_svp_counts.py) | Đếm icon mỗi trang env so với cỡ của Terraform (AZ, subnet, NAT, node group, RDS, broker MSK, node ElastiCache và mọi loại khác), offline. |
+| [`scripts/build_svp.py`](scripts/build_svp.py) | Spec của [`docs/diagrams/svp-aws.drawio`](../../../docs/diagrams/svp-aws.drawio): trang `stg`, `prd`, `org`, `flows`. |
+| [`scripts/check_svp_counts.py`](scripts/check_svp_counts.py) | Đếm icon mỗi trang env so với cỡ của Terraform (AZ, subnet, NAT, node group, RDS, broker MSK, node ElastiCache và mọi loại khác) và trang `org` so với `org_expected()` (năm account, dịch vụ mỗi account), offline. |
 
 ## Vòng làm
 
@@ -29,7 +29,7 @@ python3 .claude/skills/aws-drawio-diagram/scripts/build_svp.py --pdf --docs   # 
 ```
 
 Rồi mở PNG và nhìn: checker đo lệch lưới và đường gãy, nhưng đường đi qua nhãn hay qua icon chỉ mắt thấy. PNG trong `/tmp` để xem, không
-commit; PDF commit cạnh `.drawio`; PNG `--docs` (`svp-aws-<trang>.png`) commit vì `docs/architecture.md` của repo code nhúng nó.
+commit; PDF commit cạnh `.drawio`; PNG `--docs` (`svp-aws-<trang>.png`) commit vì tài liệu của repo code nhúng nó (`svp-aws-org.png` cho cấu trúc org).
 
 `export()` tìm CLI draw.io theo thứ tự: biến `DRAWIO`, `drawio` trên `PATH` (cask Homebrew, gói Linux), rồi app
 `/Applications/draw.io.app/Contents/MacOS/draw.io`; không có thì lỗi nêu ba chỗ. Wrapper của Homebrew còn trên `PATH` sau khi app bị gỡ
@@ -150,6 +150,20 @@ inventory thì đặt `cid` của icon là id tài nguyên và `cid` của box s
     của AZ dưới), không trên chính biên. Nhãn của cạnh nằm giữa đường đi; đường gãy mà điểm giữa rơi trên viền container hay ra mép trang
     thì dời nhãn bằng `edge(label_pos=…)` (-1 nguồn … 1 đích).
 
+### Trang `org`
+
+14b. **Trang cấu trúc tổ chức, không có VPC, AZ, subnet.** Container ngoài cùng là root của Organization; trong đó hộp chính sách gắn ở root
+    (tên và loại đọc từ `aws/modules/org-policies/main.tf` bởi `org_policies()`, không gõ lại), ba cột: account quản lý, OU `Security`
+    (account `svp-log-archive`, `svp-security`), OU `Workloads` (OU `Prod` với `svp-prd`, OU `NonProd` với `svp-stg`). OU là group aws4
+    nét liền không nền (nét đứt không nền là kiểu AZ của checker); account là group `ACCOUNT`. Policy gắn ở OU ghi dưới OU đó.
+    Luồng log (xanh) từ mọi account vào bucket của `svp-log-archive`, mỗi loại log một bucket trong một cột để nguồn từ hai phía tới được;
+    luồng phát hiện (đỏ): GuardDuty, Access Analyzer → Security Hub → bus `svp-security-events` ← rule `svp-security-*` của mọi account →
+    SNS → email. Đường từ nguồn ngoài vào đi theo hành lang dọc (waypoint chung x) để không xuyên icon; chỗ hai đường cắt nhau chấp nhận.
+    Số icon mỗi loại ở `org_expected()`, `check_svp_counts.py` so với file.
+15b. **Trang env vẽ phần account `svp-log-archive` chỉ cho bucket mà env ghi vào** (flow log, log WAF), dưới account của env, trong Cloud;
+    đường WAF đi hành lang trái account, đường VPC đi hành lang giữa Region và Account bên phải. Endpoint `guardduty-data` (interface) cạnh
+    gateway endpoint S3, trong VPC ngoài các subnet; cạnh đứt từ box cluster (agent add-on của GuardDuty).
+
 ## Bố cục chuẩn (trang env của `svp-aws`)
 
 ```text
@@ -174,7 +188,8 @@ Thêm AZ hay dịch vụ: giữ các hàng, cột ở trên, chỉ thêm icon �
 ## Khác bản gốc (để chuyển ngược)
 
 - `drawio_lib.export()`: tìm CLI qua `drawio_cli()` (`DRAWIO`, `PATH`, app macOS; lỗi rõ khi không có), xoá file đích trước khi export,
-  lỗi nêu CLI và exit code; PNG lớn hơn `PNG_MAX_PIXELS` xuất lại ở scale lớn nhất vừa ngưỡng (`png_size()` đọc cỡ từ IHDR).
+  lỗi nêu CLI và exit code; PNG lớn hơn `PNG_MAX_PIXELS` xuất lại ở scale lớn nhất vừa ngưỡng (`png_size()` đọc cỡ từ IHDR), PNG có hơn
+  `PNG_MAX_BLANK_ROWS` hàng trắng ở đáy (`blank_tail()`) xuất lại ở scale nhỏ hơn 5%.
 - `drawio_lib`: `Page.k8s(label, kind, x, y, size=40)` vẽ icon của thư viện Kubernetes (`mxgraph.kubernetes.icon2`, `kubernetesLabel=1`,
   chữ 11 như icon aws4); hằng `K8S` (xanh của icon, viền khung namespace); `Page.edge(label_pos=…)` dời nhãn dọc đường (thuộc tính `x` của
   `mxGeometry` của cạnh); nhóm `ACCOUNT` (`group_account`), `REGION` (`group_region`, nét đứt) theo palette AWS / Groups của draw.io,
@@ -207,7 +222,8 @@ Thêm AZ hay dịch vụ: giữ các hàng, cột ở trên, chỉ thêm icon �
   của cạnh nằm giữa cạnh: cạnh cắt viền container ở giữa thì nhãn đè viền (dời icon đầu kia hay bỏ nhãn, ghi ý vào khung đích).
 - Nhúng vào Markdown: xuất PNG scale 2 (`export(out, 'png', ..., scale=2)`, cờ `--docs` của `build_svp.py`), không SVG: draw.io xuất nhãn
   thành `foreignObject` kèm chữ thay thế "Text is not SVG", nhiều trình xem (Safari, Quick Look, vài renderer Markdown) hiện chữ hỏng.
-- PNG lớn bị cắt mà không báo lỗi: CLI draw.io (32.6) vẽ trang PNG trong cửa sổ offscreen ở device scale 2 và chỉ vẽ 2^27 pixel thiết bị
-  đầu, tức 2^25 pixel của ảnh (`PNG_MAX_PIXELS`); ảnh lớn hơn vẫn đủ cỡ nhưng phần dưới trắng (trang prd ở scale 2, 6963×5043, chỉ có
-  nội dung tới hàng 3789). Đo: 6789×4917 đủ, 6807×4930 cắt. `export()` đọc cỡ PNG vừa xuất và xuất lại ở scale lớn nhất vừa ngưỡng (in
-  dòng báo ra stderr). Sau mỗi lần xuất, kiểm hàng có nội dung cuối gần đáy ảnh, không chỉ cỡ ảnh.
+- PNG lớn bị cắt mà không báo lỗi: CLI draw.io (32.6) ngừng vẽ trang PNG ở khoảng 33,38 triệu pixel của ảnh, hơi dưới 2^25; ảnh lớn hơn vẫn
+  đủ cỡ nhưng phần dưới trắng, và phần trắng lớn hơn nhiều phần vượt ngưỡng. Đo: 6789×4917 (33.381.513 px) đủ; 6441×5183 (33.383.703 px)
+  chỉ có nội dung tới hàng 3915. `export()` đọc cỡ PNG vừa xuất và xuất lại ở scale lớn nhất dưới `PNG_MAX_PIXELS` (33 triệu, chừa biên);
+  rồi đếm hàng trắng ở đáy từ byte filter (`blank_tail()`: hàng filter Up toàn số 0 là hàng bằng hàng trên) và hạ scale khi quá
+  `PNG_MAX_BLANK_ROWS` (ảnh đủ có viền trắng khoảng 20 hàng). Cả hai in dòng báo ra stderr. Sau mỗi lần xuất vẫn mở ảnh xem đáy.

@@ -7,5 +7,6 @@ module "waf" {
     aws = aws.us_east_1
   }
 
-  name = "${local.name}-media"
+  name           = "${local.name}-media"
+  log_bucket_arn = "arn:aws:s3:::${local.log_archive_buckets.waf}"
 }

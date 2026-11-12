@@ -12,3 +12,28 @@ output "prd_account_id" {
   description = "Id of the member account svp-prd, the value of SVP_AWS_PRD_ACCOUNT_ID."
   value       = aws_organizations_account.member["prd"].id
 }
+
+output "log_archive_account_id" {
+  description = "Id of the member account svp-log-archive, the value of SVP_AWS_LOG_ACCOUNT_ID."
+  value       = aws_organizations_account.log_archive.id
+}
+
+output "security_account_id" {
+  description = "Id of the member account svp-security, the value of SVP_AWS_SECURITY_ACCOUNT_ID."
+  value       = aws_organizations_account.security.id
+}
+
+output "root_id" {
+  description = "Id of the root of the organization (r-...), where every policy but the production guardrails is attached."
+  value       = local.root_id
+}
+
+output "organizational_unit_ids" {
+  description = "Id of each organizational unit of this root, by name (Security, Workloads, Prod, NonProd)."
+  value = {
+    Security  = aws_organizations_organizational_unit.security.id
+    Workloads = aws_organizations_organizational_unit.workloads.id
+    Prod      = aws_organizations_organizational_unit.prod.id
+    NonProd   = aws_organizations_organizational_unit.nonprod.id
+  }
+}

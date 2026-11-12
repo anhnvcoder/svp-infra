@@ -1,15 +1,12 @@
 # Size and protection of prd: the production level of every module, kept for the whole session and protected against
-# deletion. Committed; it holds no personal value. Every plan and apply of this root passes it:
-#   AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform plan -var-file=prd.tfvars
-# and the teardown at the end of a session adds teardown.tfvars (README.md).
+# deletion. Committed; it holds no personal value. Every plan and apply of this root passes it, and the teardown at the
+# end of a session adds teardown.tfvars; the commands are in README.md.
 
-# network: three zones, one NAT gateway per zone, flow logs kept 30 days. The S3 gateway endpoint lets through only the
-# env's buckets, the image layer bucket of Amazon ECR in the region (both added by the root and the module) and the
-# bucket registry.k8s.io redirects clients inside AWS to in this region.
+# network: three zones, one NAT gateway per zone; flow logs go to the log archive account, which keeps them. The S3
+# gateway endpoint lets through only the env's buckets, the image layer bucket of Amazon ECR in the region (both added
+# by the root and the module) and the bucket registry.k8s.io redirects clients inside AWS to in this region.
 az_count                  = 3
 single_nat_gateway        = false
-flow_log_enabled          = true
-flow_log_retention_days   = 30
 s3_endpoint_restricted    = true
 s3_endpoint_extra_buckets = ["prod-registry-k8s-io-ap-southeast-1"]
 

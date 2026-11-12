@@ -4,19 +4,35 @@ SNS topic mà mọi CloudWatch alarm của một env gửi `alarm_actions` và `
 Thiết kế: [ADR-0058](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0058-managed-data-operations.md) §1. Module giống nhau ở mọi
 env; alarm nằm ở module của từng dịch vụ (`rds`, `msk`, `elasticache`), nhận `topic_arn` qua biến `alarm_topic_arn`.
 
+Root `aws/security` gọi module với `name = "svp-security"` và `publisher_services = ["events.amazonaws.com"]`: topic `svp-security-alarms`
+nhận sự kiện bảo mật của org từ rule EventBridge
+([ADR-0060](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0060-org-detection-logging.md) §10).
+
 Tạo:
 
-- Một KMS key customer managed (symmetric, xoay vòng bật, deletion window 7 ngày, alias `alias/<name>-alarms`). CloudWatch không gửi được vào
-  topic mã hoá bằng key AWS quản lý của SNS (`alias/aws/sns`), vì key policy của key đó không sửa được để cho principal dịch vụ CloudWatch dùng
+- Một KMS key customer managed (symmetric, xoay vòng bật, deletion window 7 ngày, alias `alias/<name>-alarms`). CloudWatch và EventBridge không
+  gửi được vào topic mã hoá bằng key AWS quản lý của SNS (`alias/aws/sns`), vì key policy của key đó không sửa được để cho principal dịch vụ dùng
   ([Encrypting SNS topics](https://docs.aws.amazon.com/sns/latest/dg/sns-key-management.html#compatibility-with-aws-services)). Key policy gồm
-  statement mặc định của account (IAM của account quyết định ai khác dùng key) và statement cho `cloudwatch.amazonaws.com`: chỉ `kms:Decrypt`,
-  `kms:GenerateDataKey*`, điều kiện `aws:SourceAccount` là account và `aws:SourceArn` khớp `arn:aws:cloudwatch:<region>:<account>:alarm:*`.
+  statement mặc định của account (IAM của account quyết định ai khác dùng key) và một statement cho mỗi principal của `publisher_services`: chỉ
+  `kms:Decrypt`, `kms:GenerateDataKey*`; điều kiện nguồn trên key theo dịch vụ (bảng dưới).
 - SNS topic `<name>-alarms`, `kms_master_key_id` là alias của key trên.
-- Topic policy thay policy mặc định: chỉ `cloudwatch.amazonaws.com` được `sns:Publish`, cùng hai điều kiện nguồn như key policy
-  ([confused deputy của CloudWatch](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Notify_Users_Alarm_Changes.html#SNS_Confused_Deputy));
-  mọi principal bị từ chối `sns:Publish` khi `aws:SecureTransport` là `false`. Principal của account vẫn quản lý và gửi vào topic bằng IAM
-  policy của mình.
+- Topic policy thay policy mặc định: chỉ principal của `publisher_services` được `sns:Publish`, mỗi principal một statement với điều kiện
+  `aws:SourceAccount` là account và `aws:SourceArn` khớp tài nguyên của chính dịch vụ đó (bảng dưới); mọi principal bị từ chối `sns:Publish`
+  khi `aws:SecureTransport` là `false`. Principal của account vẫn quản lý và gửi vào topic bằng IAM policy của mình.
 - Subscription `email` tới `alarm_email`.
+
+Điều kiện confused deputy theo dịch vụ:
+
+| `publisher_services` | Gửi từ | `aws:SourceArn` (`ArnLike`) | Key policy | Nguồn |
+| --- | --- | --- | --- | --- |
+| `cloudwatch.amazonaws.com` (mặc định) | CloudWatch alarm | `arn:aws:cloudwatch:<region>:<account>:alarm:*` | `aws:SourceAccount`, `aws:SourceArn` như topic policy | [CloudWatch](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Notify_Users_Alarm_Changes.html#SNS_Confused_Deputy) |
+| `events.amazonaws.com` | Rule EventBridge, trên bus mặc định hay bus riêng | `arn:aws:events:<region>:<account>:rule/*` | không điều kiện nguồn | [EventBridge](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-use-resource-based.html#eb-sns-permissions), [SNS](https://docs.aws.amazon.com/sns/latest/dg/sns-key-management.html#compatibility-with-aws-services) |
+
+SNS không hỗ trợ `aws:SourceAccount`, `aws:SourceArn`, `aws:SourceOrgID` trong key policy khi EventBridge gửi vào topic mã hoá: có chúng thì KMS
+từ chối cấp data key và cảnh báo không tới. Với EventBridge, chỉ topic policy giới hạn rule của account và region nào gửi được vào topic.
+
+Mặc định chỉ CloudWatch: topic của hai env giữ đúng statement id (`CloudWatchAlarmsUseKey`, `CloudWatchAlarmsPublish`) và mô tả key, nên plan
+của root env không đổi.
 
 ## Xác nhận email
 
@@ -67,7 +83,8 @@ Tạo:
 | Name | Description | Type | Default | Required |
 | ---- | ----------- | ---- | ------- | :------: |
 | alarm\_email | Email address subscribed to the topic; SNS sends it a confirmation link and delivers nothing until the link is opened. | `string` | n/a | yes |
-| name | Name of the env (svp-stg, svp-prd): prefix of the SNS topic <name>-alarms and of the KMS alias alias/<name>-alarms. | `string` | n/a | yes |
+| name | Name of the env or stack (svp-stg, svp-prd, svp-security): prefix of the SNS topic <name>-alarms and of the KMS alias alias/<name>-alarms. | `string` | n/a | yes |
+| publisher\_services | Service principals that publish to the topic and use its key, each limited to its own resources of this account and region: cloudwatch.amazonaws.com (alarms), events.amazonaws.com (EventBridge rules). | `list(string)` | <pre>[<br/>  "cloudwatch.amazonaws.com"<br/>]</pre> | no |
 
 ## Outputs
 

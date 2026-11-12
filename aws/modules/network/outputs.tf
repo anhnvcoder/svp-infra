@@ -42,3 +42,8 @@ output "nat_public_ips" {
   description = "Public IPv4 addresses of the NAT gateways: every connection from the nodes and pods to the internet leaves from one of them."
   value       = module.vpc.nat_public_ips
 }
+
+output "guardduty_data_endpoint_id" {
+  description = "ID of the interface endpoint guardduty-data the GuardDuty agent of the EKS nodes reports to; the eks module installs the agent only once it exists."
+  value       = aws_vpc_endpoint.guardduty_data.id
+}

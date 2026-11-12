@@ -3,8 +3,6 @@ variable "name" {
   type        = string
 
   validation {
-    # 24 characters at most: with the flow log on, the vpc module names its IAM role with name_prefix
-    # "<name>-vpc-flow-log-" (14 characters), and the provider caps a role name_prefix at 38.
     condition     = can(regex("^[a-z][a-z0-9-]{1,22}[a-z0-9]$", var.name))
     error_message = "name must be 3 to 24 lowercase letters, digits or dashes, starting with a letter."
   }
@@ -48,20 +46,13 @@ variable "cluster_name" {
   }
 }
 
-variable "flow_log_enabled" {
-  description = "Send VPC flow logs (accepted and rejected traffic) to a CloudWatch log group that this module creates, with the IAM role that writes it. Off by default: ingestion is billed per GB."
-  type        = bool
-  default     = false
-}
-
-variable "flow_log_retention_days" {
-  description = "Days CloudWatch keeps the flow logs when flow_log_enabled is true."
-  type        = number
-  default     = 1
+variable "flow_log_bucket_arn" {
+  description = "ARN of the S3 bucket of the log archive account that receives the VPC flow logs (accepted and rejected traffic), e.g. arn:aws:s3:::svp-flowlogs-000000000000-ap-southeast-1. The bucket ARN alone, no prefix: the logs land under AWSLogs/aws-account-id=<account>/, which the bucket's retention rules match."
+  type        = string
 
   validation {
-    condition     = contains([1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1096, 1827, 2192, 2557, 2922, 3288, 3653], var.flow_log_retention_days)
-    error_message = "flow_log_retention_days must be a retention CloudWatch Logs accepts: 1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1096, 1827, 2192, 2557, 2922, 3288 or 3653."
+    condition     = can(regex("^arn:aws[a-z-]*:s3:::[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$", var.flow_log_bucket_arn))
+    error_message = "flow_log_bucket_arn must be the ARN of an S3 bucket with no prefix, e.g. arn:aws:s3:::svp-flowlogs-000000000000-ap-southeast-1."
   }
 }
 

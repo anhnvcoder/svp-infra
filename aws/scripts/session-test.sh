@@ -119,6 +119,8 @@ case "$1 $2" in
     {
       printf '{"AliasName":"alias/aws/ebs","TargetKeyId":"key-aws"}\n{"AliasName":"alias/svp-tfstate","TargetKeyId":"key-state"}\n'
       [ "$left" != kms ] || printf '{"AliasName":"alias/svp-prd-eks-secrets","TargetKeyId":"key-eks"}\n'
+      # The EBS key of aws/baseline, in the accounts that run EC2 alone.
+      [ -z "$zone" ] || printf '{"AliasName":"alias/svp-ebs","TargetKeyId":"key-ebs"}\n'
       case $left in msk-kms | msk-alias) printf '{"AliasName":"alias/svp-prd-msk-scram","TargetKeyId":"key-msk"}\n' ;; esac
     } | jq -s '{Aliases: .}' ;;
   "kms describe-key")
@@ -133,6 +135,7 @@ case "$1 $2" in
     fi ;;
   "kms list-resource-tags")
     if [ "$4" = key-state ]; then echo "{\"Tags\":[{\"TagKey\":\"Project\",\"TagValue\":\"svp\"},{\"TagKey\":\"Stack\",\"TagValue\":\"$stack\"}]}"
+    elif [ "$4" = key-ebs ]; then echo '{"Tags":[{"TagKey":"Project","TagValue":"svp"},{"TagKey":"Stack","TagValue":"security-baseline"}]}'
     else echo '{"Tags":[{"TagKey":"Project","TagValue":"svp"},{"TagKey":"Stack","TagValue":"prd"}]}'; fi ;;
   "ec2 describe-volumes")
     if [ "$left" = volume ] && [[ "$*" == *tag:Project* ]]; then
@@ -167,8 +170,13 @@ case "$1 $2" in
     } | jq -s '{InstanceProfiles: .}' ;;
   "sqs list-queues")
     if [ "$left" = karpenter ]; then echo "{\"QueueUrls\":[\"https://sqs.ap-southeast-1.amazonaws.com/$account/svp-stg-karpenter\"]}"; else echo '{}'; fi ;;
+  # The rule GuardDuty manages for the Malware Protection plan of uploads is there whatever is left: it is GuardDuty's.
   "events list-rules")
-    if [ "$left" = karpenter ]; then echo '{"Rules":[{"Name":"KarpenterSpotInterrupt-2026"}]}'; else echo '{"Rules":[]}'; fi ;;
+    prefix=$(sed -n 's/.* --name-prefix \([^ ]*\) .*/\1/p' <<<" $* ")
+    {
+      echo '{"Name":"DO-NOT-DELETE-AmazonGuardDutyMalwareProtectionS3ManagedRule-fake"}'
+      [ "$left" != karpenter ] || echo '{"Name":"KarpenterSpotInterrupt-2026"}'
+    } | jq -s --arg p "$prefix" '{Rules: map(select(.Name | startswith($p)))}' ;;
   "events list-targets-by-rule") echo '{"Targets":[{"Id":"KarpenterInterruptionQueueTarget"}]}' ;;
   # FAKE_LEFTOVER=alarm: an alarm of the lab and the target tracking alarm of MSK's storage, beside another one's.
   "cloudwatch describe-alarms")
@@ -183,6 +191,26 @@ case "$1 $2" in
   "ec2 describe-vpcs") echo '{"Vpcs":[]}' ;;
   "ec2 describe-nat-gateways") echo '{"NatGateways":[]}' ;;
   "ec2 describe-addresses") echo '{"Addresses":[]}' ;;
+  # FAKE_LEFTOVER=endpoint: the interface endpoint guardduty-data, and a deleted one AWS still lists for a while.
+  "ec2 describe-vpc-endpoints")
+    if [ "$left" = endpoint ] && [[ "$*" == *tag:Project* ]]; then
+      echo '{"VpcEndpoints":[{"VpcEndpointId":"vpce-0fake","VpcEndpointType":"Interface","ServiceName":"com.amazonaws.ap-southeast-1.guardduty-data","State":"available"},{"VpcEndpointId":"vpce-0gone","VpcEndpointType":"Gateway","ServiceName":"com.amazonaws.ap-southeast-1.s3","State":"deleted"}]}'
+    else
+      echo '{"VpcEndpoints":[]}'
+    fi ;;
+  # A plan of another project's bucket always; FAKE_LEFTOVER=malware: the plan of the env's uploads bucket.
+  "guardduty list-malware-protection-plans")
+    {
+      echo '{"MalwareProtectionPlanId":"plan-other"}'
+      [ "$left" != malware ] || echo '{"MalwareProtectionPlanId":"plan-svp"}'
+    } | jq -s '{MalwareProtectionPlans: .}' ;;
+  "guardduty get-malware-protection-plan")
+    case $4 in
+      plan-svp) b=svp-stg-uploads-$account-ap-southeast-1 t='{"Project":"svp","Stack":"stg"}' ;;
+      *) b=someone-else t='{}' ;;
+    esac
+    jq -n --arg a "arn:aws:guardduty:ap-southeast-1:$account:malware-protection-plan/$4" --arg b "$b" --argjson t "$t" \
+      '{Arn: $a, ProtectedResource: {S3Bucket: {BucketName: $b}}, Status: "ACTIVE", Tags: $t}' ;;
   "ec2 describe-network-interfaces") echo '{"NetworkInterfaces":[]}' ;;
   "ec2 describe-security-groups") echo '{"SecurityGroups":[]}' ;;
   "elbv2 describe-load-balancers") echo '{"LoadBalancers":[]}' ;;
@@ -259,6 +287,7 @@ echo "terraform $*" >>"$FAKE_LOG"
 case ${AWS_PROFILE:-} in anhnv-sso | anhnv-stg | anhnv-prd) ;; *) echo "fake terraform: AWS_PROFILE is '${AWS_PROFILE:-}'" >&2; exit 97 ;; esac
 echo "$AWS_PROFILE" >>"$FAKE_LOG.profiles"
 echo "account=${TF_VAR_account_id:-} chart=${TF_VAR_svp_cluster_chart:-} chat=${TF_VAR_telegram_chat_id-unset}" >>"$FAKE_LOG.tfenv"
+echo "log_archive=${TF_VAR_log_archive_account_id-unset}" >>"$FAKE_LOG.tfenv"
 dir= out=
 for a in "$@"; do case $a in -chdir=*) dir=${a#-chdir=} ;; -out=*) out=${a#-out=} ;; esac; done
 env=${dir##*/}
@@ -482,6 +511,7 @@ push_clone "$work/gitops"
 export PATH="$bin:$PATH" FAKE_LOG=$log FAKE_STATE=$state FAKE_PASSWORD=$password
 export SVP_BACKEND_DIR=$work/backend SVP_GITOPS_DIR=$work/gitops SVP_SESSION_POLL=0
 export SVP_AWS_MGMT_ACCOUNT_ID=000000000000 SVP_AWS_STG_ACCOUNT_ID=111111111111 SVP_AWS_PRD_ACCOUNT_ID=222222222222
+export SVP_AWS_LOG_ACCOUNT_ID=333333333333
 unset SVP_SESSION_DIR
 
 # clear_log: an empty log of calls, profiles and Terraform variables.
@@ -681,6 +711,24 @@ expect "tf.sh env apply marks env-apply-start, then env-apply-end" sh -c 'has() 
 mv "$envs/stg/stg.auto.tfvars" "$work/tfvars.aside"
 expect "tf.sh env plan refuses without stg.auto.tfvars" sh -c '! bash "$1/tf.sh" stg env plan >"$2" 2>&1 && grep -q "stg.auto.tfvars" "$2"' _ "$here" "$work/out"
 mv "$work/tfvars.aside" "$envs/stg/stg.auto.tfvars"
+for e in stg prd; do
+  clear_log
+  expect "tf.sh $e env plan: TF_VAR_log_archive_account_id is SVP_AWS_LOG_ACCOUNT_ID" \
+    sh -c 'bash "$1/tf.sh" "$2" env plan >/dev/null 2>&1 && [ "$(sed -n "s/^log_archive=//p" "$3.tfenv" | sort -u)" = 333333333333 ]' _ "$here" "$e" "$log"
+  for v in '' 33333333333 log-account; do
+    clear_log
+    expect "tf.sh $e env plan refuses SVP_AWS_LOG_ACCOUNT_ID '$v' before any aws or terraform, and says how to set it" \
+      sh -c '! SVP_AWS_LOG_ACCOUNT_ID=$3 bash "$1/tf.sh" "$2" env plan >"$4" 2>&1 && grep -q "set SVP_AWS_LOG_ACCOUNT_ID to the 12 digits of the svp-log-archive account" "$4" &&
+        [ ! -s "$5" ]' _ "$here" "$e" "$v" "$work/out" "$log"
+  done
+  clear_log
+  expect "tf.sh $e env init refuses without SVP_AWS_LOG_ACCOUNT_ID too" \
+    sh -c '! env -u SVP_AWS_LOG_ACCOUNT_ID bash "$1/tf.sh" "$2" env init >"$3" 2>&1 && grep -q "set SVP_AWS_LOG_ACCOUNT_ID" "$3"' _ "$here" "$e" "$work/out"
+done
+rm -f "$envs/stg/stg.tfplan" "$envs/prd/prd.tfplan"
+clear_log
+expect "tf.sh gitops plan runs without SVP_AWS_LOG_ACCOUNT_ID: root gitops writes no log" \
+  sh -c 'env -u SVP_AWS_LOG_ACCOUNT_ID bash "$1/tf.sh" stg gitops plan >/dev/null 2>&1 && grep -qx "log_archive=unset" "$2.tfenv"' _ "$here" "$log"
 clear_log
 expect "tf.sh gitops plan runs, needing no auto.tfvars" bash "$here/tf.sh" stg gitops plan >"$work/out" 2>&1
 expect "tf.sh gitops plan: stg.tfvars into stg.tfplan of aws/gitops/stg" \
@@ -1045,8 +1093,9 @@ expect "measure.sh prd refuses while the tunnel is closed, before the smoke" \
 # --- sweep.sh -----------------------------------------------------------------------------------------------------
 unset SVP_SESSION_DIR
 for e in stg prd mgmt; do
-  case $e in mgmt) p=anhnv-sso a=000000000000 s=bootstrap ;; stg) p=anhnv-stg a=111111111111 s=baseline ;;
-    prd) p=anhnv-prd a=222222222222 s=baseline ;; esac
+  case $e in mgmt) p=anhnv-sso a=000000000000 s=bootstrap k=bootstrap,org,security-baseline,security ;;
+    stg) p=anhnv-stg a=111111111111 s=baseline k=baseline,security-baseline ;;
+    prd) p=anhnv-prd a=222222222222 s=baseline k=baseline,security-baseline ;; esac
   z=$(zone_of "$e")
   clear_log
   expect "sweep.sh $e passes with what the account keeps alone" bash "$here/sweep.sh" "$e" >"$work/sweep.out" 2>&1
@@ -1057,6 +1106,14 @@ for e in stg prd mgmt; do
     expect "sweep.sh $e prints the zone $z as kept" grep -q "^kept  hosted zone $z " "$work/sweep.out"
   fi
   expect "sweep.sh $e prints the key of a destroyed root as pending deletion" grep -q '^pending deletion  KMS key key-eks, deleted on 2026-11-12' "$work/sweep.out"
+  expect "sweep.sh $e keeps the stacks that live between sessions, aws/baseline's in every account: $k" \
+    grep -q "^ok    nothing left in account $e but what it keeps (Stack=$k) and keys pending deletion$" "$work/sweep.out"
+  if [ -n "$z" ]; then
+    expect "sweep.sh $e prints the EBS key of aws/baseline as kept (Stack=security-baseline)" \
+      grep -q '^kept  KMS key key-ebs (Stack=security-baseline)$' "$work/sweep.out"
+  fi
+  expect "sweep.sh $e reports neither another project's Malware Protection plan nor GuardDuty's own EventBridge rule" \
+    sh -c 'grep -q "^ok    GuardDuty Malware Protection plans: none$" "$1" && ! grep -q "plan-other\|DO-NOT-DELETE" "$1"' _ "$work/sweep.out"
   expect "sweep.sh $e reads WAF of CloudFront in us-east-1" grep -q '^aws wafv2 list-web-acls --scope CLOUDFRONT --output json --region us-east-1$' "$log"
   expect "sweep.sh $e reads the pricing plan subscriptions in us-east-1" \
     sh -c 'grep -q "^aws pricing-plan-manager list-subscriptions --output json --region us-east-1$" "$1"' _ "$log"
@@ -1154,6 +1211,23 @@ expect "sweep.sh stg fails on an alarm of the lab and the target tracking alarm 
   sh -c '! FAKE_LEFTOVER=alarm bash "$1/sweep.sh" stg >"$2" 2>&1 && grep -q "^FAIL  CloudWatch alarms: 2 left$" "$2" &&
     grep -q "delete: AWS_PROFILE=anhnv-stg aws cloudwatch delete-alarms --alarm-names svp-stg-rds-storage-low --region ap-southeast-1$" "$2" &&
     grep -q "^        TargetTracking-arn:aws:kafka:ap-southeast-1:111111111111:cluster/svp-stg/c-fake-AlarmHigh-0a1b$" "$2" && ! grep -q "other-alarm" "$2"' _ "$here" "$work/sweep.out"
+expect "sweep.sh stg fails on the Malware Protection plan of its uploads bucket, with the command that deletes it" \
+  sh -c '! FAKE_LEFTOVER=malware bash "$1/sweep.sh" stg >"$2" 2>&1 && grep -q "^FAIL  GuardDuty Malware Protection plans: 1 left$" "$2" &&
+    grep -q "^        plan-svp svp-stg-uploads-111111111111-ap-southeast-1 ACTIVE$" "$2" &&
+    grep -q "delete: AWS_PROFILE=anhnv-stg aws guardduty delete-malware-protection-plan --malware-protection-plan-id plan-svp --region ap-southeast-1$" "$2" &&
+    ! grep -q "plan-other\|DO-NOT-DELETE" "$2"' _ "$here" "$work/sweep.out"
+expect "sweep.sh --print stg lists the Malware Protection plans before the buckets" \
+  sh -c 'bash "$1/sweep.sh" --print stg >"$2" 2>&1' _ "$here" "$work/sweep.out"
+expect "sweep.sh --print stg: list-malware-protection-plans before list-buckets" \
+  before "$work/sweep.out" ' aws guardduty list-malware-protection-plans ' ' aws s3api list-buckets '
+expect "sweep.sh --print stg: VPC endpoints before network interfaces and security groups" \
+  sh -c 'b() { a=$(grep -nE -- "$2" "$1" | head -n 1 | cut -d: -f1); c=$(grep -nE -- "$3" "$1" | head -n 1 | cut -d: -f1); [ -n "$a" ] && [ -n "$c" ] && [ "$a" -lt "$c" ]; }
+    b "$1" " ec2 describe-vpc-endpoints " " ec2 describe-network-interfaces " && b "$1" " ec2 describe-vpc-endpoints " " ec2 describe-security-groups "' _ "$work/sweep.out"
+expect "sweep.sh prd fails on the interface endpoint guardduty-data, not on an endpoint already deleted" \
+  sh -c '! FAKE_LEFTOVER=endpoint bash "$1/sweep.sh" prd >"$2" 2>&1 && grep -q "^FAIL  VPC endpoints: 1 left$" "$2" &&
+    grep -q "^        vpce-0fake Interface com.amazonaws.ap-southeast-1.guardduty-data available$" "$2" &&
+    grep -q "delete: AWS_PROFILE=anhnv-prd aws ec2 delete-vpc-endpoints --vpc-endpoint-ids vpce-0fake --region ap-southeast-1$" "$2" &&
+    ! grep -q "vpce-0gone" "$2"' _ "$here" "$work/sweep.out"
 expect "sweep.sh stg fails on a record of its zone" \
   sh -c '! FAKE_LEFTOVER=record bash "$1/sweep.sh" stg >"$2" 2>&1 && grep -q "api.stg.aws.svp.example. A" "$2"' _ "$here" "$work/sweep.out"
 expect "sweep.sh stops on another account before any other command" \

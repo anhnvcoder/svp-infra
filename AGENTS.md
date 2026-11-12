@@ -23,12 +23,23 @@ quyết định chung của lab nằm ở `docs/` của repo code (bản clone `
 - **AI không chạy lệnh nào chạm account AWS, kể cả chỉ đọc:** `terraform init` có backend, `plan`, `apply`, `destroy`, `import`,
   `state`, `output`, `test` trần (ngoài `make test`), `refresh`; `aws` (trừ `--version`); script hay chương trình dùng SDK AWS; script buổi của `aws/scripts/`.
 - **Mọi lệnh chạm account do người học chạy** theo script và runbook viết sẵn, mỗi bước một khối, nói rõ cần dán lại output nào và tìm gì
-  trong đó. Mỗi account một profile SSO và một biến account (export trong terminal, không ghi vào file nào): management `anhnv-sso` +
-  `SVP_AWS_MGMT_ACCOUNT_ID` (`aws/bootstrap`, `aws/org`, `github/`), stg `anhnv-stg` + `SVP_AWS_STG_ACCOUNT_ID`, prd `anhnv-prd` +
-  `SVP_AWS_PRD_ACCOUNT_ID` (`aws/accounts/<env>`, `aws/envs/<env>`, `aws/gitops/<env>`). Lệnh viết sẵn ghi profile của đúng account đó ngay
-  trong lệnh, `TF_VAR_account_id` từ biến của account đó, và `--region` (`ap-southeast-1` cho dịch vụ theo region và STS, `us-east-1` cho
-  Organizations, WAF của CloudFront, Pricing Plan Manager và API Free Tier, region của Identity Center cho `sso-admin`, `identitystore`);
-  không dựa vào region của profile, không một `AWS_PROFILE` chung cho cả repo. Trước mọi lệnh ghi: `aws sts get-caller-identity` với **cùng profile** (`aws/scripts/check-account.sh
+  trong đó. Mỗi account một biến account (export trong terminal, không ghi vào file nào) và profile SSO (bảng ở mục "Plan và apply" của
+  `README.md`):
+
+  | Account | Profile ghi | Profile chỉ đọc | Biến account | Root |
+  | --- | --- | --- | --- | --- |
+  | management | `anhnv-sso` | — | `SVP_AWS_MGMT_ACCOUNT_ID` | `aws/bootstrap`, `aws/org`, `github/`; `aws/log-archive`, `aws/security`, `aws/baseline` qua role |
+  | `svp-log-archive` | — | `anhnv-log-ro` | `SVP_AWS_LOG_ACCOUNT_ID` | — |
+  | `svp-security` | — | `anhnv-security-ro` | `SVP_AWS_SECURITY_ACCOUNT_ID` | — |
+  | `svp-stg`, `svp-prd` | `anhnv-<env>` | `anhnv-<env>-ro` | `SVP_AWS_STG_ACCOUNT_ID`, `SVP_AWS_PRD_ACCOUNT_ID` | `aws/accounts/<env>`, `aws/envs/<env>`, `aws/gitops/<env>` |
+
+  Lệnh viết sẵn ghi profile của đúng account đó ngay trong lệnh, `TF_VAR_account_id` từ biến của account đó, và `--region` (`ap-southeast-1`
+  cho dịch vụ theo region và STS, `us-east-1` cho Organizations, IAM, Cost Explorer, WAF của CloudFront, Pricing Plan Manager và API Free
+  Tier, region của Identity Center cho `sso-admin`, `identitystore`); không dựa vào region của profile, không một `AWS_PROFILE` chung cho cả
+  repo. Root qua role (`aws/log-archive`, `aws/security`, `aws/baseline`) chạy bằng `anhnv-sso` với `TF_VAR_account_id` của management; provider
+  của account đích assume `OrganizationAccountAccessRole`, id đích từ `TF_VAR_<log_archive|security|stg|prd>_account_id` đặt trong lệnh từ
+  biến tương ứng. Root `aws/envs/<env>` cần thêm `SVP_AWS_LOG_ACCOUNT_ID` (`tf.sh` đặt `TF_VAR_log_archive_account_id`). Hai account bảo
+  mật không có profile ghi, bucket state hay root riêng; không thêm. Trước mọi lệnh ghi: `aws sts get-caller-identity` với **cùng profile** (`aws/scripts/check-account.sh
   mgmt|stg|prd`), hai bên cùng đọc account. Script buổi lấy profile và biến từ bảng env của `aws/scripts/lib.sh`. Buổi tạo tài nguyên kết
   thúc bằng lệnh destroy và lệnh quét sót (`sweep.sh <env>` rồi `sweep.sh mgmt`); AI nhắc tới khi người học xác nhận đã chạy cả hai.
 - CI (`check.yml`) không có credential AWS, secret, OIDC hay environment nào; thêm thì phải có ADR trước.

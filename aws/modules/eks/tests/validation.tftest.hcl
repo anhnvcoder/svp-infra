@@ -43,6 +43,8 @@ variables {
   private_subnet_ids   = ["subnet-0aaaaaaaaaaaaaaa1", "subnet-0bbbbbbbbbbbbbbb2"]
   hosted_zone_id       = "Z0123456789ABCDEFGHIJ"
   system_node_max_size = 4
+
+  guardduty_data_endpoint_id = "vpce-0123456789abcdef0"
 }
 
 run "valid" {
@@ -144,6 +146,12 @@ run "stg_values" {
   assert {
     condition     = length(local.addons) == 6 && alltrue([for k, v in local.addons : can(regex("^v[0-9]+\\.[0-9]+\\.[0-9]+-eksbuild\\.[0-9]+$", v.addon_version))])
     error_message = "Every EKS add-on must pin addon_version to a build such as v1.23.3-eksbuild.1."
+  }
+
+  # The GuardDuty agent is the seventh add-on, outside local.addons so that it can wait for the guardduty-data endpoint.
+  assert {
+    condition     = aws_eks_addon.guardduty_agent.addon_name == "aws-guardduty-agent" && aws_eks_addon.guardduty_agent.addon_version == "v1.17.3-eksbuild.2"
+    error_message = "The GuardDuty agent add-on must pin addon_version, as every other add-on does."
   }
 }
 
@@ -378,6 +386,16 @@ run "system_node_max_size_fraction" {
   }
 
   expect_failures = [var.system_node_max_size]
+}
+
+run "guardduty_data_endpoint_id_not_vpce" {
+  command = plan
+
+  variables {
+    guardduty_data_endpoint_id = "vpc-0123456789abcdef0"
+  }
+
+  expect_failures = [var.guardduty_data_endpoint_id]
 }
 
 run "hosted_zone_id_lowercase" {

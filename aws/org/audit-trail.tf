@@ -1,7 +1,7 @@
 # Organization trail: the management events (read and write) of every account of the organization, in every region,
-# delivered to one bucket of the management account, encrypted with a key of that account, with log file integrity
-# validation. Member accounts see the trail but cannot change it, and protect-cloudtrail of org-policies keeps them from
-# changing any trail of their own. Lives between sessions; README.md says how to remove it on purpose.
+# and the S3 data events of the production user buckets, delivered to the log archive account (aws/log-archive), with
+# log file integrity validation. Member accounts see the trail but cannot change it, and protect-cloudtrail of
+# org-policies keeps them from changing any trail of their own. Lives between sessions. Design notes: README.md.
 
 locals {
   trail_name = "svp-audit"
@@ -16,6 +16,9 @@ locals {
   log_cold_after_days = 90
 }
 
+# The key and the two buckets below are where the trail wrote before the log archive account. They stay, read only,
+# until Object Lock releases the last log file version they hold: deleting them earlier would lose audit history still
+# under retention. README.md says how to remove them afterwards.
 resource "aws_kms_key" "cloudtrail" {
   description         = "Encrypts the log files of the organization trail ${local.trail_name}"
   enable_key_rotation = true
@@ -392,24 +395,82 @@ resource "aws_s3_bucket_policy" "access_logs" {
   depends_on = [aws_s3_bucket_public_access_block.access_logs]
 }
 
+locals {
+  prd_id    = aws_organizations_account.member["prd"].id
+  partition = data.aws_partition.current.partition
+}
+
+# Bucket and key policies of aws/log-archive allow only this trail (aws:SourceArn), which is why its name never changes.
+data "aws_kms_alias" "log_archive" {
+  provider = aws.log_archive
+
+  name = "alias/svp-log-archive"
+}
+
 resource "aws_cloudtrail" "audit" {
-  name                          = local.trail_name
-  s3_bucket_name                = aws_s3_bucket.trail.id
-  kms_key_id                    = aws_kms_key.cloudtrail.arn
+  name           = local.trail_name
+  s3_bucket_name = "svp-cloudtrail-${local.log_archive_id}-${var.region}"
+  # The key/<id> form CloudTrail returns: an alias ARN here would show a difference on every plan.
+  kms_key_id                    = data.aws_kms_alias.log_archive.target_key_arn
   is_organization_trail         = true
   is_multi_region_trail         = true
   include_global_service_events = true
   enable_log_file_validation    = true
 
-  # No data events: they are billed per event.
-  event_selector {
-    read_write_type           = "All"
-    include_management_events = true
+  advanced_event_selector {
+    name = "management"
+
+    field_selector {
+      field  = "eventCategory"
+      equals = ["Management"]
+    }
   }
 
-  # CloudTrail checks the bucket policy, the key policy and trusted access when the trail is created.
-  depends_on = [
-    aws_organizations_organization.this,
-    aws_s3_bucket_policy.trail,
-  ]
+  # Data events are billed per event, so only where real user data lives: the production uploads (read and write) and
+  # the production media writes. Reads of media are viewer traffic through CloudFront.
+  advanced_event_selector {
+    name = "prd-uploads"
+
+    field_selector {
+      field  = "eventCategory"
+      equals = ["Data"]
+    }
+
+    field_selector {
+      field  = "resources.type"
+      equals = ["AWS::S3::Object"]
+    }
+
+    field_selector {
+      field       = "resources.ARN"
+      starts_with = ["arn:${local.partition}:s3:::svp-prd-uploads-${local.prd_id}-${var.region}/"]
+    }
+  }
+
+  advanced_event_selector {
+    name = "prd-media-writes"
+
+    field_selector {
+      field  = "eventCategory"
+      equals = ["Data"]
+    }
+
+    field_selector {
+      field  = "resources.type"
+      equals = ["AWS::S3::Object"]
+    }
+
+    field_selector {
+      field  = "readOnly"
+      equals = ["false"]
+    }
+
+    field_selector {
+      field       = "resources.ARN"
+      starts_with = ["arn:${local.partition}:s3:::svp-prd-media-${local.prd_id}-${var.region}/"]
+    }
+  }
+
+  # CloudTrail checks trusted access when an organization trail is created or changed.
+  depends_on = [aws_organizations_organization.this]
 }

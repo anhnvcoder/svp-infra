@@ -1,15 +1,13 @@
 # Size and protection of stg: the services, configuration, encryption and logs of prd, with less redundancy, smaller
 # sizes, short retention and no protection against deletion, disposable at the end of every session. Committed; it
-# holds no personal value. Every plan, apply and destroy of this root passes it:
-#   AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform plan -var-file=stg.tfvars
+# holds no personal value. Every plan, apply and destroy of this root passes it; the commands are in README.md.
 
-# network: two zones, one NAT gateway, flow logs kept 1 day. The S3 gateway endpoint lets through the same buckets as
-# in prd: the env's buckets, the image layer bucket of Amazon ECR in the region (both added by the root and the module)
-# and the bucket registry.k8s.io redirects clients inside AWS to in this region.
+# network: two zones, one NAT gateway; flow logs go to the log archive account, which keeps them. The S3 gateway
+# endpoint lets through the same buckets as in prd: the env's buckets, the image layer bucket of Amazon ECR in the
+# region (both added by the root and the module) and the bucket registry.k8s.io redirects clients inside AWS to in this
+# region.
 az_count                  = 2
 single_nat_gateway        = true
-flow_log_enabled          = true
-flow_log_retention_days   = 1
 s3_endpoint_restricted    = true
 s3_endpoint_extra_buckets = ["prod-registry-k8s-io-ap-southeast-1"]
 

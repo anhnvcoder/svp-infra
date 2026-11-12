@@ -130,7 +130,12 @@ aws/scripts/session.sh --print stg
    grep -c -E '^(hosted_zone_id|domain|acme_email|alarm_email) ' aws/envs/stg/stg.auto.tfvars     # 4
    ```
 
-6. Mac cắm sạc, tắt Low Power Mode (đo k6 và chờ dài).
+6. **Nền bảo mật của org đã áp** tới ít nhất bước (3) của [`org-security-setup.md`](org-security-setup.md#thứ-tự-áp-lần-đầu) (`aws/bootstrap`,
+   `aws/org` tạo account `svp-log-archive`, `aws/log-archive`): root env ghi flow log VPC vào bucket `svp-flowlogs-<log>-ap-southeast-1` và log
+   WAF vào `aws-waf-logs-svp-<log>-us-east-1` của account đó, nên cần id account đó trong biến `SVP_AWS_LOG_ACCOUNT_ID` (output
+   `log_archive_account_id` của `aws/org`; mục **Mở terminal của buổi**). Thiếu biến thì `tf.sh` dừng với `FAIL set SVP_AWS_LOG_ACCOUNT_ID …`;
+   bucket chưa có thì `apply` đỏ ở flow log hay logging của web ACL.
+7. Mac cắm sạc, tắt Low Power Mode (đo k6 và chờ dài).
 
 ## Mở terminal của buổi
 
@@ -140,11 +145,13 @@ AWS_PROFILE=anhnv-stg aws sso login --region us-east-1
 AWS_PROFILE=anhnv-sso aws sso login --region us-east-1                                             # cho lượt sweep.sh mgmt cuối buổi
 export SVP_AWS_STG_ACCOUNT_ID=<12 số của account svp-stg>                       # đọc trên trang SSO; không ghi vào file nào
 export SVP_AWS_MGMT_ACCOUNT_ID=<12 số của account management>
+export SVP_AWS_LOG_ACCOUNT_ID=<12 số của account svp-log-archive>               # bucket flow log, log WAF của root env
 export SVP_SESSION_DIR="$PWD/.session/$(date -u +%Y%m%dT%H%M%SZ)"               # số đo của buổi; .session/ git bỏ qua
 ```
 
 Hai profile dùng chung một phiên SSO khi cùng `sso_session` trong `~/.aws/config`, khi đó một lần `aws sso login` là đủ. Biến account không
-nằm trong file commit nào, kể cả `.envrc`; script đặt `TF_VAR_account_id` từ biến của env ngay trong lệnh `terraform`.
+nằm trong file commit nào, kể cả `.envrc`; script đặt `TF_VAR_account_id` từ biến của env và `TF_VAR_log_archive_account_id` từ
+`SVP_AWS_LOG_ACCOUNT_ID` ngay trong lệnh `terraform` của root env.
 
 Mọi bước sau chạy trong **cùng terminal này** (cùng các biến). Thư mục buổi chứa: `timeline.tsv` (mốc UTC: `session-start`,
 `env-apply-start`, `env-apply-end`, `secrets-written`, `gitops-apply-start`, `gitops-apply-end`, `observability-healthy`, `glitchtip-init`,
@@ -158,7 +165,7 @@ không phải thư mục mới. `measure.sh` đọc `cluster-values.json` của 
 ```sh
 cd infra
 AWS_PROFILE=anhnv-stg aws sso login --region us-east-1
-export SVP_AWS_STG_ACCOUNT_ID=<12 số> SVP_AWS_MGMT_ACCOUNT_ID=<12 số>
+export SVP_AWS_STG_ACCOUNT_ID=<12 số> SVP_AWS_MGMT_ACCOUNT_ID=<12 số> SVP_AWS_LOG_ACCOUNT_ID=<12 số>
 ls -1d .session/*/ | tail -n 3                                                 # thư mục mới nhất là buổi đang dở
 export SVP_SESSION_DIR="$PWD/.session/<thư mục đó>"
 tail -n 5 "$SVP_SESSION_DIR/timeline.tsv"                                      # mốc cuối: bước nào đã xong
@@ -192,7 +199,8 @@ Rồi chạy tiếp từ bước sau mốc cuối (hay chạy lại bước đan
 | 20 | `aws/scripts/sweep.sh mgmt` | 5 phút | toàn bộ output |
 
 Bước tay chen giữa các bước script: xác nhận email của alarm sau bước 5 (mục 3–5), tunnel tới API sau bước 5 và trước bước 6 (mục
-**Tunnel tới API**, giữ chạy tới hết bước 14), phép kiểm của bước 11.
+**Tunnel tới API**, giữ chạy tới hết bước 14), phép kiểm của bước 11, đọc finding bảo mật sau bước 11 và trước bước 12 (mục **Finding bảo
+mật của buổi**).
 
 Dự trù: apply root env xong ~T+70 phút (MSK là phần dài nhất), mọi Application Healthy ~T+1 giờ 55, đo tới muộn nhất T+3 giờ, gỡ và quét
 xong trước T+4 giờ khi gỡ đúng số giả định của ADR-0053 §16; buổi stg đầu tiên đo hai mốc đó và ghi vào phụ lục của ADR.
@@ -624,6 +632,40 @@ AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp-data exec deploy/svp-ops 
 Mong cột `LAG` của mỗi group cùng cỡ với panel. Panel trống: dán lỗi của receiver
 (`AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp-obs logs deploy/otel-collector --tail=50 | grep -i kafka`) cho AI.
 
+### Finding bảo mật của buổi (sau bước 11, trước bước 12)
+
+Chỉ đọc, profile `anhnv-security-ro` của account Security Tooling, khi tài nguyên của buổi **còn sống**: tài nguyên bị xoá thì finding control
+của nó chuyển `NOT_AVAILABLE` và `ARCHIVED` (Security Hub CSPM User Guide, "Generating and updating control findings"), nên lượt đọc định kỳ
+của `security-alert.md` không bao giờ thấy tài nguyên chỉ sống trong buổi. Buổi dừng sớm rồi đi thẳng tới gỡ: vẫn đọc mục này trước bước 12
+(đường `--no-cluster` của mục **15–18**: trước `plan --destroy`).
+
+Mục này cần bước (4), (5) của [`org-security-setup.md`](org-security-setup.md#thứ-tự-áp-lần-đầu): profile `anhnv-security-ro` và Security
+Hub ở `svp-security`. Org mới áp tới bước (3) (đủ cho buổi, điều kiện 6) thì chưa có gì để đọc: bỏ qua mục này. Kiểm:
+`aws configure list-profiles | grep -x anhnv-security-ro` không in gì là chưa có.
+
+```sh
+ACC="${SVP_AWS_STG_ACCOUNT_ID:?not set}"    # buổi prd: ACC="${SVP_AWS_PRD_ACCOUNT_ID:?not set}"
+A="\"AwsAccountId\":[{\"Value\":\"$ACC\",\"Comparison\":\"EQUALS\"}],\"RecordState\":[{\"Value\":\"ACTIVE\",\"Comparison\":\"EQUALS\"}]"
+# Control FAILED của account (không bao giờ tới email); bản đủ, có id tài nguyên, giữ trong thư mục buổi
+AWS_PROFILE=anhnv-security-ro aws securityhub get-findings --region ap-southeast-1 --output text \
+  --filters "{$A,\"ComplianceStatus\":[{\"Value\":\"FAILED\",\"Comparison\":\"EQUALS\"}],\"WorkflowStatus\":[{\"Value\":\"NEW\",\"Comparison\":\"EQUALS\"}]}" \
+  --query 'Findings[].[Compliance.SecurityControlId,Severity.Label,Resources[0].Type,Resources[0].Id]' \
+  | sort | tee "$SVP_SESSION_DIR/controls-failed.tsv" | cut -f 1-3 | uniq -c | sort -rn
+# Finding GuardDuty, Access Analyzer mới hay cập nhật từ đầu buổi, mọi mức
+AWS_PROFILE=anhnv-security-ro aws securityhub get-findings --region ap-southeast-1 --output text \
+  --filters "{$A,\"UpdatedAt\":[{\"Start\":\"$(head -n 1 "$SVP_SESSION_DIR/timeline.tsv" | cut -f 1)\",\"End\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}],
+    \"ProductName\":[{\"Value\":\"GuardDuty\",\"Comparison\":\"EQUALS\"},{\"Value\":\"IAM Access Analyzer\",\"Comparison\":\"EQUALS\"}]}" \
+  --query 'Findings[].[ProductName,Severity.Label,Types[0],Title]' | sort | uniq -c | sort -rn
+```
+
+Dán toàn bộ output của cả hai lệnh, cùng `controls-failed.tsv` khi AI hỏi tới tài nguyên. Lệnh đầu gồm cả control FAILED của baseline (đã có
+trong danh sách ban đầu, mục 7a của [`org-security-setup.md`](org-security-setup.md#7a-dịch-vụ-bật)) lẫn của tài nguyên buổi. Mỗi control FAILED,
+của tài nguyên buổi cũng như tài nguyên lâu dài, xử lý theo mục "Đọc bảng Security Hub định kỳ" của runbook
+[`security-alert.md`](https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks/security-alert.md#đọc-bảng-security-hub-định-kỳ):
+buổi sau tạo lại tài nguyên từ cùng code, nên lỗi không sửa trong Terraform sẽ quay lại. Của lệnh thứ hai, chỉ mức HIGH, CRITICAL tới email
+(cả finding phát sinh trong lúc gỡ); mức thấp hơn (ngoài `[SAMPLE]`) đối chiếu thời điểm với `timeline.tsv` (diễn tập, đo) rồi xử lý theo
+cùng runbook.
+
 ### 12. Gỡ trong cluster trước destroy
 
 ```sh
@@ -705,8 +747,8 @@ trước bước 18**: chỉ tài nguyên của `aws/envs/stg`, `0 to add, 0 to 
 baseline `aws/accounts/stg`, root khác). Thấy thứ khác: dừng, dán plan cho AI. `destroy` chỉ áp file đó, rồi xoá file. Kẹt: mục **Destroy
 kẹt**, rồi `plan --destroy` lại (file plan cũ không áp lại được sau một apply dở) và `destroy`.
 
-Apply đỏ trước khi tạo cluster EKS (chưa gì chạy trên cluster, root gitops chưa bao giờ apply): bỏ bước 12–14,
-`aws/scripts/tf.sh stg env plan --destroy --no-cluster`. Script tự kiểm điều đó trước khi plan: thư mục buổi không có `cluster-values.json`
+Apply đỏ trước khi tạo cluster EKS (chưa gì chạy trên cluster, root gitops chưa bao giờ apply): đọc mục **Finding bảo mật của buổi**
+(VPC, NACL, RDS… đã tạo vẫn có control), bỏ bước 12–14, `aws/scripts/tf.sh stg env plan --destroy --no-cluster`. Script tự kiểm điều đó trước khi plan: thư mục buổi không có `cluster-values.json`
 **và** `terraform state list` của `aws/envs/stg` (script tự chạy, profile `anhnv-stg`) không có `aws_eks_cluster`; không thì từ chối
 (`FAIL --no-cluster refused: …`). State còn cluster: chạy bước 12 trong thư mục buổi hiện tại (không cần bước 6), bước 13, 14, rồi `plan
 --destroy` không `--no-cluster`.
@@ -966,10 +1008,12 @@ Không sửa entry hay Secret bằng tay, không ghi mật khẩu Kafka, Valkey 
    Phép kiểm (f) của ADR-0053 là cùng hai lượt sweep sạch: không còn dòng MSK, ElastiCache, `AmazonMSK_*` nào; KMS key của root env chỉ ở
    `pending deletion`. Phép kiểm `pre-destroy.sh` của ADR-0056: cùng lượt đó không còn instance, launch template, instance profile, hàng đợi
    SQS hay rule EventBridge nào của Karpenter.
-2. Cái ở lại giữa các buổi: ở account stg là baseline (`Stack=baseline`: bucket state, KMS key state, zone `stg.aws.<domain>`); ở account prd là
-   baseline của nó, gồm zone `aws.<domain>` và bản ghi `NS` uỷ quyền `stg.aws.<domain>` trong đó (`sweep.sh` in chúng là `kept`); management chỉ
-   còn `Stack=bootstrap|org`, không hosted zone. `destroy` của hai root env không đụng zone nào (zone thuộc root `aws/accounts/<env>`).
+2. Cái ở lại giữa các buổi: ở account stg là baseline (`Stack=baseline`: bucket state, KMS key state, zone `stg.aws.<domain>`) và baseline bảo
+   mật (`Stack=security-baseline`: CMK EBS `alias/svp-ebs`; recorder Config, rule `svp-security-*` không phải tài nguyên `sweep.sh` liệt kê); ở
+   account prd là hai baseline của nó, gồm zone `aws.<domain>` và bản ghi `NS` uỷ quyền `stg.aws.<domain>` trong đó (`sweep.sh` in chúng là
+   `kept`); management chỉ còn `Stack=bootstrap|org|security-baseline|security`, không hosted zone. `destroy` của hai root env không đụng zone
+   nào (zone thuộc root `aws/accounts/<env>`) và không đụng baseline bảo mật (root `aws/baseline`).
 3. Giữ `$SVP_SESSION_DIR` (máy local, không commit): `timeline.tsv`, `k6-levels.tsv`, `k6-<n>/` là số đo cho cột Kết quả của ADR-0034
-   "Kiểm chứng sau" và roadmap.
+   "Kiểm chứng sau" và roadmap; `controls-failed.tsv` là danh sách control FAILED của tài nguyên buổi, đầu vào của việc sửa trong Terraform.
 4. Sau 24 giờ: Cost Explorer theo dịch vụ (account stg, hay management cho cả org), so với ước lượng (ADR-0034 §12 cộng MSK, ElastiCache
    của ADR-0053 §16, cộng phần của mục **Giới hạn**, ±50 %); số thật thay ước lượng ở mục đó.
