@@ -3,7 +3,8 @@
 Mỗi account thành viên của org (`svp-stg`, `svp-prd`) có một root ở đây, gọi module
 [`account-baseline`](../modules/account-baseline/README.md): bucket state và KMS key của nó, zone DNS của env với bản
 ghi `CAA` ở đỉnh, budget tháng; cùng module [`registry`](../modules/registry/README.md) và
-[`observability`](../modules/observability/README.md) (mục [Registry và observability](#registry-và-observability)).
+[`observability`](../modules/observability/README.md) (mục [Registry và observability](#registry-và-observability)), và vault
+AWS Backup `svp-<env>` cùng key, opt-in, role của nó (mục [Backup](#backup)).
 Root prd bật thêm DNSSEC (key KMS, KSK, hai alarm `page`) và query log cho zone prd, cùng topic SNS `svp-prd-dns-alarms`
 ở `us-east-1` (module [`alarms`](../modules/alarms/README.md)) nhận hai alarm đó. Mọi thứ sống giữa các buổi AWS, mang
 tag `Stack=baseline` (script quét sót của buổi giữ lại tag này).
@@ -47,6 +48,11 @@ Grafana tính cả tháng không buổi): bảng chi phí lúc không buổi c�
 [ADR-0062](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0062-ecr-registry-ci-oidc.md) §11 và
 [ADR-0063](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0063-managed-observability.md) §12.
 
+Key `alias/svp-<env>-backup` của vault (mục [Backup](#backup)) tính như key state: $1/tháng, cộng $1 ở mỗi lần xoay thứ nhất
+và thứ hai ([AWS KMS pricing](https://aws.amazon.com/kms/pricing/)); request của nó chỉ có khi job backup, copy chạy trong buổi.
+Vault không tính phí; recovery point trong vault bị xoá cuối mỗi buổi. Chi phí đủ của backup (bản copy ở `svp-backup`, mỗi buổi):
+[ADR-0067](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0067-backup-dr.md) §13.
+
 Account prd giữ thêm key KMS DNSSEC, key KMS và topic của alarm DNSSEC, hai alarm và log query DNS; phí của chúng (có nguồn) ở bảng chi phí
 lúc không buổi của [ADR-0061](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0061-edge-cloudfront-waf-acm.md) §13.
 
@@ -58,7 +64,8 @@ Dựng mới cả hai env thì prd trước: zone stg được uỷ quyền từ
 bằng `prd`, `anhnv-stg` bằng `anhnv-prd`, `SVP_AWS_STG_ACCOUNT_ID` bằng `SVP_AWS_PRD_ACCOUNT_ID`.
 
 Cần: Terraform 1.15, AWS CLI v2, `jq`, `dig`; profile `anhnv-stg` đã tạo bằng `aws configure sso` (permission set `SvpAdmin` của account
-stg) và `aws sso login --profile anhnv-stg`; trong terminal của buổi (không file commit nào) đã `export SVP_AWS_STG_ACCOUNT_ID=<12 số>`.
+stg) và `aws sso login --profile anhnv-stg`; trong terminal của buổi (không file commit nào) đã `export SVP_AWS_STG_ACCOUNT_ID=<12 số>` và
+`export SVP_AWS_BACKUP_ACCOUNT_ID=<12 số>` (output `backup_account_id` của `aws/org`; account `svp-backup` phải có trước).
 
 ### 1. Kiểm account và role
 
@@ -90,19 +97,20 @@ Bucket state chưa có, nên lần đầu chạy trên state local: file overrid
 ```sh
 printf 'terraform {\n  backend "local" {}\n}\n' > local_override.tf
 AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform init
-AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform plan -out=stg.tfplan
+AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform plan -out=stg.tfplan
 ```
 
-Đọc plan: ở stg `Plan: 59 to add, 0 to change, 0 to destroy`: 11 của `module.baseline` (KMS key và alias, bucket cùng 5
-cấu hình của nó, hosted zone, bản ghi `caa`, budget; không bản ghi `delegation` nào) và 48 của `module.registry`,
-`module.observability` (danh sách ở [Thêm vào account đã có baseline](#thêm-vào-account-đã-có-baseline)). Ở prd
-`Plan: 71 to add, 0 to change, 0 to destroy`: 46 của hai module đó, 11 như stg, thêm 6 của DNSSEC (`aws_kms_key.dnssec`
+Đọc plan: ở stg `Plan: 68 to add, 0 to change, 0 to destroy`: 11 của `module.baseline` (KMS key và alias, bucket cùng 5
+cấu hình của nó, hosted zone, bản ghi `caa`, budget; không bản ghi `delegation` nào), 48 của `module.registry`,
+`module.observability` (danh sách ở [Thêm vào account đã có baseline](#thêm-vào-account-đã-có-baseline)) và 9 của `backup.tf`
+(danh sách ở [Backup](#backup)). Ở prd `Plan: 80 to add, 0 to change, 0 to destroy`: 46 của hai module đó, 11 của
+`module.baseline` và 9 của `backup.tf` như stg, thêm 6 của DNSSEC (`aws_kms_key.dnssec`
 và alias ở `us-east-1`, `aws_route53_key_signing_key.this`, `aws_route53_hosted_zone_dnssec.this`, hai
 `aws_cloudwatch_metric_alarm.dnssec`), 3 của query log (log group, resource policy, `aws_route53_query_log.this`) và 5
 của `module.alarms` (key KMS, alias, topic, topic policy, subscription email). Rồi:
 
 ```sh
-AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform apply stg.tfplan
+AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform apply stg.tfplan
 AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform output -raw backend_hcl > ../../backend-stg.hcl
 cat ../../backend-stg.hcl     # bucket, region, encrypt, kms_key_id, use_lockfile của account stg
 ```
@@ -114,7 +122,8 @@ cat ../../backend-stg.hcl     # bucket, region, encrypt, kms_key_id, use_lockfil
 ```sh
 rm local_override.tf stg.tfplan
 AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform init -migrate-state -backend-config=../../backend-stg.hcl   # trả lời yes
-AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform plan                                                         # mong đợi: No changes.
+AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" \
+  terraform plan    # mong đợi: No changes.
 AWS_PROFILE=anhnv-stg aws s3api head-object --region ap-southeast-1 \
   --bucket "$(AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform output -raw state_bucket)" \
   --key aws/accounts/stg/terraform.tfstate --query '{SSE:ServerSideEncryption,Key:SSEKMSKeyId}'   # SSE: aws:kms, Key: ARN của key state
@@ -171,14 +180,14 @@ Rồi với profile prd:
 ```sh
 cd ../prd
 AWS_PROFILE=anhnv-prd aws sts get-caller-identity --region ap-southeast-1 --query '{Account:Account,Arn:Arn}' --output table   # Account = $SVP_AWS_PRD_ACCOUNT_ID
-AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform plan -out=prd.tfplan
+AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform plan -out=prd.tfplan
 ```
 
 Đọc plan: `Plan: 1 to add, 0 to change, 0 to destroy`, đúng `module.baseline.aws_route53_record.delegation["stg.aws.<domain>"]`, không gì
 khác. Validation của biến chỉ chạy lúc `plan`: tên không phải con của zone prd hay số name server khác bốn thì dừng ở đó. Rồi:
 
 ```sh
-AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform apply prd.tfplan && rm prd.tfplan
+AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform apply prd.tfplan && rm prd.tfplan
 ns=$(cd ../stg && AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform output -json name_servers | jq -r '.[]' | sort)
 for r in 1.1.1.1 8.8.8.8; do
   diff <(dig NS stg.aws.<domain> +short @"$r" | sed 's/\.$//' | sort) <(echo "$ns") && echo "$r: delegation OK"
@@ -221,10 +230,8 @@ Mong đợi `Signing` là `SIGNING`, KSK `svp_prd_ksk` ở `ACTIVE`; `DSRecord` 
 trước, TTL, kiểm `dig +dnssec`, `delv`) và đường lui ở runbook `docs/runbooks/edge-setup.md` của repo này; tắt ký và gỡ DNSSEC ở mục
 [Tắt ký DNSSEC](../modules/account-baseline/README.md#tắt-ký-dnssec) của module.
 
-Account đã dựng baseline trước khi có `CAA`, DNSSEC và query log: plan của stg mong đợi `1 to add` (bản ghi `caa`), của
-prd `15 to add` (bản ghi `caa`, 6 của DNSSEC, 3 của query log, 5 của `module.alarms`), `0 to change, 0 to destroy` ở cả
-hai; chưa có registry, observability thì cộng phần của mục
-[Thêm vào account đã có baseline](#thêm-vào-account-đã-có-baseline).
+Account đã dựng baseline từ một bản trước của root này (chưa có `CAA`, DNSSEC, query log, registry, observability hay
+backup) thì áp phần còn thiếu theo mục [Thêm vào account đã có baseline](#thêm-vào-account-đã-có-baseline).
 
 ## Registry và observability
 
@@ -274,23 +281,52 @@ flowchart LR
 Inspector cho ECR của mọi account thành viên, nên registry quét `ENHANCED` ngay khi tạo. Root `aws/envs/<env>` cần tài
 nguyên của root này có sẵn.
 
-### Thêm vào account đã có baseline
+## Backup
 
-**Người học chạy mọi lệnh dưới đây.** Ví dụ là stg; với prd thay `stg` bằng `prd`, `anhnv-stg` bằng `anhnv-prd`,
-`SVP_AWS_STG_ACCOUNT_ID` bằng `SVP_AWS_PRD_ACCOUNT_ID`. Trước hết `aws/org` và `aws/security` đã apply bản có Inspector
-và nhóm nền tảng ([`aws/org`](../org/README.md#thêm-inspector-và-nhóm-nền-tảng-vào-tổ-chức-đã-áp)), và `stg.auto.tfvars`
-có `platform_admin_group_id`, `platform_viewer_group_id` (dạng ở `stg.auto.tfvars.example`).
+`backup.tf` giống hệt ở hai root (giá trị theo `local.env`) và giữ phần của account env trong backup của tổ chức
+([ADR-0067](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0067-backup-dr.md) §3, §5–§7):
 
-```sh
-cd infra/aws/accounts/stg
-AWS_PROFILE=anhnv-stg aws sts get-caller-identity --region ap-southeast-1 --query '{Account:Account,Arn:Arn}' --output table
-AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform init -backend-config=../../backend-stg.hcl
-AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform plan -out=stg.tfplan
-```
+- Key `alias/svp-<env>-backup`: xoay hằng năm, chờ xoá 30 ngày, không `prevent_destroy` (vault không giữ recovery point nào giữa các
+  buổi). Key policy giữ statement quản trị mặc định của account và thêm hai statement cho account `svp-backup` (biến
+  `backup_account_id`): giải mã recovery point để copy, và `kms:CreateGrant` chỉ cho grant của AWS Backup trên vault; action, điều
+  kiện ở phụ lục §6 của ADR.
+- Vault `svp-<env>` qua module [`backup-vault`](../modules/backup-vault/README.md), mã hoá bằng key trên, không vault lock: cuối mỗi
+  buổi `aws/scripts/restore-drill.sh <env> cleanup` xoá recovery point đã có bản copy. Bản không xoá được là bản copy trong vault
+  khoá `svp-<env>-copy` của root `aws/backup`.
+- Opt-in loại tài nguyên của account ở `ap-southeast-1` (`aws_backup_region_settings`): job on-demand và restore của account theo
+  opt-in này. Resource ghi cả map, nên liệt kê mọi loại AWS Backup hỗ trợ ở region, tất cả bật như AWS bật cho account mới dùng AWS
+  Backup; `RDS`, `S3` là hai loại cần. Danh sách và nguồn: phụ lục §3 của ADR.
+- Role `svp-<env>-backup`: trust `backup.amazonaws.com` với `aws:SourceAccount` là account env; chỉ gắn bốn managed policy của AWS
+  Backup (backup, restore, backup S3, restore S3; tên và statement KMS ở §7 của ADR), không inline policy. Tên không bắt đầu bằng
+  `svp-security-`: SCP `ProtectBaselineRoles` khoá các role đó.
 
-`Account` phải bằng `$SVP_AWS_STG_ACCOUNT_ID`, `Arn` chứa `assumed-role/AWSReservedSSO_SvpAdmin_`. Plan chỉ thêm: ở stg
-`Plan: 48 to add, 0 to change, 0 to destroy`, ở prd `Plan: 46 to add, 0 to change, 0 to destroy`, mọi tài nguyên dưới
-`module.registry` hay `module.observability`:
+Backup policy của tổ chức (root `aws/org`) nhắm vault và role này bằng tên: job theo lịch của account `FAILED` khi root này chưa apply
+phần backup.
+
+Plan của phần backup có 9 tài nguyên, giống nhau ở hai env: `aws_kms_key.backup`, `aws_kms_alias.backup`,
+`module.backup_vault.aws_backup_vault.this["svp-<env>"]`, `aws_backup_region_settings.this`, `aws_iam_role.backup` và bốn
+`aws_iam_role_policy_attachment.backup`.
+
+| Output | Dùng ở |
+| --- | --- |
+| `backup_vault_arn` | vault đích của job on-demand trong buổi; đối chiếu `target_backup_vault_name` của Backup policy |
+| `backup_key_arn` | đối chiếu key của vault (`describe-backup-vault`) |
+| `backup_role_arn` | `--iam-role-arn` của job on-demand và restore |
+
+## Thêm vào account đã có baseline
+
+**Người học chạy mọi lệnh dưới đây.** Dùng khi account đã apply một bản trước của root này, và root nay có phần mà account chưa có.
+`plan` luôn tính cả root: một lượt `plan`, `apply` tạo mọi phần còn thiếu cùng lúc, không áp riêng từng phần. Ví dụ là stg; với prd thay
+`stg` bằng `prd`, `anhnv-stg` bằng `anhnv-prd`, `SVP_AWS_STG_ACCOUNT_ID` bằng `SVP_AWS_PRD_ACCOUNT_ID`.
+
+Các phần của root và số tài nguyên `plan` thêm cho phần account chưa có:
+
+| Phần | Tài nguyên | stg | prd |
+| --- | --- | --- | --- |
+| `CAA` | `module.baseline.aws_route53_record.caa` | 1 | 1 |
+| DNSSEC, query log của zone prd | 6 của DNSSEC, 3 của query log, 5 của `module.alarms` ([bước 3](#3-apply-lần-đầu-state-local)) | — | 14 |
+| Registry, observability | `module.registry`, `module.observability` (danh sách dưới bảng) | 48 | 46 |
+| Backup | 9 của `backup.tf` (danh sách ở mục [Backup](#backup)) | 9 | 9 |
 
 - `module.registry` (stg 33, prd 31): key KMS và alias, 7 `aws_ecr_repository.release`,
   `aws_ecr_registry_scanning_configuration.this`, 5 `aws_ecr_pull_through_cache_rule.this`, 2
@@ -302,34 +338,66 @@ AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform plan
   `aws_xray_trace_segment_destination.this`, `aws_xray_indexing_rule.default`, role `svp-<env>-grafana` và policy,
   workspace Grafana, hai `aws_grafana_role_association`, service account `svp-grafana-operator`.
 
-Dừng (không apply, dán plan lại) nếu có `change`, `destroy` hay tài nguyên của `module.baseline`, `module.alarms`. Rồi:
+Mọi biến của root không có `default` đều bắt buộc, kể cả biến của phần account đã có, nên trước `plan` luôn cần:
+
+- `aws/org` và `aws/security` đã apply bản có Inspector và nhóm nền tảng
+  ([`aws/org`](../org/README.md#thêm-inspector-và-nhóm-nền-tảng-vào-tổ-chức-đã-áp)), `aws/org` đã tạo account `svp-backup`
+  ([`aws/org`](../org/README.md#thêm-account-backup-và-backup-policy-vào-tổ-chức-đã-áp));
+- `stg.auto.tfvars` có `platform_admin_group_id`, `platform_viewer_group_id` (dạng ở `stg.auto.tfvars.example`); `prd.auto.tfvars` có
+  thêm `alarm_email`;
+- terminal có `SVP_AWS_STG_ACCOUNT_ID` và `SVP_AWS_BACKUP_ACCOUNT_ID` như mục [Dựng baseline](#dựng-baseline).
 
 ```sh
-AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform apply stg.tfplan && rm stg.tfplan
-AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform plan    # mong đợi: No changes.
-AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform output -json ci_role_arns | jq -r 'keys[]'
+cd infra/aws/accounts/stg
+AWS_PROFILE=anhnv-stg aws sts get-caller-identity --region ap-southeast-1 --query '{Account:Account,Arn:Arn}' --output table
+echo "$SVP_AWS_STG_ACCOUNT_ID $SVP_AWS_BACKUP_ACCOUNT_ID"
+AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform init -backend-config=../../backend-stg.hcl
+AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform plan -out=stg.tfplan
 ```
 
-Lệnh cuối in đúng tên role của `ci_roles` của env. Sau apply còn ba việc tay, làm theo README module:
+`Account` phải bằng `$SVP_AWS_STG_ACCOUNT_ID`, `Arn` chứa `assumed-role/AWSReservedSSO_SvpAdmin_`; dòng `echo` in hai số 12 chữ số
+khác nhau. Plan chỉ thêm (`0 to change, 0 to destroy`); mọi tài nguyên của plan thuộc một phần của bảng; phần nào có trong plan thì có đủ
+số tài nguyên ở cột của env; số `to add` bằng tổng các phần đó. Ví dụ: account chỉ có baseline (cùng `CAA` và, ở prd, DNSSEC, query log)
+thì stg `Plan: 57 to add, 0 to change, 0 to destroy`, prd `Plan: 55 to add, 0 to change, 0 to destroy`; account đã có registry,
+observability thì `Plan: 9 to add, 0 to change, 0 to destroy` ở cả hai env, đúng phần backup. Dừng (không apply, dán plan lại) nếu có
+`change`, `destroy`, tài nguyên ngoài bảng hay phần thiếu tài nguyên. Rồi:
 
-- Ghi giá trị hai secret `ecr-pullthroughcache/ghcr`, `ecr-pullthroughcache/docker-hub` (module chỉ tạo vỏ):
-  [Pull-through cache](../modules/registry/README.md#pull-through-cache).
-- Sau buổi đầu có span: chạy lệnh của output `spans_retention_command`
-  ([Bước tay](../modules/observability/README.md#bước-tay-retention-của-awsspans)).
-- Gán người vào hai nhóm nền tảng ([`aws/org`](../org/README.md#nhóm-nền-tảng)) để đăng nhập `grafana_url`.
+```sh
+AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform apply stg.tfplan && rm stg.tfplan
+AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" \
+  terraform plan    # expect: No changes.
+```
+
+Sau apply, việc của từng phần vừa thêm:
+
+- DNSSEC, query log: bước [6. Alarm và DNSSEC của prd](#6-alarm-và-dnssec-của-prd) (xác nhận subscription, bản ghi `DS`).
+- Registry, observability: lệnh `output` dưới đây in đúng tên role của `ci_roles` của env. Rồi ba việc tay theo README module: ghi giá
+  trị hai secret `ecr-pullthroughcache/ghcr`, `ecr-pullthroughcache/docker-hub` (module chỉ tạo vỏ;
+  [Pull-through cache](../modules/registry/README.md#pull-through-cache)); sau buổi đầu có span, chạy lệnh của output
+  `spans_retention_command` ([Bước tay](../modules/observability/README.md#bước-tay-retention-của-awsspans)); gán người vào hai nhóm
+  nền tảng ([`aws/org`](../org/README.md#nhóm-nền-tảng)) để đăng nhập `grafana_url`.
+- Backup: lệnh `describe-region-settings` dưới đây in `RDS` và `S3` là `True`.
+
+```sh
+AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform output -json ci_role_arns | jq -r 'keys[]'
+AWS_PROFILE=anhnv-stg aws backup describe-region-settings --region ap-southeast-1 \
+  --query 'ResourceTypeOptInPreference.{RDS:RDS,S3:S3}' --output table
+```
 
 ## Gỡ baseline (có chủ đích)
 
 Chỉ khi bỏ hẳn env đó: bucket giữ state của mọi root của account, key giữ quyền đọc state. Gỡ hẳn cũng xoá bản phát
 hành trong ECR (GHCR còn bản gốc), metric, log, span và workspace Grafana của env. Trước hết mọi root của account đã
-`destroy` (`aws/gitops/<env>`, `aws/envs/<env>`), quét sót của buổi sạch.
+`destroy` (`aws/gitops/<env>`, `aws/envs/<env>`), quét sót của buổi sạch. AWS Backup không xoá vault còn recovery point: vault
+`svp-<env>` phải trống (`restore-drill.sh <env> cleanup` của buổi cuối đã chạy). Bản copy trong `svp-<env>-copy` của account
+`svp-backup` không bị gỡ cùng env và giữ tới hết retention.
 
 1. Bỏ uỷ quyền trước khi xoá zone: bản ghi `NS` ở zone cha còn trỏ tới name server của zone đã xoá thì người khác tạo zone cùng tên trên
    các name server đó chiếm được tên (subdomain takeover).
    - stg: xoá mục `stg.aws.<domain>` khỏi `delegated_subdomains` trong `aws/accounts/prd/prd.auto.tfvars`, rồi từ `aws/accounts/prd`:
-     `AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform plan -out=prd.tfplan` (mong đợi
+     `AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform plan -out=prd.tfplan` (mong đợi
      `0 to add, 0 to change, 1 to destroy`, đúng `module.baseline.aws_route53_record.delegation["stg.aws.<domain>"]`), rồi
-     `AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform apply prd.tfplan && rm prd.tfplan` (kiểm account prd
+     `AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform apply prd.tfplan && rm prd.tfplan` (kiểm account prd
      bằng `AWS_PROFILE=anhnv-prd aws sts get-caller-identity --region ap-southeast-1` trước).
    - prd: gỡ stg trước (zone prd chứa uỷ quyền của stg; bước 3 đòi zone chỉ còn `NS`, `SOA`, `CAA` ở đỉnh). Rồi theo đường lui của
      [Tắt ký DNSSEC](../modules/account-baseline/README.md#tắt-ký-dnssec): gỡ bản ghi `DS` `aws`, chờ TTL của nó, apply
@@ -347,7 +415,7 @@ hành trong ECR (GHCR còn bản gốc), metric, log, span và workspace Grafana
    `aws/modules/observability/kms.tf`; thêm `force_destroy = true` vào `aws_s3_bucket.state` (xoá được bucket còn
    version cũ và state của các root khác) và `force_delete = true` vào `aws_ecr_repository.release` của
    `aws/modules/registry/repositories.tf` (ECR không xoá repo còn image). Rồi
-   `AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform apply` (ở prd, khi mặc định của
+   `AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform apply` (ở prd, khi mặc định của
    `dnssec_signing` còn `true`, thêm `-var dnssec_signing=false` như bước 1): mong đợi
    `0 to add, 8 to change, 0 to destroy`, chỉ đổi `force_destroy` của bucket và `force_delete` của 7 repo phát hành.
 6. Xoá repo do pull-through cache tạo: ECR tạo chúng khi node kéo image qua cache, nên chúng nằm ngoài state, mã hoá
@@ -380,8 +448,9 @@ hành trong ECR (GHCR còn bản gốc), metric, log, span và workspace Grafana
    [Tắt ký DNSSEC](../modules/account-baseline/README.md#tắt-ký-dnssec):
    `AWS_PROFILE=anhnv-prd terraform state rm 'module.baseline.aws_kms_key.dnssec[0]' 'module.baseline.aws_kms_alias.dnssec[0]'`.
    Không apply sau lệnh này: config còn DNSSEC thì Terraform tạo key mới.
-8. `AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform destroy` (ở prd: tắt DNSSEC của zone
-   trước, rồi xoá KSK). Key của state, `alias/svp-<env>-ecr` và `alias/svp-<env>-observability` vào `PendingDeletion`
+8. `AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform destroy` (ở prd: tắt DNSSEC của zone
+   trước, rồi xoá KSK). Key của state, `alias/svp-<env>-ecr`, `alias/svp-<env>-observability` và `alias/svp-<env>-backup` vào
+   `PendingDeletion`
    30 ngày (không tính phí), huỷ được trong thời gian đó (id mỗi key in ở output của `destroy`):
    `AWS_PROFILE=anhnv-stg aws kms cancel-key-deletion --key-id <id key> --region ap-southeast-1`. Hai secret
    `ecr-pullthroughcache/ghcr`, `ecr-pullthroughcache/docker-hub` cũng chờ xoá 30 ngày, trong thời gian đó không tạo

@@ -18,6 +18,16 @@ variable "uploads_bucket_arn" {
   }
 }
 
+variable "uploads_kms_key_arn" {
+  description = "ARN of the KMS key that encrypts the uploads bucket (output uploads_kms_key_arn of the media module): MediaConvert decrypts the input of a job with its role."
+  type        = string
+
+  validation {
+    condition     = can(regex("^arn:aws[a-z-]*:kms:[a-z]{2}(-[a-z]+)+-[0-9]+:[0-9]{12}:key/[0-9a-f-]+$", var.uploads_kms_key_arn))
+    error_message = "uploads_kms_key_arn must be a key ARN (arn:aws:kms:<region>:<account>:key/<id>) with a 12-digit account, not an alias."
+  }
+}
+
 variable "media_bucket_arn" {
   description = "ARN of the media bucket of the env (arn:aws:s3:::<name>): MediaConvert writes the output of a job under media/ with its role."
   type        = string

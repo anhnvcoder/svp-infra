@@ -1,5 +1,5 @@
 variable "account_id" {
-  description = "The management account of the organization (12 digits): the credentials of AWS_PROFILE=anhnv-sso, which assume the role of the member accounts, and the first of the five accounts this root changes. Set it with TF_VAR_account_id from SVP_AWS_MGMT_ACCOUNT_ID; it never goes into a committed file."
+  description = "The management account of the organization (12 digits): the credentials of AWS_PROFILE=anhnv-sso, which assume the role of the member accounts, and the first of the accounts this root changes. Set it with TF_VAR_account_id from SVP_AWS_MGMT_ACCOUNT_ID; it never goes into a committed file."
   type        = string
 
   validation {
@@ -15,6 +15,16 @@ variable "log_archive_account_id" {
   validation {
     condition     = can(regex("^[0-9]{12}$", var.log_archive_account_id))
     error_message = "log_archive_account_id must be the 12 digits of an AWS account id."
+  }
+}
+
+variable "backup_account_id" {
+  description = "The account svp-backup (12 digits): gets the baseline. Set it with TF_VAR_backup_account_id from SVP_AWS_BACKUP_ACCOUNT_ID; it never goes into a committed file."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[0-9]{12}$", var.backup_account_id))
+    error_message = "backup_account_id must be the 12 digits of an AWS account id."
   }
 }
 

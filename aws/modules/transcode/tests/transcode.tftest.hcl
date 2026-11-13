@@ -35,6 +35,8 @@ variables {
   media_bucket_arn   = "arn:aws:s3:::svp-stg-media-000000000000-ap-southeast-1"
   alarm_topic_arn    = "arn:aws:sns:ap-southeast-1:000000000000:svp-stg-alarms"
 
+  uploads_kms_key_arn = "arn:aws:kms:ap-southeast-1:000000000000:key/0123abcd-4567-89ef-0123-456789abcdef"
+
   # ARNs of the stg resources, as AWS writes them.
   queue_arn      = "arn:aws:mediaconvert:ap-southeast-1:000000000000:queues/svp-stg"
   role_arn       = "arn:aws:iam::000000000000:role/svp-stg-mediaconvert"
@@ -71,7 +73,8 @@ run "stg" {
     error_message = "The role svp-stg-mediaconvert must trust mediaconvert.amazonaws.com only, with aws:SourceAccount and aws:SourceArn of the queue."
   }
 
-  # Exactly the table "Role MediaConvert" of the design: read uploads/*, write media/*, nothing else.
+  # Exactly the table "Role MediaConvert" of the design: read uploads/* and decrypt it with the uploads key, write
+  # media/*, nothing else.
   assert {
     condition = toset([
       for s in data.aws_iam_policy_document.mediaconvert.statement : jsonencode([
@@ -79,9 +82,10 @@ run "stg" {
       ])
       ]) == toset([
       jsonencode(["Allow", ["s3:GetObject"], ["${var.uploads_bucket_arn}/uploads/*"], 0, 0, null, null]),
+      jsonencode(["Allow", ["kms:Decrypt"], [var.uploads_kms_key_arn], 0, 0, null, null]),
       jsonencode(["Allow", ["s3:PutObject"], ["${var.media_bucket_arn}/media/*"], 0, 0, null, null]),
     ]) && aws_iam_role_policy.mediaconvert.policy == data.aws_iam_policy_document.mediaconvert.json
-    error_message = "The policy of the MediaConvert role must be exactly s3:GetObject on uploads/* and s3:PutObject on media/*."
+    error_message = "The policy of the MediaConvert role must be exactly s3:GetObject on uploads/*, kms:Decrypt on the uploads key and s3:PutObject on media/*."
   }
 
   # Exactly the MediaConvert, iam:PassRole and SQS rows of the table "bridge permissions" of the design.
@@ -186,10 +190,11 @@ run "prd" {
   command = plan
 
   variables {
-    env                = "prd"
-    uploads_bucket_arn = "arn:aws:s3:::svp-prd-uploads-000000000000-ap-southeast-1"
-    media_bucket_arn   = "arn:aws:s3:::svp-prd-media-000000000000-ap-southeast-1"
-    alarm_topic_arn    = "arn:aws:sns:ap-southeast-1:000000000000:svp-prd-alarms"
+    env                 = "prd"
+    uploads_bucket_arn  = "arn:aws:s3:::svp-prd-uploads-000000000000-ap-southeast-1"
+    media_bucket_arn    = "arn:aws:s3:::svp-prd-media-000000000000-ap-southeast-1"
+    alarm_topic_arn     = "arn:aws:sns:ap-southeast-1:000000000000:svp-prd-alarms"
+    uploads_kms_key_arn = "arn:aws:kms:ap-southeast-1:000000000000:key/89abcdef-0123-4567-89ab-cdef01234567"
   }
 
   assert {
@@ -215,8 +220,9 @@ run "prd" {
   assert {
     condition = toset(flatten([for s in data.aws_iam_policy_document.mediaconvert.statement : s.resources])) == toset([
       "arn:aws:s3:::svp-prd-uploads-000000000000-ap-southeast-1/uploads/*", "arn:aws:s3:::svp-prd-media-000000000000-ap-southeast-1/media/*",
+      "arn:aws:kms:ap-southeast-1:000000000000:key/89abcdef-0123-4567-89ab-cdef01234567",
     ])
-    error_message = "The MediaConvert role of prd must reach the buckets of prd only."
+    error_message = "The MediaConvert role of prd must reach the buckets and the uploads key of prd only."
   }
 }
 
@@ -248,6 +254,26 @@ run "media_bucket_arn_empty_rejected" {
   }
 
   expect_failures = [var.media_bucket_arn]
+}
+
+run "uploads_kms_key_arn_wildcard_rejected" {
+  command = plan
+
+  variables {
+    uploads_kms_key_arn = "arn:aws:kms:ap-southeast-1:000000000000:key/*"
+  }
+
+  expect_failures = [var.uploads_kms_key_arn]
+}
+
+run "uploads_kms_key_arn_account_rejected" {
+  command = plan
+
+  variables {
+    uploads_kms_key_arn = "arn:aws:kms:ap-southeast-1:00000000000:key/0123abcd-4567-89ef-0123-456789abcdef"
+  }
+
+  expect_failures = [var.uploads_kms_key_arn]
 }
 
 run "alarm_topic_arn_rejected" {

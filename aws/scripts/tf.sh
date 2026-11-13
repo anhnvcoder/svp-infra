@@ -19,15 +19,25 @@
 # an environment whose API endpoint is private, every command of root gitops but init needs the tunnel open.
 
 # Root env also takes TF_VAR_log_archive_account_id from SVP_AWS_LOG_ACCOUNT_ID, the account whose buckets receive its
-# flow logs and WAF logs: without it no command of root env runs.
+# flow logs and WAF logs, and TF_VAR_backup_account_id from SVP_AWS_BACKUP_ACCOUNT_ID, the account its RDS key lets copy
+# the snapshots of AWS Backup: without both no command of root env runs.
+
+# Every env apply records backup-undrained first: it tags the instance and buckets for AWS Backup again. env plan
+# --destroy (any form) and env destroy are refused until backup-drained of restore-drill.sh <env> cleanup is the last of
+# backup-undrained, env-apply-end, env-teardown-applied and backup-drained in the timeline; there is no way around it.
+
+# state-rm and import (env only) edit the state by hand after an in-place restore of the DB instance: the state still
+# holds the renamed old instance, so its address is removed and the restored one imported at it. The address is passed
+# as one argument, never split or evaluated (for_each keys hold brackets and quotes).
 
 # Usage: aws/scripts/tf.sh [--print] stg|prd env|gitops init|plan [--teardown|--destroy [--leftovers|--no-cluster]]|show|apply [--teardown]|destroy
+#        aws/scripts/tf.sh [--print] stg|prd env state-rm ADDRESS | env import ADDRESS ID
 set -euo pipefail
 
 # shellcheck source=aws/scripts/lib.sh
 . "$(dirname "$0")/lib.sh"
 printing && shift
-usage="usage: $(basename "$0") [--print] $(env_names session) env|gitops init|plan [--teardown|--destroy [--leftovers|--no-cluster]]|show|apply [--teardown]|destroy"
+usage="usage: $(basename "$0") [--print] $(env_names session) env|gitops init|plan [--teardown|--destroy [--leftovers|--no-cluster]]|show|apply [--teardown]|destroy; $(basename "$0") [--print] $(env_names session) env state-rm ADDRESS | env import ADDRESS ID"
 [ $# -ge 3 ] && [ $# -le 5 ] || fail "$usage"
 env_arg "$1"
 root=$2
@@ -39,7 +49,17 @@ esac
 cmd=$3
 flags="${4:-}${5:+ $5}"
 op=
+address=
+import_id=
 case "$root $cmd${flags:+ $flags}" in
+  'env state-rm '*)
+    [ $# -eq 4 ] || fail "$usage"
+    op=state-rm address=$4 ;;
+  'env import '*)
+    [ $# -eq 5 ] && [ -n "$4" ] && [ -n "$5" ] || fail "$usage"
+    op=import address=$4 import_id=$5 ;;
+  'gitops state-rm'* | 'gitops import'*)
+    fail "$cmd is for root env alone: the state of root gitops is never edited by hand" ;;
   *' init' | *' plan' | *' show' | *' apply' | *' destroy') op=$cmd ;;
   'env plan --teardown') op=plan-teardown ;;
   'env apply --teardown') op=apply-teardown ;;
@@ -63,6 +83,9 @@ if [ "$root" = env ]; then
   printing || [[ ${SVP_AWS_LOG_ACCOUNT_ID:-} =~ ^[0-9]{12}$ ]] ||
     fail "set SVP_AWS_LOG_ACCOUNT_ID to the 12 digits of the svp-log-archive account, output log_archive_account_id of aws/org (export SVP_AWS_LOG_ACCOUNT_ID=...; never in a committed file): root env writes its flow logs and WAF logs to that account's buckets"
   export TF_VAR_log_archive_account_id=${SVP_AWS_LOG_ACCOUNT_ID:-}
+  printing || [[ ${SVP_AWS_BACKUP_ACCOUNT_ID:-} =~ ^[0-9]{12}$ ]] ||
+    fail "set SVP_AWS_BACKUP_ACCOUNT_ID to the 12 digits of the svp-backup account, output backup_account_id of aws/org (export SVP_AWS_BACKUP_ACCOUNT_ID=...; never in a committed file): the RDS key of root env lets that account copy its snapshots"
+  export TF_VAR_backup_account_id=${SVP_AWS_BACKUP_ACCOUNT_ID:-}
 fi
 check_account
 export TF_VAR_account_id=${!account_var:-}
@@ -73,6 +96,16 @@ fi
 
 # has_mark EVENT: the session's timeline holds EVENT.
 has_mark() { awk -F '\t' -v e="$1" '$3 == e { found = 1 } END { exit !found }' "$session/timeline.tsv" 2>/dev/null; }
+
+# need_drained: the destroy of root env waits for restore-drill.sh <env> cleanup after the last apply or drill.
+need_drained() {
+  local last
+  printing && return 0
+  last=$(awk -F '\t' '$3 ~ /^(backup-undrained|env-apply-end|env-teardown-applied|backup-drained)$/ { e = $3 } END { print e }' \
+    "$session/timeline.tsv" 2>/dev/null || true)
+  [ "$last" = backup-drained ] ||
+    fail "the backups of $env_name are not drained since the last apply or drill (${last:-no mark} last in $session/timeline.tsv): aws/scripts/restore-drill.sh $env_name cleanup, then this again"
+}
 
 # The resource types whose protection the teardown file lifts: deletion protection of the DB instance and of the
 # edge's ALB, force_destroy of the buckets (root env has no other instance, load balancer or bucket).
@@ -179,6 +212,7 @@ case $op in
   apply)
     printing || [ -f "$root_dir/$plan_file" ] ||
       fail "no $rel/$plan_file: run $(basename "$0") $env_name $root plan and read it first"
+    [ "$root" != env ] || mark backup-undrained
     mark "$root-apply-start"
     tf_ "$root_dir" apply -input=false "$plan_file" || fail "terraform apply of $rel (read the error, then plan again)"
     mark "$root-apply-end"
@@ -218,6 +252,7 @@ case $op in
     fi
     printing || [ -f "$root_dir/$teardown_plan_file" ] ||
       fail "no $rel/$teardown_plan_file: run $(basename "$0") $env_name env plan --teardown and read it first"
+    mark backup-undrained
     tf_ "$root_dir" apply -input=false "$teardown_plan_file" ||
       fail "terraform apply of $rel/$teardown_plan_file (read the error, then plan --teardown again)"
     mark env-teardown-applied
@@ -262,6 +297,7 @@ case $op in
     if [ "$root" = env ] && [ -n "$teardown" ] && ! printing && ! has_mark env-teardown-applied; then
       fail "the protections of $rel are still on (deletion protection of RDS and of the ALB, versioned buckets): $(basename "$0") $env_name env plan --teardown (it targets the DB instance, the ALB and the buckets of the state alone, and records that nothing is to lift when the state has none), read it, $(basename "$0") $env_name env apply --teardown, then this again"
     fi
+    [ "$root" != env ] || need_drained
     need_auto_tfvars
     [ "$root" = env ] || gitops_inputs
     tf_ "$root_dir" plan -destroy -input=false "${var_files[@]}" -out="$destroy_plan_file" ||
@@ -269,9 +305,23 @@ case $op in
     write_plan_text "$destroy_plan_file" "$env_name-$root-destroy-plan.txt"
     ok "destroy plan written to $rel/$destroy_plan_file: read $plan_text, then $(basename "$0") $env_name $root destroy"
     ;;
+  state-rm)
+    tf_ "$root_dir" state rm "$address" ||
+      fail "terraform state rm $address of $rel ($(basename "$0") $env_name env init first)"
+    mark env-state-rm
+    ok "$address removed from the state of $rel; the resource itself is untouched"
+    ;;
+  import)
+    need_auto_tfvars
+    tf_ "$root_dir" import -input=false "${var_files[@]}" "$address" "$import_id" ||
+      fail "terraform import of $import_id as $address in $rel (read the error: an address still in the state needs state-rm first)"
+    mark env-import
+    ok "$import_id imported as $address in $rel; next: $(basename "$0") $env_name env plan, which must not replace or destroy it, only update in place what the restore did not carry; then env apply"
+    ;;
   destroy)
     printing || [ -f "$root_dir/$destroy_plan_file" ] ||
       fail "no $rel/$destroy_plan_file: run $(basename "$0") $env_name $root plan --destroy and read it first"
+    [ "$root" != env ] || need_drained
     mark "$root-destroy-start"
     tf_ "$root_dir" apply -input=false "$destroy_plan_file" ||
       fail "terraform apply of $rel/$destroy_plan_file: see the stuck-destroy section of docs/runbooks/session-stg.md, then plan --destroy and destroy again"

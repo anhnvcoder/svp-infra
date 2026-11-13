@@ -113,6 +113,62 @@ locals {
   # type only reports compliance.
   tag_enforced_for = ["ec2:ALL_SUPPORTED", "eks:ALL_SUPPORTED", "kms:ALL_SUPPORTED"]
 
+  # One daily backup plan per env, with the retention in days of the env vault and of the copy in svp-backup. Every
+  # retention is at least 2 days: the previous recovery point outlives the latest finish of the next one (24 hours
+  # plus both windows), so a completed point is always there. Design notes: README.md.
+  backup_region               = "ap-southeast-1"
+  backup_start_window_minutes = 60
+  backup_completion_minutes   = 180
+  backup_retention_days = {
+    prd = { vault = 35, copy = 35 }
+    stg = { vault = 2, copy = 2 }
+  }
+
+  # $account stands for the member account running the plan; a cross-account copy needs the real account id.
+  backup_policy_content = {
+    for env, days in local.backup_retention_days : env => jsonencode({
+      plans = {
+        "svp-${env}" = {
+          regions = { "@@assign" = [local.backup_region] }
+          rules = {
+            daily = {
+              schedule_expression            = { "@@assign" = "cron(0 18 * * ? *)" }
+              start_backup_window_minutes    = { "@@assign" = tostring(local.backup_start_window_minutes) }
+              complete_backup_window_minutes = { "@@assign" = tostring(local.backup_completion_minutes) }
+              target_backup_vault_name       = { "@@assign" = "svp-${env}" }
+              lifecycle                      = { delete_after_days = { "@@assign" = tostring(days.vault) } }
+              copy_actions = {
+                "arn:aws:backup:${local.backup_region}:${var.backup_account_id}:backup-vault:svp-${env}-copy" = {
+                  target_backup_vault_arn = {
+                    "@@assign" = "arn:aws:backup:${local.backup_region}:${var.backup_account_id}:backup-vault:svp-${env}-copy"
+                  }
+                  lifecycle = { delete_after_days = { "@@assign" = tostring(days.copy) } }
+                }
+              }
+            }
+          }
+          selections = {
+            resources = {
+              "svp-${env}-tagged" = {
+                iam_role_arn = { "@@assign" = "arn:aws:iam::$account:role/svp-${env}-backup" }
+                # RDS DB instances and S3 buckets only: snapshots inherit the Backup tag but never match.
+                resource_types = { "@@assign" = ["arn:aws:rds:*:*:db:*", "arn:aws:s3:::*"] }
+                conditions = {
+                  string_equals = {
+                    backup-daily = {
+                      condition_key   = { "@@assign" = "aws:ResourceTag/Backup" }
+                      condition_value = { "@@assign" = "daily" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    })
+  }
+
   # Every policy of the organization, by key, with its type and the one target it is attached to. Service and resource
   # control policies are deny-only: FullAWSAccess and RCPFullAWSAccess, which AWS attaches to every root, OU and
   # account, keep granting what IAM allows, and these take away what no member account may do whatever its IAM says.
@@ -524,7 +580,7 @@ locals {
     "tags" = {
       type        = "TAG_POLICY"
       target_id   = var.root_id
-      description = "Case and allowed values of the Project, Env, ManagedBy and Stack tags."
+      description = "Case and allowed values of the Project, Env, ManagedBy, Stack and Backup tags."
       content = jsonencode({
         tags = {
           Project = {
@@ -545,12 +601,32 @@ locals {
           Stack = {
             tag_key = { "@@assign" = "Stack" }
             tag_value = {
-              "@@assign" = ["bootstrap", "org", "baseline", "log-archive", "security", "security-baseline", "stg", "prd"]
+              "@@assign" = ["bootstrap", "org", "baseline", "log-archive", "security", "security-baseline", "backup", "stg", "prd"]
             }
+            enforced_for = { "@@assign" = local.tag_enforced_for }
+          }
+          Backup = {
+            tag_key      = { "@@assign" = "Backup" }
+            tag_value    = { "@@assign" = ["daily"] }
             enforced_for = { "@@assign" = local.tag_enforced_for }
           }
         }
       })
+    }
+
+    # The plans live in the member accounts as immutable plans: an env administrator can read them, not change them.
+    "backup-prd" = {
+      type        = "BACKUP_POLICY"
+      target_id   = var.prod_ou_id
+      description = "Daily backup of the tagged RDS instances and S3 buckets of prd, copied to svp-backup."
+      content     = local.backup_policy_content["prd"]
+    }
+
+    "backup-stg" = {
+      type        = "BACKUP_POLICY"
+      target_id   = var.nonprod_ou_id
+      description = "Daily backup of the tagged RDS instances and S3 buckets of stg, copied to svp-backup."
+      content     = local.backup_policy_content["stg"]
     }
   }
 }

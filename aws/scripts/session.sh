@@ -25,11 +25,15 @@ tf.sh $env_name gitops plan
 tf.sh $env_name gitops apply
 bootstrap.sh $env_name wait
 measure.sh $env_name
+restore-drill.sh $env_name backup
+restore-drill.sh $env_name rds
+restore-drill.sh $env_name s3
 pre-destroy.sh $env_name
 tf.sh $env_name gitops plan --destroy
 tf.sh $env_name gitops destroy
 tf.sh $env_name env plan --teardown
 tf.sh $env_name env apply --teardown
+restore-drill.sh $env_name cleanup
 tf.sh $env_name env plan --destroy
 tf.sh $env_name env destroy
 sweep.sh $env_name

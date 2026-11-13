@@ -162,13 +162,13 @@ stg chỉ thêm `CAA`:
 ```sh
 aws/scripts/check-account.sh stg
 cd aws/accounts/stg
-AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform plan -out=stg.tfplan
+AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform plan -out=stg.tfplan
 ```
 
 Mong đợi `Plan: 1 to add, 0 to change, 0 to destroy`, đúng `module.baseline.aws_route53_record.caa`. Rồi:
 
 ```sh
-AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform apply stg.tfplan && rm stg.tfplan
+AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform apply stg.tfplan && rm stg.tfplan
 cd ../prd
 ```
 
@@ -177,7 +177,7 @@ prd thêm module `alarms`, nên `init` trước:
 ```sh
 ../../scripts/check-account.sh prd
 AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform init -backend-config=../../backend-prd.hcl
-AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform plan -out=prd.tfplan
+AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform plan -out=prd.tfplan
 ```
 
 Mong đợi `Plan: 15 to add, 0 to change, 0 to destroy`: bản ghi `caa`; 6 của DNSSEC (`aws_kms_key.dnssec[0]` và alias ở `us-east-1`,
@@ -187,7 +187,7 @@ Mong đợi `Plan: 15 to add, 0 to change, 0 to destroy`: bản ghi `caa`; 6 c�
 dừng, dán plan. Rồi:
 
 ```sh
-AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform apply prd.tfplan && rm prd.tfplan
+AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform apply prd.tfplan && rm prd.tfplan
 date -u +%Y-%m-%dT%H:%M:%SZ | tee "$SVP_SESSION_DIR/zone-signed"
 cd ../../..
 ```
@@ -324,14 +324,14 @@ zone prd lẫn zone stg dưới nó. Thứ tự luôn là: gỡ `DS` ở cha, ch
    ```sh
    aws/scripts/check-account.sh prd
    cd aws/accounts/prd
-   AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform plan -var dnssec_signing=false -out=prd.tfplan
+   AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform plan -var dnssec_signing=false -out=prd.tfplan
    ```
 
    Mong đợi `Plan: 0 to add, 1 to change, 0 to destroy`, đúng `module.baseline.aws_route53_hosted_zone_dnssec.this[0]` với `signing_status`
    `SIGNING` → `NOT_SIGNING`. Rồi:
 
    ```sh
-   AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform apply prd.tfplan && rm prd.tfplan
+   AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform apply prd.tfplan && rm prd.tfplan
    AWS_PROFILE=anhnv-prd aws route53 get-dnssec --region us-east-1 \
      --hosted-zone-id "$(AWS_PROFILE=anhnv-prd terraform output -raw zone_id)" --query Status.ServeSignature --output text
    cd ../../..
@@ -360,7 +360,7 @@ còn trong state: plan lỗi ở `prevent_destroy`.
 2. PR đổi `dnssec_enabled = true` thành `false` trong `aws/accounts/prd/main.tf`; sau khi merge, ở bản clone đã cập nhật:
 
    ```sh
-   AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform plan -out=prd.tfplan
+   AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform plan -out=prd.tfplan
    ```
 
    Mong đợi `Plan: 0 to add, 0 to change, 4 to destroy`: `aws_route53_hosted_zone_dnssec.this[0]`, `aws_route53_key_signing_key.this[0]`
@@ -368,7 +368,7 @@ còn trong state: plan lỗi ở `prevent_destroy`.
    Có key KMS trong plan là bước 1 chưa chạy: dừng. Rồi:
 
    ```sh
-   AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform apply prd.tfplan && rm prd.tfplan
+   AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform apply prd.tfplan && rm prd.tfplan
    cd ../../..
    ```
 

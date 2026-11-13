@@ -58,3 +58,13 @@ variable "platform_viewer_group_id" {
   description = "Id of the IAM Identity Center group svp-platform-viewers (output platform_viewer_group_id of aws/org): the VIEWER role of the Grafana workspace. Set it in the uncommitted <env>.auto.tfvars or TF_VAR_platform_viewer_group_id."
   type        = string
 }
+
+variable "backup_account_id" {
+  description = "Id of the account svp-backup (output backup_account_id of aws/org), the account the key of the vault svp-<env> lets decrypt recovery points to copy them into its vault svp-<env>-copy. Set it with TF_VAR_backup_account_id from SVP_AWS_BACKUP_ACCOUNT_ID; it never goes into a committed file."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[0-9]{12}$", var.backup_account_id))
+    error_message = "backup_account_id must be the 12 digits of an AWS account id."
+  }
+}

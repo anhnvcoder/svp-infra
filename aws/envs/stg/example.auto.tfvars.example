@@ -1,7 +1,7 @@
 # Copy to stg.auto.tfvars (ignored by git) and fill in. Never commit the real values: the repository is public.
 # The account ids are not here: every command sets TF_VAR_account_id from SVP_AWS_STG_ACCOUNT_ID and
-# TF_VAR_log_archive_account_id from SVP_AWS_LOG_ACCOUNT_ID (README.md). No address of the learner's machine either: the
-# public endpoint of the API is off in stg (stg.tfvars).
+# TF_VAR_log_archive_account_id from SVP_AWS_LOG_ACCOUNT_ID and TF_VAR_backup_account_id from SVP_AWS_BACKUP_ACCOUNT_ID
+# (README.md). No address of the learner's machine either: the public endpoint of the API is off in stg (stg.tfvars).
 
 # Output zone_id of aws/accounts/stg, the zone of the stg account:
 #   AWS_PROFILE=anhnv-stg terraform -chdir=../../accounts/stg output -raw zone_id

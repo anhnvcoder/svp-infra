@@ -149,7 +149,7 @@ run "defaults" {
 
 # The S3 rights of media-worker, the MediaConvert bridge on AWS, exactly: Probe reads the upload, the bridge reads and
 # writes media/ and the job records under transcode-jobs/, and lists both prefixes. Records expire after 30 days, and
-# CloudFront still reads media/ alone.
+# CloudFront still reads media/ alone. The KMS statement is checked in uploads_kms.
 run "bridge_s3_policy" {
   command = plan
 
@@ -160,7 +160,7 @@ run "bridge_s3_policy" {
       actions    = sort(s.actions)
       resources  = sort(s.resources)
       conditions = [for c in s.condition : { test = c.test, variable = c.variable, values = sort(c.values) }]
-      })]) == toset([for s in [
+      }) if s.sid != "DecryptUploads"]) == toset([for s in [
       {
         sid        = "ReadUploads"
         effect     = "Allow"
@@ -201,6 +201,62 @@ run "bridge_s3_policy" {
       ["arn:aws:s3:::svp-stg-media-000000000000-ap-southeast-1/media/*"]
     ])
     error_message = "The bucket policy must let CloudFront read media/* alone, never the job records."
+  }
+}
+
+# Uploads are encrypted with the module's own key and the S3 Bucket Key; media stays on SSE-S3. Each principal of the
+# module that reads or writes uploads gets exactly the KMS action it needs on one resource. The key ARN is only known
+# after apply, so the tests count that resource; that it is the uploads key is read in the code.
+run "uploads_kms" {
+  command = plan
+
+  assert {
+    condition = (aws_kms_key.uploads.enable_key_rotation && aws_kms_key.uploads.deletion_window_in_days == 7 &&
+    aws_kms_key.uploads.customer_master_key_spec == "SYMMETRIC_DEFAULT" && aws_kms_key.uploads.key_usage == "ENCRYPT_DECRYPT")
+    error_message = "The uploads key must be symmetric, rotated and deleted after 7 days."
+  }
+
+  assert {
+    condition = alltrue([for r in aws_s3_bucket_server_side_encryption_configuration.this["uploads"].rule :
+      one(r.apply_server_side_encryption_by_default).sse_algorithm == "aws:kms" && r.bucket_key_enabled
+    ]) && length(aws_s3_bucket_server_side_encryption_configuration.this["uploads"].rule) == 1
+    error_message = "The uploads bucket must encrypt with SSE-KMS (the uploads key) and the S3 Bucket Key."
+  }
+
+  assert {
+    condition = alltrue([for r in aws_s3_bucket_server_side_encryption_configuration.this["media"].rule :
+      one(r.apply_server_side_encryption_by_default).sse_algorithm == "AES256"
+    ]) && length(aws_s3_bucket_server_side_encryption_configuration.this["media"].rule) == 1
+    error_message = "The media bucket must keep SSE-S3."
+  }
+
+  # video-service signs upload forms: S3 makes the data key with the signer's rights.
+  assert {
+    condition = jsonencode([for s in data.aws_iam_policy_document.video_service.statement : [s.effect, sort(s.actions), length(s.resources), length(s.condition)]
+      if anytrue([for a in s.actions : startswith(a, "kms:")])
+    ]) == jsonencode([["Allow", ["kms:GenerateDataKey"], 1, 0]])
+    error_message = "video-service must get kms:GenerateDataKey alone, on one resource (the uploads key), in one statement."
+  }
+
+  assert {
+    condition = jsonencode([for s in data.aws_iam_policy_document.media_worker.statement : [s.sid, s.effect, sort(s.actions), length(s.resources), length(s.condition)]
+      if anytrue([for a in s.actions : startswith(a, "kms:")])
+    ]) == jsonencode([["DecryptUploads", "Allow", ["kms:Decrypt"], 1, 0]])
+    error_message = "media-worker must get kms:Decrypt alone, on one resource (the uploads key), in one statement."
+  }
+
+  assert {
+    condition = jsonencode([for s in data.aws_iam_policy_document.malware_protection.statement : [
+      s.effect, sort(s.actions), length(s.resources), [for c in s.condition : [c.test, c.variable, c.values]]
+      ] if anytrue([for a in s.actions : startswith(a, "kms:")])]) == jsonencode([
+      ["Allow", ["kms:Decrypt", "kms:GenerateDataKey"], 1, [["StringEquals", "kms:ViaService", ["s3.ap-southeast-1.amazonaws.com"]]]]
+    ])
+    error_message = "The Malware Protection role must get kms:GenerateDataKey and kms:Decrypt on one resource (the uploads key), through S3 of the region only."
+  }
+
+  assert {
+    condition     = alltrue([for b in aws_s3_bucket.this : b.tags == tomap({ Backup = "daily" })]) && length(aws_s3_bucket.this) == 2
+    error_message = "Both buckets must carry Backup = daily, the tag the backup policy selects."
   }
 }
 
@@ -442,13 +498,14 @@ run "malware_protection" {
       "AllowPutValidationObject",
       "AllowCheckBucketOwnership",
       "AllowMalwareScan",
+      "AllowDecryptForMalwareScan",
     ])
-    error_message = "The role must hold the statements of the GuardDuty guide for a bucket without KMS, and nothing else."
+    error_message = "The role must hold the statements of the GuardDuty guide for an SSE-KMS bucket, and nothing else."
   }
 
   assert {
-    condition     = alltrue([for s in data.aws_iam_policy_document.malware_protection.statement : alltrue([for a in s.actions : !strcontains(a, "*") && !startswith(a, "kms:")])])
-    error_message = "The role must name each action, with no wildcard and no KMS action (the uploads bucket uses SSE-S3)."
+    condition     = alltrue([for s in data.aws_iam_policy_document.malware_protection.statement : alltrue([for a in s.actions : !strcontains(a, "*")])])
+    error_message = "The role must name each action, with no wildcard."
   }
 
   assert {

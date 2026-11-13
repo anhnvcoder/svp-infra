@@ -79,6 +79,16 @@ variable "max_allocated_storage" {
   }
 }
 
+variable "backup_copy_account_id" {
+  description = "AWS account (12 digits) that receives the cross-account copies of the instance's backups. The key policy of the instance's KMS key lets this account decrypt the snapshots and create grants for AWS resources, which a copy across accounts needs."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[0-9]{12}$", var.backup_copy_account_id))
+    error_message = "backup_copy_account_id must be the 12 digits of an AWS account id."
+  }
+}
+
 variable "alarm_topic_arn" {
   description = "ARN of the SNS topic every CloudWatch alarm of the instance notifies, when it fires and when it clears."
   type        = string

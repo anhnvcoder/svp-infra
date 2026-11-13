@@ -25,13 +25,13 @@ variable "sso_region" {
 }
 
 variable "account_emails" {
-  description = "Root email of each member account: stg, prd, log-archive, security. Each must be an address no other AWS account uses, a closed or suspended one included. Personal data of a public repository: set it in the uncommitted org.auto.tfvars."
+  description = "Root email of each member account: stg, prd, log-archive, security, backup. Each must be an address no other AWS account uses, a closed or suspended one included. Personal data of a public repository: set it in the uncommitted org.auto.tfvars."
   type        = map(string)
   sensitive   = true
 
   validation {
-    condition     = toset(keys(var.account_emails)) == toset(["stg", "prd", "log-archive", "security"]) && alltrue([for e in values(var.account_emails) : can(regex("^[^@[:space:]]+@[^@[:space:]]+\\.[^@[:space:]]+$", e))])
-    error_message = "account_emails must hold exactly the keys stg, prd, log-archive and security, each an email address."
+    condition     = toset(keys(var.account_emails)) == toset(["stg", "prd", "log-archive", "security", "backup"]) && alltrue([for e in values(var.account_emails) : can(regex("^[^@[:space:]]+@[^@[:space:]]+\\.[^@[:space:]]+$", e))])
+    error_message = "account_emails must hold exactly the keys stg, prd, log-archive, security and backup, each an email address."
   }
 
   validation {

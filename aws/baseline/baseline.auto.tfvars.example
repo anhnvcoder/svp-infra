@@ -1,6 +1,6 @@
-# Copy to baseline.auto.tfvars (ignored by git) and fill in. Account ids are not here: TF_VAR_account_id,
-# TF_VAR_log_archive_account_id, TF_VAR_security_account_id, TF_VAR_stg_account_id and TF_VAR_prd_account_id are set
-# in each command from the SVP_AWS_*_ACCOUNT_ID variables of the terminal.
+# Copy to baseline.auto.tfvars (ignored by git) and fill in. Account ids are not here: TF_VAR_account_id and one
+# TF_VAR_<account>_account_id per member account of local.accounts in main.tf are set in each command from the
+# SVP_AWS_*_ACCOUNT_ID variables of the terminal.
 
 # The same value as sso_region in aws/org/org.auto.tfvars (sso_region of the SSO profile in ~/.aws/config).
 sso_region = "us-east-1"

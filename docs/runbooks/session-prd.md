@@ -3,7 +3,8 @@
 Một buổi dựng env prd trong account `svp-prd` (`aws/envs/prd`, mức production: NAT mỗi AZ, RDS Multi-AZ, MSK ba broker trên ba AZ,
 ElastiCache primary và replica Multi-AZ, nhóm node hệ thống và node Karpenter on-demand trải ba AZ, bảo vệ xoá), cài Argo CD và root GitOps
 qua tunnel SSM (`aws/gitops/prd`), chạy đúng commit `svp-gitops` mà stg đã chạy, đo (thời gian dựng, failover RDS Multi-AZ, drain một AZ,
-khởi động lại một broker MSK khi đang ghi, failover Valkey, alarm), rồi gỡ sạch trong cùng buổi. Các diễn tập là chỗ kiểm bù của nhóm "giảm
+khởi động lại một broker MSK khi đang ghi, failover Valkey, alarm), diễn tập khôi phục (backup on-demand và copy sang account `svp-backup`,
+PITR của RDS, một object S3 từ AWS Backup), rồi gỡ sạch trong cùng buổi. Các diễn tập là chỗ kiểm bù của nhóm "giảm
 có điều kiện" ở stg ([ADR-0055](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0055-environment-matrix.md) §4). Thiết kế:
 [ADR-0048](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0048-prd-aws.md) (§4 truy cập API, §6 bootstrap EKS, §7 ghim revision,
 §8 promote, §9 kết thúc buổi, §10 chi phí), [ADR-0053](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0053-msk-elasticache-valkey.md)
@@ -19,7 +20,8 @@ internal, WAF, cert ACM, log CloudFront, DNS), [ADR-0062](https://github.com/anh
 [ADR-0063](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0063-managed-observability.md) (telemetry vào dịch vụ managed sống qua
 destroy), [ADR-0064](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0064-interface-endpoints.md) (endpoint interface ở mọi AZ của
 prd), [ADR-0066](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0066-mediaconvert-transcode.md) (transcode bằng AWS Elemental
-MediaConvert, giống hệt stg).
+MediaConvert, giống hệt stg), [ADR-0067](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0067-backup-dr.md) (backup và DR, giống
+stg trừ retention, vault lock và OU của Backup policy).
 
 Buổi prd đi đúng chuỗi script của buổi stg; khác biệt là dữ liệu (dòng `prd` của `env_table` trong `aws/scripts/lib.sh`: profile `anhnv-prd`,
 biến `SVP_AWS_PRD_ACCOUNT_ID`, tunnel cổng 6443, file `teardown.tfvars`, không thang k6) và các bước tay ở đây. Mọi mục chung (luật chạy lệnh,
@@ -48,7 +50,9 @@ aws/scripts/session.sh --print prd                 # mọi lệnh script của b
   bảng của ADR-0063 §12), báo riêng, không cộng vào C. Phần transcode (job MediaConvert của buổi, endpoint `mediaconvert` ở mọi AZ, SQS, request
   S3; $0 lúc không buổi) ở
   [ADR-0066 §12](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0066-mediaconvert-transcode.md#12-chi-phí) và mục "Chi phí" của
-  phụ lục, cộng vào C.
+  phụ lục, cộng vào C. Phần backup mỗi buổi (instance `svp-prd-pitr` của diễn tập theo lớp của nguồn, key `uploads`, hai alarm backup, request và
+  restore S3) cộng vào C; bản copy ở `svp-backup` và ba key của vault sống giữa các buổi, báo riêng như R: cả hai ở
+  [ADR-0067 §13](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0067-backup-dr.md#13-chi-phí) và mục "Chi phí" của phụ lục.
 - **Cả buổi 4 giờ**, từ cổng promote tới hai lượt `sweep.sh` sạch. Quá 3 giờ mà chưa đo xong thì bỏ phần đo còn lại, sang gỡ. Quên gỡ 24
   giờ ≈ $48 (24 × (H₀ + H_k)); budget `svp-prd-monthly` và budget tổng của org gửi email ở 50 %, 80 %, 100 %.
 - Ba distribution của prd (web, api, media) và ba web ACL là pay-as-you-go, có access log; prd không đăng ký gói flat-rate nào. Web ACL sót
@@ -118,6 +122,8 @@ aws/scripts/session.sh --print prd                 # mọi lệnh script của b
 10. **Nền tảng managed đã áp** theo [`platform-setup.md`](platform-setup.md#thứ-tự-áp-lần-đầu) tới hết bước (9) cho account prd, như
     `session-stg.md` điều kiện 8: registry, cache có credential, AMP, log group `/svp/prd/otel`, AMG, quota chu kỳ luật 15 s; role
     `svp-ci-ecr-promote` có, nên `promote-prd` của cổng dưới chép được image vào ECR prd.
+11. **Backup đã áp** theo [`backup-setup.md`](backup-setup.md#thứ-tự-áp-lần-đầu), như `session-stg.md` điều kiện 10, với Backup policy
+    `svp-backup-prd` gắn OU `Prod`, vault `svp-prd-copy`, vault `svp-prd` cùng role `svp-prd-backup` và opt-in của `aws/accounts/prd`.
 
 ## Mở terminal của buổi
 
@@ -128,7 +134,7 @@ cd infra
 AWS_PROFILE=anhnv-prd aws sso login --region us-east-1
 AWS_PROFILE=anhnv-sso aws sso login --region us-east-1                                             # cho lượt sweep.sh mgmt cuối buổi
 export SVP_AWS_PRD_ACCOUNT_ID=<12 số của account svp-prd> SVP_AWS_MGMT_ACCOUNT_ID=<12 số của account management>
-export SVP_AWS_LOG_ACCOUNT_ID=<12 số của account svp-log-archive>
+export SVP_AWS_LOG_ACCOUNT_ID=<12 số của account svp-log-archive> SVP_AWS_BACKUP_ACCOUNT_ID=<12 số của account svp-backup>
 export SVP_SESSION_DIR="$PWD/.session/$(date -u +%Y%m%dT%H%M%SZ)"
 ```
 
@@ -136,8 +142,8 @@ export SVP_SESSION_DIR="$PWD/.session/$(date -u +%Y%m%dT%H%M%SZ)"
 
 Các bước script, theo đúng thứ tự `session.sh --print prd`; bước tay của prd chen giữa, ở các mục dưới (cổng promote trước bước 1, email
 của alarm và tunnel sau bước 5, làm nóng cache sau bước 6, CORS của media, phép kiểm edge, phép kiểm nền tảng, phép kiểm nền tảng managed,
-commit status, phép kiểm transcode và diễn tập sau bước 11, ghi truy vấn dữ liệu và finding bảo mật trước bước 12, final snapshot
-sau bước 18, chạy lại truy vấn dữ liệu sau bước 20):
+commit status, phép kiểm transcode và diễn tập của mục **Đo** sau bước 11, đọc bản copy sau bước 12, ghi truy vấn dữ liệu và finding bảo mật
+trước bước 15, đọc recovery point sau bước 20, final snapshot sau bước 22, chạy lại truy vấn dữ liệu sau bước 24):
 
 | # | Lệnh | Hạn | Dán lại cho AI |
 | --- | --- | --- | --- |
@@ -152,15 +158,19 @@ sau bước 18, chạy lại truy vấn dữ liệu sau bước 20):
 | 9 | `aws/scripts/tf.sh prd gitops apply` | 15 phút | dòng `Apply complete! …`, output `bootstrap_revision` |
 | 10 | `aws/scripts/bootstrap.sh prd wait` | 45 phút | mọi dòng `ok`/`FAIL` |
 | 11 | `aws/scripts/measure.sh prd` | 10 phút | dòng `ok smoke passed …` |
-| 12 | `aws/scripts/pre-destroy.sh prd` | 30 phút | mọi dòng `ok`/`FAIL`/`note` |
-| 13 | `aws/scripts/tf.sh prd gitops plan --destroy` | 5 phút | dòng `Plan: 0 to add, 0 to change, N to destroy` |
-| 14 | `aws/scripts/tf.sh prd gitops destroy` | 10 phút | dòng `Apply complete! …` |
-| 15 | `aws/scripts/tf.sh prd env plan --teardown` | 5 phút | dòng `note … targets …`, dòng `Plan: 0 to add, N to change, 0 to destroy` và đường dẫn file text (hay dòng `skip`) |
-| 16 | `aws/scripts/tf.sh prd env apply --teardown` | 10 phút | dòng `Apply complete! …`, mốc `env-teardown-applied` (hay dòng `skip`) |
-| 17 | `aws/scripts/tf.sh prd env plan --destroy` | 5 phút | dòng `Plan: 0 to add, 0 to change, N to destroy` và đường dẫn file text của plan |
-| 18 | `aws/scripts/tf.sh prd env destroy` | 60 phút | dòng `Apply complete! Resources: 0 added, 0 changed, N destroyed.` và hai dòng `Destruction complete after …` của cluster MSK, replication group ElastiCache |
-| 19 | `aws/scripts/sweep.sh prd` | 5 phút | toàn bộ output |
-| 20 | `aws/scripts/sweep.sh mgmt` | 5 phút | toàn bộ output |
+| 12 | `aws/scripts/restore-drill.sh prd backup` | 60 phút | mọi dòng `ok`/`FAIL`, dòng `PASS backup …` |
+| 13 | `aws/scripts/restore-drill.sh prd rds` | 75 phút | mọi dòng `ok`/`FAIL`, dòng `PASS rds …` hay `FAIL rds …` |
+| 14 | `aws/scripts/restore-drill.sh prd s3` | 30 phút | mọi dòng `ok`/`FAIL`, dòng `PASS s3 …` hay `FAIL s3 …` |
+| 15 | `aws/scripts/pre-destroy.sh prd` | 30 phút | mọi dòng `ok`/`FAIL`/`note` |
+| 16 | `aws/scripts/tf.sh prd gitops plan --destroy` | 5 phút | dòng `Plan: 0 to add, 0 to change, N to destroy` |
+| 17 | `aws/scripts/tf.sh prd gitops destroy` | 10 phút | dòng `Apply complete! …` |
+| 18 | `aws/scripts/tf.sh prd env plan --teardown` | 5 phút | dòng `note … targets …`, dòng `Plan: 0 to add, N to change, 0 to destroy` và đường dẫn file text (hay dòng `skip`) |
+| 19 | `aws/scripts/tf.sh prd env apply --teardown` | 10 phút | dòng `Apply complete! …`, mốc `env-teardown-applied` (hay dòng `skip`) |
+| 20 | `aws/scripts/restore-drill.sh prd cleanup` | 30 phút | mọi dòng `ok`/`FAIL`/`skip`, mốc `backup-drained` |
+| 21 | `aws/scripts/tf.sh prd env plan --destroy` | 5 phút | dòng `Plan: 0 to add, 0 to change, N to destroy` và đường dẫn file text của plan |
+| 22 | `aws/scripts/tf.sh prd env destroy` | 60 phút | dòng `Apply complete! Resources: 0 added, 0 changed, N destroyed.` và hai dòng `Destruction complete after …` của cluster MSK, replication group ElastiCache |
+| 23 | `aws/scripts/sweep.sh prd` | 5 phút | toàn bộ output |
+| 24 | `aws/scripts/sweep.sh mgmt` | 5 phút | toàn bộ output |
 
 ## Cổng promote prd (trước mọi lệnh tốn tiền)
 
@@ -241,7 +251,7 @@ của topic `svp-prd-alarms` theo `session-stg.md`, mục 3–5 (`AWS_PROFILE=an
 ## Tunnel tới API (sau bước 5, trước bước 6)
 
 Như `session-stg.md`, mục **Tunnel tới API**, với cổng `127.0.0.1:6443` của prd. Mở ở **một terminal riêng** từ gốc repo, giữ chạy tới hết
-bước 14 (Ctrl-C để đóng):
+bước 17 (Ctrl-C để đóng):
 
 ```sh
 cd infra
@@ -314,7 +324,7 @@ Sau smoke, mục [Phép kiểm nền tảng managed](session-stg.md#phép-kiểm
 - (d) chỉ phần luật: hai namespace `ACTIVE`, Alertmanager `ACTIVE`, chu kỳ `15`. prd chạy commit `svp-gitops` mà stg đã chạy (`gitopsRevision`
   ghim), nên không PR annotation nào tới được nó: canary, AnalysisRun thủ công và cảnh báo `page` qua AMP được kiểm ở stg, cùng chart; alarm
   `page` của prd là mục 6 của **Đo**.
-- (e) dữ liệu còn sau destroy: như stg, thư mục `.session/persist-prd/`; ghi trước bước 12 (sau các diễn tập), chạy lại sau bước 20 cùng ngày
+- (e) dữ liệu còn sau destroy: như stg, thư mục `.session/persist-prd/`; ghi trước bước 15 (sau các diễn tập), chạy lại sau bước 24 cùng ngày
   (mục **Kết thúc buổi**) và ở buổi prd kế. Retention của prd dài hơn stg (`locals` của `aws/accounts/prd`).
 
 Dán output của từng phép như mục của stg.
@@ -510,31 +520,67 @@ Deployment `svp-data/svp-ops`); một truy vấn tay vào database của service
 `--context svp-prd`, tunnel mở: cùng các dòng `ok`, `FAIL` (`cluster svp-prd …`). Không broker nào restart: MSK đọc mật khẩu từ secret SCRAM,
 ElastiCache từ user của nó; chỉ pod client restart (Reloader).
 
+## Bước 12–14: diễn tập khôi phục
+
+Như `session-stg.md`, mục **12–14. Diễn tập khôi phục**, với `prd`, chạy sau mọi phép của mục **Đo** (lượt k6 cuối đã xoá, không client nào
+ghi) và sau lượt chạy lại (f) của mục **Phép kiểm transcode**, tunnel mở:
+
+```sh
+aws/scripts/restore-drill.sh prd backup
+aws/scripts/restore-drill.sh prd rds
+aws/scripts/restore-drill.sh prd s3
+```
+
+Khác stg ở dữ liệu: plan `svp-prd` của Backup policy `svp-backup-prd`, vault `svp-prd`, role `svp-prd-backup`, bản copy vào `svp-prd-copy`
+(retention và vault lock của prd, ADR-0067 §4); instance `svp-prd-pitr` một AZ cùng lớp với `svp-prd` (nguồn Multi-AZ, bản khôi phục không),
+nên giờ của nó là khoản lớn nhất của phần backup mỗi buổi. Cùng mục tiêu RTO/RPO, cùng cách đọc dòng `FAIL`. Đọc bản copy bằng lệnh của mục
+stg với `svp-prd-copy`:
+
+```sh
+k=$(AWS_PROFILE=anhnv-backup-ro aws backup describe-backup-vault --backup-vault-name svp-prd-copy --region ap-southeast-1 \
+  --query EncryptionKeyArn --output text)
+AWS_PROFILE=anhnv-backup-ro aws backup list-recovery-points-by-backup-vault --backup-vault-name svp-prd-copy --region ap-southeast-1 \
+  --by-created-after "$(head -n 1 "$SVP_SESSION_DIR/timeline.tsv" | cut -f 1)" --output json |
+  jq -r --arg k "$k" '.RecoveryPoints[] | [.ResourceType, .Status, .CreationDate, .CalculatedLifecycle.DeleteAt,
+    (if .EncryptionKeyArn == $k then "vault-key" else "other-key" end)] | @tsv'
+```
+
+Mong ba dòng `COMPLETED`, `DeleteAt` cách `CreationDate` đúng retention bản copy của prd, `vault-key`. Lệnh xem log quanh T_r, khôi phục
+object bằng delete marker khi restore job lỗi: như stg với `anhnv-prd`, `--context svp-prd`, bucket `svp-prd-media-<account prd>-ap-southeast-1`.
+Dán bảng `restore-drill.tsv` (lệnh `column` của mục stg); số đo vào phụ lục ADR-0067 cùng số của stg.
+
 ## Kết thúc buổi
 
-**Trước bước 12, finding bảo mật của buổi** (chỉ đọc, khi tài nguyên của buổi còn sống, cả khi buổi dừng sớm): hai lệnh và cách xử lý của
-`session-stg.md`, mục [Finding bảo mật của buổi](session-stg.md#finding-bảo-mật-của-buổi-sau-bước-11-trước-bước-12), cùng điều kiện
+**Trước bước 15, finding bảo mật của buổi** (chỉ đọc, khi tài nguyên của buổi còn sống, cả khi buổi dừng sớm): hai lệnh và cách xử lý của
+`session-stg.md`, mục [Finding bảo mật của buổi](session-stg.md#finding-bảo-mật-của-buổi-sau-bước-14-trước-bước-15), cùng điều kiện
 (bước (4), (5) của nền bảo mật org), với dòng đầu `ACC="${SVP_AWS_PRD_ACCOUNT_ID:?not set}"` của prd (comment trên dòng `ACC` của stg) thay
 dòng của stg: dòng của stg chạy ở terminal prd thì đọc finding của account stg. Mốc của diễn tập prd cũng nằm trong `timeline.tsv` của buổi.
 
 Theo thứ tự, mỗi bước xong mới sang bước sau:
 
-1. **Destroy root gitops rồi root env** (bước 12–18, tunnel còn mở tới hết bước 14). Bảo vệ của prd được nhấc trước: bước 15 đọc
+1. **Destroy root gitops rồi root env** (bước 15–22, tunnel còn mở tới hết bước 17). Bảo vệ của prd được nhấc trước: bước 18 đọc
    `terraform state list` của `aws/envs/prd` rồi plan với `prd.tfvars` và `teardown.tfvars`, chỉ nhắm (`-target`) DB instance, ALB edge và
    bucket có trong state (đọc `prd-env-teardown-plan.txt`: chỉ `to change`, deletion protection của RDS và của ALB `svp-prd-edge` về `false`,
    `force_destroy` của bucket; cảnh báo
-   "Resource targeting is in effect" của Terraform là đúng ý), bước 16 apply nó; `tf.sh prd env plan --destroy` dừng với `FAIL the protections
-   of aws/envs/prd are still on` khi chưa có mốc `env-teardown-applied`, rồi plan `-destroy` với cả hai file, không `-target`. Destroy vẫn ghi
-   final snapshot của RDS (`skip_final_snapshot` giữ `false`) và giữ backup tự động.
+   "Resource targeting is in effect" của Terraform là đúng ý), bước 19 apply nó; `tf.sh prd env plan --destroy` dừng với `FAIL the protections
+   of aws/envs/prd are still on` khi chưa có mốc `env-teardown-applied`. Apply của bước 19 cũng gắn lại tag `Backup`, nên bước 20
+   (`restore-drill.sh prd cleanup`, mục **18–22** của `session-stg.md`) chạy sau nó: xoá `svp-prd-pitr` nếu còn, gỡ tag, chờ job, xoá recovery
+   point của vault `svp-prd` đã có bản copy, ghi `backup-drained`; thiếu mốc đó thì `plan --destroy` dừng với `FAIL the backups of prd are not
+   drained`. Rồi plan `-destroy` với cả hai file, không `-target`. Destroy vẫn ghi final snapshot của RDS (`skip_final_snapshot` giữ `false`) và
+   giữ backup tự động.
 
-   Apply của bước 5 đỏ giữa chừng (vd thiếu quota): vẫn làm bước 15, 16 trước `plan --destroy` (với `--no-cluster` khi chưa có cluster EKS,
-   điều kiện ở `session-stg.md`, mục 15–18). Plan chỉ nhắm những gì đã được tạo nên không tạo thêm phần còn thiếu và không gặp lại lỗi
-   cũ; state không có DB instance, ALB hay bucket nào thì bước 15 in `skip`, ghi mốc `env-teardown-applied` (không có gì để nhấc) và bước 16 in
-   `skip`.
-2. **Final snapshot và backup tự động**: đọc final snapshot có thật (dán tên và thời điểm: bằng chứng bảo vệ chạy), rồi xoá nó; đọc backup
-   tự động được giữ, rồi xoá từng cái:
+   Apply của bước 5 đỏ giữa chừng (vd thiếu quota): vẫn làm bước 18, 19, 20 trước `plan --destroy` (với `--no-cluster` khi chưa có cluster
+   EKS, điều kiện ở `session-stg.md`, mục 18–22). Plan chỉ nhắm những gì đã được tạo nên không tạo thêm phần còn thiếu và không gặp lại lỗi
+   cũ; state không có DB instance, ALB hay bucket nào thì bước 18 in `skip`, ghi mốc `env-teardown-applied` (không có gì để nhấc) và bước 19 in
+   `skip`; bước 20 in `skip` cho phần chưa tạo.
+2. **Recovery point, final snapshot và backup tự động**: đọc recovery point của buổi (lệnh đầu: vault `svp-prd` của account không còn recovery
+   point nào sau bước 20, mong `0`; bản copy của buổi còn ở `svp-prd-copy`: lệnh **Đọc bản copy** của mục **Bước 12–14**, mong cùng ba dòng
+   như lúc đọc sau bước 12). Snapshot `awsbackup:*` của AWS Backup không phải `manual`, không hiện ở lệnh thứ hai. Đọc final snapshot có thật
+   (dán tên và thời điểm: bằng chứng bảo vệ chạy), rồi xoá nó; đọc backup tự động được giữ, rồi xoá từng cái:
 
    ```sh
+   AWS_PROFILE=anhnv-prd aws backup list-recovery-points-by-backup-vault --backup-vault-name svp-prd --region ap-southeast-1 \
+     --query 'length(RecoveryPoints)' --output text
    AWS_PROFILE=anhnv-prd aws rds describe-db-snapshots --db-instance-identifier svp-prd --snapshot-type manual --region ap-southeast-1 \
      --query 'DBSnapshots[].[DBSnapshotIdentifier,SnapshotCreateTime,Status]' --output text
    AWS_PROFILE=anhnv-prd aws rds delete-db-snapshot --db-snapshot-identifier <svp-prd-final-…> --region ap-southeast-1 --query 'DBSnapshot.Status' --output text
@@ -547,12 +593,13 @@ Theo thứ tự, mỗi bước xong mới sang bước sau:
 3. **`aws/scripts/sweep.sh prd`** (profile `anhnv-prd`): chỉ còn dòng `kept` (`Stack=baseline`: bucket state, KMS key state, zone
    `aws.<domain>` cùng `CAA` và bản ghi `NS` uỷ quyền `stg.aws.<domain>` dưới đỉnh của nó, ở `us-east-1` key DNSSEC, hai alarm DNSSEC, log
    group query log, topic `svp-prd-dns-alarms` và key của nó; registry ECR, rule và repo của cache, OIDC provider, role CI, workspace AMP, log
-   group `/svp/prd/otel`, workspace AMG và key của chúng; `Stack=security-baseline`: CMK EBS), không endpoint interface, không rule groups
+   group `/svp/prd/otel`, workspace AMG và key của chúng; vault `svp-prd`, role `svp-prd-backup` và key của vault; `Stack=security-baseline`:
+   CMK EBS), không endpoint interface, không rule groups
    namespace của AMP, và `pending deletion` (KMS key của root
    env: RDS, MSK, alarm, Secrets của EKS; 7 ngày), exit 0; không còn dòng MSK, ElastiCache, `AmazonMSK_*`, log group `/aws/msk/svp-prd` (phép kiểm (f) của ADR-0053),
    không còn instance, launch template, instance profile, hàng đợi SQS hay rule EventBridge nào của Karpenter; không còn queue MediaConvert
    `svp-prd`, role `svp-prd-mediaconvert`, hàng đợi `svp-prd-transcode-events*`, rule `svp-prd-mediaconvert-job-state` (phép kiểm gỡ của
-   ADR-0066).
+   ADR-0066); không còn recovery point, job AWS Backup chưa kết thúc hay instance `svp-prd-pitr` (phép kiểm gỡ của ADR-0067).
    Còn gì khác: chạy lệnh `delete:` nó in, rồi chạy lại. Gói của account rỗng (mong `[]`), cùng lượt sweep sạch này:
 
    ```sh
@@ -564,7 +611,7 @@ Theo thứ tự, mỗi bước xong mới sang bước sau:
 
 Một lượt `sweep.sh prd` chạy trước bước 2 được phép exit khác 0 (final snapshot, backup tự động còn đó) và chỉ để xem. **Buổi chỉ xong khi
 lượt `sweep.sh prd` sau bước 2 và lượt `sweep.sh mgmt` cùng exit 0.** AI nhắc tới khi người học xác nhận đủ bốn bước. Rồi, cùng ngày, chạy
-lại truy vấn dữ liệu đã ghi trước bước 12 (mục **Phép kiểm nền tảng managed** (e), `after-destroy.txt` của `.session/persist-prd/`) và dán
+lại truy vấn dữ liệu đã ghi trước bước 15 (mục **Phép kiểm nền tảng managed** (e), `after-destroy.txt` của `.session/persist-prd/`) và dán
 `diff`; buổi đầu có span của account prd: retention của `aws/spans` theo bước (10) của
 [`platform-setup.md`](platform-setup.md#bước-10-retention-của-awsspans). Sau 24 giờ: Cost Explorer của account prd theo dịch vụ, so với C.
 

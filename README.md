@@ -53,6 +53,8 @@ Nâng minor EKS của cả hai env theo runbook [`docs/runbooks/eks-upgrade.md`]
 [`docs/runbooks/edge-setup.md`](docs/runbooks/edge-setup.md).
 Áp nền tảng managed lần đầu (Inspector, nhóm nền tảng, registry ECR và role CI, observability, credential của pull-through cache, quota chu kỳ
 luật AMP) và xoay PAT của cache theo runbook [`docs/runbooks/platform-setup.md`](docs/runbooks/platform-setup.md).
+Áp backup lần đầu (account `svp-backup`, Backup policy, vault copy và vault env) theo runbook
+[`docs/runbooks/backup-setup.md`](docs/runbooks/backup-setup.md); diễn tập khôi phục và xoá backup cuối buổi nằm ở runbook buổi.
 Cài đặt GitHub của các repo (Terraform `github/`, GitHub App từ manifest, phần provider không quản) theo runbook
 [`docs/runbooks/github-setup.md`](docs/runbooks/github-setup.md); `make github-check` đọc lại phần ngoài Terraform.
 
@@ -73,11 +75,12 @@ renovate.json                 provider, module, ruleset tflint, image ghim của
 .github/zizmor.yml            ngoại lệ của zizmor, mỗi mục một lý do (tạo khi có ngoại lệ đầu tiên)
 aws/
   bootstrap/                  management account, một lần, giữ giữa các buổi: bucket state (KMS key), budget, Cost Anomaly Detection, tag phân bổ chi phí của org; không hosted zone nào
-  org/                        management account: Organizations, OU Security và Workloads/Prod, Workloads/NonProd, bốn account thành viên, policy của tổ chức, delegated admin, root tập trung, liên hệ SECURITY, IAM Identity Center (SvpAdmin, SvpReadOnly, SvpLogReader), organization trail
+  org/                        management account: Organizations, OU Security và Workloads/Prod, Workloads/NonProd, các account thành viên svp-*, policy của tổ chức (cả Backup policy), cross-account backup và opt-in AWS Backup, delegated admin, root tập trung, liên hệ SECURITY, IAM Identity Center (SvpAdmin, SvpReadOnly, SvpLogReader), organization trail
   log-archive/                account svp-log-archive (chạy từ management qua OrganizationAccountAccessRole): bucket log của org (cả log CloudFront), hai KMS key, delivery destination svp-cloudfront-<env> của log CloudFront
   security/                   account svp-security (như trên): GuardDuty, Security Hub CSPM, aggregator Config, Access Analyzer của org; bus và SNS cảnh báo bảo mật
-  baseline/                   năm account (như trên): baseline bảo mật của mỗi account, CMK EBS của stg, prd
-  accounts/<env>/             baseline của mỗi account thành viên (stg, prd), giữ giữa các buổi: bucket state, KMS key của nó, zone của env với CAA (prd aws.<domain>, giữ cả bản ghi NS uỷ quyền stg.aws.<domain>, DNSSEC, query log, topic alarm DNSSEC; stg stg.aws.<domain>), budget; registry ECR, pull-through cache, role CI và observability (AMP, log group ứng dụng, X-Ray, AMG) của env
+  baseline/                   mọi account của tổ chức (như trên): baseline bảo mật của mỗi account, CMK EBS của stg, prd
+  backup/                     account svp-backup (như trên): KMS key, vault svp-stg-copy, svp-prd-copy có vault lock governance nhận bản copy của AWS Backup
+  accounts/<env>/             baseline của mỗi account thành viên (stg, prd), giữ giữa các buổi: bucket state, KMS key của nó, zone của env với CAA (prd aws.<domain>, giữ cả bản ghi NS uỷ quyền stg.aws.<domain>, DNSSEC, query log, topic alarm DNSSEC; stg stg.aws.<domain>), budget; registry ECR, pull-through cache, role CI và observability (AMP, log group ứng dụng, X-Ray, AMG) của env; vault AWS Backup svp-<env>, key, role svp-<env>-backup, opt-in
   envs/<env>/                 cấu hình gốc của mỗi env (stg, prd: cùng *.tf kể cả bastion SSM, khác ở <env>.tfvars; prd thêm teardown.tfvars)
   gitops/<env>/               bootstrap GitOps của cluster EKS của env (GitOps Bridge): namespace, Argo CD, AppProject, cluster Secret, ApplicationSet svp-bootstrap
   modules/                    module nội bộ; lock file không commit
@@ -91,14 +94,16 @@ aws/
     ssm-bastion               bastion SSM tới endpoint private của API EKS (cả hai env)
     external-secrets          vỏ entry Secrets Manager svp/<env>/*, role của External Secrets theo namespace, Pod Identity
     gitops-bridge             giá trị của bootstrap GitOps (không resource): cluster Secret, values Argo CD, root
-    org-policies              mọi policy của tổ chức: SCP, RCP data perimeter, declarative policy EC2, tag policy
+    org-policies              mọi policy của tổ chức: SCP, RCP data perimeter, declarative policy EC2, tag policy, Backup policy svp-backup-<env>
+    backup-vault              vault AWS Backup từ một KMS key có sẵn, vault lock và vault access policy tuỳ chọn (root backup, accounts/<env>)
+    backup-alarms             alarm svp-<env>-backup-job-failed, svp-<env>-backup-copy-failed của AWS Backup (root envs/<env>)
     security-baseline         baseline bảo mật của một account: S3 BPA cấp account, EBS mã hoá mặc định, Config recorder, rule svp-security-*
     account-baseline          bucket state, KMS key, zone (cùng bản ghi NS uỷ quyền zone con, chỉ prd dùng), CAA, DNSSEC và query log (prd bật), budget của một account thành viên
     registry                  ECR private của một account env (root accounts/<env>): repo phát hành bất biến, pull-through cache, quét Inspector, KMS, OIDC provider GitHub, role CI svp-ci-*
     observability             nơi nhận telemetry của một account env (root accounts/<env>): workspace AMP, log group /svp/<env>/otel, Transaction Search của X-Ray, Amazon Managed Grafana, KMS
   backend.hcl                 backend của management (bucket của aws/bootstrap; không commit, sinh từ output backend_hcl)
   backend-<env>.hcl           backend của account stg, prd (bucket, region, KMS; không key, mỗi root truyền key riêng; không commit, sinh từ output của accounts/<env>)
-  scripts/                    script buổi AWS theo bảng env (mgmt, stg, prd) của lib.sh: kiểm account, DNS, Terraform hai root, secret và token Grafana, làm nóng pull-through cache, chờ Argo CD, đo, pre-destroy, sweep
+  scripts/                    script buổi AWS theo bảng env (mgmt, stg, prd) của lib.sh: kiểm account, DNS, Terraform hai root, secret và token Grafana, làm nóng pull-through cache, chờ Argo CD, đo, diễn tập khôi phục và xoá backup cuối buổi (restore-drill.sh), pre-destroy, sweep
 github/                       cài đặt GitHub của các repo trong `local.repositories` (repo, quyền Actions, ruleset, environment promote, promote-prd, ecr-rescan); state trong bucket của aws/bootstrap
 docs/diagrams/                sơ đồ AWS svp-aws.drawio (trang stg, prd, flows), PDF, PNG nhúng ở docs của repo code; sinh từ spec
 .claude/skills/aws-drawio-diagram/   spec và checker của sơ đồ (luật vẽ ở SKILL.md)
@@ -241,9 +246,12 @@ Hai đường vào:
   `aws/accounts/<env>`, `DS` ở DNS cha), trước buổi đầu có edge; tắt ký DNSSEC ở cùng runbook.
 - **Nền tảng managed, một lần:** runbook [`docs/runbooks/platform-setup.md`](docs/runbooks/platform-setup.md) (`aws/org`, `aws/security`,
   `github/`, hai root `aws/accounts/<env>`, credential của cache, secret của CI, quota AMP), trước buổi đầu có registry và observability.
+- **Backup, một lần:** runbook [`docs/runbooks/backup-setup.md`](docs/runbooks/backup-setup.md) (`aws/org` tạo account `svp-backup` và
+  Backup policy, `aws/baseline`, `aws/security` áp lại, `aws/backup`, hai root `aws/accounts/<env>`), trước buổi đầu có diễn tập khôi phục.
 - **Cài đặt GitHub** (thêm repo hay App): runbook [`docs/runbooks/github-setup.md`](docs/runbooks/github-setup.md).
 - **Mỗi buổi dựng, đo, gỡ một env:** runbook [`docs/runbooks/session-stg.md`](docs/runbooks/session-stg.md) (stg, cùng mọi mục chung) và
-  [`docs/runbooks/session-prd.md`](docs/runbooks/session-prd.md) (prd: cổng promote, diễn tập, final snapshot). Xem trước
+  [`docs/runbooks/session-prd.md`](docs/runbooks/session-prd.md) (prd: cổng promote, diễn tập, final snapshot); diễn tập khôi phục và xoá
+  backup của buổi (`restore-drill.sh`) ở cả hai. Xem trước
   toàn bộ lệnh của buổi, không chạy gì và không cần credential: `aws/scripts/session.sh --print stg` (hay `prd`). Chi phí và trần một buổi
   4 giờ: mục "Giới hạn" của `session-stg.md`, "Chi phí và giới hạn" của `session-prd.md`; phần edge mỗi buổi và lúc không buổi:
   [phụ lục ADR-0061 §13](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0061-edge-cloudfront-waf-acm.md#13-chi-phí-edge).
@@ -255,18 +263,21 @@ của buổi, không ghi vào file nào); mọi lệnh viết sẵn ghi profile 
 
 | Account | Profile ghi | Profile chỉ đọc | Biến account | Root |
 | --- | --- | --- | --- | --- |
-| management (account sandbox) | `anhnv-sso` | — | `SVP_AWS_MGMT_ACCOUNT_ID` | `aws/bootstrap`, `aws/org`, `aws/log-archive`, `aws/security`, `aws/baseline`, `github/` |
+| management (account sandbox) | `anhnv-sso` | — | `SVP_AWS_MGMT_ACCOUNT_ID` | `aws/bootstrap`, `aws/org`, `aws/log-archive`, `aws/security`, `aws/baseline`, `aws/backup`, `github/` |
 | `svp-log-archive` | — (qua management) | `anhnv-log-ro` | `SVP_AWS_LOG_ACCOUNT_ID` | không root riêng |
 | `svp-security` | — (qua management) | `anhnv-security-ro` | `SVP_AWS_SECURITY_ACCOUNT_ID` | không root riêng |
+| `svp-backup` | — (qua management) | `anhnv-backup-ro` | `SVP_AWS_BACKUP_ACCOUNT_ID` | không root riêng |
 | `svp-stg` | `anhnv-stg` | `anhnv-stg-ro` | `SVP_AWS_STG_ACCOUNT_ID` | `aws/accounts/stg`, `aws/envs/stg`, `aws/gitops/stg` |
 | `svp-prd` | `anhnv-prd` | `anhnv-prd-ro` | `SVP_AWS_PRD_ACCOUNT_ID` | `aws/accounts/prd`, `aws/envs/prd`, `aws/gitops/prd` |
 
-**Root chạy từ management qua role.** `aws/log-archive`, `aws/security`, `aws/baseline` chạy bằng `anhnv-sso` với `TF_VAR_account_id` của
-management; provider của mỗi account đích assume `OrganizationAccountAccessRole` của account đó, `allowed_account_ids` đúng account đó, id
-từ `TF_VAR_<log_archive|security|stg|prd>_account_id` đặt trong lệnh từ biến tương ứng. Hai account bảo mật không có profile ghi, bucket state
-riêng hay root riêng: baseline áp từ một chỗ, như execution role của Control Tower. Root `aws/envs/<env>` cần thêm `SVP_AWS_LOG_ACCOUNT_ID`
-(tên bucket flow log, log WAF và ARN delivery destination của log CloudFront ở account Log Archive); `tf.sh` đặt
-`TF_VAR_log_archive_account_id` từ nó và dừng khi rỗng.
+**Root chạy từ management qua role.** `aws/log-archive`, `aws/security`, `aws/baseline`, `aws/backup` chạy bằng `anhnv-sso` với
+`TF_VAR_account_id` của management; provider của mỗi account đích assume `OrganizationAccountAccessRole` của account đó,
+`allowed_account_ids` đúng account đó, id từ `TF_VAR_<log_archive|security|backup|stg|prd>_account_id` đặt trong lệnh từ biến tương ứng.
+Account của OU `Security` (`svp-log-archive`, `svp-security`, `svp-backup`) không có profile ghi, bucket state riêng hay root chạy trong chính
+nó: baseline và vault áp từ một chỗ, như execution role của Control Tower. Root `aws/envs/<env>` cần thêm `SVP_AWS_LOG_ACCOUNT_ID` (tên
+bucket flow log, log WAF và ARN delivery destination của log CloudFront ở account Log Archive) và `SVP_AWS_BACKUP_ACCOUNT_ID` (account mà key
+RDS cho dùng khi copy snapshot của AWS Backup); `tf.sh` đặt `TF_VAR_log_archive_account_id`, `TF_VAR_backup_account_id` từ chúng và dừng khi
+rỗng. Root `aws/accounts/<env>` nhận `TF_VAR_backup_account_id` trong lệnh của README (key policy của key vault env).
 
 Region `ap-southeast-1` cho dịch vụ theo region và STS, `us-east-1` cho Organizations, IAM, Cost Explorer, WAF, cert ACM và log chuẩn của
 CloudFront (delivery destination ở `aws/log-archive`, delivery source và delivery ở account env), KMS key, alarm và query log của DNSSEC
@@ -307,6 +318,20 @@ Bảng env của `lib.sh` (`env_table`) mỗi env một dòng và là nơi duy n
 tự, có kiểm account và có giới hạn cho mỗi lần chờ. `secrets` chạy sau `tf.sh <env> env apply` và trước root gitops (nguồn của các Secret
 trong cluster có trước Argo CD); `wait` chạy sau `tf.sh <env> gitops apply`.
 
+`tf.sh <env> env|gitops <thao tác>` chạy Terraform của hai root buổi; dòng `Usage` đầu file liệt kê đủ thao tác và cờ. Mọi thao tác kiểm
+account trước và đặt `TF_VAR_*` của root. Root env có thêm hai thao tác sửa state bằng tay, dùng khi khôi phục RDS thay chỗ (instance cũ đổi
+tên, bản khôi phục mang tên cũ, state vẫn trỏ instance cũ); mỗi thao tác ghi một mốc vào timeline của buổi:
+
+| Thao tác | Lệnh Terraform | Mốc timeline |
+| --- | --- | --- |
+| `tf.sh <env> env state-rm <địa chỉ>` | `terraform state rm <địa chỉ>` | `env-state-rm` |
+| `tf.sh <env> env import <địa chỉ> <id>` | `terraform import -input=false -var-file=<env>.tfvars <địa chỉ> <id>` | `env-import` |
+
+Địa chỉ đi nguyên một đối số (giữ `[` và `"` của khoá `for_each`). Root gitops từ chối cả hai; không có thao tác state nào khác (`mv`, `pull`,
+`push`, `list`). Sau `import`, `tf.sh <env> env plan` không được thay (replace) hay xoá instance vừa nhập; nó vẫn sửa tại chỗ các thiết lập
+mà bản khôi phục không mang theo (tag, `copy_tags_to_snapshot`, monitoring, deletion protection, `skip_final_snapshot`,
+`delete_automated_backups`). Đọc plan rồi `tf.sh <env> env apply` để đưa chúng về như code.
+
 **Luồng secret** của một env: root `aws/envs/<env>` (module `external-secrets`) tạo các entry `svp/<env>/*` của Secrets Manager. Mật khẩu
 Kafka và Valkey do chính apply đó sinh (ephemeral `random_password`, 32 chữ và số) và ghi bằng đối số write-only, không vào plan hay state,
 cùng một giá trị vào secret SCRAM `AmazonMSK_svp-<env>-<user>` (module `msk`, khoá KMS của module) và entry `kafka-admin`, `kafka-users`, vào
@@ -320,7 +345,7 @@ vì finalizer và webhook của chúng cần cho việc xoá object của worklo
 
 ## Luồng vận hành
 
-Năm luồng của một buổi; tên tài nguyên khớp code (trong sơ đồ, `ENV` là `stg` hay `prd`), bước và lệnh ở runbook buổi.
+Các luồng của một buổi; tên tài nguyên khớp code (trong sơ đồ, `ENV` là `stg` hay `prd`), bước và lệnh ở runbook buổi.
 
 **Đường vào của người xem.** Web, API và media chỉ vào từ internet qua CloudFront, mỗi tên một distribution có web ACL riêng và cert ACM ở
 `us-east-1`; không load balancer nào internet-facing. Web và API đi qua VPC origin tới ALB internal ở tầng edge, rồi tới pod Envoy mà
@@ -397,20 +422,46 @@ flowchart LR
     A --> S["SNS svp-ENV-alarms"]
 ```
 
+**Đường backup.** Backup policy `svp-backup-<env>` của `aws/org` (gắn OU của env) sinh plan `svp-<env>` trong account env. Rule `daily`
+chọn instance RDS và hai bucket mang tag `Backup = "daily"` (module `rds`, `media`), chụp vào vault `svp-<env>` (root `aws/accounts/<env>`,
+key `alias/svp-<env>-backup`) bằng role `svp-<env>-backup`, rồi copy sang vault `svp-<env>-copy` của account `svp-backup` (root `aws/backup`,
+vault lock governance, key `alias/svp-backup-copy` mã hoá lại bản copy). Admin của account env không chạm được bản copy. Env chỉ sống trong
+buổi nên lịch hiếm khi gặp nó: trong buổi, `restore-drill.sh <env> backup` chạy job on-demand theo cùng đường, `rds` khôi phục point-in-time từ
+backup tự động gốc của RDS ra `svp-<env>-pitr`, `s3` restore một object từ recovery point của buổi; `cleanup` gỡ tag và xoá recovery point đã
+có bản copy trước destroy. Job hay copy job lỗi: alarm `svp-<env>-backup-job-failed`, `svp-<env>-backup-copy-failed` (module
+[`backup-alarms`](aws/modules/backup-alarms/README.md), `Severity=ticket`) tới topic `svp-<env>-alarms`. Lịch, retention, lock, mục tiêu
+RTO/RPO: [ADR-0067](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0067-backup-dr.md); thứ tự áp lần đầu:
+[`backup-setup.md`](docs/runbooks/backup-setup.md).
+
+```mermaid
+flowchart LR
+    P["Backup policy svp-backup-ENV<br/>aws/org, gắn OU"] -->|"plan svp-ENV, rule daily"| R["Selection svp-ENV-tagged<br/>tag Backup=daily"]
+    R --> DB["RDS svp-ENV"]
+    R --> S3[("Bucket uploads, media")]
+    DB -->|"role svp-ENV-backup"| V["Vault svp-ENV<br/>key alias/svp-ENV-backup"]
+    S3 -->|"role svp-ENV-backup"| V
+    V -->|"copy job, backup:CopyIntoBackupVault"| C["Vault svp-ENV-copy, lock governance<br/>account svp-backup, key alias/svp-backup-copy"]
+    V -.->|"metric AWS/Backup: job, copy job lỗi"| A["Alarm svp-ENV-backup-job-failed, svp-ENV-backup-copy-failed"]
+    A --> SNS["SNS svp-ENV-alarms"]
+```
+
 **Thứ tự gỡ.** Thứ Kubernetes tạo trong account đi trước, khi controller tạo ra nó còn chạy; cluster đi trước mạng. `pre-destroy.sh` xoá
 luật và Alertmanager của AMP (CR của ACK, khi ACK còn chạy), Application workload, job MediaConvert còn dở (huỷ, khi `media-worker` đã gỡ) và
 Gateway (target của Envoy trong target group edge),
 PVC (volume EBS), rồi NodePool và EC2NodeClass (Karpenter drain và tắt node của nó, trần `terminationGracePeriod`), rồi controller nền
-tảng; root gitops gỡ qua tunnel; root env gỡ edge (bản ghi DNS, ba distribution, VPC origin, ALB, web ACL), cluster, node group hệ thống,
-dịch vụ dữ liệu, endpoint interface, rồi VPC; `sweep.sh` tìm phần còn sót (instance, launch template, instance profile của Karpenter, ENI và
-security group mà CloudFront tạo cho VPC origin cả, rule groups namespace của AMP, queue MediaConvert, role MediaConvert).
+tảng; root gitops gỡ qua tunnel; `restore-drill.sh <env> cleanup` gỡ tag `Backup`, chờ job AWS Backup và xoá recovery point của vault env
+đã có bản copy (`tf.sh` từ chối destroy root env tới khi nó xong sau apply cuối); root env gỡ edge (bản ghi DNS, ba distribution, VPC
+origin, ALB, web ACL), cluster, node group hệ thống, dịch vụ dữ liệu, endpoint interface, rồi VPC; `sweep.sh` tìm phần còn sót (instance,
+launch template, instance profile của Karpenter, ENI và security group mà CloudFront tạo cho VPC origin cả, rule groups namespace của AMP,
+queue MediaConvert, role MediaConvert, recovery point, job và vault của AWS Backup).
 
 ```mermaid
 flowchart TD
     A["pre-destroy.sh 1-3: luật AMP của ACK, Application workload, job MediaConvert, Gateway, TargetGroupBinding, PVC"] --> B["pre-destroy.sh 4: NodePool, EC2NodeClass; chờ hết NodeClaim, instance"]
     B --> C["pre-destroy.sh 5: svp-cluster, controller nền tảng (Karpenter cuối cùng)"]
     C --> D["tf.sh ENV gitops destroy: Argo CD, namespace (qua tunnel)"]
-    D --> E["tf.sh ENV env destroy: DNS, distribution, VPC origin, ALB edge, web ACL; cluster EKS, node group system, Karpenter"]
+    D --> X["restore-drill.sh ENV cleanup: gỡ tag Backup, chờ job, xoá recovery point đã có bản copy; mốc backup-drained"]
+    X --> E["tf.sh ENV env destroy: DNS, distribution, VPC origin, ALB edge, web ACL; cluster EKS, node group system, Karpenter"]
     E --> F["cùng destroy: RDS, MSK, ElastiCache, transcode, bastion, endpoint interface, VPC, NAT"]
     F --> G["sweep.sh ENV, sweep.sh mgmt: exit 0"]
 ```

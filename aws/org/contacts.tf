@@ -8,6 +8,7 @@ locals {
     prd         = aws_organizations_account.member["prd"].id
     log-archive = aws_organizations_account.log_archive.id
     security    = aws_organizations_account.security.id
+    backup      = aws_organizations_account.backup.id
   }
 }
 

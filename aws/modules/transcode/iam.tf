@@ -31,13 +31,21 @@ resource "aws_iam_role" "mediaconvert" {
   assume_role_policy = data.aws_iam_policy_document.mediaconvert_trust.json
 }
 
-# Both buckets use SSE-S3, so the role needs no KMS permission.
+# Uploads are encrypted with the env's uploads key (SSE-KMS), so reading the input also takes kms:Decrypt on that key;
+# media uses SSE-S3 and needs no KMS permission to write.
 data "aws_iam_policy_document" "mediaconvert" {
   statement {
     sid       = "ReadInput"
     effect    = "Allow"
     actions   = ["s3:GetObject"]
     resources = ["${var.uploads_bucket_arn}/uploads/*"]
+  }
+
+  statement {
+    sid       = "DecryptInput"
+    effect    = "Allow"
+    actions   = ["kms:Decrypt"]
+    resources = [var.uploads_kms_key_arn]
   }
 
   statement {

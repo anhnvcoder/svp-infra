@@ -1,7 +1,8 @@
 # Runbook: một buổi AWS stg
 
 Một buổi dựng env stg trong account `svp-stg` (`aws/envs/stg`), cài Argo CD và root GitOps lên EKS bằng Terraform (`aws/gitops/stg`, mẫu
-GitOps Bridge), đo (smoke, seed, k6 bậc 1, 2, 4, 8), rồi gỡ sạch trong cùng buổi và quét cả account stg lẫn account management. Thiết kế:
+GitOps Bridge), đo (smoke, seed, k6 bậc 1, 2, 4, 8), diễn tập khôi phục (backup on-demand và copy sang account `svp-backup`, PITR của RDS,
+một object S3 từ AWS Backup), rồi gỡ sạch trong cùng buổi và quét cả account stg lẫn account management. Thiết kế:
 [ADR-0034](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0034-aws-stage7.md) §13 (tài nguyên ngoài state), §14 (buổi AWS);
 [ADR-0048](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0048-prd-aws.md) §1–§2 (account, state), §5 (secret), §6 (bootstrap
 EKS), §9 (kết thúc buổi); [ADR-0051](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0051-dns-prd-apex.md) (zone của mỗi env);
@@ -18,7 +19,9 @@ cache làm nóng mỗi buổi, Inspector); [ADR-0063](https://github.com/anhnvco
 (metric vào AMP, log vào CloudWatch Logs, trace vào X-Ray, luật trên AMP tới SNS, dashboard trên Amazon Managed Grafana, canary hỏi AMP);
 [ADR-0064](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0064-interface-endpoints.md) (API AWS qua endpoint interface có private
 DNS); [ADR-0066](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0066-mediaconvert-transcode.md) (transcode bằng AWS Elemental
-MediaConvert: queue, role, rule EventBridge, SQS và DLQ của root env, endpoint `mediaconvert`).
+MediaConvert: queue, role, rule EventBridge, SQS và DLQ của root env, endpoint `mediaconvert`);
+[ADR-0067](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0067-backup-dr.md) (backup và DR: Backup policy, vault copy ở account
+`svp-backup`, mục tiêu RTO/RPO, diễn tập, xoá recovery point cuối buổi).
 Buổi prd theo [`session-prd.md`](session-prd.md), dùng chung mọi mục chung của file này.
 
 **Người học chạy mọi lệnh ở đây.** AI không chạy lệnh nào chạm account hay cluster EKS, kể cả lệnh chỉ đọc; AI đọc output người học dán
@@ -30,6 +33,9 @@ profile và một biến account, script tự lấy theo env từ bảng `env_ta
 | `stg` | `svp-stg` | `anhnv-stg` | `SVP_AWS_STG_ACCOUNT_ID` |
 | `prd` | `svp-prd` | `anhnv-prd` | `SVP_AWS_PRD_ACCOUNT_ID` |
 | `mgmt` | management (account sandbox cũ) | `anhnv-sso` | `SVP_AWS_MGMT_ACCOUNT_ID` |
+
+Account `svp-backup` (vault `svp-stg-copy`, `svp-prd-copy` giữ bản copy) không phải env của script: script chỉ cần 12 số của nó trong
+`SVP_AWS_BACKUP_ACCOUNT_ID` (ARN vault đích, key RDS của root env), lệnh tay đọc bản copy bằng profile chỉ đọc `anhnv-backup-ro`.
 
 Profile và region `ap-southeast-1` (`us-east-1` cho WAF, cert ACM và log chuẩn của CloudFront, Pricing Plan Manager và API Free Tier)
 ghi sẵn trong từng lệnh của script. Script in mỗi bước một dòng
@@ -44,7 +50,9 @@ aws/scripts/session.sh --print stg
 ## Giới hạn
 
 - **Cả buổi 4 giờ**, từ `check-account.sh` (mốc `session-start`) tới hai lượt `sweep.sh` sạch. **Quá 3 giờ mà chưa đo xong thì bỏ phần đo
-  còn lại, sang gỡ**: `measure.sh` tự bỏ bậc k6 nào sẽ kết thúc sau mốc 3 giờ (dòng `skip`).
+  còn lại, sang gỡ**: `measure.sh` tự bỏ bậc k6 nào sẽ kết thúc sau mốc 3 giờ (dòng `skip`). Diễn tập khôi phục (bước 12–14) chạy sau đo,
+  không có mốc tự bỏ: mỗi lần chờ của `restore-drill.sh` có hạn riêng (đầu script), instance PITR sống tới khi kiểm xong (mục tiêu RTO ≤ 60
+  phút). Hết giờ thì bỏ diễn tập chưa chạy, sang bước 15; bước 20 (`cleanup`) không bao giờ bỏ: thiếu nó, `tf.sh` từ chối destroy root env.
 - Chi phí một buổi 4 giờ: ước tính của ADR-0034 §12 cộng MSK và ElastiCache (H_k ~$0,144 mỗi giờ, O_k ~$0,06, ADR-0053 §16), cộng
   phần ADR-0055 và ADR-0056 thêm vào stg (nhóm node hệ thống on-demand, bastion SSM, KMS key, log control plane, flow log, CloudWatch alarm),
   cộng phần edge (ALB, phí theo giờ của ba web ACL, log; bảng "Thêm mỗi buổi" ở phụ lục ADR-0061 §13), cộng phần nền tảng managed (endpoint
@@ -52,7 +60,10 @@ aws/scripts/session.sh --print stg
   [ADR-0063 §12](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0063-managed-observability.md#12-chi-phí-hợp-đồng-cluster-và-adr-cũ)
   và phụ lục của nó), cộng phần transcode (job MediaConvert của buổi, endpoint `mediaconvert`, SQS, request S3:
   [ADR-0066 §12](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0066-mediaconvert-transcode.md#12-chi-phí) và mục "Chi phí" của
-  phụ lục); buổi đầu đo số thật ở Cost Explorer (mục **Kết thúc buổi**). Quên destroy 24 giờ tốn gấp ~6 lần một buổi; budget
+  phụ lục), cộng phần backup (instance `svp-stg-pitr` của diễn tập, key `uploads`, hai alarm backup, request và restore S3:
+  [ADR-0067 §13](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0067-backup-dr.md#13-chi-phí) và bảng "Mỗi buổi" ở mục "Chi phí"
+  của phụ lục; bản copy ở `svp-backup` tính theo retention, ngoài buổi); buổi đầu đo số thật ở Cost Explorer (mục **Kết thúc buổi**). Quên
+  destroy 24 giờ tốn gấp ~6 lần một buổi; budget
   `svp-stg-monthly` của account stg và budget tổng của org ở management gửi email ở 50 %, 80 %, 100 %.
 - MSK và ElastiCache dựng, gỡ lâu: tài liệu AWS không ghi thời gian, ADR-0053 §16 giả định MSK dựng ≤ 45, gỡ ≤ 30 phút, ElastiCache ≤ 20,
   ≤ 15 phút, song song với EKS trong apply của root env (buổi dài thêm ~30 phút apply, ~20 phút destroy); buổi stg đo số thật (phép kiểm (a)
@@ -169,7 +180,12 @@ aws/scripts/session.sh --print stg
    git -C ../backend show "$rev:deploy/helm/svp-service/values.yaml" | grep -q '^canaryPrometheus:' && echo ok
    ```
 
-10. Mac cắm sạc, tắt Low Power Mode (đo k6 và chờ dài).
+10. **Backup đã áp** theo [`backup-setup.md`](backup-setup.md#thứ-tự-áp-lần-đầu): account `svp-backup` và biến
+    `SVP_AWS_BACKUP_ACCOUNT_ID` (thiếu biến thì `tf.sh stg env …` dừng với `FAIL set SVP_AWS_BACKUP_ACCOUNT_ID …`), Backup policy
+    `svp-backup-stg` gắn OU `NonProd` (plan `svp-stg` của account), vault `svp-stg-copy` ở `svp-backup`, vault `svp-stg` cùng role
+    `svp-stg-backup` và opt-in ở `aws/accounts/stg`, profile `anhnv-backup-ro`. Thiếu một phần thì bước 12 dừng ở phần đó (`FAIL no backup plan
+    svp-stg …`, `opt-in …`), hay copy job lỗi. Một lần, không nằm trong buổi.
+11. Mac cắm sạc, tắt Low Power Mode (đo k6 và chờ dài).
 
 ## Mở terminal của buổi
 
@@ -180,17 +196,20 @@ AWS_PROFILE=anhnv-sso aws sso login --region us-east-1                          
 export SVP_AWS_STG_ACCOUNT_ID=<12 số của account svp-stg>                       # đọc trên trang SSO; không ghi vào file nào
 export SVP_AWS_MGMT_ACCOUNT_ID=<12 số của account management>
 export SVP_AWS_LOG_ACCOUNT_ID=<12 số của account svp-log-archive>               # bucket flow log, log WAF của root env
+export SVP_AWS_BACKUP_ACCOUNT_ID=<12 số của account svp-backup>                 # copy vaults; root env shares RDS key
 export SVP_SESSION_DIR="$PWD/.session/$(date -u +%Y%m%dT%H%M%SZ)"               # số đo của buổi; .session/ git bỏ qua
 ```
 
-Hai profile dùng chung một phiên SSO khi cùng `sso_session` trong `~/.aws/config`, khi đó một lần `aws sso login` là đủ. Biến account không
-nằm trong file commit nào, kể cả `.envrc`; script đặt `TF_VAR_account_id` từ biến của env và `TF_VAR_log_archive_account_id` từ
-`SVP_AWS_LOG_ACCOUNT_ID` ngay trong lệnh `terraform` của root env.
+Các profile dùng chung một phiên SSO khi cùng `sso_session` trong `~/.aws/config` (cả `anhnv-backup-ro` của bước 12), khi đó một lần `aws sso
+login` là đủ. Biến account không nằm trong file commit nào, kể cả `.envrc`; script đặt `TF_VAR_account_id` từ biến của env,
+`TF_VAR_log_archive_account_id` từ `SVP_AWS_LOG_ACCOUNT_ID` và `TF_VAR_backup_account_id` từ `SVP_AWS_BACKUP_ACCOUNT_ID` ngay trong lệnh
+`terraform` của root env; `restore-drill.sh` dựng ARN vault `svp-stg-copy` từ `SVP_AWS_BACKUP_ACCOUNT_ID`.
 
 Mọi bước sau chạy trong **cùng terminal này** (cùng các biến). Thư mục buổi chứa: `timeline.tsv` (mốc UTC: `session-start`,
 `env-apply-start`, `env-apply-end`, `secrets-written`, `gitops-apply-start`, `gitops-apply-end`, `observability-healthy`, `glitchtip-init`,
-`svp-root-healthy`, `edge-healthy`, `smoke-ok`, `seed-ok`, `k6-<n>-start`/`-end`, `pre-destroy-*`, `gitops-destroy-*`, `env-destroy-*`),
-`cluster-values.json` (mode 600), `eks-secrets.log`, `svp-cluster-chart/`, các file text của plan, `k6-levels.tsv`, `k6-<n>/`.
+`svp-root-healthy`, `edge-healthy`, `smoke-ok`, `seed-ok`, `k6-<n>-start`/`-end`, `backup-undrained`, `backup-drained`, `pre-destroy-*`,
+`gitops-destroy-*`, `env-destroy-*`), `cluster-values.json` (mode 600), `eks-secrets.log`, `svp-cluster-chart/`, các file text của plan,
+`k6-levels.tsv`, `k6-<n>/`, `restore-drill.tsv`, `restore-drill-points.tsv` và các file mẫu `restore-drill-*` của diễn tập.
 
 **Mở lại terminal giữa buổi** (terminal đóng, máy khởi động lại): đặt lại các biến, với `SVP_SESSION_DIR` là **thư mục của buổi đang dở**,
 không phải thư mục mới. `measure.sh` đọc `cluster-values.json` của nó và tính mốc 3 giờ từ `session-start` của nó; `tf.sh` đọc các mốc gỡ
@@ -199,7 +218,7 @@ không phải thư mục mới. `measure.sh` đọc `cluster-values.json` của 
 ```sh
 cd infra
 AWS_PROFILE=anhnv-stg aws sso login --region us-east-1
-export SVP_AWS_STG_ACCOUNT_ID=<12 số> SVP_AWS_MGMT_ACCOUNT_ID=<12 số> SVP_AWS_LOG_ACCOUNT_ID=<12 số>
+export SVP_AWS_STG_ACCOUNT_ID=<12 số> SVP_AWS_MGMT_ACCOUNT_ID=<12 số> SVP_AWS_LOG_ACCOUNT_ID=<12 số> SVP_AWS_BACKUP_ACCOUNT_ID=<12 số>
 ls -1d .session/*/ | tail -n 3                                                 # thư mục mới nhất là buổi đang dở
 export SVP_SESSION_DIR="$PWD/.session/<thư mục đó>"
 tail -n 5 "$SVP_SESSION_DIR/timeline.tsv"                                      # mốc cuối: bước nào đã xong
@@ -222,27 +241,33 @@ Rồi chạy tiếp từ bước sau mốc cuối (hay chạy lại bước đan
 | 9 | `aws/scripts/tf.sh stg gitops apply` | 15 phút | dòng `Apply complete! …`, output `bootstrap_revision` |
 | 10 | `aws/scripts/bootstrap.sh stg wait` | 45 phút | mọi dòng `ok`/`FAIL` |
 | 11 | `aws/scripts/measure.sh stg` | tới mốc 3 giờ | `k6-levels.tsv`, dòng `ok highest level …` |
-| 12 | `aws/scripts/pre-destroy.sh stg` | 30 phút | mọi dòng `ok`/`FAIL`/`note` |
-| 13 | `aws/scripts/tf.sh stg gitops plan --destroy` | 5 phút | dòng `Plan: 0 to add, 0 to change, N to destroy` |
-| 14 | `aws/scripts/tf.sh stg gitops destroy` | 10 phút | dòng `Apply complete! Resources: 0 added, 0 changed, N destroyed.` |
-| 15 | `aws/scripts/tf.sh stg env plan --teardown` | 1 phút | dòng `skip` (stg không có bảo vệ cần nhấc) |
-| 16 | `aws/scripts/tf.sh stg env apply --teardown` | 1 phút | dòng `skip` |
-| 17 | `aws/scripts/tf.sh stg env plan --destroy` | 5 phút | dòng `Plan: 0 to add, 0 to change, N to destroy` và đường dẫn file text của plan |
-| 18 | `aws/scripts/tf.sh stg env destroy` | 50 phút | dòng `Apply complete! Resources: 0 added, 0 changed, N destroyed.` và hai dòng `Destruction complete after …` của cluster MSK, replication group ElastiCache |
-| 19 | `aws/scripts/sweep.sh stg` | 5 phút | toàn bộ output |
-| 20 | `aws/scripts/sweep.sh mgmt` | 5 phút | toàn bộ output |
+| 12 | `aws/scripts/restore-drill.sh stg backup` | 60 phút | mọi dòng `ok`/`FAIL`, dòng `PASS backup …` |
+| 13 | `aws/scripts/restore-drill.sh stg rds` | 75 phút | mọi dòng `ok`/`FAIL`, dòng `PASS rds …` hay `FAIL rds …` |
+| 14 | `aws/scripts/restore-drill.sh stg s3` | 30 phút | mọi dòng `ok`/`FAIL`, dòng `PASS s3 …` hay `FAIL s3 …` |
+| 15 | `aws/scripts/pre-destroy.sh stg` | 30 phút | mọi dòng `ok`/`FAIL`/`note` |
+| 16 | `aws/scripts/tf.sh stg gitops plan --destroy` | 5 phút | dòng `Plan: 0 to add, 0 to change, N to destroy` |
+| 17 | `aws/scripts/tf.sh stg gitops destroy` | 10 phút | dòng `Apply complete! Resources: 0 added, 0 changed, N destroyed.` |
+| 18 | `aws/scripts/tf.sh stg env plan --teardown` | 1 phút | dòng `skip` (stg không có bảo vệ cần nhấc) |
+| 19 | `aws/scripts/tf.sh stg env apply --teardown` | 1 phút | dòng `skip` |
+| 20 | `aws/scripts/restore-drill.sh stg cleanup` | 30 phút | mọi dòng `ok`/`FAIL`/`skip`, mốc `backup-drained` |
+| 21 | `aws/scripts/tf.sh stg env plan --destroy` | 5 phút | dòng `Plan: 0 to add, 0 to change, N to destroy` và đường dẫn file text của plan |
+| 22 | `aws/scripts/tf.sh stg env destroy` | 50 phút | dòng `Apply complete! Resources: 0 added, 0 changed, N destroyed.` và hai dòng `Destruction complete after …` của cluster MSK, replication group ElastiCache |
+| 23 | `aws/scripts/sweep.sh stg` | 5 phút | toàn bộ output |
+| 24 | `aws/scripts/sweep.sh mgmt` | 5 phút | toàn bộ output |
 
 Bước tay chen giữa các bước script: xác nhận email của alarm sau bước 5 (mục 3–5), tunnel tới API sau bước 5 và trước bước 6 (mục
-**Tunnel tới API**, giữ chạy tới hết bước 14), làm nóng cache sau bước 6 và trước bước 7 (mục **Làm nóng cache**), phép kiểm của bước 11 (cả
+**Tunnel tới API**, giữ chạy tới hết bước 17), làm nóng cache sau bước 6 và trước bước 7 (mục **Làm nóng cache**), phép kiểm của bước 11 (cả
 mục **Phép kiểm nền tảng managed** và **Phép kiểm transcode**, clip của nó sinh trong lúc chờ bước 5),
-đọc finding bảo mật sau bước 11 và trước bước 12 (mục **Finding bảo mật của buổi**), chạy lại truy vấn
-dữ liệu sau bước 20 (mục **Kết thúc buổi**).
+đọc bản copy ở `svp-backup` sau bước 12 (mục **12–14**), đọc finding bảo mật sau bước 14 và trước bước 15 (mục **Finding bảo mật của
+buổi**), chạy lại truy vấn dữ liệu sau bước 24 (mục **Kết thúc buổi**).
 
 Dự trù: apply root env xong ~T+70 phút (MSK là phần dài nhất), mọi Application Healthy ~T+1 giờ 55, đo tới muộn nhất T+3 giờ, gỡ và quét
-xong trước T+4 giờ khi gỡ đúng số giả định của ADR-0053 §16; buổi stg đầu tiên đo hai mốc đó và ghi vào phụ lục của ADR.
+xong trước T+4 giờ khi gỡ đúng số giả định của ADR-0053 §16; buổi stg đầu tiên đo hai mốc đó và ghi vào phụ lục của ADR. Hạn của bước 12–14,
+20 là ước (AWS không công bố thời gian của job backup, copy hay restore); buổi stg đầu đo số thật (`t0`, `t1` của `restore-drill.tsv`, mốc
+`backup-drained`) và ghi vào phụ lục ADR-0067.
 Một bước đỏ: đọc dòng `FAIL`, sửa nguyên nhân, chạy lại **đúng bước đó** (mọi script chạy lại được). Không đi tiếp qua một bước đỏ, trừ
-bước 11 (đo): đo hỏng thì vẫn sang bước 12. Bước 15, 16 không làm gì ở stg (không có `teardown.tfvars`); chúng nằm trong bảng để stg và prd
-chạy cùng một chuỗi bước.
+bước 11 (đo): đo hỏng thì vẫn sang bước 12; và bước 13, 14 khi dòng kết quả là `FAIL` của phép đo (mục **12–14**): đó là số đo, sang bước kế.
+Bước 18, 19 không làm gì ở stg (không có `teardown.tfvars`); chúng nằm trong bảng để stg và prd chạy cùng một chuỗi bước.
 
 ### 1. Kiểm account
 
@@ -310,9 +335,9 @@ entry lệch nhau (`WRONGPASS` ở phép kiểm (d) của ADR-0053 ở bước 1
 `plan` lại, đúng cách của mục [Đổi một secret của env đang chạy](#đổi-một-secret-của-env-đang-chạy) (`msk_password_version`,
 `valkey_password_version` trong `stg.auto.tfvars`): apply với version mới ghi lại mọi mật khẩu của nhóm từ cùng một giá trị; rồi đi tiếp
 bước 6 (`bootstrap.sh stg secrets`, lệnh kết thúc lượt xoay đó). Lỗi nằm ở chính access string của user ElastiCache thì không apply lại
-(bảng dưới). Muốn bỏ buổi thì sang bước 12 (`pre-destroy.sh` tự ghi context `svp-stg`, nên chạy được cả khi apply đỏ sau khi cluster EKS
-đã có), hay bước 17 với `--no-cluster` khi apply đỏ trước khi tạo cluster EKS (điều kiện ở bước
-17).
+(bảng dưới). Muốn bỏ buổi thì sang bước 15 (`pre-destroy.sh` tự ghi context `svp-stg`, nên chạy được cả khi apply đỏ sau khi cluster EKS
+đã có), hay bước 20 rồi 21 với `--no-cluster` khi apply đỏ trước khi tạo cluster EKS (điều kiện ở mục
+18–22).
 
 **Xác nhận email của alarm** (mỗi buổi, sau apply): SNS gửi thư "AWS Notification - Subscription Confirmation" tới `alarm_email`; mở link
 "Confirm subscription" trong thư. Chưa xác nhận thì không alarm nào tới email. Đọc lại (ARN của topic tính từ biến account của buổi):
@@ -339,7 +364,7 @@ Lỗi apply đã biết, không sửa bằng `plan` lại:
 
 Endpoint công khai của API tắt ở cả hai env (ADR-0055 §2): máy tới endpoint private qua phiên port forwarding của Session Manager tới bastion
 `t4g.nano` trong subnet private (module `ssm-bastion`), cổng local `127.0.0.1:6444` (prd `6443`, cột `tunnel` của `env_table`: một lệnh nhầm
-context không bao giờ tới cluster kia). Mở ở **một terminal riêng** từ gốc repo, giữ chạy tới hết bước 14 (Ctrl-C để đóng):
+context không bao giờ tới cluster kia). Mở ở **một terminal riêng** từ gốc repo, giữ chạy tới hết bước 17 (Ctrl-C để đóng):
 
 ```sh
 cd infra
@@ -432,7 +457,7 @@ thái sync, health) và
 AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n argocd get applications.argoproj.io
 ```
 
-sửa xong chạy lại (chạy lại được). Muốn bỏ buổi ở đây: sang bước 12; `pre-destroy.sh` chạy được cả khi Argo CD chưa được cài.
+sửa xong chạy lại (chạy lại được). Muốn bỏ buổi ở đây: sang bước 15; `pre-destroy.sh` chạy được cả khi Argo CD chưa được cài.
 
 ### 11. Đo
 
@@ -482,7 +507,7 @@ $SVP_SESSION_DIR/k6-levels.tsv`, dòng `ok highest level …`, và với mỗi b
 
 Commit status `argocd/stg` (Argo CD Notifications, ADR-0032) phải có trên commit `svp-gitops` cluster vừa sync: đó là **bằng chứng stg** mà
 `promote-prd` đòi trước khi promote commit đó lên prd. Đọc commit (ghi vào `stg-ref.txt` của thư mục buổi), status của nó và
-commit đó nằm trên `main` của `svp-gitops`, trước bước 12 (cluster còn):
+commit đó nằm trên `main` của `svp-gitops`, trước bước 15 (cluster còn):
 
 ```sh
 AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n argocd get applications.argoproj.io svp-root -o jsonpath='{.status.sync.revision}{"\n"}' |
@@ -759,7 +784,7 @@ dig +short CAA "$d" @1.1.1.1 | sort
 Mong `status: NOERROR` và cờ `ad`; tám dòng `0 issue`, `0 issuewild` cho bốn CA của Amazon. Không cờ `ad`: [`edge-setup.md`](edge-setup.md),
 bước (3).
 
-(g) Plan lần hai `No changes`: phép (c) của mục trên (prd: bước 11 của `session-prd.md`). (h) Sau destroy, `sweep.sh stg` sạch: bước 19.
+(g) Plan lần hai `No changes`: phép (c) của mục trên (prd: bước 11 của `session-prd.md`). (h) Sau destroy, `sweep.sh stg` sạch: bước 23.
 
 #### Kafka và Valkey managed
 
@@ -773,7 +798,7 @@ Deployment `svp-data/svp-ops`, không `kubectl run`, không công cụ trên má
 dòng đầu của stdin, lấy từ Secret của chính client đó (`svp/<service>-env`), không qua đối số, không in ra.
 
 (a) MSK `ACTIVE` với cấu hình của ADR-0053 §2, ElastiCache `available`; phút dựng là hai dòng `Creation complete after …` của bước 5, phút gỡ
-là hai dòng `Destruction complete after …` của bước 18; plan lần hai `No changes` là phép (c) của mục trên:
+là hai dòng `Destruction complete after …` của bước 22; plan lần hai `No changes` là phép (c) của mục trên:
 
 ```sh
 AWS_PROFILE=anhnv-stg aws kafka list-clusters-v2 --cluster-name-filter svp-stg --region ap-southeast-1 --output text \
@@ -1106,8 +1131,8 @@ AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp delete analysisruns.argop
 
 Mong `session-check-failed-… Failed Failed <số ≥ -1>` và `session-check-error-… Error Error … 404` (hay thông điệp không tìm thấy workspace).
 
-(e) Dữ liệu còn sau destroy (ADR-0063, "Xác nhận"): metric, log và trace của buổi nằm ở account, không ở cluster. Ghi lại **trước bước 12**,
-sau khi k6 xong, một khoảng thời gian tuyệt đối trong buổi và một trace của khoảng đó; rồi chạy lại đúng các truy vấn sau bước 20 (cùng ngày)
+(e) Dữ liệu còn sau destroy (ADR-0063, "Xác nhận"): metric, log và trace của buổi nằm ở account, không ở cluster. Ghi lại **trước bước 15**,
+sau khi k6 xong, một khoảng thời gian tuyệt đối trong buổi và một trace của khoảng đó; rồi chạy lại đúng các truy vấn sau bước 24 (cùng ngày)
 và ở buổi kế. Kết quả nằm ở `.session/persist-stg/` (git bỏ qua, không commit; giữ qua các buổi, như thư mục buổi). `end` cách lúc ghi ít nhất 10
 phút, để mẫu, log, span đến trễ đã tới:
 
@@ -1134,7 +1159,7 @@ persist | tee "$d/before.txt"
 ```
 
 Mong mỗi phần có dòng (series, số mẫu mỗi job, `records`, `spans` lớn hơn 0), không dòng `query failed`. Dán `window.env` (không có giá trị bí
-mật) và `before.txt`. Sau bước 20 cùng ngày (mục **Kết thúc buổi**) và ở buổi kế (trước bước 1, terminal có biến và hàm của khối dùng chung,
+mật) và `before.txt`. Sau bước 24 cùng ngày (mục **Kết thúc buổi**) và ở buổi kế (trước bước 1, terminal có biến và hàm của khối dùng chung,
 `E`, `d` như trên):
 
 ```sh
@@ -1147,7 +1172,7 @@ còn trong retention của workspace AMP, nhưng log ứng dụng và `aws/spans
 Dòng `query failed` là truy vấn hỏng, không phải dữ liệu mất: lỗi nằm trên terminal (stderr không vào file); sửa nguyên nhân (như
 `AWS_PROFILE=anhnv-$E aws sso login --region us-east-1` khi phiên SSO hết hạn) rồi chạy lại `persist`.
 
-(f) Quét sót: `sweep.sh stg` và `sweep.sh mgmt` sạch ở bước 19–20, cùng các loại mới (endpoint interface, rule groups namespace của AMP) và
+(f) Quét sót: `sweep.sh stg` và `sweep.sh mgmt` sạch ở bước 23–24, cùng các loại mới (endpoint interface, rule groups namespace của AMP) và
 dòng `kept` của registry, observability.
 
 #### Phép kiểm transcode
@@ -1332,21 +1357,123 @@ output cho AI. Rồi chạy lại ba lệnh cuối của (a) (`list-jobs`, `s3 s
 gặp job `ERROR`), `reason` chỉ `DURATION_EXCEEDED` của (d) và lý do (e) đã ghi; `orphan-job` như ở (a); khác: dán bảng đếm cho AI.
 `mediaconvert-jobs.json` khi đó giữ mọi job của buổi cùng thời lượng từng output, đầu vào đối chiếu chi phí ở mục **Kết thúc buổi**.
 
-### Finding bảo mật của buổi (sau bước 11, trước bước 12)
+### 12–14. Diễn tập khôi phục
+
+```sh
+aws/scripts/restore-drill.sh stg backup
+aws/scripts/restore-drill.sh stg rds
+aws/scripts/restore-drill.sh stg s3
+```
+
+Chạy sau bước 11 và các phép kiểm của nó, khi không còn tải: k6 đã xong, không client nào ghi (Diễn tập PITR chỉ so nội dung tại các mẫu).
+Tunnel còn mở: bước 13 đọc dữ liệu qua `svp-pg` trong pod `svp-ops`. Mục tiêu RTO/RPO, cách đo và giới hạn của kết luận:
+[ADR-0067](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0067-backup-dr.md) §2, §9, §10; hạn của từng lần chờ ở đầu
+`restore-drill.sh`. Mỗi lệnh con ghi mốc `backup-undrained` sau kiểm account, trước lệnh ghi đầu tiên, nên sau nó `tf.sh` chỉ destroy root env khi bước 20 đã
+chạy lại. Xem trước lệnh của một lệnh con, không chạy gì: `aws/scripts/restore-drill.sh --print stg backup` (hay `rds`, `s3`, `cleanup`).
+
+Kết quả mỗi lần chạy thêm một dòng vào `restore-drill.tsv` (cột `kind t0 t1 rto_s rpo_s check note`, giờ UTC). Dán lại bảng sau bước 14:
+
+```sh
+column -t -s "$(printf '\t')" "$SVP_SESSION_DIR/restore-drill.tsv"
+```
+
+Số đo (RTO, RPO, thời gian của từng bước) vào phụ lục ADR-0067 sau buổi.
+
+**Bước 12, `backup`.** Kiểm cấu hình mà lịch hằng ngày dựa vào: plan `svp-stg` do Backup policy `svp-backup-stg` sinh trong account, selection
+`svp-stg-tagged` của nó, opt-in RDS và S3 của account. Rồi job on-demand cho instance `svp-stg` và hai bucket vào vault `svp-stg` bằng role
+`svp-stg-backup` (retention là của rule `daily`), chờ xong; copy từng recovery point sang vault `svp-stg-copy` của `svp-backup` (retention bản
+copy của plan), chờ xong; ghi `restore-drill-points.tsv` (**Điểm của buổi**, bước 14 và bước 20 đọc nó). Tìm `ok plan svp-stg: …`,
+`ok selection svp-stg-tagged: …`, `ok opt-in of RDS and S3 on …`, ba dòng `ok backup job … completed` và ba dòng `ok copy job … completed`,
+rồi `PASS  backup: …`. Dòng `FAIL`:
+
+| Dòng `FAIL` | Nguyên nhân | Cách xử lý |
+| --- | --- | --- |
+| `no backup plan svp-stg in the account of stg` | policy `svp-backup-stg` chưa gắn OU `NonProd`, hay AWS chưa sinh plan trong account | kiểm theo bước (7) của [`backup-setup.md`](backup-setup.md#bước-7-kiểm-sau-áp); chưa có thì bỏ diễn tập, sang bước 15 |
+| `plan svp-stg is not the policy's` hay `selection svp-stg-tagged is not the policy's` | plan trong account khác Backup policy của `aws/org` | dán dòng đó cho AI; không sửa plan ở account (plan của policy là bất biến) |
+| `opt-in of the account of stg …` | `aws/accounts/stg` chưa áp phần backup | áp theo bước (6) của `backup-setup.md`, rồi chạy lại bước 12 |
+| `backup job … ended …: no recovery point` hay `copy job … is FAILED` | job lỗi | đọc `StatusMessage` (lệnh dưới), dán cho AI; lỗi quyền ở copy job thường là vault access policy của `svp-stg-copy` hay key policy |
+| `backup jobs still running after …` | job chưa xong khi hết hạn chờ | đọc job bằng lệnh script in ra; xong thì chạy lại bước 12 (lượt mới tạo job mới; recovery point của job cũ không có copy job, nên bước 20 giữ nó và `FAIL … has no completed copy … kept`: chọn copy lại hay xoá theo lệnh in ra) |
+
+```sh
+AWS_PROFILE=anhnv-stg aws backup describe-backup-job --backup-job-id <id> --region ap-southeast-1 --query '[State,StatusMessage]' --output text
+AWS_PROFILE=anhnv-stg aws backup describe-copy-job --copy-job-id <id> --region ap-southeast-1 \
+  --query 'CopyJob.[State,StatusMessage]' --output text
+```
+
+**Đọc bản copy** (sau bước 12, chỉ đọc, profile `anhnv-backup-ro` của account `svp-backup`): recovery point của buổi trong `svp-stg-copy`, mã
+hoá bằng key của chính vault đó (dùng được sau khi key RDS bị xoá cuối buổi, và cả khi key vault env, sống giữa các buổi, bị xoá khi gỡ
+lab). Lệnh không in ARN nào (ARN mang id account):
+
+```sh
+k=$(AWS_PROFILE=anhnv-backup-ro aws backup describe-backup-vault --backup-vault-name svp-stg-copy --region ap-southeast-1 \
+  --query EncryptionKeyArn --output text)
+AWS_PROFILE=anhnv-backup-ro aws backup list-recovery-points-by-backup-vault --backup-vault-name svp-stg-copy --region ap-southeast-1 \
+  --by-created-after "$(head -n 1 "$SVP_SESSION_DIR/timeline.tsv" | cut -f 1)" --output json |
+  jq -r --arg k "$k" '.RecoveryPoints[] | [.ResourceType, .Status, .CreationDate, .CalculatedLifecycle.DeleteAt,
+    (if .EncryptionKeyArn == $k then "vault-key" else "other-key" end)] | @tsv'
+```
+
+Mong ba dòng (`RDS` và hai `S3`), mỗi dòng `COMPLETED`, `DeleteAt` cách `CreationDate` đúng retention bản copy của stg (ADR-0067 §4) và
+`vault-key`. Thiếu dòng hay `other-key`: dán output cho AI. Lỗi `AccessDenied` hay profile không có: profile `anhnv-backup-ro` chưa tạo hay
+permission set chưa gán (bước (1), (2) của `backup-setup.md`).
+
+**Bước 13, `rds`.** **Diễn tập PITR** của ADR-0067 §9: mẫu S1 (**Kiểm dữ liệu** trên `svp-stg` qua `svp-pg`), T_r là lúc S1 xong làm tròn lên
+giây kế; chờ `LatestRestorableTime` ≥ T_r; mẫu S2 trên nguồn; restore `--restore-time` T_r ra `svp-stg-pitr` (cùng subnet group, security
+group, parameter group, lớp; một AZ); chờ `available`; mẫu R trên bản khôi phục; so; rồi xoá `svp-stg-pitr` và chờ nó mất, kể cả khi FAIL. Tìm
+`ok sample S1 of svp-stg; T_r …`, `ok sample S2 equals S1`, dòng `PASS  rds: RTO … s, RPO … s; R equals S1 on the tables checked`, rồi
+`ok svp-stg-pitr deleted`. Dòng kết quả `FAIL rds` là số đo (sang bước 14), trừ dòng đầu của bảng:
+
+| Dòng | Nghĩa | Cách xử lý |
+| --- | --- | --- |
+| `source changed during window` | có ghi giữa S1 và S2 (còn tải, job, consumer): không restore gì | chờ hết ghi, chạy lại bước 13 |
+| `restore differs from sample S1` | R khác S1; chưa chứng minh restore sai: ghi giữa lúc S1 xong và T_r không để dấu ở S1, S2 | dán phần `diff` script in và log của ba service quanh T_r (lệnh dưới) cho AI |
+| `RTO over 3600 s`, `RPO over 300 s` | vượt mục tiêu của ADR-0067 §2 | ghi lại; số đo vào phụ lục |
+| `… is left from an earlier drill` | `svp-stg-pitr` còn từ lần trước | chạy lệnh xoá script in, chờ nó mất, chạy lại bước 13 |
+| `LatestRestorableTime of svp-stg is still before T_r` | RDS chưa đẩy log giao dịch tới T_r trong hạn chờ | đọc bằng lệnh script in, chạy lại bước 13 |
+| `could not read svp-stg-pitr` hay `svp-stg-pitr is still …` | xoá instance khôi phục chưa xong hay lỗi | chạy lệnh `delete-db-instance` script in; `sweep.sh stg` của bước 23 cũng bắt nó |
+
+```sh
+for s in video-service engagement-service feed-service; do
+  AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp logs "deploy/$s" --since-time=<T_r trừ 2 phút, RFC 3339> --timestamps | head -n 100
+done
+```
+
+**Bước 14, `s3`.** **Diễn tập object S3** của ADR-0067 §10: recovery point là dòng của bucket media trong `restore-drill-points.tsv`; key là
+key `.m3u8` đầu tiên theo thứ tự từ điển dưới `media/` có trước recovery point đó; tải, ghi độ dài và SHA-256; xoá key (delete marker);
+restore item-level đúng key đó vào chính bucket bằng role `svp-stg-backup`; tải lại, so độ dài và SHA-256 (ETag không so: AWS Backup không
+giữ ETag). Tìm `ok s3://svp-stg-media-…/<key>: N bytes, SHA-256 …; deleting it`, rồi `PASS  s3: RTO … s, RPO … s; …`. `rpo_s` là tuổi của
+recovery point đã dùng, chỉ ghi lại: RPO của S3 là giới hạn cấu hình (ADR-0067 §2). Dòng `FAIL`:
+
+- `no line of arn:aws:s3:::… in …restore-drill-points.tsv`: bước 12 chưa xong cho bucket media; chạy bước 12, rồi bước 14.
+- `no .m3u8 under media/ … older than its recovery point`: bucket media chưa có video nào trước lúc backup (smoke, seed của bước 11 chưa
+  chạy); không diễn tập được ở buổi này, ghi lại.
+- `restore job … ended …` hay `… after … s`: key vẫn bị xoá, version cũ còn (bucket có versioning). Khôi phục bằng cách xoá delete marker
+  (lệnh dưới; key là key script in), dán `StatusMessage` của job cho AI.
+
+```sh
+aws/scripts/check-account.sh stg
+b="svp-stg-media-$SVP_AWS_STG_ACCOUNT_ID-ap-southeast-1"
+AWS_PROFILE=anhnv-stg aws backup describe-restore-job --restore-job-id <id> --region ap-southeast-1 --query '[Status,StatusMessage]' --output text
+AWS_PROFILE=anhnv-stg aws s3api list-object-versions --bucket "$b" --prefix <key> --region ap-southeast-1 \
+  --query 'DeleteMarkers[?IsLatest].VersionId' --output text
+AWS_PROFILE=anhnv-stg aws s3api delete-object --bucket "$b" --key <key> --version-id <VersionId của delete marker> --region ap-southeast-1
+```
+
+### Finding bảo mật của buổi (sau bước 14, trước bước 15)
 
 Chỉ đọc, profile `anhnv-security-ro` của account Security Tooling, khi tài nguyên của buổi **còn sống**: tài nguyên bị xoá thì finding control
 của nó chuyển `NOT_AVAILABLE` và `ARCHIVED` (Security Hub CSPM User Guide, "Generating and updating control findings"), nên lượt đọc định kỳ
-của `security-alert.md` không bao giờ thấy tài nguyên chỉ sống trong buổi. Buổi dừng sớm rồi đi thẳng tới gỡ: vẫn đọc mục này trước bước 12
-(đường `--no-cluster` của mục **15–18**: trước `plan --destroy`).
+của `security-alert.md` không bao giờ thấy tài nguyên chỉ sống trong buổi. Buổi dừng sớm rồi đi thẳng tới gỡ: vẫn đọc mục này trước bước 15
+(đường `--no-cluster` của mục **18–22**: trước `plan --destroy`).
 
 Mục này cần bước (4), (5) của [`org-security-setup.md`](org-security-setup.md#thứ-tự-áp-lần-đầu): profile `anhnv-security-ro` và Security
 Hub ở `svp-security`. Org mới áp tới bước (3) (đủ cho buổi, điều kiện 6) thì chưa có gì để đọc: bỏ qua mục này. Kiểm:
 `aws configure list-profiles | grep -x anhnv-security-ro` không in gì là chưa có.
 
 ```sh
-ACC="${SVP_AWS_STG_ACCOUNT_ID:?not set}"    # buổi prd: ACC="${SVP_AWS_PRD_ACCOUNT_ID:?not set}"
+ACC="${SVP_AWS_STG_ACCOUNT_ID:?not set}"    # prd session: ACC="${SVP_AWS_PRD_ACCOUNT_ID:?not set}"
 A="\"AwsAccountId\":[{\"Value\":\"$ACC\",\"Comparison\":\"EQUALS\"}],\"RecordState\":[{\"Value\":\"ACTIVE\",\"Comparison\":\"EQUALS\"}]"
-# Control FAILED của account (không bao giờ tới email); bản đủ, có id tài nguyên, giữ trong thư mục buổi
+# FAILED controls of the account (never emailed); the full list with resource ids stays in the session directory
 AWS_PROFILE=anhnv-security-ro aws securityhub get-findings --region ap-southeast-1 --output text \
   --filters "{$A,\"ComplianceStatus\":[{\"Value\":\"FAILED\",\"Comparison\":\"EQUALS\"}],\"WorkflowStatus\":[{\"Value\":\"NEW\",\"Comparison\":\"EQUALS\"}]}" \
   --query 'Findings[].[Compliance.SecurityControlId,Severity.Label,Resources[0].Type,Resources[0].Id]' \
@@ -1366,7 +1493,7 @@ buổi sau tạo lại tài nguyên từ cùng code, nên lỗi không sửa tro
 (cả finding phát sinh trong lúc gỡ); mức thấp hơn (ngoài `[SAMPLE]`) đối chiếu thời điểm với `timeline.tsv` (diễn tập, đo) rồi xử lý theo
 cùng runbook.
 
-### 12. Gỡ trong cluster trước destroy
+### 15. Gỡ trong cluster trước destroy
 
 ```sh
 aws/scripts/pre-destroy.sh stg
@@ -1375,7 +1502,7 @@ aws/scripts/pre-destroy.sh stg
 Tunnel còn mở. Gỡ những gì Kubernetes tạo trong account mà Terraform không biết, **khi controller tạo ra chúng còn chạy**, mỗi lần chờ có
 hạn: target của Envoy trong target group edge (`TargetGroupBinding`), volume EBS của PVC, node của Karpenter. Chỉ cần apply đã tạo cluster:
 script tự chạy `aws eks update-kubeconfig --name svp-stg --alias svp-stg`, không đọc file nào của bước 6, nên chạy được cả khi bước 6 chưa
-chạy hay từ thư mục buổi mới. `FAIL kubeconfig context …` là account không có cluster `svp-stg`: sang bước 17 với
+chạy hay từ thư mục buổi mới. `FAIL kubeconfig context …` là account không có cluster `svp-stg`: sang bước 20, rồi 21 với
 `--no-cluster`.
 
 1. ApplicationSet `svp-bootstrap` (nó dựng lại `svp-root`), `svp-root` và `svp-apps` (auto-sync prune + self-heal, không finalizer): xoá
@@ -1383,7 +1510,7 @@ chạy hay từ thư mục buổi mới. `FAIL kubeconfig context …` là accou
    `svp-cluster` không dựng lại Gateway).
 2. Trước hết luật và Alertmanager của AMP: xoá mọi `RuleGroupsNamespace`, `AlertManagerDefinition` của ACK khi controller ACK còn chạy (nó
    xoá chúng ở AMP, chờ tối đa 5 phút); không pod ACK nào Ready hay quá hạn thì gỡ finalizer của chúng và in dòng `note left in AMP: …` kèm
-   lệnh xoá ở AMP (người học chạy sau bước 20; `sweep.sh stg` cũng liệt kê rule groups namespace còn lại). Mốc `pre-destroy-amp-rules`. Rồi
+   lệnh xoá ở AMP (người học chạy sau bước 24; `sweep.sh stg` cũng liệt kê rule groups namespace còn lại). Mốc `pre-destroy-amp-rules`. Rồi
    Application workload theo sync wave từ cao xuống (finalizer của mỗi cái xoá thứ nó triển khai), trừ `svp-cluster` và controller nền
    tảng (cả `karpenter`); rồi, khi `media-worker` đã gỡ (không job mới), huỷ mọi job `SUBMITTED`, `PROGRESSING` của queue MediaConvert
    `svp-stg` và chờ tới khi không còn job nào dở (job dở chặn xoá queue và ghi vào bucket `media` mà destroy làm rỗng), in số job đã huỷ
@@ -1415,9 +1542,9 @@ còn lại và lệnh xem; sửa rồi chạy lại script (mỗi bước tìm t
 Bước 2 đỏ ở job MediaConvert: dòng `FAIL` nêu lời gọi lỗi (quyền, throttle) hay job còn dở sau hạn chờ;
 sửa rồi chạy lại script, hay huỷ tay theo mục **Lệnh xoá tay theo loại**.
 **Hết giờ của buổi mà bước 2, 3 hay 4 vẫn đỏ sau khi đã chạy lại**
-(dòng `note` cuối sau `FAIL` nhắc lối này): sang bước 13 với `--leftovers`.
+(dòng `note` cuối sau `FAIL` nhắc lối này): sang bước 16 với `--leftovers`.
 
-### 13–14. Gỡ root gitops
+### 16–17. Gỡ root gitops
 
 ```sh
 aws/scripts/tf.sh stg gitops plan --destroy
@@ -1430,34 +1557,38 @@ Root gitops gỡ **trước** root env (provider của nó cần cluster). `plan
 mốc `gitops-destroy-end`. Root gitops chưa init trong bản checkout này (bỏ buổi trước bước 7): `aws/scripts/tf.sh stg gitops init` trước;
 state trống thì plan là `No changes` và destroy chỉ ghi mốc.
 
-Root gitops gỡ qua tunnel: đóng tunnel được sau bước 14. Hết giờ của buổi mà bước 12 vẫn đỏ ở bước 2, 3 hay 4 của nó sau khi đã chạy lại:
+Root gitops gỡ qua tunnel: đóng tunnel được sau bước 17. Hết giờ của buổi mà bước 15 vẫn đỏ ở bước 2, 3 hay 4 của nó sau khi đã chạy lại:
 lối thoát có kiểm, để cluster không tính tiền tiếp.
 
 ```sh
 aws/scripts/tf.sh stg gitops plan --destroy --leftovers
 ```
 
-Chỉ nhận khi `timeline.tsv` của buổi có mốc `pre-destroy-start` (bước 12 đã chạy trong thư mục buổi này) mà chưa có `pre-destroy-done`;
-thiếu `pre-destroy-start` thì từ chối và bảo chạy bước 12 trước, đã có `pre-destroy-done` thì từ chối (không cần cờ này). Dòng `note
+Chỉ nhận khi `timeline.tsv` của buổi có mốc `pre-destroy-start` (bước 15 đã chạy trong thư mục buổi này) mà chưa có `pre-destroy-done`;
+thiếu `pre-destroy-start` thì từ chối và bảo chạy bước 15 trước, đã có `pre-destroy-done` thì từ chối (không cần cờ này). Dòng `note
 --leftovers: …` nhắc thứ Kubernetes tạo có thể còn (volume EBS của PVC, instance EC2 của Karpenter, load balancer của Load Balancer
 Controller), rồi ghi
-mốc `pre-destroy-skipped`. Tiếp: bước 14, rồi các bước sau (destroy có thể kẹt vì những thứ đó: mục **Destroy kẹt**); thứ `sweep.sh` liệt
+mốc `pre-destroy-skipped`. Tiếp: bước 17, rồi các bước sau (destroy có thể kẹt vì những thứ đó: mục **Destroy kẹt**); thứ `sweep.sh` liệt
 kê xoá bằng lệnh nó in, rồi chạy lại `sweep.sh` tới khi sạch.
 
-### 15–18. Gỡ root env
+### 18–22. Gỡ root env
 
 ```sh
 aws/scripts/tf.sh stg env plan --teardown
 aws/scripts/tf.sh stg env apply --teardown
+aws/scripts/restore-drill.sh stg cleanup
 aws/scripts/tf.sh stg env plan --destroy
 aws/scripts/tf.sh stg env destroy
 ```
 
-Bước 15, 16 in `skip`: stg không có file nhấc bảo vệ (prd có, `session-prd.md`). `plan --destroy` từ chối khi thư mục buổi chưa có mốc
-`gitops-destroy-end`; như bước 4 cho apply, ghi `aws/envs/stg/stg.destroy.tfplan` và bản text `stg-env-destroy-plan.txt`. **Đọc file text đó
-trước bước 18**: chỉ tài nguyên của `aws/envs/stg`, `0 to add, 0 to change`; không có bucket `svp-tfstate`, không có `aws_route53_zone` (của
-baseline `aws/accounts/stg`, root khác). Thấy thứ khác: dừng, dán plan cho AI. `destroy` chỉ áp file đó, rồi xoá file. Kẹt: mục **Destroy
-kẹt**, rồi `plan --destroy` lại (file plan cũ không áp lại được sau một apply dở) và `destroy`.
+Bước 18, 19 in `skip`: stg không có file nhấc bảo vệ (prd có, `session-prd.md`). Bước 20 xoá backup của buổi (mục dưới). `plan --destroy`
+từ chối khi thư mục buổi chưa có mốc `gitops-destroy-end`, hay khi trong `timeline.tsv` mốc cuối trong bốn mốc `backup-undrained`,
+`env-apply-end`, `env-teardown-applied`, `backup-drained` không phải `backup-drained` (`FAIL the backups of stg are not drained …`: chạy bước
+20, rồi bước 21 lại); `destroy` cũng kiểm lại điều đó. Như bước 4 cho apply, `plan --destroy` ghi `aws/envs/stg/stg.destroy.tfplan` và bản
+text `stg-env-destroy-plan.txt`. **Đọc file text đó trước bước 22**: chỉ tài nguyên của `aws/envs/stg`, `0 to add, 0 to change`; không có
+bucket `svp-tfstate`, không có `aws_route53_zone` (của baseline `aws/accounts/stg`, root khác). Thấy thứ khác: dừng, dán plan cho AI.
+`destroy` chỉ áp file đó, rồi xoá file. Kẹt: mục **Destroy kẹt**, rồi `plan --destroy` lại (file plan cũ không áp lại được sau một apply
+dở) và `destroy`.
 
 Destroy gỡ edge theo tham chiếu trong code: bản ghi DNS và delivery log, rồi ba distribution (provider tắt từng cái, chờ `Deployed`, rồi xoá:
 mỗi cái vài phút tới ~15 phút, phần dài nhất của edge), rồi VPC origin (AWS từ chối xoá khi distribution còn dùng nó), rồi listener, ALB,
@@ -1465,12 +1596,42 @@ target group, security group, cert ACM. Sau VPC origin, CloudFront tự gỡ ENI
 `CloudFront-VPCOrigins-Service-SG` (ngoài state); chưa gỡ xong thì subnet edge hay VPC báo `DependencyViolation`: mục **Destroy kẹt**.
 
 Apply đỏ trước khi tạo cluster EKS (chưa gì chạy trên cluster, root gitops chưa bao giờ apply): đọc mục **Finding bảo mật của buổi**
-(VPC, NACL, RDS… đã tạo vẫn có control), bỏ bước 12–14, `aws/scripts/tf.sh stg env plan --destroy --no-cluster`. Script tự kiểm điều đó trước khi plan: thư mục buổi không có `cluster-values.json`
+(VPC, NACL, RDS… đã tạo vẫn có control), bỏ bước 12–17, chạy bước 20 (apply đã gắn tag `Backup` và ghi `backup-undrained`), rồi
+`aws/scripts/tf.sh stg env plan --destroy --no-cluster`. Script tự kiểm điều đó trước khi plan: thư mục buổi không có `cluster-values.json`
 **và** `terraform state list` của `aws/envs/stg` (script tự chạy, profile `anhnv-stg`) không có `aws_eks_cluster`; không thì từ chối
-(`FAIL --no-cluster refused: …`). State còn cluster: chạy bước 12 trong thư mục buổi hiện tại (không cần bước 6), bước 13, 14, rồi `plan
+(`FAIL --no-cluster refused: …`). State còn cluster: chạy bước 15 trong thư mục buổi hiện tại (không cần bước 6), bước 16, 17, 20, rồi `plan
 --destroy` không `--no-cluster`.
 
-### 19–20. Quét sót
+#### Bước 20: xoá backup của buổi
+
+`restore-drill.sh stg cleanup` (**Xoá cuối buổi** của ADR-0067 §11) chạy sau lần ghi Terraform cuối vào root env (mọi apply gắn lại tag
+`Backup`) và ngay trước `plan --destroy`, theo thứ tự: xoá `svp-stg-pitr` nếu còn; gỡ tag `Backup` khỏi instance `svp-stg` và hai bucket (lịch
+không chọn chúng nữa); chờ mọi job backup, copy, restore của account kết thúc (có hạn); với mỗi recovery point của vault `svp-stg`: có copy job
+`COMPLETED` tới `svp-stg-copy` thì xoá, không có thì giữ và in hai lệnh; cả bốn xong thì ghi mốc `backup-drained`. Vault `svp-stg` ở lại
+(`aws/accounts/stg`), bản copy ở lại tới hết retention. Key RDS, key `uploads` chỉ vào `PendingDeletion` ở destroy sau bước này, khi bản copy
+đã mã hoá bằng key của `svp-backup`. Tìm `ok no svp-stg-pitr left`, `ok tag Backup removed …` (hay `skip` khi tài nguyên không còn), `ok no
+backup, copy or restore job running`, mỗi recovery point một dòng `ok recovery point … deleted: its copy is in svp-stg-copy`, mốc
+`backup-drained`, rồi `ok backups of stg drained: next, …`. Không cờ nào bỏ qua bước này; hai trường hợp đỏ:
+
+- **Job kẹt** (`FAIL jobs still running after … s, nothing deleted`, kèm danh sách `kind id state resource`): không gì bị xoá. Backup job dừng
+  được (lệnh dưới); copy job và restore job không dừng được, chỉ chờ (đọc lại trạng thái). Rồi chạy lại bước 20.
+- **Recovery point chưa có bản copy** (`FAIL recovery point … has no completed copy in svp-stg-copy, kept`, rồi `… kept, backup-drained not
+  recorded`): copy job của nó lỗi hay chưa từng chạy (job theo lịch khi env sống qua 18:00 UTC mà copy lỗi). Chọn một trong hai lệnh script in
+  dưới mỗi recovery point: copy lại (`start-copy-job`, đúng retention của plan; chạy lại bước 20 khi copy job `COMPLETED`) hay chấp nhận mất
+  bản đó (`delete-recovery-point`, ghi lại vào ghi chú của buổi); rồi chạy lại bước 20.
+
+```sh
+aws/scripts/check-account.sh stg
+AWS_PROFILE=anhnv-stg aws backup describe-backup-job --backup-job-id <id> --region ap-southeast-1 --query '[State,PercentDone]' --output text
+AWS_PROFILE=anhnv-stg aws backup stop-backup-job --backup-job-id <id> --region ap-southeast-1
+AWS_PROFILE=anhnv-stg aws backup describe-copy-job --copy-job-id <id> --region ap-southeast-1 --query 'CopyJob.State' --output text
+AWS_PROFILE=anhnv-stg aws backup describe-restore-job --restore-job-id <id> --region ap-southeast-1 --query Status --output text
+```
+
+Bỏ cả buổi khi apply đỏ: bước 20 vẫn chạy trước `plan --destroy` (kể cả `--no-cluster`), vì `env apply` ghi `backup-undrained` trước khi
+tạo gì; khi chưa có instance hay bucket, nó in `skip` cho phần đó.
+
+### 23–24. Quét sót
 
 ```sh
 aws/scripts/sweep.sh stg
@@ -1502,6 +1663,15 @@ Transcode thêm các loại: queue MediaConvert `svp-<env>` (queue `Default` c�
 alarm `svp-<env>-transcode-events-dlq` và endpoint interface `svp-<env>-mediaconvert` (loại alarm, endpoint có sẵn).
 Sót là lỗi: mọi thứ đó ở root env.
 
+Backup thêm các loại (ADR-0067, **Quét backup**): job backup, copy, restore chưa kết thúc (`AWS Backup … jobs not ended`; backup job dừng
+được, copy và restore job thì chờ rồi quét lại); recovery point trong mọi vault `svp-*` (luôn là sót: bước 20 xoá recovery point của buổi;
+snapshot RDS `awsbackup:*` là recovery point, loại `RDS snapshots` không đếm nó lần nữa); vault lock rồi vault `svp-*` không mang `Stack` được
+giữ (vault `svp-<env>` của `aws/accounts/<env>` mang `Stack=baseline`, là `kept`); plan cục bộ `svp-probe*` (plan `svp-stg`, `svp-prd` của
+Backup policy không tính: account không xoá được chúng); role `svp-*-backup` (`us-east-1`; role `svp-<env>-backup` của `aws/accounts/<env>`
+là `kept`), in sau policy inline và managed policy gắn vào nó. Instance `svp-<env>-pitr` của diễn tập nằm trong loại `RDS instances`; snapshot
+tự động của instance vừa xoá nằm trong loại `RDS automated snapshots` (RDS tự gỡ sau vài phút: quét lại). Bản copy ở account `svp-backup`
+không thuộc lượt quét nào: nó sống theo retention.
+
 Edge thêm các loại: cert ACM tag `Project=svp` (region nhà và `us-east-1`), VPC origin CloudFront, security group
 `CloudFront-VPCOrigins-Service-SG` trong VPC của lab (loại riêng: xoá tay chỉ khi không còn VPC origin), delivery, delivery source và delivery
 destination của CloudWatch Logs (`us-east-1`), topic SNS `svp-*`; alarm, log group, topic SNS, KMS key và alias ở `us-east-1` (cái mang tag
@@ -1509,7 +1679,8 @@ destination của CloudWatch Logs (`us-east-1`), topic SNS `svp-*`; alarm, log g
 ACL của edge theo bộ lọc ELBv2, WAF có sẵn.
 
 Được giữ, in thành dòng riêng, không đếm: tài nguyên tag `Stack=baseline` ở account stg (bucket state, KMS key state, zone `stg.aws.<domain>`
-với `NS`, `SOA`, `CAA` ở đỉnh; registry ECR, AMP, AMG, OIDC provider, role CI) và ở account prd (thêm, ở `us-east-1`: key KMS DNSSEC,
+với `NS`, `SOA`, `CAA` ở đỉnh; registry ECR, AMP, AMG, OIDC provider, role CI; vault `svp-stg`, role `svp-stg-backup` và key của vault) và ở
+account prd (thêm, ở `us-east-1`: key KMS DNSSEC,
 hai alarm DNSSEC, log group query log, topic `svp-prd-dns-alarms` và key của nó)
 và `Stack=bootstrap|org` ở management (bucket state, bucket và KMS key của trail; management không có hosted zone) là `kept`, gói đã có
 lịch huỷ (`scheduledChange.changeType` `CANCELLATION`, chỉ gói trả phí; gói Free huỷ ngay) cũng là `kept`; KMS key ở trạng thái `PendingDeletion` (key của root env sau destroy: RDS, MSK, alarm, Secrets của EKS; tối thiểu 7 ngày) là `pending deletion`. Tìm: `ok nothing left
@@ -1524,17 +1695,18 @@ exit 0.**
 
 | Triệu chứng | Nguyên nhân | Cách xử lý |
 | --- | --- | --- |
-| `DependencyViolation` khi xoá subnet, security group hay VPC | ENI còn gắn: ENI phụ của VPC CNI (`aws-K8S-<instance>`, `available` sau khi node mất), hay ENI của load balancer mà bước 12 chưa gỡ | `sweep.sh stg` liệt kê ENI theo VPC; ENI `available`: xoá ENI; ENI của load balancer: xoá load balancer (ENI tự mất), rồi destroy lại |
+| `FAIL the backups of stg are not drained …` ở `plan --destroy` hay `destroy` | một apply hay diễn tập chạy sau `cleanup` cuối (mốc cuối không phải `backup-drained`) | bước 20, rồi `plan --destroy` lại |
+| `DependencyViolation` khi xoá subnet, security group hay VPC | ENI còn gắn: ENI phụ của VPC CNI (`aws-K8S-<instance>`, `available` sau khi node mất), hay ENI của load balancer mà bước 15 chưa gỡ | `sweep.sh stg` liệt kê ENI theo VPC; ENI `available`: xoá ENI; ENI của load balancer: xoá load balancer (ENI tự mất), rồi destroy lại |
 | `DependencyViolation` khi xoá subnet edge hay VPC, sau khi VPC origin đã xoá | ENI của CloudFront trong subnet edge hay security group `CloudFront-VPCOrigins-Service-SG` chưa được dịch vụ gỡ (ngoài state; tài liệu VPC origins không nói sau bao lâu) | đọc lại `sweep.sh stg` mỗi 5 phút tới khi không còn ENI trong subnet edge, rồi destroy lại; còn security group khi không còn VPC origin nào: xoá nó (lệnh ở **Lệnh xoá tay theo loại**); không xoá ENI của dịch vụ bằng tay |
 | `CannotDeleteEntityWhileInUse` khi xoá VPC origin | distribution còn dùng nó (destroy dở ở distribution) | destroy lại sau khi distribution đã xoá (Terraform chờ tiếp) |
-| ALB `svp-<env>-edge` báo deletion protection | prd: chưa áp `teardown.tfvars` (`edge_alb_deletion_protection = false`) | bước 15, 16, rồi destroy lại; state mất: tắt bằng tay (lệnh ở **Lệnh xoá tay theo loại**) |
+| ALB `svp-<env>-edge` báo deletion protection | prd: chưa áp `teardown.tfvars` (`edge_alb_deletion_protection = false`) | bước 18, 19, 20, rồi destroy lại; state mất: tắt bằng tay (lệnh ở **Lệnh xoá tay theo loại**) |
 | `ResourceInUseException` khi xoá cert ACM | distribution hay listener ALB còn dùng nó | destroy lại sau khi distribution, listener đã xoá |
 | Destroy đỏ ở `aws_cloudfront_distribution`, hay `delete-distribution` bị từ chối, vì distribution còn gói flat-rate | gói không nằm trong state (destroy dở, state mất, gói tạo ở console) nên Terraform không huỷ nó trước; hay gói vừa huỷ còn đang đồng bộ (provider huỷ gói rồi trả về ngay, không chờ) | huỷ gói theo mục CloudFront của **Lệnh xoá tay theo loại**, chờ `list-subscriptions` không còn ARN đó, rồi destroy lại |
 | Destroy chờ lâu hay quá hạn ở `aws_cloudfront_distribution` | Terraform phải tắt distribution và chờ `Deployed` (vài phút tới ~15 phút) trước khi xoá | destroy lại (Terraform chờ tiếp); vẫn kẹt thì tắt và xoá tay (lệnh dưới) |
 | `BucketNotEmpty` | stg đặt `media_force_destroy = true` nên không nên gặp; object ghi giữa lúc destroy | destroy lại; còn thì xoá tay (lệnh dưới) |
-| RDS báo deletion protection | `rds_deletion_protection` của `stg.tfvars` phải `false` (prd: `teardown.tfvars`) | sửa biến, `tf.sh stg env plan`, `apply`, rồi destroy lại |
-| Node group `system` xoá lâu | node drain | chờ tới hạn bước 18 |
-| Destroy đỏ ở `aws_media_convert_queue` (`ConflictException`, queue còn job) | job `SUBMITTED`, `PROGRESSING` còn trên queue: bước 12 bị bỏ (`--leftovers`) hay job tạo sau nó | huỷ job theo mục MediaConvert của **Lệnh xoá tay theo loại**, rồi destroy lại |
+| RDS báo deletion protection | `rds_deletion_protection` của `stg.tfvars` phải `false` (prd: `teardown.tfvars`) | sửa biến, `tf.sh stg env plan`, `apply`, bước 20, rồi destroy lại |
+| Node group `system` xoá lâu | node drain | chờ tới hạn bước 22 |
+| Destroy đỏ ở `aws_media_convert_queue` (`ConflictException`, queue còn job) | job `SUBMITTED`, `PROGRESSING` còn trên queue: bước 15 bị bỏ (`--leftovers`) hay job tạo sau nó | huỷ job theo mục MediaConvert của **Lệnh xoá tay theo loại**, rồi destroy lại |
 | `DependencyViolation` khi xoá subnet hay security group node, sau `--leftovers` | instance của Karpenter còn chạy (ENI của nó trong subnet private) | `sweep.sh stg` liệt kê nó với lệnh `terminate-instances`; chờ instance `terminated`, rồi destroy lại |
 | `DeleteConflict` khi xoá role `svp-stg-karpenter-node` | instance profile do Karpenter tạo (ngoài state) còn giữ role | lệnh `delete:` của dòng `IAM instance profiles of Karpenter` trong `sweep.sh stg`, rồi destroy lại |
 | `DependencyViolation` khi xoá subnet database hay security group của MSK, ElastiCache | ENI của broker MSK hay node ElastiCache còn trong subnet: cluster, replication group đang xoá (destroy quá hạn của provider trong khi AWS vẫn gỡ) | chờ `sweep.sh stg` không còn dòng `MSK clusters`, `ElastiCache replication groups` (đọc lại mỗi 5 phút), rồi destroy lại; không xoá ENI của dịch vụ managed bằng tay |
@@ -1699,6 +1871,22 @@ AWS_PROFILE=anhnv-stg aws mediaconvert cancel-job --id <id> --region ap-southeas
 AWS_PROFILE=anhnv-stg aws mediaconvert delete-queue --name svp-stg --region ap-southeast-1
 ```
 
+AWS Backup plans (loại `AWS Backup plans` của `sweep.sh`): chỉ plan cục bộ `svp-probe*` của thử sandbox ở management (lượt `sweep.sh mgmt`,
+`AWS_PROFILE=anhnv-sso`, `check-account.sh mgmt`). AWS từ chối xoá plan còn selection: xoá từng selection, rồi plan. Không xoá plan
+`svp-stg`, `svp-prd`: Backup policy của `aws/org` sinh chúng, account không xoá được.
+
+```sh
+aws/scripts/check-account.sh mgmt
+AWS_PROFILE=anhnv-sso aws backup list-backup-selections --backup-plan-id <BackupPlanId> --region ap-southeast-1 \
+  --query 'BackupSelectionsList[].[SelectionId,SelectionName]' --output text
+AWS_PROFILE=anhnv-sso aws backup delete-backup-selection --backup-plan-id <BackupPlanId> --selection-id <SelectionId> --region ap-southeast-1
+AWS_PROFILE=anhnv-sso aws backup delete-backup-plan --backup-plan-id <BackupPlanId> --region ap-southeast-1 --query DeletionDate --output text
+```
+
+Loại AWS Backup khác có lệnh `delete:` đủ dưới mỗi dòng của `sweep.sh`, theo thứ tự nó in: job (dừng backup job; copy, restore job thì chờ),
+recovery point, vault lock (governance: account gỡ được), vault, policy rồi role `svp-*-backup`. Vault không xoá được khi còn recovery point
+hay copy job đang ghi vào nó: xoá recovery point trước, chờ job xong.
+
 Luật và Alertmanager của AMP sót (dòng `note left in AMP: …` của `pre-destroy.sh`, hay `AMP rule groups namespaces` của `sweep.sh`): xoá bằng
 lệnh dòng đó in, rồi đọc lại tới khi rỗng; workspace thì giữ (`kept`):
 
@@ -1798,7 +1986,8 @@ Không sửa entry hay Secret bằng tay, không ghi mật khẩu Kafka, Valkey 
 
 ## Kết thúc buổi
 
-1. Thứ tự gỡ, mỗi bước xong mới sang bước sau: destroy root `aws/gitops/stg` rồi `aws/envs/stg` (bước 13–18); `sweep.sh stg`; `sweep.sh mgmt`.
+1. Thứ tự gỡ, mỗi bước xong mới sang bước sau: destroy root `aws/gitops/stg`, xoá backup của buổi, rồi destroy `aws/envs/stg` (bước
+   16–22); `sweep.sh stg`; `sweep.sh mgmt`.
    Hai lượt cùng exit 0 (dán output cho AI). AI nhắc tới khi người học xác nhận đã chạy cả hai destroy và hai lượt sweep. Phép kiểm (e) của
    ADR-0052 (output vào phụ lục của nó, kết luận vào "Xác nhận"): sau destroy, gói của account rỗng (mong `[]`), cùng lượt `sweep.sh stg` sạch:
 
@@ -1809,23 +1998,28 @@ Không sửa entry hay Secret bằng tay, không ghi mật khẩu Kafka, Valkey 
    Phép kiểm (f) của ADR-0053 là cùng hai lượt sweep sạch: không còn dòng MSK, ElastiCache, `AmazonMSK_*` nào; KMS key của root env chỉ ở
    `pending deletion`. Phép kiểm `pre-destroy.sh` của ADR-0056: cùng lượt đó không còn instance, launch template, instance profile, hàng đợi
    SQS hay rule EventBridge nào của Karpenter. Phép kiểm gỡ của ADR-0066: cùng lượt đó không còn queue `svp-stg`, role
-   `svp-stg-mediaconvert`, hàng đợi `svp-stg-transcode-events*`, rule `svp-stg-mediaconvert-job-state`, endpoint `svp-stg-mediaconvert`. Ngày sau
+   `svp-stg-mediaconvert`, hàng đợi `svp-stg-transcode-events*`, rule `svp-stg-mediaconvert-job-state`, endpoint `svp-stg-mediaconvert`. Phép
+   kiểm gỡ của ADR-0067: cùng lượt đó không còn recovery point, job AWS Backup chưa kết thúc hay instance `svp-stg-pitr`; vault `svp-stg`, role
+   `svp-stg-backup` là `kept`; bản copy của buổi vẫn ở `svp-stg-copy` (lệnh **Đọc bản copy** của mục **12–14**, mong cùng ba dòng). Ngày sau
    buổi, tổng MediaConvert của ngày buổi ở Cost Explorer (lệnh ở mục "Chi phí mỗi phút video" của
    [phụ lục ADR-0066](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0066-mediaconvert-transcode.md#chi-phí-mỗi-phút-video)),
    đối chiếu với tổng tính theo output của mọi job trong `mediaconvert-jobs.json` (lượt cuối của mục **Phép kiểm transcode** (f)) mà video có
    bản ghi ở `$SVP_SESSION_DIR/transcode-jobs/`, job lạc gồm; dán output.
-   Rồi chạy lại truy vấn dữ liệu đã ghi trước bước 12 (mục Phép kiểm nền tảng managed (e), `after-destroy.txt`), cùng ngày; dán `diff`.
+   Rồi chạy lại truy vấn dữ liệu đã ghi trước bước 15 (mục Phép kiểm nền tảng managed (e), `after-destroy.txt`), cùng ngày; dán `diff`.
    Buổi đầu có span của account: retention của `aws/spans` theo bước (10) của
    [`platform-setup.md`](platform-setup.md#bước-10-retention-của-awsspans).
 2. Cái ở lại giữa các buổi: ở account stg là baseline (`Stack=baseline`: bucket state, KMS key state, zone `stg.aws.<domain>` với `CAA`;
    registry ECR cùng repo phát hành, rule và repo của pull-through cache, OIDC provider, role CI; workspace AMP, log group `/svp/stg/otel`,
-   Transaction Search của X-Ray cùng `aws/spans`, workspace AMG, hai key KMS của chúng) và
+   Transaction Search của X-Ray cùng `aws/spans`, workspace AMG, hai key KMS của chúng; vault `svp-stg` rỗng, key `alias/svp-stg-backup`,
+   role `svp-stg-backup`, opt-in của AWS Backup) và
    baseline bảo mật (`Stack=security-baseline`: CMK EBS `alias/svp-ebs`; recorder Config, rule `svp-security-*` không phải tài nguyên `sweep.sh`
    liệt kê); ở account prd là hai baseline của nó, gồm zone `aws.<domain>` với `CAA`, bản ghi `NS` uỷ quyền `stg.aws.<domain>`, DNSSEC, query
-   log và topic alarm DNSSEC (`sweep.sh` in chúng là `kept`); ở account Log Archive, bucket log CloudFront và delivery destination;
+   log và topic alarm DNSSEC (`sweep.sh` in chúng là `kept`); ở account Log Archive, bucket log CloudFront và delivery destination; ở account
+   `svp-backup`, vault `svp-stg-copy` với bản copy của buổi tới hết retention (root `aws/backup`); plan `svp-stg` của Backup policy;
    management chỉ còn `Stack=bootstrap|org|security-baseline|security`, không hosted zone. `destroy` của hai root env không đụng zone
    nào (zone thuộc root `aws/accounts/<env>`) và không đụng baseline bảo mật (root `aws/baseline`).
 3. Giữ `$SVP_SESSION_DIR` (máy local, không commit): `timeline.tsv`, `k6-levels.tsv`, `k6-<n>/` là số đo cho cột Kết quả của ADR-0034
-   "Kiểm chứng sau" và roadmap; `controls-failed.tsv` là danh sách control FAILED của tài nguyên buổi, đầu vào của việc sửa trong Terraform.
+   "Kiểm chứng sau" và roadmap; `restore-drill.tsv` là số đo RTO/RPO cho phụ lục ADR-0067; `controls-failed.tsv` là danh sách control
+   FAILED của tài nguyên buổi, đầu vào của việc sửa trong Terraform.
 4. Sau 24 giờ: Cost Explorer theo dịch vụ (account stg, hay management cho cả org), so với ước lượng (ADR-0034 §12 cộng MSK, ElastiCache
    của ADR-0053 §16, cộng phần của mục **Giới hạn**, ±50 %); số thật thay ước lượng ở mục đó.

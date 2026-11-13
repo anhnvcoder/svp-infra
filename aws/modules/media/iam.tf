@@ -18,6 +18,15 @@ data "aws_iam_policy_document" "video_service" {
     resources = ["${aws_s3_bucket.this["uploads"].arn}/uploads/*"]
   }
 
+  # S3 makes the data key of an upload with the rights of the form's signer. The service only heads and deletes
+  # uploads, which do not use the key, so it needs no kms:Decrypt.
+  statement {
+    sid       = "EncryptUploads"
+    effect    = "Allow"
+    actions   = ["kms:GenerateDataKey"]
+    resources = [aws_kms_key.uploads.arn]
+  }
+
   statement {
     sid       = "ListUploads"
     effect    = "Allow"
@@ -56,6 +65,13 @@ data "aws_iam_policy_document" "media_worker" {
     effect    = "Allow"
     actions   = ["s3:GetObject"]
     resources = ["${local.bucket_arns["uploads"]}/uploads/*"]
+  }
+
+  statement {
+    sid       = "DecryptUploads"
+    effect    = "Allow"
+    actions   = ["kms:Decrypt"]
+    resources = [aws_kms_key.uploads.arn]
   }
 
   statement {

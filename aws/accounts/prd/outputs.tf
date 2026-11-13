@@ -42,3 +42,18 @@ output "spans_retention_command" {
   description = "Command that sets the retention of the log group aws/spans, run once per account after the first session with spans."
   value       = module.observability.spans_retention_command
 }
+
+output "backup_vault_arn" {
+  description = "ARN of the AWS Backup vault svp-<env>, where the backup policy of the organization and the on-demand jobs of a session write recovery points."
+  value       = module.backup_vault.vault_arns["svp-${local.env}"]
+}
+
+output "backup_key_arn" {
+  description = "ARN of the KMS key alias/svp-<env>-backup that encrypts the vault svp-<env>."
+  value       = aws_kms_key.backup.arn
+}
+
+output "backup_role_arn" {
+  description = "ARN of the role svp-<env>-backup that AWS Backup assumes for the backup, copy and restore jobs of the account."
+  value       = aws_iam_role.backup.arn
+}
