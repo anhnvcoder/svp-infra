@@ -17,7 +17,9 @@ VPC origin tới ALB internal, ba web ACL, cert ACM, log CloudFront, DNS của b
 cache làm nóng mỗi buổi, Inspector); [ADR-0063](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0063-managed-observability.md)
 (metric vào AMP, log vào CloudWatch Logs, trace vào X-Ray, luật trên AMP tới SNS, dashboard trên Amazon Managed Grafana, canary hỏi AMP);
 [ADR-0064](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0064-interface-endpoints.md) (API AWS qua endpoint interface có private
-DNS). Buổi prd theo [`session-prd.md`](session-prd.md), dùng chung mọi mục chung của file này.
+DNS); [ADR-0066](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0066-mediaconvert-transcode.md) (transcode bằng AWS Elemental
+MediaConvert: queue, role, rule EventBridge, SQS và DLQ của root env, endpoint `mediaconvert`).
+Buổi prd theo [`session-prd.md`](session-prd.md), dùng chung mọi mục chung của file này.
 
 **Người học chạy mọi lệnh ở đây.** AI không chạy lệnh nào chạm account hay cluster EKS, kể cả lệnh chỉ đọc; AI đọc output người học dán
 lại và nhắc tới khi destroy hai root và hai lượt `sweep.sh` (stg, mgmt) đều đã chạy. Mọi lệnh chạy từ gốc repo này (`infra/`). Mỗi account một
@@ -48,7 +50,9 @@ aws/scripts/session.sh --print stg
   cộng phần edge (ALB, phí theo giờ của ba web ACL, log; bảng "Thêm mỗi buổi" ở phụ lục ADR-0061 §13), cộng phần nền tảng managed (endpoint
   interface, mẫu AMP, log, span, Inspector mỗi digest bên thứ ba mới, AMG ở buổi đầu tháng: bảng tổng mỗi buổi và lúc không buổi ở
   [ADR-0063 §12](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0063-managed-observability.md#12-chi-phí-hợp-đồng-cluster-và-adr-cũ)
-  và phụ lục của nó); buổi đầu đo số thật ở Cost Explorer (mục **Kết thúc buổi**). Quên destroy 24 giờ tốn gấp ~6 lần một buổi; budget
+  và phụ lục của nó), cộng phần transcode (job MediaConvert của buổi, endpoint `mediaconvert`, SQS, request S3:
+  [ADR-0066 §12](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0066-mediaconvert-transcode.md#12-chi-phí) và mục "Chi phí" của
+  phụ lục); buổi đầu đo số thật ở Cost Explorer (mục **Kết thúc buổi**). Quên destroy 24 giờ tốn gấp ~6 lần một buổi; budget
   `svp-stg-monthly` của account stg và budget tổng của org ở management gửi email ở 50 %, 80 %, 100 %.
 - MSK và ElastiCache dựng, gỡ lâu: tài liệu AWS không ghi thời gian, ADR-0053 §16 giả định MSK dựng ≤ 45, gỡ ≤ 30 phút, ElastiCache ≤ 20,
   ≤ 15 phút, song song với EKS trong apply của root env (buổi dài thêm ~30 phút apply, ~20 phút destroy); buổi stg đo số thật (phép kiểm (a)
@@ -230,7 +234,8 @@ Rồi chạy tiếp từ bước sau mốc cuối (hay chạy lại bước đan
 
 Bước tay chen giữa các bước script: xác nhận email của alarm sau bước 5 (mục 3–5), tunnel tới API sau bước 5 và trước bước 6 (mục
 **Tunnel tới API**, giữ chạy tới hết bước 14), làm nóng cache sau bước 6 và trước bước 7 (mục **Làm nóng cache**), phép kiểm của bước 11 (cả
-mục **Phép kiểm nền tảng managed**), đọc finding bảo mật sau bước 11 và trước bước 12 (mục **Finding bảo mật của buổi**), chạy lại truy vấn
+mục **Phép kiểm nền tảng managed** và **Phép kiểm transcode**, clip của nó sinh trong lúc chờ bước 5),
+đọc finding bảo mật sau bước 11 và trước bước 12 (mục **Finding bảo mật của buổi**), chạy lại truy vấn
 dữ liệu sau bước 20 (mục **Kết thúc buổi**).
 
 Dự trù: apply root env xong ~T+70 phút (MSK là phần dài nhất), mọi Application Healthy ~T+1 giờ 55, đo tới muộn nhất T+3 giờ, gỡ và quét
@@ -476,14 +481,18 @@ kiểm (đạt hay không, output chính) vào một file trong `$SVP_SESSION_DI
 $SVP_SESSION_DIR/k6-levels.tsv`, dòng `ok highest level …`, và với mỗi bậc `jq -c . $SVP_SESSION_DIR/k6-<n>/summaries/pod-*.json | head`.
 
 Commit status `argocd/stg` (Argo CD Notifications, ADR-0032) phải có trên commit `svp-gitops` cluster vừa sync: đó là **bằng chứng stg** mà
-`promote-prd` đòi trước khi promote commit đó lên prd. Đọc commit và status:
+`promote-prd` đòi trước khi promote commit đó lên prd. Đọc commit (ghi vào `stg-ref.txt` của thư mục buổi), status của nó và
+commit đó nằm trên `main` của `svp-gitops`, trước bước 12 (cluster còn):
 
 ```sh
-AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n argocd get applications.argoproj.io svp-root -o jsonpath='{.status.sync.revision}{"\n"}'
-gh api "repos/anhnvcoder/svp-gitops/commits/<sha trên>/statuses" --jq '.[] | select(.context == "argocd/stg") | "\(.state) \(.created_at)"' | head -n 1
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n argocd get applications.argoproj.io svp-root -o jsonpath='{.status.sync.revision}{"\n"}' |
+  tee "$SVP_SESSION_DIR/stg-ref.txt"
+gh api "repos/anhnvcoder/svp-gitops/commits/$(cat "$SVP_SESSION_DIR/stg-ref.txt")/statuses" --jq '.[] | select(.context == "argocd/stg") | "\(.state) \(.created_at)"' | head -n 1
+git -C ../gitops fetch origin && git -C ../gitops merge-base --is-ancestor "$(cat "$SVP_SESSION_DIR/stg-ref.txt")" origin/main && echo on-main
 ```
 
-Mong `success`; dán lại cả hai dòng.
+Mong 40 hex, `success` và `on-main`; dán lại ba dòng. Commit trong `stg-ref.txt` là `stg_ref` của buổi prd (mục **Cổng promote prd** của
+[`session-prd.md`](session-prd.md#cổng-promote-prd-trước-mọi-lệnh-tốn-tiền)) khi buổi này qua mục **Phép kiểm transcode**.
 
 #### Nền tảng EKS, TLS Postgres và alarm
 
@@ -1141,6 +1150,188 @@ Dòng `query failed` là truy vấn hỏng, không phải dữ liệu mất: l�
 (f) Quét sót: `sweep.sh stg` và `sweep.sh mgmt` sạch ở bước 19–20, cùng các loại mới (endpoint interface, rule groups namespace của AMP) và
 dòng `kept` của registry, observability.
 
+#### Phép kiểm transcode
+
+Phép kiểm buổi của mục "Xác nhận" của
+[ADR-0066](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0066-mediaconvert-transcode.md#xác-nhận): `media-worker` chạy
+lệnh con `mediaconvert` và video đi qua MediaConvert, header của output qua CloudFront, FF-9 của threat model, lớp cắt đầu vào, hàng đợi sự
+kiện rỗng, và đường MediaConvert của phép đo hai đường. Làm trong lúc bậc k6 đầu tiên (1 pod) giữ tải, tunnel mở: k6 chỉ gọi
+`POST /videos`, không tải file, nên không job nào khác chen vào số đo. Lệnh và output có thời điểm UTC vào một file của `$SVP_SESSION_DIR`, một
+dòng kết luận mỗi phép vào "Xác nhận" của ADR-0066, số thô của (b) vào bảng "Kết quả" ở phụ lục của nó. Buổi prd chạy (a) và (f) với
+`anhnv-prd`, `--context svp-prd`, tên `svp-prd` ([`session-prd.md`](session-prd.md#phép-kiểm-transcode)). Chi phí của mục này nằm trong phần
+chi phí của transcode ở [ADR-0066 §12](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0066-mediaconvert-transcode.md#12-chi-phí).
+
+Ba clip sinh trên máy một lần, trong lúc chờ bước 5 (vài phút CPU): clip tham chiếu 60 s và 200 s (lệnh của mục "Phép đo hai đường:
+phương pháp" ở [phụ lục ADR-0066](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0066-mediaconvert-transcode.md#phép-đo-hai-đường-phương-pháp)),
+và một bản 200 s không edit list mà header MP4 khai 60 s, cho (e). Script Python chỉ ghi lại trường thời lượng của ba hộp `mvhd`, `tkhd`,
+`mdhd` (version 0, như ffmpeg ghi); mẫu của luồng giữ nguyên 200 s:
+
+```sh
+c=$SVP_SESSION_DIR
+for t in 60 200; do
+  ffmpeg -f lavfi -i testsrc2=size=1080x1920:rate=30 -f lavfi -i sine=frequency=440 -t "$t" -c:v libx264 -pix_fmt yuv420p -c:a aac "$c/clip-${t}s.mp4"
+done
+ffmpeg -f lavfi -i testsrc2=size=1080x1920:rate=30 -f lavfi -i sine=frequency=440 -t 200 -c:v libx264 -pix_fmt yuv420p -c:a aac \
+  -use_editlist 0 "$c/clip-200s-noedit.mp4"
+python3 - "$c/clip-200s-noedit.mp4" "$c/clip-200s-says-60s.mp4" 60 <<'EOF'
+import struct, sys
+src, dst, secs = sys.argv[1], sys.argv[2], float(sys.argv[3])
+b = bytearray(open(src, 'rb').read())
+movie = 0
+def walk(off, end):
+    global movie
+    while off < end:
+        size, kind = struct.unpack_from('>I4s', b, off)
+        if size < 8:
+            sys.exit('box size %d at %d: not a plain MP4' % (size, off))
+        if kind in (b'moov', b'trak', b'mdia'):
+            walk(off + 8, off + size)
+        elif kind in (b'mvhd', b'tkhd', b'mdhd'):
+            if b[off + 8] != 0:
+                sys.exit(kind.decode() + ': only version 0 is patched')
+            if kind == b'tkhd':
+                struct.pack_into('>I', b, off + 28, int(secs * movie))
+            else:
+                scale = struct.unpack_from('>I', b, off + 20)[0]
+                movie = scale if kind == b'mvhd' else movie
+                struct.pack_into('>I', b, off + 24, int(secs * scale))
+        off += size
+walk(0, len(b))
+open(dst, 'wb').write(b)
+EOF
+ffprobe -v error -show_entries format=duration -of csv=p=0 "$c/clip-200s-says-60s.mp4"
+ffmpeg -v error -i "$c/clip-200s-says-60s.mp4" -map 0:v -f null - -stats 2>&1 | tail -n 1
+```
+
+Mong dòng đầu ~`60` (header khai 60 s) và dòng sau có `time=00:03:20` (giải mã thật 200 s). Khác: dán hai dòng cho AI, không dùng file đó.
+
+Biến và hàm dùng chung, một lần trong terminal của buổi (mở lại terminal thì chạy lại khối này). Bản ghi job
+(`transcode-jobs/<video_id>/<version>.json` của bucket media) là nguồn duy nhất của kết quả mỗi version: job của version hay lý do hỏng
+trước khi có job (`docs/explanation/transcode.md` của repo code):
+
+```sh
+values=$SVP_SESSION_DIR/cluster-values.json
+media=$(jq -r .mediaBucket "$values"); dom=$(jq -r .domain "$values"); cdn=https://$(jq -r .mediaDomain "$values")
+record_key() {          # job record key of video $1
+  AWS_PROFILE=anhnv-stg aws s3api list-objects-v2 --bucket "$media" --prefix "transcode-jobs/$1/" --region ap-southeast-1 \
+    --query 'Contents[0].Key' --output text
+}
+last_key() {            # newest job record: the video just uploaded
+  AWS_PROFILE=anhnv-stg aws s3api list-objects-v2 --bucket "$media" --prefix transcode-jobs/ --region ap-southeast-1 \
+    --query 'sort_by(Contents, &LastModified)[-1].Key' --output text
+}
+show() { AWS_PROFILE=anhnv-stg aws s3 cp "s3://$media/$1" - --region ap-southeast-1; }
+```
+
+(a) Smoke đi qua MediaConvert: Deployment `media-worker` chạy lệnh con `mediaconvert`, và job trong bản ghi của mỗi video smoke, seed của
+`measure.sh` là `COMPLETE` trên queue `svp-stg`. Một video có thể có thêm job lạc: `CreateJob` mất response, bridge thử lại và tạo job thứ
+hai; job đó chạy tới `COMPLETE` hay `ERROR` nhưng không có tên trong bản ghi, nên không quyết kết quả. Khối dưới chép mọi bản ghi về thư mục
+buổi, rồi đếm mỗi bản ghi theo trạng thái job của nó (`record-job`) hay lý do của nó (`reason`), và mỗi job khác của cùng video (`orphan-job`):
+
+```sh
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp get deploy media-worker \
+  -o jsonpath='{.spec.template.spec.containers[?(@.name=="media-worker")].args}{"\n"}'
+AWS_PROFILE=anhnv-stg aws mediaconvert list-jobs --queue svp-stg --region ap-southeast-1 --output json > "$SVP_SESSION_DIR/mediaconvert-jobs.json"
+AWS_PROFILE=anhnv-stg aws s3 sync "s3://$media/transcode-jobs/" "$SVP_SESSION_DIR/transcode-jobs/" --region ap-southeast-1 --only-show-errors
+find "$SVP_SESSION_DIR/transcode-jobs" -name '*.json' -exec jq -c '{video: (input_filename | split("/")[-2]), job: .job_id, reason}' {} + |
+  jq -rs --slurpfile all "$SVP_SESSION_DIR/mediaconvert-jobs.json" '($all[0].Jobs | map({key: .Id, value: .Status}) | from_entries) as $st
+    | map(.job | select(.)) as $own | map(.video) as $videos
+    | (.[] | if .reason then "reason \(.reason)" else "record-job \($st[.job] // "MISSING")" end),
+      ($all[0].Jobs[] | select((.UserMetadata.video_id | IN($videos[])) and (.Id | IN($own[]) | not)) | "orphan-job \(.Status)")' |
+  sort | uniq -c
+```
+
+Mong `["mediaconvert"]`, rồi dòng `record-job COMPLETE` với số đếm bằng số video smoke và seed đã `READY`, không dòng `record-job` nào khác,
+không dòng `reason`. Dòng `orphan-job <trạng thái>` được chấp nhận (job lạc, như trên); ghi số của nó vào dòng kết luận. `record-job` khác
+`COMPLETE` (`MISSING`: job của bản ghi không có trên queue) hay có dòng `reason`: dán bảng đếm và output của
+`jq -c '.Jobs[] | select(.Status != "COMPLETE") | {Id, Status, ErrorCode, ErrorMessage, UserMetadata}' "$SVP_SESSION_DIR/mediaconvert-jobs.json"`
+cho AI.
+
+(b) Phép đo hai đường, đường MediaConvert: script đo thời gian tới `READY` (`deploy/compose/transcode-timing.sh`) qua
+`make eks-transcode-timing` của repo code, 5 lần clip 60 s, rồi `GetJob` của 5 job (job ID ở bản ghi job) cho phút output theo loại:
+
+```sh
+AWS_PROFILE=anhnv-stg make -C ../backend eks-transcode-timing CONTEXT=svp-stg DOMAIN="$dom" CLIP="$SVP_SESSION_DIR/clip-60s.mp4" N=5 |
+  tee "$SVP_SESSION_DIR/transcode-timing-mediaconvert.txt"
+grep -E '^[0-9a-f-]{36} [0-9]+$' "$SVP_SESSION_DIR/transcode-timing-mediaconvert.txt" | cut -d ' ' -f 1 | while read -r id; do
+  job=$(show "$(record_key "$id")" | jq -r .job_id)
+  AWS_PROFILE=anhnv-stg aws mediaconvert get-job --id "$job" --region ap-southeast-1 --output json \
+    --query 'Job.{id: Id, status: Status, timing: Timing, outputs: OutputGroupDetails[].OutputDetails[].[DurationInMs, VideoDetails.WidthInPx, VideoDetails.HeightInPx]}'
+done | tee "$SVP_SESSION_DIR/transcode-timing-jobs.json"
+```
+
+Mong năm dòng `<video_id> <giây>`, dòng `p50=<giây> max=<giây>` và năm JSON `COMPLETE`. Dán nguyên `transcode-timing-mediaconvert.txt` và
+`transcode-timing-jobs.json` (output thô, AI tính chi phí theo công thức ở mục "Chi phí mỗi phút video" của phụ lục). Đường ffmpeg trên
+compose chạy ngoài buổi, một lần, theo cùng mục của phụ lục; tổng MediaConvert của ngày buổi ở Cost Explorer đọc ở mục **Kết thúc buổi**.
+
+(c) Header của output qua CloudFront: master, playlist rendition, một segment và thumbnail của một video vừa đo, đọc qua `media.<domain>`:
+
+```sh
+id=$(grep -E -m 1 '^[0-9a-f-]{36} [0-9]+$' "$SVP_SESSION_DIR/transcode-timing-mediaconvert.txt" | cut -d ' ' -f 1)
+key=$(AWS_PROFILE=anhnv-stg aws s3api list-objects-v2 --bucket "$media" --prefix "media/$id/" --region ap-southeast-1 \
+  --query "Contents[?ends_with(Key, 'master.m3u8')].Key | [0]" --output text)
+dir=${key%/master.m3u8}
+var=$(curl -s "$cdn/$key" | grep -v -e '^#' -e '^[[:space:]]*$' | head -n 1 | tr -d '\r')
+seg=$(curl -s "$cdn/$dir/$var" | grep -v -e '^#' -e '^[[:space:]]*$' | head -n 1 | tr -d '\r')
+for k in "$key" "$dir/$var" "$dir/${var%/*}/$seg" "$dir/${var%/*}/thumbnail.jpg"; do
+  echo "$k"; curl -sI "$cdn/$k" | grep -i -E '^(HTTP|cache-control|content-type)'
+done
+```
+
+Mong bốn khối, mỗi khối `HTTP/2 200` và `cache-control` đúng hằng `CacheControl` của `services/media-worker/internal/worker/worker.go`
+(`max-age=31536000, immutable`, như `serve` ghi), `content-type` theo đuôi như `serve`: `application/vnd.apple.mpegurl` cho hai playlist,
+`video/mp2t` cho segment, `image/jpeg` cho thumbnail. Biến thể trong master có dạng `<attempt>/index_<rendition>.m3u8`. Thiếu header hay
+khác giá trị: dán output cho AI.
+
+(d) FF-9: clip 200 s thành `FAILED` với lý do `DURATION_EXCEEDED`, và không job nào của video đó trên queue:
+
+```sh
+AWS_PROFILE=anhnv-stg make -C ../backend eks-transcode-timing CONTEXT=svp-stg DOMAIN="$dom" CLIP="$SVP_SESSION_DIR/clip-200s.mp4" N=1
+key=$(last_key); echo "$key"; show "$key"
+AWS_PROFILE=anhnv-stg aws mediaconvert list-jobs --queue svp-stg --region ap-southeast-1 --output json \
+  --query "Jobs[?UserMetadata.video_id=='$(cut -d / -f 2 <<<"$key")'].[Id,Status]"
+```
+
+Mong: `make` dừng ở `FAIL  video v went FAILED instead of READY`; key `transcode-jobs/<video_id>/<version>.json`, nội dung
+`{"reason":"DURATION_EXCEEDED"}`; `[]`. Video `READY`, lý do khác hay có job: dán cả ba output cho AI (FF-9 không giữ được).
+
+(e) Lớp cắt: file khai 60 s mà dài thật 200 s không ra output quá 3 phút:
+
+```sh
+AWS_PROFILE=anhnv-stg make -C ../backend eks-transcode-timing CONTEXT=svp-stg DOMAIN="$dom" CLIP="$SVP_SESSION_DIR/clip-200s-says-60s.mp4" N=1
+key=$(last_key); echo "$key"; show "$key"
+job=$(show "$key" | jq -r '.job_id // empty')
+[ -z "$job" ] || AWS_PROFILE=anhnv-stg aws mediaconvert get-job --id "$job" --region ap-southeast-1 --output json \
+  --query 'Job.[Status,ErrorCode,OutputGroupDetails[].OutputDetails[].DurationInMs]'
+```
+
+Đạt khi không output nào dài quá 180 000 ms. Ghi trường hợp gặp: video `READY`, bản ghi có `job_id`, job `COMPLETE` với mọi `DurationInMs`
+quanh 60 000 (cắt tại thời lượng Probe báo: lớp cắt chạy); hay `FAILED` với bản ghi `{"reason":"INVALID_INPUT"}` hoặc job `ERROR` (không
+output); hay `{"reason":"DURATION_EXCEEDED"}` (Probe không tin header, lớp cắt không được thử tới). Có output trên 180 000 ms: trần chi phí
+hỏng, dừng mục này và dán output cho AI.
+
+(f) Hàng đợi sự kiện rỗng, alarm DLQ không báo, bridge không bỏ message nào. Chạy sau cùng, khi mọi job của mục này đã xong:
+
+```sh
+for q in svp-stg-transcode-events svp-stg-transcode-events-dlq; do
+  url=$(AWS_PROFILE=anhnv-stg aws sqs get-queue-url --queue-name "$q" --region ap-southeast-1 --query QueueUrl --output text)
+  echo "$q $(AWS_PROFILE=anhnv-stg aws sqs get-queue-attributes --queue-url "$url" --region ap-southeast-1 --output text \
+    --attribute-names ApproximateNumberOfMessages ApproximateNumberOfMessagesNotVisible \
+    --query 'Attributes.[ApproximateNumberOfMessages,ApproximateNumberOfMessagesNotVisible]')"
+done
+AWS_PROFILE=anhnv-stg aws cloudwatch describe-alarms --alarm-names svp-stg-transcode-events-dlq --region ap-southeast-1 --output text \
+  --query 'MetricAlarms[].[AlarmName,StateValue]'
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp logs deploy/media-worker --since=3h |
+  grep -c -E 'transcode event (ignored|interrupted)|transcode result undecided'
+```
+
+Mong hai dòng kết thúc bằng hai số `0` (hàng đợi nguồn còn số khác 0 thì đọc lại sau một phút), alarm `OK` hay `INSUFFICIENT_DATA`, và `0`.
+DLQ có message hay alarm `ALARM`: theo runbook
+[`transcode-events-dlq.md`](https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks/transcode-events-dlq.md) của repo code, dán
+output cho AI. Rồi chạy lại ba lệnh cuối của (a) (`list-jobs`, `s3 sync`, bảng đếm). Mong `record-job` chỉ `COMPLETE` (thêm `ERROR` khi (e)
+gặp job `ERROR`), `reason` chỉ `DURATION_EXCEEDED` của (d) và lý do (e) đã ghi; `orphan-job` như ở (a); khác: dán bảng đếm cho AI.
+`mediaconvert-jobs.json` khi đó giữ mọi job của buổi cùng thời lượng từng output, đầu vào đối chiếu chi phí ở mục **Kết thúc buổi**.
+
 ### Finding bảo mật của buổi (sau bước 11, trước bước 12)
 
 Chỉ đọc, profile `anhnv-security-ro` của account Security Tooling, khi tài nguyên của buổi **còn sống**: tài nguyên bị xoá thì finding control
@@ -1194,7 +1385,10 @@ chạy hay từ thư mục buổi mới. `FAIL kubeconfig context …` là accou
    xoá chúng ở AMP, chờ tối đa 5 phút); không pod ACK nào Ready hay quá hạn thì gỡ finalizer của chúng và in dòng `note left in AMP: …` kèm
    lệnh xoá ở AMP (người học chạy sau bước 20; `sweep.sh stg` cũng liệt kê rule groups namespace còn lại). Mốc `pre-destroy-amp-rules`. Rồi
    Application workload theo sync wave từ cao xuống (finalizer của mỗi cái xoá thứ nó triển khai), trừ `svp-cluster` và controller nền
-   tảng (cả `karpenter`); rồi Gateway `svp-edge/svp`, rồi xoá tường minh TargetGroupBinding `envoy-gateway-system/svp-envoy` (chart
+   tảng (cả `karpenter`); rồi, khi `media-worker` đã gỡ (không job mới), huỷ mọi job `SUBMITTED`, `PROGRESSING` của queue MediaConvert
+   `svp-stg` và chờ tới khi không còn job nào dở (job dở chặn xoá queue và ghi vào bucket `media` mà destroy làm rỗng), in số job đã huỷ
+   (`ok no MediaConvert queue …` khi account không có queue đó); rồi Gateway `svp-edge/svp`,
+   rồi xoá tường minh TargetGroupBinding `envoy-gateway-system/svp-envoy` (chart
    `svp-cluster` render nó, không mất theo Gateway): LBC gỡ target của Envoy khỏi target group edge rồi mới thả nó, chờ có hạn. Chờ hết
    Service `LoadBalancer`, TargetGroupBinding, load balancer và target group mang tag `elbv2.k8s.aws/cluster=svp-stg` trong ELBv2 (của
    controller; ALB và target group edge của Terraform không mang tag này), trong khi LBC, Envoy Gateway còn chạy. Bản ghi DNS của buổi thuộc
@@ -1208,7 +1402,8 @@ chạy hay từ thư mục buổi mới. `FAIL kubeconfig context …` là accou
 5. `svp-cluster` và Application nền tảng, theo wave; quá hạn chỉ ghi `note` (không gì của chúng tính tiền ngoài cluster).
 
 Cluster chưa có Argo CD (root gitops chưa apply hay dừng trước Argo CD, dòng `note no Argo CD on svp-stg`): không có Application nào để xoá,
-bước 1, 5 và phần Application của bước 2 bỏ qua. Cluster chưa có CRD của Karpenter (dòng `note no Karpenter on svp-stg`): bước 4 không xoá
+bước 1, 5 và phần Application của bước 2 bỏ qua; phần huỷ job MediaConvert của bước 2 vẫn chạy.
+Cluster chưa có CRD của Karpenter (dòng `note no Karpenter on svp-stg`): bước 4 không xoá
 gì. Các phép chờ của bước 2–4 (Service `LoadBalancer`, ELBv2, PVC, volume EBS, instance của Karpenter) vẫn chạy, rồi ghi mốc
 `pre-destroy-done` như thường.
 
@@ -1217,6 +1412,8 @@ Tìm: mỗi bước `ok`, cuối cùng `ok ready for: aws/scripts/tf.sh stg gito
 còn lại và lệnh xem; sửa rồi chạy lại script (mỗi bước tìm thứ còn lại). Bước 4 đỏ vì NodeClaim còn: đọc log của Karpenter
 (`AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n kube-system logs deploy/karpenter --tail=50`); đỏ vì instance còn mà hết NodeClaim:
 `sweep.sh stg` in lệnh tắt nó. Bước 2 đỏ ở `svp-envoy`: dòng `FAIL` nêu lệnh xem finalizer, status của nó và log của LBC.
+Bước 2 đỏ ở job MediaConvert: dòng `FAIL` nêu lời gọi lỗi (quyền, throttle) hay job còn dở sau hạn chờ;
+sửa rồi chạy lại script, hay huỷ tay theo mục **Lệnh xoá tay theo loại**.
 **Hết giờ của buổi mà bước 2, 3 hay 4 vẫn đỏ sau khi đã chạy lại**
 (dòng `note` cuối sau `FAIL` nhắc lối này): sang bước 13 với `--leftovers`.
 
@@ -1298,6 +1495,13 @@ lỗi); rule groups namespace của AMP (ACK tạo mỗi buổi, `pre-destroy.sh
 Grafana, repo ECR, rule pull-through cache cùng repo do cache tạo (không tag), IAM OIDC provider và role `svp-ci-*` của root
 `aws/accounts/<env>`: in là `kept` khi account giữ `Stack=baseline`.
 
+Transcode thêm các loại: queue MediaConvert `svp-<env>` (queue `Default` của account không tính); hàng đợi SQS
+`svp-<env>-transcode-events` và `-dlq` (loại SQS có sẵn); rule EventBridge `svp-<env>-mediaconvert-job-state`: loại `EventBridge rule targets`
+(chỉ rule còn đích) in trước loại `EventBridge rules`, rule `svp-*` mang tag `Stack` được giữ (rule `svp-security-*` của `aws/baseline`) là
+`kept`; role `svp-<env>-mediaconvert` (`us-east-1`): loại `IAM inline policies of MediaConvert roles` in trước `IAM roles of MediaConvert`;
+alarm `svp-<env>-transcode-events-dlq` và endpoint interface `svp-<env>-mediaconvert` (loại alarm, endpoint có sẵn).
+Sót là lỗi: mọi thứ đó ở root env.
+
 Edge thêm các loại: cert ACM tag `Project=svp` (region nhà và `us-east-1`), VPC origin CloudFront, security group
 `CloudFront-VPCOrigins-Service-SG` trong VPC của lab (loại riêng: xoá tay chỉ khi không còn VPC origin), delivery, delivery source và delivery
 destination của CloudWatch Logs (`us-east-1`), topic SNS `svp-*`; alarm, log group, topic SNS, KMS key và alias ở `us-east-1` (cái mang tag
@@ -1330,6 +1534,7 @@ exit 0.**
 | `BucketNotEmpty` | stg đặt `media_force_destroy = true` nên không nên gặp; object ghi giữa lúc destroy | destroy lại; còn thì xoá tay (lệnh dưới) |
 | RDS báo deletion protection | `rds_deletion_protection` của `stg.tfvars` phải `false` (prd: `teardown.tfvars`) | sửa biến, `tf.sh stg env plan`, `apply`, rồi destroy lại |
 | Node group `system` xoá lâu | node drain | chờ tới hạn bước 18 |
+| Destroy đỏ ở `aws_media_convert_queue` (`ConflictException`, queue còn job) | job `SUBMITTED`, `PROGRESSING` còn trên queue: bước 12 bị bỏ (`--leftovers`) hay job tạo sau nó | huỷ job theo mục MediaConvert của **Lệnh xoá tay theo loại**, rồi destroy lại |
 | `DependencyViolation` khi xoá subnet hay security group node, sau `--leftovers` | instance của Karpenter còn chạy (ENI của nó trong subnet private) | `sweep.sh stg` liệt kê nó với lệnh `terminate-instances`; chờ instance `terminated`, rồi destroy lại |
 | `DeleteConflict` khi xoá role `svp-stg-karpenter-node` | instance profile do Karpenter tạo (ngoài state) còn giữ role | lệnh `delete:` của dòng `IAM instance profiles of Karpenter` trong `sweep.sh stg`, rồi destroy lại |
 | `DependencyViolation` khi xoá subnet database hay security group của MSK, ElastiCache | ENI của broker MSK hay node ElastiCache còn trong subnet: cluster, replication group đang xoá (destroy quá hạn của provider trong khi AWS vẫn gỡ) | chờ `sweep.sh stg` không còn dòng `MSK clusters`, `ElastiCache replication groups` (đọc lại mỗi 5 phút), rồi destroy lại; không xoá ENI của dịch vụ managed bằng tay |
@@ -1340,7 +1545,8 @@ exit 0.**
 
 `sweep.sh` in lệnh xoá dưới từng tài nguyên sót. Mục này cho loại mà một lệnh không đủ, và cho thu hồi rule security group. Mọi lệnh ghi;
 người học chạy sau khi `check-account.sh stg` đúng account, thay `<…>` bằng id `sweep.sh` in ra. Ưu tiên destroy lại cho thứ Terraform quản
-(VPC, NAT, EIP, EKS, RDS, MSK, ElastiCache, bucket, gói, CloudFront, VPC origin, ALB, cert ACM, web ACL); lệnh tay cho thứ ngoài state
+(VPC, NAT, EIP, EKS, RDS, MSK, ElastiCache, bucket, gói, CloudFront, VPC origin, ALB, cert ACM, web ACL,
+queue MediaConvert); lệnh tay cho thứ ngoài state
 hay khi state mất. Tài nguyên sót ở management (lượt `sweep.sh
 mgmt`): cùng lệnh với `AWS_PROFILE=anhnv-sso`.
 
@@ -1481,6 +1687,18 @@ Bản ghi `NS` dưới đỉnh là uỷ quyền do baseline tạo (ở zone prd:
 Ở zone prd dùng cùng
 khối với `AWS_PROFILE=anhnv-prd`, `zone=aws.<domain>`, `aws/accounts/prd`. Management không có zone nên lượt `mgmt` không có bản ghi nào để xoá.
 
+MediaConvert (khi state mất, hay queue còn job): huỷ mọi job dở của queue `svp-stg`, đọc lại tới khi hai lệnh `list-jobs` không in gì,
+rồi xoá queue. Phần còn lại của transcode xoá bằng lệnh `delete:` của `sweep.sh stg`, theo thứ tự nó in: hai hàng đợi SQS, đích rồi rule
+EventBridge `svp-stg-mediaconvert-job-state`, alarm, policy inline rồi role `svp-stg-mediaconvert` (IAM ở `us-east-1`):
+
+```sh
+aws/scripts/check-account.sh stg
+AWS_PROFILE=anhnv-stg aws mediaconvert list-jobs --queue svp-stg --status SUBMITTED --region ap-southeast-1 --query 'Jobs[].Id' --output text
+AWS_PROFILE=anhnv-stg aws mediaconvert list-jobs --queue svp-stg --status PROGRESSING --region ap-southeast-1 --query 'Jobs[].Id' --output text
+AWS_PROFILE=anhnv-stg aws mediaconvert cancel-job --id <id> --region ap-southeast-1
+AWS_PROFILE=anhnv-stg aws mediaconvert delete-queue --name svp-stg --region ap-southeast-1
+```
+
 Luật và Alertmanager của AMP sót (dòng `note left in AMP: …` của `pre-destroy.sh`, hay `AMP rule groups namespaces` của `sweep.sh`): xoá bằng
 lệnh dòng đó in, rồi đọc lại tới khi rỗng; workspace thì giữ (`kept`):
 
@@ -1590,7 +1808,12 @@ Không sửa entry hay Secret bằng tay, không ghi mật khẩu Kafka, Valkey 
 
    Phép kiểm (f) của ADR-0053 là cùng hai lượt sweep sạch: không còn dòng MSK, ElastiCache, `AmazonMSK_*` nào; KMS key của root env chỉ ở
    `pending deletion`. Phép kiểm `pre-destroy.sh` của ADR-0056: cùng lượt đó không còn instance, launch template, instance profile, hàng đợi
-   SQS hay rule EventBridge nào của Karpenter.
+   SQS hay rule EventBridge nào của Karpenter. Phép kiểm gỡ của ADR-0066: cùng lượt đó không còn queue `svp-stg`, role
+   `svp-stg-mediaconvert`, hàng đợi `svp-stg-transcode-events*`, rule `svp-stg-mediaconvert-job-state`, endpoint `svp-stg-mediaconvert`. Ngày sau
+   buổi, tổng MediaConvert của ngày buổi ở Cost Explorer (lệnh ở mục "Chi phí mỗi phút video" của
+   [phụ lục ADR-0066](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0066-mediaconvert-transcode.md#chi-phí-mỗi-phút-video)),
+   đối chiếu với tổng tính theo output của mọi job trong `mediaconvert-jobs.json` (lượt cuối của mục **Phép kiểm transcode** (f)) mà video có
+   bản ghi ở `$SVP_SESSION_DIR/transcode-jobs/`, job lạc gồm; dán output.
    Rồi chạy lại truy vấn dữ liệu đã ghi trước bước 12 (mục Phép kiểm nền tảng managed (e), `after-destroy.txt`), cùng ngày; dán `diff`.
    Buổi đầu có span của account: retention của `aws/spans` theo bước (10) của
    [`platform-setup.md`](platform-setup.md#bước-10-retention-của-awsspans).

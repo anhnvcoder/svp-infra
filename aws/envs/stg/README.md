@@ -1,7 +1,7 @@
 # `aws/envs/stg`: cấu hình gốc của env stg
 
 Tầng platform của stg trên AWS (ADR-0034 §2, ADR-0024 §6A, ADR-0048, ADR-0053, ADR-0055…0058, ADR-0060, ADR-0061): ghép
-các module `network`, `eks`, `rds`, `msk`, `elasticache`, `alarms`, `media`, `edge`, `waf`, `ssm-bastion`,
+các module `network`, `eks`, `rds`, `msk`, `elasticache`, `alarms`, `media`, `transcode`, `edge`, `waf`, `ssm-bastion`,
 `external-secrets`, thêm role IAM và Pod Identity association cho `svp/video-service`, `svp/media-worker`, đọc tài
 nguyên sống lâu của account (`baseline.tf`), xuất output `cluster_values` theo hợp đồng `cluster.*` và các output của
 cluster cho root bootstrap `aws/gitops/stg`. Ứng dụng trong cluster không ở đây: Argo CD triển khai từ `svp-gitops`.
@@ -204,6 +204,16 @@ GuardDuty bật ở mức tổ chức (root `aws/security`). Root này thêm ph�
   module `network` (output `guardduty_data_endpoint_id`), để agent có đường gửi ngay từ đầu;
 - plan Malware Protection for S3 của module `media` trên bucket `uploads`.
 
+## Transcode
+
+Module [`transcode`](../../modules/transcode/README.md) dựng phần MediaConvert của env: queue on-demand `svp-stg`, role
+`svp-stg-mediaconvert` mà job chạy với (đọc `uploads/*` của bucket uploads, ghi `media/*` của bucket media), rule
+EventBridge `svp-stg-mediaconvert-job-state`, SQS `svp-stg-transcode-events` và dead-letter queue
+`svp-stg-transcode-events-dlq`, alarm `page` `svp-stg-transcode-events-dlq` gửi topic `svp-stg-alarms`. Root truyền ARN
+hai bucket của module `media` và topic của module `alarms`. Không tài nguyên nào giữ dữ liệu cần sống qua buổi, nên tất
+cả nằm ở root này và bị gỡ cùng `destroy`. Thiết kế:
+[ADR-0066](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0066-mediaconvert-transcode.md).
+
 ## Output
 
 | Output | Nội dung |
@@ -242,6 +252,9 @@ Khoá của `cluster_values`:
 | `logGroup` | `/svp/stg/otel`: Collector ghi log OTLP của service và web vào đây |
 | `grafanaUrl` | `https://` + endpoint của workspace AMG, không `/` cuối: Grafana Operator đẩy dashboard và data source tới đây |
 | `alarmTopicArn` | `module.alarms.topic_arn` (topic `svp-stg-alarms`): Alertmanager của AMP gửi cảnh báo tới đây |
+| `mediaconvertQueueArn` | `module.transcode.queue_arn` (queue MediaConvert `svp-stg`): bridge tạo job trên queue này |
+| `mediaconvertRoleArn` | `module.transcode.role_arn` (role `svp-stg-mediaconvert`): role mà job chạy với, bridge truyền nó bằng `iam:PassRole` |
+| `transcodeEventsQueueUrl` | `module.transcode.events_queue_url` (SQS `svp-stg-transcode-events`): bridge đọc trạng thái cuối của job ở đây |
 
 Dạng từng khoá (regex) là validation của module [`gitops-bridge`](../../modules/gitops-bridge/README.md)
 (`variables.tf`); dạng các khoá của AMP, AMG, SNS đối chiếu với tài liệu AWS ở [phụ lục
@@ -253,10 +266,16 @@ repo code.
 
 ## Quyền AWS trong cluster
 
-| ServiceAccount (`svp`) | Role | Policy (inline `s3`) |
+| ServiceAccount (`svp`) | Role | Policy (inline `service`) |
 | --- | --- | --- |
 | `video-service` | `svp-stg-video-service` | `video_service_policy_json` của module `media` |
-| `media-worker` | `svp-stg-media-worker` | `media_worker_policy_json` của module `media` |
+| `media-worker` | `svp-stg-media-worker` | `media_worker_policy_json` của module `media` (S3) gộp với `bridge_policy_json` của module `transcode` (MediaConvert, `iam:PassRole`, SQS) |
+
+Trên EKS, `media-worker` chạy lệnh con `mediaconvert` (bridge tới MediaConvert), nên role của nó mang quyền bridge của
+[phụ lục ADR-0066](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0066-mediaconvert-transcode.md)
+§9. Data source `aws_iam_policy_document.media_worker` (`pod-identity.tf`) gộp hai policy bằng
+`source_policy_documents`: từng statement giữ nguyên, không chép tay; `sid` của hai module phải khác nhau (luật của
+`source_policy_documents`).
 
 Trust policy như role của controller trong module `eks`: `pods.eks.amazonaws.com`, `sts:AssumeRole` + `sts:TagSession`, condition trên
 session tag `eks-cluster-name`, `kubernetes-namespace`, `kubernetes-service-account` đúng cặp ở bảng. ServiceAccount của chart `svp-service`
@@ -301,3 +320,7 @@ của ADR-0055; luật ghi ngoại lệ ở mục "Ngoại lệ trivy" của [`A
 §16, cộng phần ADR-0055, ADR-0056 thêm: nhóm node hệ thống on-demand, bastion, KMS key, log, alarm); chi tiết từng module ở README của module.
 Distribution media và web ACL của nó nằm trong gói flat-rate Free: $0 ([ADR-0052](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0052-cloudfront-flat-rate-free.md));
 distribution web, api, hai web ACL của chúng (ATP, Bot Control) và ALB edge tính theo giờ và request, bảng ở mục "Chi phí edge" của [ADR-0061](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0061-edge-cloudfront-waf-acm.md).
+Transcode (MediaConvert theo phút output, SQS, EventBridge, request S3, endpoint interface `mediaconvert`) tính theo
+lượng dùng trong buổi, $0 lúc không buổi: §12 của
+[ADR-0066](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0066-mediaconvert-transcode.md) và mục "Chi phí"
+của [phụ lục](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0066-mediaconvert-transcode.md).

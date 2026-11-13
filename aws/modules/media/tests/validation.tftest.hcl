@@ -10,6 +10,12 @@ mock_provider "aws" {
     }
   }
 
+  mock_data "aws_partition" {
+    defaults = {
+      partition = "aws"
+    }
+  }
+
   mock_data "aws_cloudfront_response_headers_policy" {
     defaults = {
       id = "60669652-455b-4ae9-85a4-c4c02393f86c"
@@ -139,6 +145,63 @@ run "defaults" {
     error_message = "By default the module must create no log bucket and write no access log."
   }
 
+}
+
+# The S3 rights of media-worker, the MediaConvert bridge on AWS, exactly: Probe reads the upload, the bridge reads and
+# writes media/ and the job records under transcode-jobs/, and lists both prefixes. Records expire after 30 days, and
+# CloudFront still reads media/ alone.
+run "bridge_s3_policy" {
+  command = plan
+
+  assert {
+    condition = toset([for s in data.aws_iam_policy_document.media_worker.statement : jsonencode({
+      sid        = s.sid
+      effect     = s.effect
+      actions    = sort(s.actions)
+      resources  = sort(s.resources)
+      conditions = [for c in s.condition : { test = c.test, variable = c.variable, values = sort(c.values) }]
+      })]) == toset([for s in [
+      {
+        sid        = "ReadUploads"
+        effect     = "Allow"
+        actions    = ["s3:GetObject"]
+        resources  = ["arn:aws:s3:::svp-stg-uploads-000000000000-ap-southeast-1/uploads/*"]
+        conditions = []
+      },
+      {
+        sid     = "WriteMedia"
+        effect  = "Allow"
+        actions = ["s3:GetObject", "s3:PutObject"]
+        resources = [
+          "arn:aws:s3:::svp-stg-media-000000000000-ap-southeast-1/media/*",
+          "arn:aws:s3:::svp-stg-media-000000000000-ap-southeast-1/transcode-jobs/*",
+        ]
+        conditions = []
+      },
+      {
+        sid        = "ListMedia"
+        effect     = "Allow"
+        actions    = ["s3:ListBucket"]
+        resources  = ["arn:aws:s3:::svp-stg-media-000000000000-ap-southeast-1"]
+        conditions = [{ test = "StringLike", variable = "s3:prefix", values = ["media/*", "transcode-jobs/*"] }]
+      },
+    ] : jsonencode(s)])
+    error_message = "The bridge must get exactly GetObject on uploads/*, GetObject and PutObject on media/* and transcode-jobs/*, and a listing of those two prefixes."
+  }
+
+  assert {
+    condition = length([for r in aws_s3_bucket_lifecycle_configuration.media.rule : r if r.id == "expire-transcode-jobs" &&
+      r.status == "Enabled" && r.filter[0].prefix == "transcode-jobs/" && r.expiration[0].days == 30
+    ]) == 1
+    error_message = "The media bucket must delete the transcode job records under transcode-jobs/ after 30 days."
+  }
+
+  assert {
+    condition = jsonencode([for s in data.aws_iam_policy_document.media.statement : sort(s.resources) if s.effect == "Allow"]) == jsonencode([
+      ["arn:aws:s3:::svp-stg-media-000000000000-ap-southeast-1/media/*"]
+    ])
+    error_message = "The bucket policy must let CloudFront read media/* alone, never the job records."
+  }
 }
 
 # Attribute names below are built with join: the guard of make test refuses any line that holds the word naming a

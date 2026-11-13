@@ -34,8 +34,9 @@ variable "cluster_values" {
       "name", "region", "vpcId", "vpcCidr", "serviceCidr", "dbCidrs", "edgeCidrs", "edgeTargetGroupArn", "domain",
       "rdsAddress", "kafkaBrokers", "valkeyHost", "uploadsBucket", "mediaBucket", "mediaDomain", "s3Cidrs",
       "externalSecretsRoles", "ecrRegistry", "ampWorkspaceId", "ampEndpoint", "logGroup", "grafanaUrl", "alarmTopicArn",
+      "mediaconvertQueueArn", "mediaconvertRoleArn", "transcodeEventsQueueUrl",
     ]), false)
-    error_message = "cluster_values must hold exactly the keys name, region, vpcId, vpcCidr, serviceCidr, dbCidrs, edgeCidrs, edgeTargetGroupArn, domain, rdsAddress, kafkaBrokers, valkeyHost, uploadsBucket, mediaBucket, mediaDomain, s3Cidrs, externalSecretsRoles, ecrRegistry, ampWorkspaceId, ampEndpoint, logGroup, grafanaUrl and alarmTopicArn."
+    error_message = "cluster_values must hold exactly the keys name, region, vpcId, vpcCidr, serviceCidr, dbCidrs, edgeCidrs, edgeTargetGroupArn, domain, rdsAddress, kafkaBrokers, valkeyHost, uploadsBucket, mediaBucket, mediaDomain, s3Cidrs, externalSecretsRoles, ecrRegistry, ampWorkspaceId, ampEndpoint, logGroup, grafanaUrl, alarmTopicArn, mediaconvertQueueArn, mediaconvertRoleArn and transcodeEventsQueueUrl."
   }
 
   validation {
@@ -43,7 +44,8 @@ variable "cluster_values" {
       [for k in [
         "name", "region", "vpcId", "vpcCidr", "serviceCidr", "edgeTargetGroupArn", "domain", "rdsAddress",
         "kafkaBrokers", "valkeyHost", "uploadsBucket", "mediaBucket", "mediaDomain", "ecrRegistry", "ampWorkspaceId",
-        "ampEndpoint", "logGroup", "grafanaUrl", "alarmTopicArn",
+        "ampEndpoint", "logGroup", "grafanaUrl", "alarmTopicArn", "mediaconvertQueueArn", "mediaconvertRoleArn",
+        "transcodeEventsQueueUrl",
       ] : startswith(jsonencode(var.cluster_values[k]), "\"")],
       [for k in ["dbCidrs", "edgeCidrs", "s3Cidrs"] :
         startswith(jsonencode(var.cluster_values[k]), "[") &&
@@ -72,8 +74,12 @@ variable "cluster_values" {
       logGroup       = "^/svp/[a-z]+/otel$"
       grafanaUrl     = "^https://g-[0-9a-z]+\\.grafana-workspace\\.[a-z]{2}(-[a-z]+)+-[0-9]+\\.amazonaws\\.com$"
       alarmTopicArn  = "^arn:aws:sns:[a-z]{2}(-[a-z]+)+-[0-9]+:[0-9]{12}:svp-[a-z]+-alarms$"
+
+      mediaconvertQueueArn    = "^arn:aws:mediaconvert:[a-z]{2}(-[a-z]+)+-[0-9]+:[0-9]{12}:queues/svp-[a-z]+$"
+      mediaconvertRoleArn     = "^arn:aws:iam::[0-9]{12}:role/svp-[a-z]+-mediaconvert$"
+      transcodeEventsQueueUrl = "^https://sqs\\.[a-z]{2}(-[a-z]+)+-[0-9]+\\.amazonaws\\.com/[0-9]{12}/svp-[a-z]+-transcode-events$"
     } : can(regex(re, var.cluster_values[k]))]), false)
-    error_message = "cluster_values: ecrRegistry must be <account>.dkr.ecr.<region>.amazonaws.com, ampWorkspaceId ws-<id>, ampEndpoint https://aps-workspaces.<region>.amazonaws.com/workspaces/ws-<id>/, logGroup /svp/<env>/otel, grafanaUrl https://g-<id>.grafana-workspace.<region>.amazonaws.com without a trailing slash, alarmTopicArn arn:aws:sns:<region>:<account>:svp-<env>-alarms."
+    error_message = "cluster_values: ecrRegistry must be <account>.dkr.ecr.<region>.amazonaws.com, ampWorkspaceId ws-<id>, ampEndpoint https://aps-workspaces.<region>.amazonaws.com/workspaces/ws-<id>/, logGroup /svp/<env>/otel, grafanaUrl https://g-<id>.grafana-workspace.<region>.amazonaws.com without a trailing slash, alarmTopicArn arn:aws:sns:<region>:<account>:svp-<env>-alarms, mediaconvertQueueArn arn:aws:mediaconvert:<region>:<account>:queues/svp-<env>, mediaconvertRoleArn arn:aws:iam::<account>:role/svp-<env>-mediaconvert, transcodeEventsQueueUrl https://sqs.<region>.amazonaws.com/<account>/svp-<env>-transcode-events."
   }
 }
 

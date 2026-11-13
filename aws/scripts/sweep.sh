@@ -12,9 +12,9 @@
 # an alias of the lab still on such a key is counted: it keeps its name, so the next session cannot make it again.
 
 # Reads the home region, and us-east-1 for what CloudFront keeps there (web ACLs, pricing plans, certificates, log
-# deliveries), for the OIDC providers and roles of CI (IAM is global, its endpoint in us-east-1) and for the kinds a
-# baseline keeps there too (the DNSSEC alarms of prd, its query log group, their SNS topic and KMS keys): each of those
-# kinds reads the Stack tag, so what a baseline keeps is "kept" in either region.
+# deliveries), for IAM (OIDC providers, roles of CI and of MediaConvert; global, its endpoint in us-east-1) and for
+# the kinds a baseline keeps there too (the DNSSEC alarms of prd, its query log group, their SNS topic and KMS keys):
+# each of those kinds reads the Stack tag, so what a baseline keeps is "kept" in either region.
 
 # Design notes: README.md.
 
@@ -276,18 +276,44 @@ cache_parameter_groups() {
     elasticache describe-cache-parameter-groups
 }
 
-# The interruption queue of Karpenter (svp-<env>-karpenter) and any other queue svp-*.
+# The interruption queue of Karpenter (svp-<env>-karpenter), the job state queues of MediaConvert
+# (svp-<env>-transcode-events and its -dlq) and any other queue svp-*.
 queues() { q '.QueueUrls[]?' sqs list-queues --queue-name-prefix svp-; }
 
-# The EventBridge rules that feed that queue (Karpenter<event>-<suffix>), each with the ids of its targets, which go
-# before the rule.
-event_rules() {
+# The EventBridge rules that feed those queues (Karpenter<event>-<suffix>, svp-<env>-mediaconvert-job-state) and any
+# other rule svp-*, one tagged with a kept Stack (the rules svp-security-* of aws/baseline) left out and, with KEEP,
+# put on the kept list (once, by the kind that deletes the rules; the kind of their targets reads this too).
+event_rules_left() {
+  local lines out p name arn tags stack
+  lines=
+  for p in Karpenter svp-; do
+    out=$(q '.Rules[] | "\(.Name) \(.Arn)"' events list-rules --name-prefix "$p") || return 1
+    lines="$lines$out"$'\n'
+  done
+  printing && lines='<each-rule-above> <its-ARN>'
+  while read -r name arn; do
+    [ -n "$name" ] || continue
+    tags=$(aws_ events list-tags-for-resource --resource-arn "$arn" --output json) || return 1
+    printing && continue
+    stack=$(stack_tag <<<"$tags")
+    if is_kept "$stack"; then
+      [ "${1:-}" != keep ] || keep "kept  EventBridge rule $name (Stack=$stack)"
+      continue
+    fi
+    echo "$name"
+  done <<<"$lines"
+}
+event_rules() { event_rules_left keep; }
+
+# The targets those rules still have ("<rule> <id>..."), a kind listed before the rules: EventBridge refuses to delete
+# a rule with one, and a destroy that stopped half-way may have removed them already, so only those left are removed.
+event_rule_targets() {
   local names n ids
-  names=$(q '.Rules[].Name' events list-rules --name-prefix Karpenter) || return 1
+  names=$(event_rules_left) || return 1
   printing && names='<each-rule-above>'
   for n in $names; do
     ids=$(q '[.Targets[].Id] | join(" ")' events list-targets-by-rule --rule "$n") || return 1
-    printing || echo "$n $ids"
+    printing || [ -z "$ids" ] || echo "$n $ids"
   done
 }
 
@@ -582,6 +608,25 @@ oidc_providers() {
   done
 }
 
+# MediaConvert queues svp-<env> (on demand, billed per job only, but a queue left blocks the next session's of the same
+# name). The account's own queue Default is not the lab's.
+mediaconvert_queues() { q '.Queues[]? | select(.Name | startswith("svp-")) | "\(.Name) \(.Status) \(.PricingPlan // "")"' mediaconvert list-queues; }
+
+# The role MediaConvert runs the jobs of queue svp-<env> with (svp-<env>-mediaconvert).
+mediaconvert_roles() { q '.Roles[] | select(.RoleName | test("^svp-[a-z]+-mediaconvert$")) | .RoleName' iam list-roles; }
+
+# The inline policies those roles still have ("<role> <policy>"), a kind listed before the roles: IAM refuses to delete
+# a role with one, and a destroy that stopped half-way may have deleted it already, so only those left are deleted.
+mediaconvert_role_policies() {
+  local names n policies p
+  names=$(mediaconvert_roles) || return 1
+  printing && names='<each-role-above>'
+  for n in $names; do
+    policies=$(q '.PolicyNames[]' iam list-role-policies --role-name "$n") || return 1
+    for p in $policies; do echo "$n $p"; done
+  done
+}
+
 # The roles GitHub Actions assumes to push to ECR (svp-ci-*).
 ci_roles() {
   local names n tags stack
@@ -653,9 +698,10 @@ global sweep_kind "CloudWatch Logs deliveries in us-east-1" log_deliveries "aws 
 global sweep_kind "CloudWatch Logs delivery sources in us-east-1" log_delivery_sources "aws logs delete-delivery-source --name {}"
 global sweep_kind "CloudWatch Logs delivery destinations in us-east-1" log_delivery_destinations \
   "aws logs delete-delivery-destination --name {}"
+sweep_kind "MediaConvert queues" mediaconvert_queues "aws mediaconvert delete-queue --name {}"
 sweep_kind "SQS queues" queues "aws sqs delete-queue --queue-url {}"
-sweep_kind "EventBridge rules of Karpenter" event_rules \
-  "aws events remove-targets --rule {} --ids {rest} --region $region && AWS_PROFILE=$profile aws events delete-rule --name {}"
+sweep_kind "EventBridge rule targets" event_rule_targets "aws events remove-targets --rule {} --ids {rest}"
+sweep_kind "EventBridge rules" event_rules "aws events delete-rule --name {}"
 sweep_kind "CloudWatch alarms" alarms "aws cloudwatch delete-alarms --alarm-names {}"
 sweep_kind "CloudWatch log groups" log_groups "aws logs delete-log-group --log-group-name {}"
 sweep_kind "SNS topics" sns_topics "aws sns delete-topic --topic-arn {}"
@@ -665,6 +711,9 @@ sweep_kind "Managed Grafana workspaces" grafana_workspaces "aws grafana delete-w
 sweep_kind "ECR repositories" ecr_repositories "aws ecr delete-repository --repository-name {} --force"
 sweep_kind "ECR pull-through cache rules" cache_rules "aws ecr delete-pull-through-cache-rule --ecr-repository-prefix {}"
 global sweep_kind "IAM OIDC providers" oidc_providers "aws iam delete-open-id-connect-provider --open-id-connect-provider-arn {}"
+global sweep_kind "IAM inline policies of MediaConvert roles" mediaconvert_role_policies \
+  "aws iam delete-role-policy --role-name {} --policy-name {rest}"
+global sweep_kind "IAM roles of MediaConvert" mediaconvert_roles "aws iam delete-role --role-name {}"
 global sweep_kind "IAM roles of CI" ci_roles "$runbook (delete-role-policy for each inline policy, then delete-role)"
 sweep_kind "Secrets Manager secrets (scheduled for deletion included)" secrets \
   "aws secretsmanager delete-secret --secret-id {} --force-delete-without-recovery"

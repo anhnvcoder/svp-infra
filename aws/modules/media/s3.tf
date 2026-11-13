@@ -11,7 +11,12 @@ locals {
     uploads = "${var.name_prefix}-uploads-${local.bucket_suffix}"
     media   = "${var.name_prefix}-media-${local.bucket_suffix}"
   }
+
+  # Built from the names rather than read from the buckets, so the policies that use them are known at plan time.
+  bucket_arns = { for k, name in local.buckets : k => "arn:${data.aws_partition.current.partition}:s3:::${name}" }
 }
+
+data "aws_partition" "current" {}
 
 resource "aws_s3_bucket" "this" {
   for_each = local.buckets
@@ -180,6 +185,21 @@ resource "aws_s3_bucket_lifecycle_configuration" "media" {
     }
   }
 
+  # The transcode job record of a version decides its result only while a job, an SQS message or a Kafka record of it
+  # can still arrive; 30 days outlasts all three.
+  rule {
+    id     = "expire-transcode-jobs"
+    status = "Enabled"
+
+    filter {
+      prefix = "transcode-jobs/"
+    }
+
+    expiration {
+      days = 30
+    }
+  }
+
   # Only with versioning on: older versions go noncurrent_days after they were replaced or deleted, and a delete
   # marker with no version left behind it goes too.
   dynamic "rule" {
@@ -239,7 +259,7 @@ data "aws_iam_policy_document" "media" {
     sid       = "CloudFrontReadMedia"
     effect    = "Allow"
     actions   = ["s3:GetObject"]
-    resources = ["${aws_s3_bucket.this["media"].arn}/media/*"]
+    resources = ["${local.bucket_arns["media"]}/media/*"]
 
     principals {
       type        = "Service"

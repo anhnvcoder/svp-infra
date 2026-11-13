@@ -175,6 +175,17 @@ module "media" {
   log_delivery_destination_arn = local.cloudfront_log_destination_arn
 }
 
+# MediaConvert transcoding of the env: its jobs read uploads/ and write media/ of the buckets above, and their final
+# states reach media-worker through an SQS queue whose dead-letter alarm pages on the alarms topic.
+module "transcode" {
+  source = "../../modules/transcode"
+
+  env                = local.env
+  uploads_bucket_arn = "arn:aws:s3:::${module.media.uploads_bucket}"
+  media_bucket_arn   = "arn:aws:s3:::${module.media.media_bucket}"
+  alarm_topic_arn    = module.alarms.topic_arn
+}
+
 # The public way in to the web and the API: CloudFront, through a VPC origin, to an internal ALB in the edge subnets
 # in front of Envoy. The ALB lets Envoy in on the node security group, where the pods take their addresses.
 module "edge" {

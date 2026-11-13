@@ -2,7 +2,7 @@
 """Generate `docs/diagrams/svp-aws.drawio` (+ PDF, PNG) from a Python spec — the drawio file is GENERATED, edit it here.
 
 Four pages: stg, prd (one function, sizes read from the Terraform of this repository), org (organization, accounts, OUs,
-policies, log and detection flows) and flows (release path to ECR, telemetry, upload to playback, request). Layout as in SKILL.md: rows = AZs, each holding its public, private and database subnet; columns = tiers (outside
+policies, log and detection flows) and flows (release path to ECR, upload to playback, request, telemetry, transcode). Layout as in SKILL.md: rows = AZs, each holding its public, private and database subnet; columns = tiers (outside
 → global services of the account → public → private → database), the regional band below the VPC. Every coordinate is a multiple of 40 (major cell), icons 80px.
 
     python3 .claude/skills/aws-drawio-diagram/scripts/build_svp.py [--pdf] [--png DIR] [--docs]
@@ -161,7 +161,9 @@ def expected(env: Env) -> dict[str, int]:
             # endpoints: S3 gateway, guardduty-data interface, one icon per AZ holding the interface endpoints' ENIs;
             # s3: media, uploads and the three log archive buckets it writes (VPC flow, WAF, CloudFront access logs)
             "elasticache": env.cache_nodes, "endpoints": 2 + env.endpoint_azs, "s3": 5, "secrets_manager": 1, "key_management_service": 1,
-            "elastic_block_store": n, "sns": 1, "sqs": 1, "eventbridge": 1, "systems_manager": 1,
+            # transcode (modules/transcode): MediaConvert queue, its role, the job-state rule, two queues, the DLQ alarm
+            "elastic_block_store": n, "sns": 1, "sqs": 3, "eventbridge": 2, "systems_manager": 1,
+            "elemental_mediaconvert": 1, "role": 1, "alarm": 1,
             # account-level services that outlive the session: ECR, Inspector (scans the cache repositories), AMP, AMG,
             # the application log group (cloudwatch_2 below counts the alarm icon too), X-Ray
             "ecr": 1, "inspector": 1, "managed_service_for_prometheus": 1, "managed_service_for_grafana": 1, "xray": 1,
@@ -249,8 +251,9 @@ def env_page(env: Env) -> Page:
     ep_y, vpc_b = bottom + 80, bottom + 200
     band_y = vpc_b + 40
     row = band_y + 40                                     # icon row of the band
-    row2 = row + 200                                      # second icon row of the band: account-level observability, registry
-    lane = band_y + 440                                   # users → uploads, below the band
+    row_t = row + 240                                     # transcode row of the band, under the buckets it reads and writes
+    row2 = row + 440                                      # third icon row of the band: account-level observability, registry
+    lane = band_y + 720                                   # users → uploads, below the band
     region_b = lane + 40
     acct_b = region_b + 40
     log_y = acct_b + 40                                   # the log archive account, under the env's own account
@@ -292,7 +295,7 @@ def env_page(env: Env) -> Page:
         p.group(f"Database subnet {data[k]}", DB_X, sub[k], DB_R - DB_X, SUB_H, **PRIVATE, cid=f"db{k}")
     eks = p.group(f"EKS cluster svp-{env.name}", EKS_X, a, EKS_R - EKS_X, sub[-1] + SUB_H - a, gr="eks", stroke="#D05C17",
                   font="#D05C17", cid="eks")
-    p.group("Regional services", VPC_X, band_y, VPC_R - VPC_X, 400, **BAND)
+    p.group("Regional services", VPC_X, band_y, VPC_R - VPC_X, 680, **BAND)
     p.group("AWS Account svp-log-archive · buckets written by this env", ACCT_X, log_y, ACCT_R - ACCT_X, log_b - log_y, **ACCOUNT)
 
     # namespace frames (boxes, not aws4 containers), every Kubernetes icon wholly inside one private box: first AZ rows
@@ -371,7 +374,7 @@ def env_page(env: Env) -> Page:
                      "elasticache", CACHE_X, sub[k] + 160, DB, cid=f"cache{k}") for k in range(env.cache_nodes)]
     brokers = [p.icon("MSK broker", "managed_streaming_for_kafka", MSK_X, sub[k] + 40, ANA, cid=f"msk{k}") for k in range(n)]
 
-    media = p.icon("S3 media", "s3", 600, row, STO, cid="media")
+    media = p.icon("S3 media", "s3", 600, row, STO, cid="media", label_top=True)
     # entered from below by the browser
     uploads = p.icon("S3 uploads<br>GuardDuty malware scan", "s3", 760, row, STO, cid="uploads", label_top=True)
     p.icon(f"Secrets Manager<br>RDS master, svp/{env.name}/*,<br>AmazonMSK_*, ecr-pullthroughcache/*", "secrets_manager", 1000, row, SEC,
@@ -382,7 +385,7 @@ def env_page(env: Env) -> Page:
     if env.logs:
         lines = ["CloudWatch: alarms, Logs", ", ".join(env.logs[:2]), ", ".join(env.logs[2:])]
         cw = p.icon("<br>".join(x for x in lines if x), "cloudwatch_2", 1560, row, SEC, cid="cw")
-    sns = p.icon(f"SNS svp-{env.name}-alarms<br>email to the learner", "sns", 1840, row, INTEG, cid="sns")
+    sns = p.icon(f"SNS svp-{env.name}-alarms<br>email to the learner", "sns", 1840, row, INTEG, cid="sns", label_top=True)
     events = p.icon("EventBridge rules<br>Spot interruption, rebalance,<br>instance state", "eventbridge", 2120, row, INTEG,
                     cid="events")
     queue = p.icon(f"SQS svp-{env.name}-karpenter<br>read by Karpenter", "sqs", 2400, row, INTEG, cid="sqs")
@@ -405,6 +408,23 @@ def env_page(env: Env) -> Page:
         "GitHub, Sigstore, Telegram, upstream registries, the Pricing API and AMG still go through NAT"),
         2320, row2, 1160, 120, valign="top")
     p.icon(f"ACM · ALB certificate, {env.region}<br>viewer certificates in us-east-1", "certificate_manager_2", 2960, row, SEC, cid="acm")
+
+    # transcode (modules/transcode): MediaConvert reads uploads and writes media with its role; the job-state rule fills
+    # the events queue that media-worker polls; the DLQ alarm goes to the alarms topic
+    role = p.flat(f"Role svp-{env.name}-mediaconvert<br>GetObject uploads/*, PutObject media/*", "role", 600, row_t, SEC[0], cid="mcrole")
+    mc = p.icon(f"MediaConvert queue svp-{env.name}<br>on-demand", "elemental_mediaconvert", 960, row_t, COMP, cid="mc")
+    rule = p.icon(f"EventBridge rule<br>svp-{env.name}-mediaconvert-job-state", "eventbridge", 1240, row_t, INTEG, cid="mcrule")
+    events_q = p.icon(f"SQS svp-{env.name}-transcode-events<br>read by media-worker", "sqs", 1520, row_t, INTEG, cid="evq")
+    dlq = p.icon(f"SQS svp-{env.name}-<br>transcode-events-dlq", "sqs", 1800, row_t, INTEG, cid="dlq")
+    dlq_alarm = p.flat(f"CloudWatch alarm<br>svp-{env.name}-transcode-events-dlq", "alarm", 2080, row_t, SEC[0], cid="dlqalarm")
+    p.text(bullets(
+        "media-worker runs its mediaconvert command here (same image and release as the ffmpeg worker): Kafka video.uploaded in, "
+        "MediaConvert jobs out, transcode.completed or transcode.failed back",
+        "MediaConvert reads uploads and writes media as the role; its job-state events (COMPLETE, ERROR) reach media-worker "
+        "through EventBridge and SQS; an event EventBridge cannot deliver and a message media-worker cannot handle land in "
+        "the DLQ, which pages through SNS",
+        "media-worker calls MediaConvert and SQS through the interface endpoints and S3 through the gateway endpoint; no NAT"),
+        2320, row_t, 1160, 160, valign="top")
 
     # request path: DNS, CloudFront, VPC origin, ALB, Envoy, services, databases. The origin edges and ALB → Envoy run
     # 20 above and 20 below the shared AZ border (bottom margin of the first AZ, top margin of the second), never on
@@ -465,8 +485,8 @@ def env_page(env: Env) -> Page:
     p.edge(ep, uploads, STROKE["sto"], exit_=(0, 0.75), entry=(1, 0.5), points=[(880, ep_y + 60), (880, row + 40)])
     # label on the lane below the band (x 480, inside the Region left of the band): the middle of the route is on the
     # page's left edge
-    route = [(60, alb_y + 80), (60, lane), (800, lane), (800, row + 80)]
-    p.edge(users, uploads, STROKE["sto"], label="POST presigned form", exit_=(0.25, 1), entry=(0.5, 1), points=route[1:3],
+    route = [(60, alb_y + 80), (60, lane), (820, lane), (820, row + 80)]
+    p.edge(users, uploads, STROKE["sto"], label="POST presigned form", exit_=(0.25, 1), entry=(0.75, 1), points=route[1:3],
            label_pos=along(route, (480, lane)))
     p.edge(users, cf, STROKE["net"], label="GET HLS", exit_=(0.75, 1), entry=(0, 0.5), points=[(100, row + 40)])
     p.edge(waf, cf, STROKE["sec"], dashed=True, arrow=False, exit_=(0.5, 1), entry=(0.5, 0))
@@ -489,10 +509,29 @@ def env_page(env: Env) -> Page:
     if cw:
         p.edge(cw, sns, STROKE["integ"], label="alarm, OK")
     p.edge(events, queue, STROKE["integ"])
-    p.edge(scan, ecr, STROKE["sec"], dashed=True, label="scan", exit_=(0, 0.5), entry=(1, 0.5))
+    p.edge(scan, ecr, STROKE["sec"], dashed=True, label="scan", exit_=(0, 0.5), entry=(1, 0.5), label_pos=0.5)
     p.edge(amg, amp, STROKE["sec"], label="PromQL", exit_=(0, 0.5), entry=(1, 0.5))
     p.edge(amg, app_logs, STROKE["sec"], label="Logs Insights", exit_=(1, 0.5), entry=(0, 0.5))
     p.edge(xray, app_logs, STROKE["sec"], label="spans", exit_=(0, 0.5), entry=(1, 0.5))
+    # transcode: media-worker's calls leave the first AZ's endpoint ENIs down the corridor at x 1480 (between the KMS
+    # and CloudWatch labels) and enter the top of their target; the role reads uploads and writes media
+    trunk = [(BASTION_X + 80, a + 340), (1480, a + 340), (1480, row + 200)]
+    p.edge(eni[0], mc, STROKE["vpc"], dashed=True, label="CreateJob, GetJob, Probe", exit_=(1, 0.75), entry=(0.5, 0),
+           points=trunk[1:] + [(1000, row + 200)], label_pos=along(trunk + [(1000, row + 200), (1000, row_t)], (1240, row + 200)))
+    p.edge(eni[0], events_q, STROKE["vpc"], dashed=True, label="ReceiveMessage", exit_=(1, 0.75), entry=(0.5, 0),
+           points=trunk[1:] + [(1560, row + 200)], label_pos=along(trunk + [(1560, row + 200), (1560, row_t)], (1520, row + 200)))
+    p.edge(mc, role, COMP[0], dashed=True, label="assumes", exit_=(0, 0.75), entry=(1, 0.75), label_pos=0.5)
+    p.edge(role, media, STROKE["sto"], label="PutObject media/*", exit_=(0.5, 0), entry=(0.5, 1))
+    p.edge(role, uploads, STROKE["sto"], label="GetObject", exit_=(1, 0.25), entry=(0.25, 1), points=[(780, row_t + 20)])
+    p.edge(mc, rule, STROKE["integ"], label="job state change")
+    p.edge(rule, events_q, STROKE["integ"], label="COMPLETE, ERROR")
+    p.edge(events_q, dlq, STROKE["integ"], label="redrive")
+    # the rule's target has the same DLQ: an event EventBridge cannot deliver; under the labels, above the third row
+    route = [(1320, row_t + 60), (1440, row_t + 60), (1440, row_t + 160), (1720, row_t + 160), (1720, row_t + 60), (1800, row_t + 60)]
+    p.edge(rule, dlq, STROKE["integ"], label="failed delivery", exit_=(1, 0.75), entry=(0, 0.75), points=route[1:5],
+           label_pos=along(route, (1580, row_t + 160)))
+    p.edge(dlq, dlq_alarm, STROKE["integ"])
+    p.edge(dlq_alarm, sns, STROKE["integ"], exit_=(0.5, 0), entry=(0.5, 1), points=[(2120, row + 200), (1880, row + 200)])
     # the nodes and pods reach the AWS APIs through the endpoint of their AZ (the first AZ drawn)
     p.edge(eks, eni[0], STROKE["vpc"], dashed=True, label="443", exit_=(0, 320 / (sub[-1] + SUB_H - a)), entry=(1, 0.5))
     return p
@@ -631,8 +670,8 @@ def org_page() -> Page:
 
 def flows(region: str) -> Page:
     u, r, t = 880, 1240, 1840              # tops of the upload, request and telemetry blocks
-    p = Page("flows", 1880, t + 1120)
-    p.text("Flows — image release, upload to playback, request to the web and API, telemetry", 40, 0, 1400, 40, size=17, bold=1)
+    p = Page("flows", 1880, t + 2000)
+    p.text("Flows — image release, upload to playback, request to the web and API, telemetry, transcode", 40, 0, 1400, 40, size=17, bold=1)
     p.text("Release: commit → signed image → ECR (same digest) → svp-gitops → Argo CD", 40, 120, 880, 40, size=13, bold=1)
     p.text("Upload to playback", 40, u, 880, 40, size=13, bold=1)
     # Release: GHCR stays the build target; CI copies the same digest and its signatures to the ECR of each account
@@ -669,16 +708,17 @@ def flows(region: str) -> Page:
     # Cloud: the buckets (regional) and the cluster; CloudFront is global, outside it (content rule 3). Every edge label
     # lies clear of the borders its edge crosses.
     p.group(f"AWS Cloud · {region}", 160, u + 40, 1160, 280, **CLOUD)
-    p.group("EKS cluster svp-&lt;env&gt;", 720, u + 80, 200, 200, gr="eks", stroke="#D05C17", font="#D05C17")
     creator = p.flat("Creator", "users", 40, u + 120, cid="creator")
     up = p.icon("S3 uploads", "s3", 320, u + 120, STO, cid="up")
-    worker = p.k8s("media-worker<br>Deployment · KEDA", "deploy", 760, u + 120, size=80, cid="worker")
+    worker = p.icon("MediaConvert<br>svp-&lt;env&gt; queue", "elemental_mediaconvert", 760, u + 120, COMP, cid="worker")
     media = p.icon("S3 media", "s3", 1200, u + 120, STO, cid="med")
     cf = p.icon("CloudFront<br>svp-&lt;env&gt;-media", "cloudfront", 1480, u + 120, NET, cid="cdn")
     viewer = p.flat("Viewer", "users", 1720, u + 120, cid="viewer")
     p.edge(creator, up, STROKE["sto"], label="POST presigned")
-    p.edge(up, worker, STROKE["sto"], label="read, gateway endpoint")
-    p.edge(worker, media, STROKE["sto"], label="write HLS once")
+    p.edge(up, worker, STROKE["sto"], label="read, job role")
+    p.edge(worker, media, STROKE["sto"], label="write HLS, job role")
+    p.text("The job is created, watched and settled by media-worker (mediaconvert command), see Transcode on the cloud below",
+           360, u + 280, 840, 40, color=MUTED)
     p.edge(media, cf, STROKE["sto"], label="OAC")
     p.edge(cf, viewer, STROKE["net"], label="GET HLS")
 
@@ -747,6 +787,51 @@ def flows(region: str) -> Page:
     p.edge(amp, sns, STROKE["integ"], label="alerts", exit_=(0.5, 1), entry=(0.5, 0))
     p.edge(sns, learner, STROKE["integ"], label="email")
     p.edge(admins, amg, STROKE["sec"], label="SSO", exit_=(0, 0.5), entry=(1, 0.5))
+
+    # Transcode: the mediaconvert command of media-worker bridges Kafka and MediaConvert; the job state comes back
+    # through EventBridge and SQS; the role lets MediaConvert touch the two buckets.
+    y0 = t + 1120
+    y1, y2 = y0 + 240, y0 + 520
+    p.text("Transcode on the cloud (eks): media-worker, MediaConvert, EventBridge, SQS", 40, y0, 1400, 40, size=13, bold=1)
+    p.group(f"AWS Cloud · {region}", 40, y0 + 80, 1800, 760, **CLOUD)
+    p.group("EKS cluster svp-&lt;env&gt;", 400, y0 + 120, 240, 280, gr="eks", stroke="#D05C17", font="#D05C17")
+    msk = p.icon("MSK<br>video.uploaded,<br>transcode.*", "managed_streaming_for_kafka", 120, y1, ANA, cid="xmsk")
+    bridge = p.k8s("media-worker<br>mediaconvert · KEDA", "deploy", 480, y1, size=80, cid="xworker")
+    mc = p.icon("MediaConvert queue<br>svp-&lt;env&gt;", "elemental_mediaconvert", 840, y1, COMP, cid="xmc", label_top=True)
+    rule = p.icon("EventBridge rule<br>svp-&lt;env&gt;-mediaconvert-job-state", "eventbridge", 1160, y1, INTEG, cid="xrule")
+    evq = p.icon("SQS svp-&lt;env&gt;-<br>transcode-events", "sqs", 1440, y1, INTEG, cid="xevq")
+    dlq = p.icon("SQS svp-&lt;env&gt;-<br>transcode-events-dlq", "sqs", 1720, y1, INTEG, cid="xdlq", label_top=True)
+    role = p.flat("Role svp-&lt;env&gt;-mediaconvert", "role", 840, y2, SEC[0], cid="xrole")
+    up = p.icon("S3 uploads", "s3", 600, y2, STO, cid="xup", label_top=True)
+    media = p.icon("S3 media", "s3", 1160, y2, STO, cid="xmedia", label_top=True)
+    alarm = p.flat("CloudWatch alarm<br>svp-&lt;env&gt;-<br>transcode-events-dlq", "alarm", 1720, y2, SEC[0], cid="xalarm")
+    sns = p.icon("SNS svp-&lt;env&gt;-alarms<br>page", "sns", 1440, y2, INTEG, cid="xsns")
+    p.edge(msk, bridge, STROKE["net"], label="video.uploaded", exit_=(1, 0.25), entry=(0, 0.25))
+    p.edge(bridge, msk, STROKE["net"], label="transcode.completed, .failed", exit_=(0, 0.75), entry=(1, 0.75))
+    p.edge(bridge, mc, STROKE["vpc"], dashed=True, label="Probe, CreateJob, GetJob", exit_=(1, 0.5), entry=(0, 0.5))
+    p.edge(mc, role, COMP[0], dashed=True, label="assumes", exit_=(0.5, 1), entry=(0.5, 0))
+    p.edge(role, up, STROKE["sto"], label="GetObject uploads/*", exit_=(0, 0.5), entry=(1, 0.5))
+    p.edge(role, media, STROKE["sto"], label="PutObject media/*", exit_=(1, 0.5), entry=(0, 0.5))
+    p.edge(mc, rule, STROKE["integ"], label="job state change")
+    p.edge(rule, evq, STROKE["integ"], label="COMPLETE, ERROR")
+    p.edge(evq, dlq, STROKE["integ"], label="redrive")
+    route = [(1240, y1 + 60), (1360, y1 + 60), (1360, y1 + 160), (1640, y1 + 160), (1640, y1 + 60), (1720, y1 + 60)]
+    p.edge(rule, dlq, STROKE["integ"], label="failed delivery", exit_=(1, 0.75), entry=(0, 0.75), points=route[1:5],
+           label_pos=along(route, (1500, y1 + 160)))
+    p.edge(dlq, alarm, STROKE["integ"])
+    p.edge(alarm, sns, STROKE["integ"], exit_=(0, 0.5), entry=(1, 0.5))
+    route = [(1480, y1), (1480, y0 + 160), (520, y0 + 160), (520, y1)]
+    p.edge(evq, bridge, STROKE["integ"], label="ReceiveMessage, DeleteMessage", exit_=(0.5, 0), entry=(0.5, 0), points=route[1:3],
+           label_pos=along(route, (1000, y0 + 160)))
+    # leaves the right side of the worker, clear of the label under it
+    route = [(560, y1 + 70), (600, y1 + 70), (600, y2 + 160), (1200, y2 + 160), (1200, y2 + 80)]
+    p.edge(bridge, media, STROKE["sto"], label="CopyObject (Cache-Control), master.m3u8, job record", exit_=(1, 0.875), entry=(0.5, 1),
+           points=route[1:4], label_pos=along(route, (900, y2 + 160)))
+    p.text(bullets(
+        "A version can get more than one job (retries, a lost CreateJob response); only the job named in the record "
+        "transcode-jobs/&lt;video_id&gt;/&lt;version&gt;.json of the media bucket (first write wins) decides the result",
+        "media-worker reaches MediaConvert and SQS through their interface endpoints, S3 through the gateway endpoint"),
+        80, y0 + 720, 1720, 80, valign="top")
     return p
 
 
