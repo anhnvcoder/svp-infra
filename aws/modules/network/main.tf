@@ -241,7 +241,7 @@ resource "aws_vpc_security_group_ingress_rule" "guardduty_data_https" {
 }
 
 locals {
-  guardduty_data_endpoint_policy = jsonencode({
+  account_only_endpoint_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
@@ -272,9 +272,76 @@ resource "aws_vpc_endpoint" "guardduty_data" {
   subnet_ids          = module.vpc.private_subnets
   security_group_ids  = [aws_security_group.guardduty_data.id]
   private_dns_enabled = true
-  policy              = local.guardduty_data_endpoint_policy
+  policy              = local.account_only_endpoint_policy
 
   tags = {
     Name = "${var.name}-guardduty-data"
+  }
+}
+
+# Interface endpoints for the AWS APIs below, so those calls stay in the VPC and pass an endpoint policy; the NAT
+# gateway keeps destinations outside AWS and a few AWS APIs left out on purpose (listed in the design notes). Private
+# DNS points the regional service names at the endpoints, so no client needs an endpoint setting.
+# Design notes: aws/modules/network/README.md.
+locals {
+  interface_endpoint_services = [
+    "sts", "eks-auth", "secretsmanager", "logs", "ssm", "ssmmessages", "ec2messages", "ecr.api", "ecr.dkr", "ec2",
+    "elasticloadbalancing", "aps-workspaces", "aps", "xray", "sqs",
+  ]
+
+  # The first zones of the private tier, the zone of the single NAT gateway first. A list of known length: the subnet
+  # IDs are unknown until apply, so tests read these.
+  interface_endpoint_azs        = slice(local.azs, 0, var.interface_endpoint_az_count)
+  interface_endpoint_subnet_ids = slice(module.vpc.private_subnets, 0, var.interface_endpoint_az_count)
+}
+
+# Fails the plan, before anything is made, when the region does not offer a service as an interface endpoint.
+data "aws_vpc_endpoint_service" "interface" {
+  for_each = toset(local.interface_endpoint_services)
+
+  service_name = "com.amazonaws.${data.aws_region.current.region}.${each.key}"
+  service_type = "Interface"
+}
+
+resource "aws_security_group" "endpoints" {
+  name        = "${var.name}-endpoints"
+  description = "Interface endpoints of the AWS APIs: HTTPS from the VPC"
+  vpc_id      = module.vpc.vpc_id
+
+  tags = {
+    Name = "${var.name}-endpoints"
+  }
+}
+
+resource "aws_vpc_security_group_ingress_rule" "endpoints_https" {
+  security_group_id = aws_security_group.endpoints.id
+  description       = "Nodes and pods calling AWS APIs"
+  ip_protocol       = "tcp"
+  from_port         = 443
+  to_port           = 443
+  cidr_ipv4         = var.cidr
+}
+
+resource "aws_vpc_endpoint" "interface" {
+  for_each = toset(local.interface_endpoint_services)
+
+  vpc_id              = module.vpc.vpc_id
+  service_name        = "com.amazonaws.${data.aws_region.current.region}.${each.key}"
+  vpc_endpoint_type   = "Interface"
+  subnet_ids          = local.interface_endpoint_subnet_ids
+  security_group_ids  = [aws_security_group.endpoints.id]
+  private_dns_enabled = true
+  # A service that takes no endpoint policy rejects one; AWS then allows full access through the endpoint.
+  policy = data.aws_vpc_endpoint_service.interface[each.key].vpc_endpoint_policy_supported ? local.account_only_endpoint_policy : null
+
+  tags = {
+    Name = "${var.name}-${each.key}"
+  }
+
+  lifecycle {
+    precondition {
+      condition     = length(setsubtract(local.interface_endpoint_azs, data.aws_vpc_endpoint_service.interface[each.key].availability_zones)) == 0
+      error_message = "${each.key} is not offered in every zone of ${join(", ", local.interface_endpoint_azs)}."
+    }
   }
 }

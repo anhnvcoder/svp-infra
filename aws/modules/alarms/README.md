@@ -8,6 +8,13 @@ Root `aws/security` gọi module với `name = "svp-security"` và `publisher_se
 nhận sự kiện bảo mật của org từ rule EventBridge
 ([ADR-0060](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0060-org-detection-logging.md) §10).
 
+Root `aws/envs/<env>` gọi module với `publisher_services = ["cloudwatch.amazonaws.com", "aps.amazonaws.com"]` và
+`aps_workspace_arn` là ARN **Workspace AMP** của env: Alertmanager của workspace gửi mọi cảnh báo của luật trên AMP tới
+topic `svp-<env>-alarms`, cùng chỗ với alarm của dịch vụ managed
+([ADR-0063](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0063-managed-observability.md) §5). Biến
+`aps_workspace_arn` có giá trị đúng khi `publisher_services` có `aps.amazonaws.com`; validation từ chối mọi trường hợp
+khác.
+
 Biến `region` (mặc định `null`: region của provider) đặt region của mọi tài nguyên của module; `<region>` trong ARN của topic và của
 `aws:SourceArn` theo nó. CloudWatch alarm chỉ gửi tới topic cùng region, nên alarm ở region khác region của provider cần topic riêng ở region đó:
 root `aws/accounts/prd` gọi module với `name = "svp-prd-dns"`, `region = "us-east-1"` cho hai alarm DNSSEC của module
@@ -22,7 +29,8 @@ Tạo:
   statement mặc định của account (IAM của account quyết định ai khác dùng key) và một statement cho mỗi principal của `publisher_services`: chỉ
   `kms:Decrypt`, `kms:GenerateDataKey*`; điều kiện nguồn trên key theo dịch vụ (bảng dưới).
 - SNS topic `<name>-alarms`, `kms_master_key_id` là alias của key trên.
-- Topic policy thay policy mặc định: chỉ principal của `publisher_services` được `sns:Publish`, mỗi principal một statement với điều kiện
+- Topic policy thay policy mặc định: chỉ principal của `publisher_services` được `sns:Publish` (`aps.amazonaws.com` thêm
+  `sns:GetTopicAttributes`, Alertmanager của AMP đọc thuộc tính topic), mỗi principal một statement với điều kiện
   `aws:SourceAccount` là account và `aws:SourceArn` khớp tài nguyên của chính dịch vụ đó (bảng dưới); mọi principal bị từ chối `sns:Publish`
   khi `aws:SecureTransport` là `false`. Principal của account vẫn quản lý và gửi vào topic bằng IAM policy của mình.
 - Subscription `email` tới `alarm_email`.
@@ -33,9 +41,13 @@ Tạo:
 | --- | --- | --- | --- | --- |
 | `cloudwatch.amazonaws.com` (mặc định) | CloudWatch alarm | `arn:aws:cloudwatch:<region>:<account>:alarm:*` | `aws:SourceAccount`, `aws:SourceArn` như topic policy | [CloudWatch](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Notify_Users_Alarm_Changes.html#SNS_Confused_Deputy) |
 | `events.amazonaws.com` | Rule EventBridge, trên bus mặc định hay bus riêng | `arn:aws:events:<region>:<account>:rule/*` | không điều kiện nguồn | [EventBridge](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-use-resource-based.html#eb-sns-permissions), [SNS](https://docs.aws.amazon.com/sns/latest/dg/sns-key-management.html#compatibility-with-aws-services) |
+| `aps.amazonaws.com` | Alertmanager của workspace AMP | `aps_workspace_arn` (đúng một workspace) | không điều kiện nguồn | [AMP](https://docs.aws.amazon.com/prometheus/latest/userguide/AMP-alertmanager-receiver-AMPpermission.html) |
 
 SNS không hỗ trợ `aws:SourceAccount`, `aws:SourceArn`, `aws:SourceOrgID` trong key policy khi EventBridge gửi vào topic mã hoá: có chúng thì KMS
 từ chối cấp data key và cảnh báo không tới. Với EventBridge, chỉ topic policy giới hạn rule của account và region nào gửi được vào topic.
+
+Hướng dẫn của AMP cho topic mã hoá đưa statement key policy của `aps.amazonaws.com` không điều kiện nguồn; module làm
+theo, workspace nào gửi được vào topic do topic policy giới hạn (`aws:SourceAccount`, `aws:SourceArn`).
 
 Mặc định chỉ CloudWatch: topic của hai env giữ đúng statement id (`CloudWatchAlarmsUseKey`, `CloudWatchAlarmsPublish`) và mô tả key, nên plan
 của root env không đổi.
@@ -89,8 +101,9 @@ của root env không đổi.
 | Name | Description | Type | Default | Required |
 | ---- | ----------- | ---- | ------- | :------: |
 | alarm\_email | Email address subscribed to the topic; SNS sends it a confirmation link and delivers nothing until the link is opened. | `string` | n/a | yes |
+| aps\_workspace\_arn | ARN of the Amazon Managed Service for Prometheus workspace whose Alertmanager publishes to the topic (aws:SourceArn of the aps.amazonaws.com statement). Null: Prometheus does not publish. | `string` | `null` | no |
 | name | Name of the env or stack (svp-stg, svp-prd, svp-security): prefix of the SNS topic <name>-alarms and of the KMS alias alias/<name>-alarms. | `string` | n/a | yes |
-| publisher\_services | Service principals that publish to the topic and use its key, each limited to its own resources of this account and region: cloudwatch.amazonaws.com (alarms), events.amazonaws.com (EventBridge rules). | `list(string)` | <pre>[<br/>  "cloudwatch.amazonaws.com"<br/>]</pre> | no |
+| publisher\_services | Service principals that publish to the topic and use its key, each limited to its own resources of this account and region: cloudwatch.amazonaws.com (alarms), events.amazonaws.com (EventBridge rules), aps.amazonaws.com (Alertmanager of the Prometheus workspace aps\_workspace\_arn). | `list(string)` | <pre>[<br/>  "cloudwatch.amazonaws.com"<br/>]</pre> | no |
 | region | Region of the topic, its key and the alarms that may notify it (CloudWatch alarm actions reach a topic of their own region only). Null: the region of the provider. | `string` | `null` | no |
 
 ## Outputs

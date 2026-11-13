@@ -37,3 +37,13 @@ output "organizational_unit_ids" {
     NonProd   = aws_organizations_organizational_unit.nonprod.id
   }
 }
+
+output "platform_admin_group_id" {
+  description = "Id of the IAM Identity Center group svp-platform-admins: platform_admin_group_id of aws/accounts/<env>."
+  value       = aws_identitystore_group.platform["admins"].group_id
+}
+
+output "platform_viewer_group_id" {
+  description = "Id of the IAM Identity Center group svp-platform-viewers: platform_viewer_group_id of aws/accounts/<env>."
+  value       = aws_identitystore_group.platform["viewers"].group_id
+}

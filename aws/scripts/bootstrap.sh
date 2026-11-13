@@ -18,6 +18,8 @@ session_dir
 values_file=$session/cluster-values.json
 # Waits: Argo CD makes svp-observability within minutes of the apply; GlitchTip's migrations and every chart after.
 app_limit=${SVP_BOOTSTRAP_LIMIT:-1800}
+# Lifetime of Grafana Operator's token: a day outlasts any session, and the next session's token replaces it.
+grafana_token_ttl=86400
 
 step "bootstrap.sh $2: the account of profile $profile"
 check_account
@@ -86,8 +88,62 @@ if [ "$2" = secrets ]; then
     password=
     [ "$rc" -eq 0 ] || fail "make eks-secrets (exit $rc; output in $log)"
   fi
+
+  step "bootstrap.sh secrets: a token of Grafana Operator in Amazon Managed Grafana"
+  # The workspace id is the first label of grafanaUrl (https://g-<id>.grafana-workspace.<region>.amazonaws.com).
+  if printing; then
+    workspace='<g-id of grafanaUrl of cluster-values.json>'
+  else
+    workspace=$(jq -r '.grafanaUrl // empty' "$values_file")
+    workspace=${workspace#https://}
+    workspace=${workspace%%.*}
+    [[ $workspace =~ ^g-[0-9a-z]+$ ]] ||
+      fail "no grafanaUrl https://g-<id>.grafana-workspace... in output cluster_values of aws/envs/$env_name"
+  fi
+  out=$(aws_ grafana list-workspace-service-accounts --workspace-id "$workspace" --output json) ||
+    fail "list the service accounts of Grafana workspace $workspace"
+  if printing; then
+    account_id='<id of service account svp-grafana-operator>'
+  else
+    account_id=$(jq -r '[.serviceAccounts[]? | select(.name == "svp-grafana-operator") | .id][0] // empty' <<<"$out")
+    [ -n "$account_id" ] ||
+      fail "Grafana workspace $workspace has no service account svp-grafana-operator (the apply of aws/accounts/$env_name makes it)"
+  fi
+  # A workspace holds 100 tokens, expired ones included: every older token of the account goes first.
+  out=$(aws_ grafana list-workspace-service-account-tokens --workspace-id "$workspace" --service-account-id "$account_id" \
+    --output json) || fail "list the tokens of service account svp-grafana-operator"
+  if printing; then
+    tokens='<each token above>'
+  else
+    tokens=$(jq -r '.serviceAccountTokens[]?.id' <<<"$out")
+  fi
+  for t in $tokens; do
+    aws_ grafana delete-workspace-service-account-token --workspace-id "$workspace" --service-account-id "$account_id" \
+      --token-id "$t" --output json >/dev/null || fail "delete token $t of service account svp-grafana-operator"
+  done
+  printing || ok "older tokens of svp-grafana-operator deleted: $(oneline <<<"${tokens:-none}")"
+  # The token goes from aws to jq and then to aws through pipes, and lives in this shell's variable in between, never
+  # in an argument (which ps shows), a file or the output: put-secret-value reads it from its stdin.
+  if printing; then
+    aws_ grafana create-workspace-service-account-token --workspace-id "$workspace" --service-account-id "$account_id" \
+      --name "svp-grafana-operator-<time>" --seconds-to-live "$grafana_token_ttl" --output json
+    printf '  (piped to jq -c {SVP_GRAFANA_OPERATOR_TOKEN: .serviceAccountToken.key}, then to the command below)\n' >&3
+    aws_ secretsmanager put-secret-value --secret-id "svp/$env_name/grafana-operator" --secret-string file:///dev/stdin \
+      --query VersionId --output text
+  else
+    token_json=$(aws_ grafana create-workspace-service-account-token --workspace-id "$workspace" \
+      --service-account-id "$account_id" --name "svp-grafana-operator-$(date -u +%Y%m%dT%H%M%SZ)" \
+      --seconds-to-live "$grafana_token_ttl" --output json |
+      jq -ce '{SVP_GRAFANA_OPERATOR_TOKEN: (.serviceAccountToken.key // empty)} | select(.SVP_GRAFANA_OPERATOR_TOKEN != "")' \
+        2>/dev/null) || fail "create a token of service account svp-grafana-operator (no key in the answer)"
+    printf '%s' "$token_json" | aws_ secretsmanager put-secret-value --secret-id "svp/$env_name/grafana-operator" \
+      --secret-string file:///dev/stdin --query VersionId --output text >/dev/null ||
+      fail "write entry svp/$env_name/grafana-operator (the token is lost with this shell: run this again, which deletes it)"
+    token_json=
+    ok "a token of svp-grafana-operator valid $((grafana_token_ttl / 3600)) h in entry svp/$env_name/grafana-operator (not shown)"
+  fi
   mark secrets-written
-  ok "entries svp/$env_name/* written (kafka-admin, kafka-users, valkey-users by the apply of aws/envs/$env_name); next: aws/scripts/tf.sh $env_name gitops init, plan, apply"
+  ok "entries svp/$env_name/* written (kafka-admin, kafka-users, valkey-users by the apply of aws/envs/$env_name); next: aws/scripts/ecr-warm.sh $env_name <image list>, then aws/scripts/tf.sh $env_name gitops init, plan, apply"
   exit 0
 fi
 

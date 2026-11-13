@@ -5,6 +5,10 @@ budget_emails    = ["you@svp.example"]
 budget_limit_usd = 20
 zone_name        = "aws.svp.example"
 
+# Outputs platform_admin_group_id and platform_viewer_group_id of aws/org (made-up ids below).
+platform_admin_group_id  = "0000000000-00000000-0000-0000-0000-000000000001"
+platform_viewer_group_id = "0000000000-00000000-0000-0000-0000-000000000002"
+
 # The stg zone, delegated from this zone: the four name servers of the name_servers output of aws/accounts/stg.
 # Leave it out until the baseline of stg is applied.
 delegated_subdomains = {

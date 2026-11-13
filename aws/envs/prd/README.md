@@ -22,8 +22,12 @@ triển khai từ `svp-gitops`, bootstrap bằng root `aws/gitops/prd`.
 | Zone | `aws.<domain>` của account prd (output `zone_id` của `aws/accounts/prd`), uỷ quyền từ DNS cha của `<domain>` (bốn bản ghi `NS` `aws`, ngoài Terraform) |
 
 Root chạy được khi baseline `aws/accounts/prd` đã apply, uỷ quyền DNS đã xong
-([`aws/accounts/README.md`](../../accounts/README.md)) và root `aws/log-archive` đã apply (bucket nhận flow log, log WAF, log CloudFront và
-delivery destination `svp-cloudfront-prd`, [`aws/log-archive/README.md`](../../log-archive/README.md)).
+([`aws/accounts/README.md`](../../accounts/README.md)) và root `aws/log-archive` đã apply (bucket nhận flow log, log
+WAF, log CloudFront và delivery destination `svp-cloudfront-prd`,
+[`aws/log-archive/README.md`](../../log-archive/README.md)). Registry, workspace AMP, log group `/svp/prd/otel`, khoá
+KMS và workspace AMG của `aws/accounts/prd` được `baseline.tf` đọc theo tên suy từ `svp-prd`; thiếu một cái thì `plan`
+dừng ở đúng data source đó ([mục "Tài nguyên sống lâu của account" của
+stg](../stg/README.md#tài-nguyên-sống-lâu-của-account)).
 
 ## Cái gì khác với stg
 
@@ -40,21 +44,25 @@ dòng `env` đó, `<env>.tfvars`, `teardown.tfvars`, `README.md`, `backend.hcl.e
 | `../../backend-prd.hcl` | **không** | phần chung của backend trong account prd |
 | `TF_VAR_account_id` | biến môi trường, đặt ngay trong lệnh | account được phép đổi (`allowed_account_ids`) |
 
-Giá trị của `prd.tfvars`: mỗi nhóm biến một comment nói vì sao, cùng thứ tự dòng với `stg.tfvars`; khác biệt với stg, nhóm của nó và mất
-gì ở stg: bảng của [`environments.md`](https://github.com/anhnvcoder/svp-backend/blob/main/docs/explanation/environments.md) ở repo code. Những gì chỉ prd có: ba AZ, NAT mỗi AZ, RDS
-`db.m7g` Multi-AZ, MSK RF 3 và min ISR 2 (mất một AZ không mất ghi đã `acks=all`, ADR-0053 §6), Valkey có replica ở AZ khác với failover tự
-động, `apply_immediately = false` của Valkey (thay đổi chờ cửa sổ bảo trì), retention log CloudWatch 30 ngày (flow log và log WAF ở Log
-Archive: [README của stg](../stg/README.md#log-và-phát-hiện)), backup 7 ngày giữ lại sau khi xoá, deletion protection (RDS, ALB edge),
-final snapshot, versioning của media, distribution media pay-as-you-go có response headers policy riêng và log chuẩn về Log Archive
-(`media_flat_rate_free = false`).
+Giá trị của `prd.tfvars`: mỗi nhóm biến một comment nói vì sao, cùng thứ tự dòng với `stg.tfvars`; khác biệt với stg,
+nhóm của nó và mất gì ở stg: bảng của
+[`environments.md`](https://github.com/anhnvcoder/svp-backend/blob/main/docs/explanation/environments.md) ở repo code.
+Những gì chỉ prd có: ba AZ, NAT mỗi AZ, ENI của endpoint interface mỗi AZ (`interface_endpoint_az_count = 3`), RDS
+`db.m7g` Multi-AZ, MSK RF 3 và min ISR 2 (mất một AZ không mất ghi đã `acks=all`, ADR-0053 §6), Valkey có replica ở AZ
+khác với failover tự động, `apply_immediately = false` của Valkey (thay đổi chờ cửa sổ bảo trì), retention log
+CloudWatch 30 ngày (flow log và log WAF ở Log Archive: [README của stg](../stg/README.md#log-và-phát-hiện)), backup 7
+ngày giữ lại sau khi xoá, deletion protection (RDS, ALB edge), final snapshot, versioning của media, distribution media
+pay-as-you-go có response headers policy riêng và log chuẩn về Log Archive (`media_flat_rate_free = false`).
 
 Root không có `validation` ép giá trị prd: test của từng module có một `run` với giá trị prd, `make trivy DIRS=aws/envs/prd` quét với
 `prd.tfvars`.
 
-Giá trị cá nhân (`prd.auto.tfvars` hay `TF_VAR_*`): `hosted_zone_id` (output `zone_id` của `aws/accounts/prd`; module `edge`, `media` ghi
-bản ghi alias và validation ACM vào zone này), `domain` (tên zone prd `aws.<domain>`, web ở apex, API ở `api.<tên này>`, media ở
-`media.<tên này>`; plan dừng ở precondition của `cluster_values` nếu tên khác), `alarm_email` (hộp thư của topic `svp-prd-alarms`, xác
-nhận link SNS gửi sau apply). Không có IP của máy người học.
+Giá trị cá nhân (`prd.auto.tfvars` hay `TF_VAR_*`): `hosted_zone_id` (output `zone_id` của `aws/accounts/prd`; module
+`edge`, `media` ghi bản ghi alias và validation ACM vào zone này), `domain` (tên zone prd `aws.<domain>`, web ở apex,
+API ở `api.<tên này>`, media ở `media.<tên này>`; plan dừng ở precondition của `cluster_values` nếu tên khác),
+`alarm_email` (hộp thư của topic `svp-prd-alarms`, nhận CloudWatch alarm và cảnh báo của luật trên AMP; xác nhận link
+SNS gửi sau apply), `grafana_workspace_id` (id `g-<id>` của workspace AMG `svp-prd`, lệnh đọc trong
+`example.auto.tfvars.example`). Không có IP của máy người học.
 
 ## Tới API: tunnel SSM
 
@@ -90,7 +98,7 @@ echo "$SVP_AWS_PRD_ACCOUNT_ID"
 Dựng:
 
 ```sh
-cp example.auto.tfvars.example prd.auto.tfvars          # rồi sửa ba giá trị
+cp example.auto.tfvars.example prd.auto.tfvars          # rồi sửa bốn giá trị
 AWS_PROFILE=anhnv-prd terraform init -reconfigure -backend-config=../../backend-prd.hcl -backend-config=key=aws/prd/terraform.tfstate
 AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
   terraform plan -var-file=prd.tfvars -out=prd.tfplan

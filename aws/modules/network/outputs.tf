@@ -57,3 +57,13 @@ output "guardduty_data_endpoint_id" {
   description = "ID of the interface endpoint guardduty-data the GuardDuty agent of the EKS nodes reports to; the eks module installs the agent only once it exists."
   value       = aws_vpc_endpoint.guardduty_data.id
 }
+
+output "interface_endpoint_ids" {
+  description = "IDs of the interface endpoints of the AWS APIs, by service (sts, ecr.api, ...)."
+  value       = { for s, e in aws_vpc_endpoint.interface : s => e.id }
+}
+
+output "endpoints_security_group_id" {
+  description = "ID of the security group of the interface endpoints of the AWS APIs: TCP 443 from the VPC range only."
+  value       = aws_security_group.endpoints.id
+}

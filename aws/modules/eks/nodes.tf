@@ -42,3 +42,38 @@ locals {
     }
   }
 }
+
+# Pull through cache: the first pull of an image the cache does not hold yet makes the node import it from upstream,
+# into a repository it creates on that pull. Only under the cache prefixes, so a node cannot create or fill a release
+# repository; pulling itself goes through the AmazonEC2ContainerRegistryReadOnly policy every node role has.
+data "aws_iam_policy_document" "node_ecr_cache" {
+  statement {
+    sid       = "ImportThroughPullThroughCache"
+    actions   = ["ecr:BatchImportUpstreamImage", "ecr:CreateRepository"]
+    resources = [for p in var.ecr_cache_prefixes : "arn:${data.aws_partition.current.partition}:ecr:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:repository/${p}/*"]
+  }
+
+  # Only through ECR of this region, so the node can use the registry key for nothing but an image pull.
+  statement {
+    sid       = "DecryptImagesThroughEcr"
+    actions   = ["kms:Decrypt"]
+    resources = [var.ecr_kms_key_arn]
+
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = ["ecr.${data.aws_region.current.region}.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role_policy" "node_ecr_cache" {
+  for_each = {
+    system    = module.eks.eks_managed_node_groups["system"].iam_role_name
+    karpenter = module.karpenter.node_iam_role_name
+  }
+
+  name   = "${var.name}-ecr-pull-through-cache"
+  role   = each.value
+  policy = data.aws_iam_policy_document.node_ecr_cache.json
+}

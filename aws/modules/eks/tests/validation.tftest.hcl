@@ -10,6 +10,12 @@ mock_provider "aws" {
     }
   }
 
+  mock_data "aws_region" {
+    defaults = {
+      region = "ap-southeast-1"
+    }
+  }
+
   mock_data "aws_caller_identity" {
     defaults = {
       account_id = "000000000000"
@@ -44,6 +50,16 @@ variables {
   system_node_max_size = 4
 
   guardduty_data_endpoint_id = "vpce-0123456789abcdef0"
+
+  amp_workspace_arn         = "arn:aws:aps:ap-southeast-1:000000000000:workspace/ws-0123abcd-4567-89ef-0123-456789abcdef"
+  log_group_arn             = "arn:aws:logs:ap-southeast-1:000000000000:log-group:/svp/stg/otel"
+  observability_kms_key_arn = "arn:aws:kms:ap-southeast-1:000000000000:key/0123abcd-4567-89ef-0123-456789abcdef"
+  ecr_kms_key_arn           = "arn:aws:kms:ap-southeast-1:000000000000:key/89abcdef-0123-4567-89ab-cdef01234567"
+  release_repository_arns = [
+    "arn:aws:ecr:ap-southeast-1:000000000000:repository/svp-backend/gateway",
+    "arn:aws:ecr:ap-southeast-1:000000000000:repository/svp-frontend/web",
+  ]
+  ecr_cache_prefixes = ["ghcr", "docker-hub", "quay", "k8s", "ecr-public"]
 }
 
 run "valid" {
@@ -233,8 +249,195 @@ run "no_dns_writer" {
   command = plan
 
   assert {
-    condition     = toset(keys(local.pod_identity)) == toset(["aws_load_balancer_controller", "ebs_csi"])
-    error_message = "Only the AWS Load Balancer Controller and the EBS CSI driver get a Pod Identity role from this module."
+    condition = toset(keys(local.pod_identity)) == toset([
+      "aws_load_balancer_controller", "ebs_csi", "otel_collector", "prometheus_agent", "ack_prometheusservice", "kyverno_admission",
+      "argo_rollouts",
+    ])
+    error_message = "Only the AWS Load Balancer Controller, the EBS CSI driver and the five roles of pod_identity_roles get a Pod Identity role from this module."
+  }
+}
+
+# Each workload role trusts exactly its own namespace and ServiceAccount of this cluster; the expected pairs are written
+# out here, not read from local.pod_identity, so a change of either side fails this run.
+run "pod_identity_trust" {
+  command = plan
+
+  assert {
+    condition = alltrue([for k, sa in {
+      otel_collector        = ["svp-obs", "otel-collector"]
+      prometheus_agent      = ["svp-obs", "kps-prometheus"]
+      ack_prometheusservice = ["svp-obs", "ack-prometheusservice-controller"]
+      kyverno_admission     = ["kyverno", "kyverno-admission-controller"]
+      argo_rollouts         = ["argo-rollouts", "argo-rollouts"]
+      } : length(data.aws_iam_policy_document.pod_identity_trust[k].statement[0].condition) == 3 && alltrue([
+        for c in data.aws_iam_policy_document.pod_identity_trust[k].statement[0].condition :
+        c.test == "StringEquals" && toset(c.values) == toset(lookup({
+          "aws:RequestTag/eks-cluster-name"           = ["svp-stg"]
+          "aws:RequestTag/kubernetes-namespace"       = [sa[0]]
+          "aws:RequestTag/kubernetes-service-account" = [sa[1]]
+        }, c.variable, []))
+      ])
+    ])
+    error_message = "Each workload role must trust only this cluster and its namespace/ServiceAccount: svp-obs/otel-collector, svp-obs/kps-prometheus, svp-obs/ack-prometheusservice-controller, kyverno/kyverno-admission-controller, argo-rollouts/argo-rollouts."
+  }
+
+  assert {
+    condition = alltrue([for k, sa in {
+      otel_collector        = ["svp-obs", "otel-collector"]
+      prometheus_agent      = ["svp-obs", "kps-prometheus"]
+      ack_prometheusservice = ["svp-obs", "ack-prometheusservice-controller"]
+      kyverno_admission     = ["kyverno", "kyverno-admission-controller"]
+      argo_rollouts         = ["argo-rollouts", "argo-rollouts"]
+      } : aws_eks_pod_identity_association.pod_identity[k].cluster_name == "svp-stg" && aws_eks_pod_identity_association.pod_identity[k].namespace == sa[0] && aws_eks_pod_identity_association.pod_identity[k].service_account == sa[1]
+    ]) && length(aws_eks_pod_identity_association.pod_identity) == 5
+    error_message = "Each workload role must have exactly one Pod Identity association, with the namespace and ServiceAccount its role trusts."
+  }
+
+  assert {
+    condition = {
+      for k, r in aws_iam_role.pod_identity : k => r.name
+      } == {
+      otel_collector        = "svp-stg-otel-collector"
+      prometheus_agent      = "svp-stg-prometheus-agent"
+      ack_prometheusservice = "svp-stg-ack-prometheusservice"
+      kyverno_admission     = "svp-stg-kyverno-admission"
+      argo_rollouts         = "svp-stg-argo-rollouts"
+    }
+    error_message = "The workload roles must be named <name>-otel-collector, -prometheus-agent, -ack-prometheusservice, -kyverno-admission and -argo-rollouts."
+  }
+}
+
+# Each workload policy holds exactly these statements: sid, actions and resources, on the ARNs passed in.
+run "pod_identity_permissions" {
+  command = plan
+
+  assert {
+    condition = toset([for s in data.aws_iam_policy_document.otel_collector.statement : s.sid]) == toset(["WriteMetrics", "WriteLogs", "UseLogGroupKeyThroughLogs", "WriteSpans"]) && alltrue([
+      for s in data.aws_iam_policy_document.otel_collector.statement :
+      toset(s.actions) == toset(lookup({
+        WriteMetrics              = ["aps:RemoteWrite"]
+        WriteLogs                 = ["logs:PutLogEvents"]
+        UseLogGroupKeyThroughLogs = ["kms:Encrypt", "kms:Decrypt", "kms:ReEncrypt*", "kms:GenerateDataKey*", "kms:DescribeKey"]
+        WriteSpans                = ["xray:PutTraceSegments"]
+        }, s.sid, [])) && toset(s.resources) == toset(lookup({
+        WriteMetrics              = ["arn:aws:aps:ap-southeast-1:000000000000:workspace/ws-0123abcd-4567-89ef-0123-456789abcdef"]
+        WriteLogs                 = ["arn:aws:logs:ap-southeast-1:000000000000:log-group:/svp/stg/otel:log-stream:otel-collector"]
+        UseLogGroupKeyThroughLogs = ["arn:aws:kms:ap-southeast-1:000000000000:key/0123abcd-4567-89ef-0123-456789abcdef"]
+        WriteSpans                = ["*"]
+      }, s.sid, []))
+    ])
+    error_message = "The Collector may only remote write to the workspace, put events into the stream otel-collector of the log group, use the observability key and put trace segments."
+  }
+
+  assert {
+    condition = alltrue([
+      for s in data.aws_iam_policy_document.otel_collector.statement : s.sid != "UseLogGroupKeyThroughLogs" || (
+        length(s.condition) == 1 && alltrue([for c in s.condition : c.test == "StringEquals" && c.variable == "kms:ViaService" && toset(c.values) == toset(["logs.ap-southeast-1.amazonaws.com"])])
+      )
+    ])
+    error_message = "The Collector may use the observability key only through CloudWatch Logs of the region (kms:ViaService)."
+  }
+
+  assert {
+    condition     = length(data.aws_iam_policy_document.prometheus_agent.statement) == 1 && toset(data.aws_iam_policy_document.prometheus_agent.statement[0].actions) == toset(["aps:RemoteWrite"]) && toset(data.aws_iam_policy_document.prometheus_agent.statement[0].resources) == toset(["arn:aws:aps:ap-southeast-1:000000000000:workspace/ws-0123abcd-4567-89ef-0123-456789abcdef"])
+    error_message = "The Prometheus agent may only remote write to the workspace."
+  }
+
+  assert {
+    condition = toset([for s in data.aws_iam_policy_document.ack_prometheusservice.statement : s.sid]) == toset(["ManageRuleGroupsNamespaces", "ManageAlertManagerDefinition"]) && alltrue([
+      for s in data.aws_iam_policy_document.ack_prometheusservice.statement :
+      toset(s.actions) == toset(lookup({
+        ManageRuleGroupsNamespaces = [
+          "aps:CreateRuleGroupsNamespace", "aps:PutRuleGroupsNamespace", "aps:DescribeRuleGroupsNamespace", "aps:DeleteRuleGroupsNamespace",
+          "aps:TagResource", "aps:UntagResource", "aps:ListTagsForResource",
+        ]
+        ManageAlertManagerDefinition = [
+          "aps:CreateAlertManagerDefinition", "aps:PutAlertManagerDefinition", "aps:DescribeAlertManagerDefinition",
+          "aps:DeleteAlertManagerDefinition", "aps:ListRuleGroupsNamespaces",
+        ]
+        }, s.sid, [])) && toset(s.resources) == toset(lookup({
+        ManageRuleGroupsNamespaces   = ["arn:aws:aps:ap-southeast-1:000000000000:rulegroupsnamespace/ws-0123abcd-4567-89ef-0123-456789abcdef/*"]
+        ManageAlertManagerDefinition = ["arn:aws:aps:ap-southeast-1:000000000000:workspace/ws-0123abcd-4567-89ef-0123-456789abcdef"]
+      }, s.sid, []))
+    ])
+    error_message = "The ACK controller may only manage the rule groups namespaces and the alert manager definition of the workspace."
+  }
+
+  assert {
+    condition = toset([for s in data.aws_iam_policy_document.kyverno_admission.statement : s.sid]) == toset(["GetRegistryToken", "ReadReleaseImages"]) && alltrue([
+      for s in data.aws_iam_policy_document.kyverno_admission.statement :
+      toset(s.actions) == toset(lookup({
+        GetRegistryToken  = ["ecr:GetAuthorizationToken"]
+        ReadReleaseImages = ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"]
+        }, s.sid, [])) && toset(s.resources) == toset(lookup({
+        GetRegistryToken = ["*"]
+        ReadReleaseImages = [
+          "arn:aws:ecr:ap-southeast-1:000000000000:repository/svp-backend/gateway",
+          "arn:aws:ecr:ap-southeast-1:000000000000:repository/svp-frontend/web",
+        ]
+      }, s.sid, []))
+    ])
+    error_message = "The Kyverno admission controller may only get a registry token and read images of the release repositories."
+  }
+
+  assert {
+    condition     = length(data.aws_iam_policy_document.argo_rollouts.statement) == 1 && toset(data.aws_iam_policy_document.argo_rollouts.statement[0].actions) == toset(["aps:QueryMetrics"]) && toset(data.aws_iam_policy_document.argo_rollouts.statement[0].resources) == toset(["arn:aws:aps:ap-southeast-1:000000000000:workspace/ws-0123abcd-4567-89ef-0123-456789abcdef"])
+    error_message = "Argo Rollouts may only query metrics of the workspace."
+  }
+
+  # No wildcard action; resource * only for the actions that have no resource type.
+  assert {
+    condition = alltrue(flatten([
+      for d in [
+        data.aws_iam_policy_document.otel_collector, data.aws_iam_policy_document.prometheus_agent,
+        data.aws_iam_policy_document.ack_prometheusservice, data.aws_iam_policy_document.kyverno_admission,
+        data.aws_iam_policy_document.argo_rollouts, data.aws_iam_policy_document.node_ecr_cache,
+        ] : [for s in d.statement : [
+          for a in s.actions : a != "*" && !endswith(a, ":*") && (!contains(s.resources, "*") || contains(["ecr:GetAuthorizationToken", "xray:PutTraceSegments"], a))
+      ]]
+    ]))
+    error_message = "No workload or node policy may grant a wildcard action, and resource * is only for ecr:GetAuthorizationToken and xray:PutTraceSegments."
+  }
+
+  assert {
+    condition     = alltrue([for k, p in aws_iam_role_policy.pod_identity : p.name == aws_iam_role.pod_identity[k].name]) && toset(keys(aws_iam_role_policy.pod_identity)) == toset(keys(aws_iam_role.pod_identity))
+    error_message = "Each workload role must carry its inline policy."
+  }
+}
+
+# Nodes may import from upstream and create repositories only under the cache prefixes, never a release repository,
+# and decrypt only with the registry key, only through ECR.
+run "node_ecr_cache" {
+  command = plan
+
+  assert {
+    condition = toset([for s in data.aws_iam_policy_document.node_ecr_cache.statement : s.sid]) == toset(["ImportThroughPullThroughCache", "DecryptImagesThroughEcr"]) && alltrue([
+      for s in data.aws_iam_policy_document.node_ecr_cache.statement : s.sid != "ImportThroughPullThroughCache" || (
+        toset(s.actions) == toset(["ecr:BatchImportUpstreamImage", "ecr:CreateRepository"]) && toset(s.resources) == toset([
+          "arn:aws:ecr:ap-southeast-1:000000000000:repository/ghcr/*",
+          "arn:aws:ecr:ap-southeast-1:000000000000:repository/docker-hub/*",
+          "arn:aws:ecr:ap-southeast-1:000000000000:repository/quay/*",
+          "arn:aws:ecr:ap-southeast-1:000000000000:repository/k8s/*",
+          "arn:aws:ecr:ap-southeast-1:000000000000:repository/ecr-public/*",
+        ])
+      )
+    ])
+    error_message = "Nodes may only import upstream images and create repositories under repository/<cache prefix>/*."
+  }
+
+  assert {
+    condition = alltrue([
+      for s in data.aws_iam_policy_document.node_ecr_cache.statement : s.sid != "DecryptImagesThroughEcr" || (
+        toset(s.actions) == toset(["kms:Decrypt"]) && toset(s.resources) == toset(["arn:aws:kms:ap-southeast-1:000000000000:key/89abcdef-0123-4567-89ab-cdef01234567"]) &&
+        length(s.condition) == 1 && alltrue([for c in s.condition : c.test == "StringEquals" && c.variable == "kms:ViaService" && toset(c.values) == toset(["ecr.ap-southeast-1.amazonaws.com"])])
+      )
+    ])
+    error_message = "Nodes may only decrypt with the registry key, and only through ECR of the region (kms:ViaService)."
+  }
+
+  assert {
+    condition     = toset(keys(aws_iam_role_policy.node_ecr_cache)) == toset(["system", "karpenter"]) && aws_iam_role_policy.node_ecr_cache["karpenter"].role == "svp-stg-karpenter-node"
+    error_message = "Both node roles, of the system node group and of the Karpenter nodes, must carry the pull through cache policy."
   }
 }
 
@@ -379,4 +582,87 @@ run "guardduty_data_endpoint_id_not_vpce" {
   }
 
   expect_failures = [var.guardduty_data_endpoint_id]
+}
+
+run "amp_workspace_arn_not_workspace" {
+  command = plan
+
+  variables {
+    amp_workspace_arn = "arn:aws:aps:ap-southeast-1:000000000000:rulegroupsnamespace/ws-0123abcd/svp-alerts"
+  }
+
+  expect_failures = [var.amp_workspace_arn]
+}
+
+# The provider's log group ARN has no :* suffix; with one, the stream ARN of the Collector policy would be wrong.
+run "log_group_arn_with_wildcard" {
+  command = plan
+
+  variables {
+    log_group_arn = "arn:aws:logs:ap-southeast-1:000000000000:log-group:/svp/stg/otel:*"
+  }
+
+  expect_failures = [var.log_group_arn]
+}
+
+# A wildcard key would let the Collector use every key of the account through CloudWatch Logs.
+run "observability_kms_key_arn_wildcard" {
+  command = plan
+
+  variables {
+    observability_kms_key_arn = "arn:aws:kms:ap-southeast-1:000000000000:key/*"
+  }
+
+  expect_failures = [var.observability_kms_key_arn]
+}
+
+# A wildcard key would let nodes decrypt with every key of the account through ECR.
+run "ecr_kms_key_arn_wildcard" {
+  command = plan
+
+  variables {
+    ecr_kms_key_arn = "arn:aws:kms:ap-southeast-1:000000000000:key/*"
+  }
+
+  expect_failures = [var.ecr_kms_key_arn]
+}
+
+run "release_repository_arns_empty" {
+  command = plan
+
+  variables {
+    release_repository_arns = []
+  }
+
+  expect_failures = [var.release_repository_arns]
+}
+
+run "release_repository_arns_wildcard" {
+  command = plan
+
+  variables {
+    release_repository_arns = ["arn:aws:ecr:ap-southeast-1:000000000000:repository/*"]
+  }
+
+  expect_failures = [var.release_repository_arns]
+}
+
+run "ecr_cache_prefixes_empty" {
+  command = plan
+
+  variables {
+    ecr_cache_prefixes = []
+  }
+
+  expect_failures = [var.ecr_cache_prefixes]
+}
+
+run "ecr_cache_prefixes_wildcard" {
+  command = plan
+
+  variables {
+    ecr_cache_prefixes = ["ghcr/*"]
+  }
+
+  expect_failures = [var.ecr_cache_prefixes]
 }

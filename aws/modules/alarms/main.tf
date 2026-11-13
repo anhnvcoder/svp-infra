@@ -15,14 +15,16 @@ locals {
   topic_arn = "arn:${data.aws_partition.current.partition}:sns:${local.region}:${data.aws_caller_identity.current.account_id}:${local.topic_name}"
 
   # Confused deputy conditions of the service guides: each publisher acts only for its own resources (CloudWatch alarms,
-  # EventBridge rules) of this account and region. SNS does not support them in the key policy for EventBridge to an
-  # encrypted topic, so for EventBridge only the topic policy carries them.
+  # EventBridge rules, the Prometheus workspace) of this account and region. SNS does not support them in the key policy
+  # for EventBridge to an encrypted topic, and the Prometheus guide gives its key statement without them, so for those
+  # two only the topic policy carries them. Alertmanager of Prometheus also reads the topic's attributes.
   source_account = data.aws_caller_identity.current.account_id
   arn_prefix     = "arn:${data.aws_partition.current.partition}"
   account_region = "${local.region}:${data.aws_caller_identity.current.account_id}"
   publishers = {
-    "cloudwatch.amazonaws.com" = { sid = "CloudWatchAlarms", label = "CloudWatch alarms", source_arn = "${local.arn_prefix}:cloudwatch:${local.account_region}:alarm:*", key_source_conditions = true }
-    "events.amazonaws.com"     = { sid = "EventBridgeRules", label = "EventBridge rules", source_arn = "${local.arn_prefix}:events:${local.account_region}:rule/*", key_source_conditions = false }
+    "cloudwatch.amazonaws.com" = { sid = "CloudWatchAlarms", label = "CloudWatch alarms", source_arn = "${local.arn_prefix}:cloudwatch:${local.account_region}:alarm:*", key_source_conditions = true, actions = ["sns:Publish"] }
+    "events.amazonaws.com"     = { sid = "EventBridgeRules", label = "EventBridge rules", source_arn = "${local.arn_prefix}:events:${local.account_region}:rule/*", key_source_conditions = false, actions = ["sns:Publish"] }
+    "aps.amazonaws.com"        = { sid = "PrometheusAlerts", label = "Prometheus alerts", source_arn = var.aps_workspace_arn, key_source_conditions = false, actions = ["sns:Publish", "sns:GetTopicAttributes"] }
   }
   source_conditions = { for service, p in local.publishers : service => [
     { test = "StringEquals", variable = "aws:SourceAccount", values = [local.source_account] },
@@ -115,7 +117,7 @@ data "aws_iam_policy_document" "topic" {
     content {
       sid       = "${local.publishers[statement.value].sid}Publish"
       effect    = "Allow"
-      actions   = ["sns:Publish"]
+      actions   = local.publishers[statement.value].actions
       resources = [local.topic_arn]
 
       principals {

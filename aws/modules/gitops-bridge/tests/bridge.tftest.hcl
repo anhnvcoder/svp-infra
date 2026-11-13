@@ -34,6 +34,12 @@ variables {
       keda     = "arn:aws:iam::111111111111:role/svp-stg-external-secrets-keda"
       argocd   = "arn:aws:iam::111111111111:role/svp-stg-external-secrets-argocd"
     }
+    ecrRegistry    = "111111111111.dkr.ecr.ap-southeast-1.amazonaws.com"
+    ampWorkspaceId = "ws-12345678-abcd-4ef0-9876-0123456789ab"
+    ampEndpoint    = "https://aps-workspaces.ap-southeast-1.amazonaws.com/workspaces/ws-12345678-abcd-4ef0-9876-0123456789ab/"
+    logGroup       = "/svp/stg/otel"
+    grafanaUrl     = "https://g-abc123def4.grafana-workspace.ap-southeast-1.amazonaws.com"
+    alarmTopicArn  = "arn:aws:sns:ap-southeast-1:111111111111:svp-stg-alarms"
   }
 
   main_commit             = "1111111111111111111111111111111111111111"
@@ -389,6 +395,190 @@ run "cluster_value_valkey_host_missing" {
 
   variables {
     cluster_values = { for k, v in var.cluster_values : k => v if k != "valkeyHost" }
+  }
+
+  expect_failures = [var.cluster_values]
+}
+
+run "cluster_value_ecr_registry_missing" {
+  command = plan
+
+  variables {
+    cluster_values = { for k, v in var.cluster_values : k => v if k != "ecrRegistry" }
+  }
+
+  expect_failures = [var.cluster_values]
+}
+
+run "cluster_value_ecr_registry_wrong_kind" {
+  command = plan
+
+  variables {
+    cluster_values = merge(var.cluster_values, { ecrRegistry = ["111111111111.dkr.ecr.ap-southeast-1.amazonaws.com"] })
+  }
+
+  expect_failures = [var.cluster_values]
+}
+
+# A registry other than the account's private ECR is refused.
+run "cluster_value_ecr_registry_ghcr" {
+  command = plan
+
+  variables {
+    cluster_values = merge(var.cluster_values, { ecrRegistry = "ghcr.io/anhnvcoder" })
+  }
+
+  expect_failures = [var.cluster_values]
+}
+
+run "cluster_value_amp_workspace_id_missing" {
+  command = plan
+
+  variables {
+    cluster_values = { for k, v in var.cluster_values : k => v if k != "ampWorkspaceId" }
+  }
+
+  expect_failures = [var.cluster_values]
+}
+
+run "cluster_value_amp_workspace_id_wrong_kind" {
+  command = plan
+
+  variables {
+    cluster_values = merge(var.cluster_values, { ampWorkspaceId = 12345678 })
+  }
+
+  expect_failures = [var.cluster_values]
+}
+
+# The workspace ARN is refused: the rules and the Alertmanager of ACK take the id.
+run "cluster_value_amp_workspace_id_arn" {
+  command = plan
+
+  variables {
+    cluster_values = merge(var.cluster_values, { ampWorkspaceId = "arn:aws:aps:ap-southeast-1:111111111111:workspace/ws-12345678-abcd-4ef0-9876-0123456789ab" })
+  }
+
+  expect_failures = [var.cluster_values]
+}
+
+run "cluster_value_amp_endpoint_missing" {
+  command = plan
+
+  variables {
+    cluster_values = { for k, v in var.cluster_values : k => v if k != "ampEndpoint" }
+  }
+
+  expect_failures = [var.cluster_values]
+}
+
+run "cluster_value_amp_endpoint_wrong_kind" {
+  command = plan
+
+  variables {
+    cluster_values = merge(var.cluster_values, { ampEndpoint = { url = "https://aps-workspaces.ap-southeast-1.amazonaws.com/workspaces/ws-12345678-abcd-4ef0-9876-0123456789ab/" } })
+  }
+
+  expect_failures = [var.cluster_values]
+}
+
+# The endpoint ends with a slash, as prometheus_endpoint gives it: the charts append api/v1/remote_write to it.
+run "cluster_value_amp_endpoint_no_trailing_slash" {
+  command = plan
+
+  variables {
+    cluster_values = merge(var.cluster_values, { ampEndpoint = "https://aps-workspaces.ap-southeast-1.amazonaws.com/workspaces/ws-12345678-abcd-4ef0-9876-0123456789ab" })
+  }
+
+  expect_failures = [var.cluster_values]
+}
+
+run "cluster_value_log_group_missing" {
+  command = plan
+
+  variables {
+    cluster_values = { for k, v in var.cluster_values : k => v if k != "logGroup" }
+  }
+
+  expect_failures = [var.cluster_values]
+}
+
+run "cluster_value_log_group_wrong_kind" {
+  command = plan
+
+  variables {
+    cluster_values = merge(var.cluster_values, { logGroup = ["/svp/stg/otel"] })
+  }
+
+  expect_failures = [var.cluster_values]
+}
+
+run "cluster_value_log_group_other_group" {
+  command = plan
+
+  variables {
+    cluster_values = merge(var.cluster_values, { logGroup = "/aws/eks/svp-stg/cluster" })
+  }
+
+  expect_failures = [var.cluster_values]
+}
+
+run "cluster_value_grafana_url_missing" {
+  command = plan
+
+  variables {
+    cluster_values = { for k, v in var.cluster_values : k => v if k != "grafanaUrl" }
+  }
+
+  expect_failures = [var.cluster_values]
+}
+
+run "cluster_value_grafana_url_wrong_kind" {
+  command = plan
+
+  variables {
+    cluster_values = merge(var.cluster_values, { grafanaUrl = true })
+  }
+
+  expect_failures = [var.cluster_values]
+}
+
+# The URL has no trailing slash and a scheme: the endpoint of the workspace with https:// before it.
+run "cluster_value_grafana_url_trailing_slash" {
+  command = plan
+
+  variables {
+    cluster_values = merge(var.cluster_values, { grafanaUrl = "https://g-abc123def4.grafana-workspace.ap-southeast-1.amazonaws.com/" })
+  }
+
+  expect_failures = [var.cluster_values]
+}
+
+run "cluster_value_alarm_topic_arn_missing" {
+  command = plan
+
+  variables {
+    cluster_values = { for k, v in var.cluster_values : k => v if k != "alarmTopicArn" }
+  }
+
+  expect_failures = [var.cluster_values]
+}
+
+run "cluster_value_alarm_topic_arn_wrong_kind" {
+  command = plan
+
+  variables {
+    cluster_values = merge(var.cluster_values, { alarmTopicArn = ["arn:aws:sns:ap-southeast-1:111111111111:svp-stg-alarms"] })
+  }
+
+  expect_failures = [var.cluster_values]
+}
+
+run "cluster_value_alarm_topic_arn_other_topic" {
+  command = plan
+
+  variables {
+    cluster_values = merge(var.cluster_values, { alarmTopicArn = "arn:aws:sns:ap-southeast-1:111111111111:svp-stg-budget" })
   }
 
   expect_failures = [var.cluster_values]

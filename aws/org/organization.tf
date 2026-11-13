@@ -16,6 +16,7 @@ resource "aws_organizations_organization" "this" {
     "ec2.amazonaws.com",
     "guardduty.amazonaws.com",
     "iam.amazonaws.com",
+    "inspector2.amazonaws.com",
     "malware-protection.guardduty.amazonaws.com",
     "securityhub.amazonaws.com",
     "sso.amazonaws.com",

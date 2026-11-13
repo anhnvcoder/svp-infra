@@ -17,24 +17,29 @@ locals {
       vulnerability_alerts        = true
       allowed_actions             = "selected"
       sha_pinning_required        = true
-      # The release jobs sign and attest images with cosign; scorecard.yml runs the OpenSSF Scorecard action.
-      patterns_allowed = ["sigstore/cosign-installer@*", "ossf/scorecard-action@*"]
+      # The release jobs sign and attest images with cosign and copy them to ECR with short-lived AWS credentials from
+      # GitHub OIDC; scorecard.yml runs the OpenSSF Scorecard action.
+      patterns_allowed = [
+        "sigstore/cosign-installer@*", "ossf/scorecard-action@*", "aws-actions/configure-aws-credentials@*",
+      ]
       # No workflow opens or approves a pull request with GITHUB_TOKEN: the promote pull requests use the App's token.
       can_approve_pull_request_reviews = false
     }
     svp-frontend = {
-      description                      = "Web client (Next.js + BFF) of the short-video platform lab"
-      has_wiki                         = true
-      allow_merge_commit               = false
-      allow_rebase_merge               = false
-      allow_auto_merge                 = true
-      squash_merge_commit_title        = "PR_TITLE"
-      squash_merge_commit_message      = "PR_BODY"
-      delete_branch_on_merge           = false
-      vulnerability_alerts             = true
-      allowed_actions                  = "selected"
-      sha_pinning_required             = true
-      patterns_allowed                 = ["sigstore/cosign-installer@*", "ossf/scorecard-action@*"]
+      description                 = "Web client (Next.js + BFF) of the short-video platform lab"
+      has_wiki                    = true
+      allow_merge_commit          = false
+      allow_rebase_merge          = false
+      allow_auto_merge            = true
+      squash_merge_commit_title   = "PR_TITLE"
+      squash_merge_commit_message = "PR_BODY"
+      delete_branch_on_merge      = false
+      vulnerability_alerts        = true
+      allowed_actions             = "selected"
+      sha_pinning_required        = true
+      patterns_allowed = [
+        "sigstore/cosign-installer@*", "ossf/scorecard-action@*", "aws-actions/configure-aws-credentials@*",
+      ]
       can_approve_pull_request_reviews = false
     }
     svp-gitops = {

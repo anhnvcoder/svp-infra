@@ -12,8 +12,12 @@ cấu hình, xác thực, mã hoá và giám sát với prd, kể cả API qua t
 node hệ thống, Envoy và Kyverno HA); [ADR-0057](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0057-postgres17-verify-full.md) (PostgreSQL 17, `verify-full`);
 [ADR-0058](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0058-managed-data-operations.md) (CloudWatch alarm tới email qua SNS);
 [ADR-0061](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0061-edge-cloudfront-waf-acm.md) (edge: CloudFront trước web, API, media,
-VPC origin tới ALB internal, ba web ACL, cert ACM, log CloudFront, DNS của buổi). Buổi prd theo [`session-prd.md`](session-prd.md),
-dùng chung mọi mục chung của file này.
+VPC origin tới ALB internal, ba web ACL, cert ACM, log CloudFront, DNS của buổi);
+[ADR-0062](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0062-ecr-registry-ci-oidc.md) (image kéo từ ECR của account, pull-through
+cache làm nóng mỗi buổi, Inspector); [ADR-0063](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0063-managed-observability.md)
+(metric vào AMP, log vào CloudWatch Logs, trace vào X-Ray, luật trên AMP tới SNS, dashboard trên Amazon Managed Grafana, canary hỏi AMP);
+[ADR-0064](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0064-interface-endpoints.md) (API AWS qua endpoint interface có private
+DNS). Buổi prd theo [`session-prd.md`](session-prd.md), dùng chung mọi mục chung của file này.
 
 **Người học chạy mọi lệnh ở đây.** AI không chạy lệnh nào chạm account hay cluster EKS, kể cả lệnh chỉ đọc; AI đọc output người học dán
 lại và nhắc tới khi destroy hai root và hai lượt `sweep.sh` (stg, mgmt) đều đã chạy. Mọi lệnh chạy từ gốc repo này (`infra/`). Mỗi account một
@@ -39,11 +43,13 @@ aws/scripts/session.sh --print stg
 
 - **Cả buổi 4 giờ**, từ `check-account.sh` (mốc `session-start`) tới hai lượt `sweep.sh` sạch. **Quá 3 giờ mà chưa đo xong thì bỏ phần đo
   còn lại, sang gỡ**: `measure.sh` tự bỏ bậc k6 nào sẽ kết thúc sau mốc 3 giờ (dòng `skip`).
-- Chi phí, trần $5 một buổi 4 giờ: ước tính của ADR-0034 §12 cộng MSK và ElastiCache (H_k ~$0,144 mỗi giờ, O_k ~$0,06, ADR-0053 §16), cộng
+- Chi phí một buổi 4 giờ: ước tính của ADR-0034 §12 cộng MSK và ElastiCache (H_k ~$0,144 mỗi giờ, O_k ~$0,06, ADR-0053 §16), cộng
   phần ADR-0055 và ADR-0056 thêm vào stg (nhóm node hệ thống on-demand, bastion SSM, KMS key, log control plane, flow log, CloudWatch alarm),
-  cộng phần edge (ALB, phí theo giờ của ba web ACL, log; bảng "Thêm mỗi buổi" ở phụ lục ADR-0061 §13); buổi đầu đo số thật ở Cost
-  Explorer (mục **Kết thúc buổi**). Quên destroy 24 giờ tốn gấp ~6 lần một buổi; budget `svp-stg-monthly` của
-  account stg và budget tổng của org ở management gửi email ở 50 %, 80 %, 100 %.
+  cộng phần edge (ALB, phí theo giờ của ba web ACL, log; bảng "Thêm mỗi buổi" ở phụ lục ADR-0061 §13), cộng phần nền tảng managed (endpoint
+  interface, mẫu AMP, log, span, Inspector mỗi digest bên thứ ba mới, AMG ở buổi đầu tháng: bảng tổng mỗi buổi và lúc không buổi ở
+  [ADR-0063 §12](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0063-managed-observability.md#12-chi-phí-hợp-đồng-cluster-và-adr-cũ)
+  và phụ lục của nó); buổi đầu đo số thật ở Cost Explorer (mục **Kết thúc buổi**). Quên destroy 24 giờ tốn gấp ~6 lần một buổi; budget
+  `svp-stg-monthly` của account stg và budget tổng của org ở management gửi email ở 50 %, 80 %, 100 %.
 - MSK và ElastiCache dựng, gỡ lâu: tài liệu AWS không ghi thời gian, ADR-0053 §16 giả định MSK dựng ≤ 45, gỡ ≤ 30 phút, ElastiCache ≤ 20,
   ≤ 15 phút, song song với EKS trong apply của root env (buổi dài thêm ~30 phút apply, ~20 phút destroy); buổi stg đo số thật (phép kiểm (a)
   ở bước 11).
@@ -101,7 +107,8 @@ aws/scripts/session.sh --print stg
    `bootstrap.sh stg secrets` tự kiểm lại: repo code ở `main`, sạch, bằng `origin/main` (entry và key của `make eks-secrets` đọc từ chart của
    nó). `tf.sh stg gitops plan` fetch hai bản clone, giải nén chart `svp-cluster` ở `revision` của `envs/stg/charts.yaml` vào thư mục buổi.
 3. Trên máy: Terraform 1.15 (`terraform version`), AWS CLI v2 và Session Manager plugin (`session-manager-plugin --version`, cho tunnel
-   tới API), `kubectl`, `jq`, `dig`, `nc`, `make`; `.env` của repo code đã có
+   tới API), `kubectl`, `jq`, `dig`, `nc`, `make`, `cosign` (kiểm chữ ký bản ECR), `curl` có `--aws-sigv4` (7.75 trở lên; bản của macOS có:
+   `curl --version`), Docker (`image-list.sh` của repo code render chart như `make helm-check`); `.env` của repo code đã có
    (`make -C ../backend env`; `tf.sh stg gitops plan` lấy chat Telegram `SVP_ALERT_TELEGRAM_CHAT_ID` từ đó, rỗng là chỉ commit status).
 4. File backend của account stg, `aws/backend-stg.hcl` (git bỏ qua; chỉ bucket, region, KMS key, không `key`), ghi từ output của baseline:
 
@@ -110,25 +117,29 @@ aws/scripts/session.sh --print stg
    ```
 
 5. `aws/envs/stg/stg.auto.tfvars` (git bỏ qua) sinh bằng khối lệnh dưới, chỉ đọc output của baseline; thay `<domain>`, `<email>` (hộp
-   thư nhận alarm):
+   thư nhận alarm). `grafana_workspace_id` là id của workspace AMG `svp-stg` (nhãn đầu của output `grafana_url`; AMG không có data source tìm
+   theo tên):
 
    ```sh
    zone=$(AWS_PROFILE=anhnv-stg terraform -chdir=aws/accounts/stg output -raw zone_id)
+   ws=$(AWS_PROFILE=anhnv-stg terraform -chdir=aws/accounts/stg output -raw grafana_url | sed -E 's#^https://(g-[0-9a-z]+)\..*#\1#')
    cat > aws/envs/stg/stg.auto.tfvars <<EOF
-   hosted_zone_id = "$zone"
-   domain         = "stg.aws.<domain>"
-   alarm_email    = "<email>"
+   hosted_zone_id       = "$zone"
+   domain               = "stg.aws.<domain>"
+   alarm_email          = "<email>"
+   grafana_workspace_id = "$ws"
    EOF
    ```
 
    `domain` là tên zone của account stg (web ở đỉnh, API ở `api.<domain>`); precondition của root từ chối tên ngoài zone đó ngay lúc plan.
    Endpoint công khai của API tắt, nên file không có IP của máy. File có sẵn mà còn dòng `eks_public_access_cidrs` hay `acme_email` (root
-   không khai báo hai biến này: Terraform chỉ cảnh báo `Value for undeclared variable`) hay thiếu `alarm_email` (plan dừng ở `No value for
-   required variable`): xoá hai dòng đó, thêm dòng `alarm_email` trong editor, rồi đếm (không in giá trị nào):
+   không khai báo hai biến này: Terraform chỉ cảnh báo `Value for undeclared variable`) hay thiếu `alarm_email`, `grafana_workspace_id` (plan
+   dừng ở `No value for required variable`): xoá hai dòng đó, thêm dòng thiếu (`grafana_workspace_id` theo bước (9) của
+   [`platform-setup.md`](platform-setup.md#bước-9-grafana-managed)), rồi đếm (không in giá trị nào):
 
    ```sh
    sed -i '' -E '/^(eks_public_access_cidrs|acme_email)[[:space:]]*=/d' aws/envs/stg/stg.auto.tfvars
-   grep -c -E '^(hosted_zone_id|domain|alarm_email) ' aws/envs/stg/stg.auto.tfvars     # 3
+   grep -c -E '^(hosted_zone_id|domain|alarm_email|grafana_workspace_id) ' aws/envs/stg/stg.auto.tfvars     # 4
    ```
 
 6. **Nền bảo mật của org đã áp** tới ít nhất bước (3) của [`org-security-setup.md`](org-security-setup.md#thứ-tự-áp-lần-đầu) (`aws/bootstrap`,
@@ -139,7 +150,22 @@ aws/scripts/session.sh --print stg
 7. **Edge đã áp lần đầu** theo [`edge-setup.md`](edge-setup.md#thứ-tự-áp-lần-đầu) tới hết bước (3): delivery destination
    `svp-cloudfront-stg` của account Log Archive (root env tạo delivery log của CloudFront tới nó; thiếu thì `apply` đỏ ở
    `aws_cloudwatch_log_delivery`), `CAA` ở zone, zone prd ký và có `DS` ở DNS cha (phép kiểm edge đọc cờ `ad`). Một lần, không nằm trong buổi.
-8. Mac cắm sạc, tắt Low Power Mode (đo k6 và chờ dài).
+8. **Nền tảng managed đã áp** theo [`platform-setup.md`](platform-setup.md#thứ-tự-áp-lần-đầu) tới hết bước (9): registry, pull-through cache có
+   credential, workspace AMP, log group `/svp/stg/otel`, AMG của `aws/accounts/stg` (root env đọc chúng bằng data source; thiếu thì `plan` dừng
+   ở data source hay precondition), quota chu kỳ luật AMP 15 s đã duyệt (thiếu thì luật không lên AMP), secret CI đã đặt. Một lần, không
+   nằm trong buổi.
+9. **Chart có nền tảng managed**: `revision` của `envs/stg/charts.yaml` (lệnh của điều 2) là commit của repo code có Collector theo nền tảng và
+   value `canaryPrometheus` (chart cũ bỏ qua values eks mới: không metric, log, trace vào dịch vụ managed, image kéo thẳng upstream, canary hỏi
+   Prometheus không còn trả lời). Kiểm (hai dòng `ok`):
+
+   ```sh
+   rev=$(git -C ../gitops show origin/main:envs/stg/charts.yaml | sed -n 's/^revision: *//p')
+   git -C ../backend fetch origin
+   git -C ../backend cat-file -e "$rev:deploy/observability/otelcol/k8s-eks.yaml" && echo ok
+   git -C ../backend show "$rev:deploy/helm/svp-service/values.yaml" | grep -q '^canaryPrometheus:' && echo ok
+   ```
+
+10. Mac cắm sạc, tắt Low Power Mode (đo k6 và chờ dài).
 
 ## Mở terminal của buổi
 
@@ -203,8 +229,9 @@ Rồi chạy tiếp từ bước sau mốc cuối (hay chạy lại bước đan
 | 20 | `aws/scripts/sweep.sh mgmt` | 5 phút | toàn bộ output |
 
 Bước tay chen giữa các bước script: xác nhận email của alarm sau bước 5 (mục 3–5), tunnel tới API sau bước 5 và trước bước 6 (mục
-**Tunnel tới API**, giữ chạy tới hết bước 14), phép kiểm của bước 11, đọc finding bảo mật sau bước 11 và trước bước 12 (mục **Finding bảo
-mật của buổi**).
+**Tunnel tới API**, giữ chạy tới hết bước 14), làm nóng cache sau bước 6 và trước bước 7 (mục **Làm nóng cache**), phép kiểm của bước 11 (cả
+mục **Phép kiểm nền tảng managed**), đọc finding bảo mật sau bước 11 và trước bước 12 (mục **Finding bảo mật của buổi**), chạy lại truy vấn
+dữ liệu sau bước 20 (mục **Kết thúc buổi**).
 
 Dự trù: apply root env xong ~T+70 phút (MSK là phần dài nhất), mọi Application Healthy ~T+1 giờ 55, đo tới muộn nhất T+3 giờ, gỡ và quét
 xong trước T+4 giờ khi gỡ đúng số giả định của ADR-0053 §16; buổi stg đầu tiên đo hai mốc đó và ghi vào phụ lục của ADR.
@@ -332,9 +359,37 @@ Theo thứ tự: kiểm account; repo code ở `main` = `origin/main`, sạch; `
 (không ra file, không in), rồi `make -C ../backend eks-secrets CONTEXT=svp-stg` với `AWS_PROFILE=anhnv-stg`: ghi các entry `svp/stg/*` từ
 `.env` (mỗi entry một `put-secret-value --secret-string file://…`, giá trị không qua đối số hay output); `glitchtip-runtime` ba key rỗng chỉ
 khi chưa có giá trị. Ba entry của Kafka và Valkey (`kafka-admin`, `kafka-users`, `valkey-users`) Terraform đã ghi ở bước 5: `make eks-secrets`
-chỉ kiểm chúng có, không ghi, không đọc mật khẩu Kafka, Valkey của `.env` (mật khẩu của stack local). Nguồn của mọi Secret trên EKS có trước
-Argo CD. Tìm: `ok entries svp/stg/* written (kafka-admin, kafka-users, valkey-users by the apply of aws/envs/stg)` và mốc `secrets-written`.
-Đỏ: dán ~30 dòng cuối của `$SVP_SESSION_DIR/eks-secrets.log` (script nêu tên biến thiếu, không in giá trị).
+chỉ kiểm chúng có, không ghi, không đọc mật khẩu Kafka, Valkey của `.env` (mật khẩu của stack local). Rồi token của Grafana Operator: tìm
+service account `svp-grafana-operator` của workspace AMG (id từ `grafanaUrl` của `cluster-values.json`), xoá mọi token cũ của nó (quota 100 token
+mỗi workspace, kể cả token hết hạn), tạo token sống 24 giờ và ghi thẳng vào entry `svp/stg/grafana-operator` qua pipe (token không qua đối số,
+file hay output). Nguồn của mọi Secret trên EKS có trước Argo CD. Tìm: `ok a token of svp-grafana-operator valid 24 h in entry
+svp/stg/grafana-operator (not shown)`, `ok entries svp/stg/* written (kafka-admin, kafka-users, valkey-users by the apply of aws/envs/stg); next:
+aws/scripts/ecr-warm.sh stg <image list>, …` và mốc `secrets-written`. Đỏ: dán ~30 dòng cuối của `$SVP_SESSION_DIR/eks-secrets.log` (script
+nêu tên biến thiếu, không in giá trị), hay dòng `FAIL` của phần Grafana (thiếu `grafanaUrl`, thiếu service account: `aws/accounts/stg` chưa có
+bước (5) của [`platform-setup.md`](platform-setup.md#bước-5-awsaccountsenv)).
+
+### Làm nóng cache (sau bước 6, trước bước 7)
+
+Mọi image của cluster ghim digest, mà ECR không kéo được theo digest một image pull-through cache chưa từng thấy
+([ADR-0062](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0062-ecr-registry-ci-oidc.md) §7). Nên trước khi Argo CD cài gì,
+`ecr-warm.sh` kéo **theo tag** qua cache mọi image bên thứ ba của bản render eks của env, rồi kiểm digest ghim có ở ECR. Danh sách do
+`deploy/ci/image-list.sh` của repo code in, mỗi dòng `<ref upstream>:<tag>@<digest>` (không image phát hành của lab: chúng vào ECR qua CI). Lập
+danh sách không chạm AWS, làm được từ đầu buổi (render các chart ở `revision` của env như `make helm-check`, ~1–2 phút, cần mạng và Docker):
+
+```sh
+(cd ../backend && deploy/ci/image-list.sh ../gitops stg) >"$SVP_SESSION_DIR/images-stg.txt"
+wc -l <"$SVP_SESSION_DIR/images-stg.txt"
+aws/scripts/ecr-warm.sh stg "$SVP_SESSION_DIR/images-stg.txt"
+```
+
+Script đọc hết danh sách trước lệnh đầu tiên (dòng sai dạng, image không thuộc năm tiền tố cache thì dừng, nêu dòng), kiểm account, rồi mỗi image
+một `aws ecr batch-get-image` theo tag qua repo cache và so digest (đi hết danh sách, rồi mới dừng nếu có image đỏ). Tìm: mỗi image một dòng
+`ok`, dòng cuối `ok every image of … in the cache of stg at its pinned digest; next: …`, mốc `ecr-warm-start`, `ecr-warmed` trong
+`timeline.tsv`. Dòng `FAIL` nêu image, tag, digest ghim và digest ECR trả: tag upstream đã dời (cache làm mới một tag tối đa mỗi ngày một lần;
+Renovate mở PR đổi digest ghim) hay credential của cache sai (dòng GHCR, Docker Hub:
+[`platform-setup.md`](platform-setup.md#xoay-credential)); dán mọi dòng `FAIL`. PR đổi digest bên thứ ba merge giữa
+buổi thì lập lại danh sách và chạy lại script trước khi Argo CD sync bản đó. Xem trước lệnh, không chạy gì: `aws/scripts/ecr-warm.sh --print stg
+<file>` (`session.sh --print` không gồm bước này).
 
 ### 7–9. Root gitops: Argo CD và root GitOps
 
@@ -413,8 +468,9 @@ curl -s -o /dev/null -w '%{http_code}\n' \
 
 Dán lại mã in ra (ghi vào hàng tương ứng của mục "Kiểm chứng sau" của ADR-0034).
 
-Trong lúc giữ tải, đọc phía server ở Grafana (`AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp-obs port-forward --address 127.0.0.1
-service/kps-grafana 3000:80`, đăng nhập `admin` + `SVP_GRAFANA_ADMIN_PASSWORD` của `.env`, dashboard SLO): p95/p99 của gateway theo route.
+Trong lúc giữ tải, đọc phía server ở Amazon Managed Grafana (`AWS_PROFILE=anhnv-stg terraform -chdir=aws/accounts/stg output -raw
+grafana_url`, mở trên trình duyệt, đăng nhập bằng IAM Identity Center với user của nhóm nền tảng; dashboard "SVP — SLO"): p95/p99 của gateway
+theo route. Grafana của eks là AMG: Grafana trong cluster không chạy, trace không có data source Tempo (mục Phép kiểm edge (d)).
 Các phép kiểm chỉ chứng minh được trên AWS ở mục "Kiểm chứng sau" của ADR-0034 và ADR-0048: làm trong lúc chờ bậc k6, ghi kết quả từng phép
 kiểm (đạt hay không, output chính) vào một file trong `$SVP_SESSION_DIR`, để sau buổi điền cột Kết quả của bảng đó. Dán lại: `cat
 $SVP_SESSION_DIR/k6-levels.tsv`, dòng `ok highest level …`, và với mỗi bậc `jq -c . $SVP_SESSION_DIR/k6-<n>/summaries/pod-*.json | head`.
@@ -638,16 +694,22 @@ curl -4 -s -o /dev/null -w '%{http_code}\n' -H 'X-Forwarded-For: 198.51.100.7' "
 ```
 
 Mong ba dòng `404`. Access log của gateway không ghi IP; gateway ghi IP client vào thuộc tính `client.address` của span (cùng giá trị rate
-limit theo IP dùng), nên phép này đọc trace: Grafana
-(port-forward của bước 11) → Explore → data source Tempo → TraceQL, 15 phút gần nhất, hai truy vấn:
+limit theo IP dùng), nên phép này đọc span ở log group `aws/spans` (Transaction Search của X-Ray) bằng CloudWatch Logs Insights, 15 phút gần
+nhất, hai truy vấn (hai phút sau ba request, để span đã tới). Hàm `insights` nằm ở khối biến và hàm dùng chung của mục
+[Phép kiểm nền tảng managed](#phép-kiểm-nền-tảng-managed): chạy khối đó trước, một lần trong terminal (buổi prd với `E=prd`):
 
-```text
-{ span.client.address = "<IP vừa in>" }
-{ span.client.address = "203.0.113.7" || span.client.address = "198.51.100.7" }
+```sh
+for f in "= \"$ip\"" 'in ["203.0.113.7", "198.51.100.7"]'; do
+  echo "== client.address $f"
+  insights aws/spans "$(( $(date +%s) - 900 ))" "$(date +%s)" \
+    "filter \`attributes.client.address\` $f | stats count(*) as spans, count_distinct(traceId) as traces" || echo "query failed"
+done
 ```
 
-Mong truy vấn đầu có ít nhất ba trace ở thời điểm ba request, truy vấn sau không trace nào: CloudFront đè `CloudFront-Viewer-Address` viewer tự
-gửi, gateway không đọc `X-Forwarded-For`. Truy vấn sau có trace: dừng buổi, dán output cho AI (mục "Xem lại khi" của ADR-0061).
+Mong truy vấn đầu có ít nhất ba trace ở thời điểm ba request, truy vấn sau không dòng nào (không trace nào): CloudFront đè
+`CloudFront-Viewer-Address` viewer tự gửi, gateway không đọc `X-Forwarded-For`. Truy vấn sau có trace: dừng buổi, dán output cho AI (mục "Xem
+lại khi" của ADR-0061). Truy vấn đầu cũng rỗng: span chưa tới X-Ray (mục Phép kiểm nền tảng managed (c)), dán output. Dòng `query failed`
+là truy vấn hỏng, không phải kết quả rỗng: dán dòng lỗi ngay trên nó (lỗi của `aws`, như phiên SSO hết hạn, hay dòng `insights:`).
 
 (e) Log mới ở bucket log CloudFront và bucket log WAF của account Log Archive (năm phút sau các request trên; profile `anhnv-log-ro` của bước
 (4) của [`org-security-setup.md`](org-security-setup.md#bước-4-awsorg-đủ)):
@@ -754,7 +816,7 @@ unset pw
 Mong, theo thứ tự: một dòng `NOPERM …` (`svp-feed-service` không vào db 10) rồi `OK` (db 14 của nó); một dòng `NOPERM …` (`svp-gateway` không
 đọc `svp:feed:*`) rồi một dòng trống (khoá `svp:gw:check` không có, đọc được). `WRONGPASS` hay lỗi TLS: dán cho AI.
 
-(e) Lag hiện trên dashboard: trong lúc giữ tải, Grafana (port-forward ở trên) dashboard "SVP — Kafka and pipeline", panel "Consumer lag by
+(e) Lag hiện trên dashboard: trong lúc giữ tải, AMG (bước 11) dashboard "SVP — Kafka and pipeline", panel "Consumer lag by
 group (max over partitions)" có đường của bốn group `video-service`, `engagement-service`, `feed-service`, `media-worker` (receiver
 `kafkametrics` của Collector, user `svp-otelcol`). Đối chiếu với broker:
 
@@ -764,6 +826,320 @@ AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp-data exec deploy/svp-ops 
 
 Mong cột `LAG` của mỗi group cùng cỡ với panel. Panel trống: dán lỗi của receiver
 (`AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp-obs logs deploy/otel-collector --tail=50 | grep -i kafka`) cho AI.
+
+#### Phép kiểm nền tảng managed
+
+Phép kiểm buổi của mục "Xác nhận" của ADR-0062 (registry), ADR-0063 (observability), ADR-0064 (endpoint): image kéo từ ECR, mạng riêng,
+telemetry, cảnh báo, canary, dữ liệu còn sau destroy. Làm trong bước 11, tunnel mở; lệnh và output có thời điểm UTC vào một file của
+`$SVP_SESSION_DIR`, một dòng kết luận mỗi phép vào "Xác nhận" của ADR tương ứng. Buổi prd chạy (a), (b), (c), (e) và phần luật của (d) với
+`anhnv-prd`, `--context svp-prd`, `svp-prd` (mục cùng tên của [`session-prd.md`](session-prd.md#phép-kiểm-nền-tảng-managed)).
+
+Biến và hàm dùng chung, một lần trong terminal của buổi (mở lại terminal thì chạy lại khối này). `amp_get` gọi API Prometheus của workspace AMP
+bằng `curl --aws-sigv4`: credential tạm của profile đi từ `aws configure export-credentials` qua `jq` vào `curl --config -`, đều qua pipe, không
+qua đối số, file hay output. Workspace, log group lấy từ root `aws/accounts/stg`, nên các hàm chạy được cả khi env đã gỡ:
+
+```sh
+E=stg                                                       # buổi prd: E=prd
+values=$SVP_SESSION_DIR/cluster-values.json
+ecr=$(jq -r .ecrRegistry "$values")                         # chỉ (a), (b): cần cluster của buổi
+ws=$(AWS_PROFILE="anhnv-$E" terraform -chdir="aws/accounts/$E" output -raw amp_workspace_id)
+amp="https://aps-workspaces.ap-southeast-1.amazonaws.com/workspaces/$ws/"
+# amp_get PATH [tuỳ chọn curl…]: GET tới API Prometheus của workspace, ký SigV4
+amp_get() {
+  local p=$1; shift
+  AWS_PROFILE="anhnv-$E" aws configure export-credentials --format process --region ap-southeast-1 |
+    jq -r '"user = \"\(.AccessKeyId):\(.SecretAccessKey)\"", "header = \"x-amz-security-token: \(.SessionToken)\""' |
+    curl -sS --fail-with-body --config - --aws-sigv4 aws:amz:ap-southeast-1:aps -G "$amp$p" "$@"
+}
+# promql QUERY [THỜI ĐIỂM, giây Unix]: truy vấn tức thời; mỗi series một dòng, nhãn rồi giá trị
+promql() {
+  if [ -n "${2:-}" ]; then amp_get api/v1/query --data-urlencode "query=$1" --data-urlencode "time=$2"
+  else amp_get api/v1/query --data-urlencode "query=$1"; fi |
+    jq -r '.data.result[] | "\(.metric | to_entries | map("\(.key)=\(.value)") | join(",")) \(.value[1])"' | sort
+}
+# insights LOG-GROUP TỪ TỚI QUERY: Logs Insights trong [TỪ, TỚI] (giây Unix); in trường, giá trị
+# Lỗi API, trạng thái khác Complete, chờ quá 300 s: báo ở stderr, trả 1
+insights() {
+  local id st n=0
+  id=$(AWS_PROFILE="anhnv-$E" aws logs start-query --log-group-names "$1" --start-time "$2" --end-time "$3" --query-string "$4" \
+    --region ap-southeast-1 --query queryId --output text) || return 1
+  while :; do
+    st=$(AWS_PROFILE="anhnv-$E" aws logs get-query-results --query-id "$id" --region ap-southeast-1 --query status --output text) ||
+      return 1
+    case $st in
+      Complete) break ;;
+      Scheduled | Running) ;;
+      *) echo "insights: query $id ended $st" >&2; return 1 ;;
+    esac
+    [ $((n += 1)) -lt 150 ] || { echo "insights: query $id still $st after 300 s" >&2; return 1; }
+    sleep 2
+  done
+  AWS_PROFILE="anhnv-$E" aws logs get-query-results --query-id "$id" --region ap-southeast-1 --query 'results[][].[field,value]' --output text
+}
+```
+
+(a) Image (ADR-0062): pod kéo image từ ECR của account (policy `svp-registry-mirror` đổi tham chiếu lúc tạo pod, IVP `svp-images` xác minh ở
+ECR bằng Pod Identity của Kyverno); host image theo namespace:
+
+```sh
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg get pods -A -o json |
+  jq -r '.items[] | .metadata.namespace as $n | ((.spec.initContainers // [])[], .spec.containers[]) | "\($n) \(.image | split("/")[0])"' |
+  sort | uniq -c | sed "s/$SVP_AWS_STG_ACCOUNT_ID/<account>/g"
+```
+
+Mong mọi namespace chỉ có host `<account>.dkr.ecr.ap-southeast-1.amazonaws.com`, trừ `kube-system` (Kyverno không nhận request của namespace
+này: Karpenter, Load Balancer Controller, add-on EKS kéo upstream hay ECR của AWS), `kyverno` (policy loại trừ) và `argocd` (Terraform cài trước
+khi policy có; pod tạo trước policy kéo upstream tới lần tạo lại). Namespace khác có host `ghcr.io`, `docker.io`, `quay.io`, `registry.k8s.io`,
+`public.ecr.aws`: dán output. Chữ ký và attestation đi theo bản ECR (đăng nhập ECR vào một `DOCKER_CONFIG` tạm, mật khẩu qua stdin):
+
+```sh
+img=$(AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp get pods -o json |
+  jq -r '[.items[].spec.containers[].image | select(contains("/svp-backend/gateway@"))][0]')
+echo "$img" | sed "s/$SVP_AWS_STG_ACCOUNT_ID/<account>/"
+export DOCKER_CONFIG=$(mktemp -d)
+AWS_PROFILE=anhnv-stg aws ecr get-login-password --region ap-southeast-1 | cosign login "$ecr" -u AWS --password-stdin
+ident=(--certificate-oidc-issuer https://token.actions.githubusercontent.com
+  --certificate-identity https://github.com/anhnvcoder/svp-backend/.github/workflows/images.yml@refs/heads/main)
+cosign verify "${ident[@]}" "$img" >/dev/null 2>&1 && echo "signature verified"
+for t in vuln slsaprovenance1; do cosign verify-attestation --type "$t" "${ident[@]}" "$img" >/dev/null 2>&1 && echo "$t verified"; done
+rm -rf "$DOCKER_CONFIG"; unset DOCKER_CONFIG
+```
+
+Mong `<account>.dkr.ecr…/svp-backend/gateway@sha256:…` rồi ba dòng `verified`. Thiếu dòng: chạy lại lệnh đó không có `>/dev/null 2>&1`,
+dán lỗi. Inspector quét repo cache (image bên thứ ba vừa làm nóng; vài phút sau khi image vào cache), không quét repo phát hành:
+
+```sh
+AWS_PROFILE=anhnv-stg aws inspector2 list-coverage --region ap-southeast-1 --output text \
+  --filter-criteria '{"resourceType":[{"comparison":"EQUALS","value":"AWS_ECR_CONTAINER_IMAGE"}]}' \
+  --query 'coveredResources[].scanStatus.statusCode' | tr '\t' '\n' | sort | uniq -c
+AWS_PROFILE=anhnv-stg aws inspector2 list-findings --region ap-southeast-1 --max-results 10 --output text \
+  --filter-criteria '{"resourceType":[{"comparison":"EQUALS","value":"AWS_ECR_CONTAINER_IMAGE"}],"findingStatus":[{"comparison":"EQUALS","value":"ACTIVE"}]}' \
+  --sort-criteria field=SEVERITY,sortOrder=DESC --query 'findings[].[severity,resources[0].details.awsEcrContainerImage.repositoryName,title]'
+```
+
+Mong phần lớn image `ACTIVE` (đang được quét liên tục); ít nhất một finding, repo của nó bắt đầu bằng `ghcr/`, `docker-hub/`, `quay/`, `k8s/` hay
+`ecr-public/`, không repo `svp-backend/`, `svp-frontend/`. Rỗng: đọc lại cuối bước 11; vẫn rỗng thì dán cả hai output. Finding cũng vào
+Security Hub của `svp-security` (`ProductName` Inspector), không gửi email.
+
+(b) Mạng riêng (ADR-0064): endpoint interface có private DNS ở subnet private (stg một AZ), tên API AWS phân giải ra IP trong VPC từ một pod,
+Kyverno và External Secrets vẫn gọi được API qua đó:
+
+```sh
+jq -r .vpcCidr "$values"
+AWS_PROFILE=anhnv-stg aws ec2 describe-vpc-endpoints --region ap-southeast-1 --output text \
+  --filters "Name=vpc-id,Values=$(jq -r .vpcId "$values")" Name=vpc-endpoint-type,Values=Interface \
+  --query 'VpcEndpoints[].[ServiceName,State,PrivateDnsEnabled,length(SubnetIds)]' | sort
+for n in sts secretsmanager logs api.ecr "$ecr" aps-workspaces aps xray ssm ec2 elasticloadbalancing sqs eks-auth; do
+  case $n in *.amazonaws.com) h=$n ;; eks-auth) h=eks-auth.ap-southeast-1.api.aws ;; *) h=$n.ap-southeast-1.amazonaws.com ;; esac
+  printf '%s ' "$h" | sed "s/$SVP_AWS_STG_ACCOUNT_ID/<account>/"
+  AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp-data exec deploy/svp-ops -c valkey -- nslookup "$h" 2>/dev/null |
+    awk '/^Address/ && !/:53$/ { printf "%s ", $NF } END { print "" }'
+done
+```
+
+Mong: CIDR của VPC; 15 dòng của ADR-0064 §1 (`com.amazonaws.ap-southeast-1.sts`, `eks-auth`, `secretsmanager`, `logs`, `ssm`, `ssmmessages`,
+`ec2messages`, `ecr.api`, `ecr.dkr`, `ec2`, `elasticloadbalancing`, `aps-workspaces`, `aps`, `xray`, `sqs`) cộng `guardduty-data`, mỗi dòng
+`available True 1` (prd `3`); mỗi tên in ít nhất một IP trong CIDR đó, không IP công khai (`nslookup` của BusyBox trong container `valkey` của
+`svp-ops`). Tên ra IP công khai: private DNS của endpoint đó chưa bật hay endpoint thiếu: dán output. Rồi Kyverno, External Secrets và Pod
+Identity:
+
+```sh
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n kyverno get pods
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n external-secrets get pods
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg get externalsecrets.external-secrets.io -A -o json |
+  jq -r '[.items[] | select(any(.status.conditions[]?; .type == "Ready" and .status == "True") | not)
+    | "\(.metadata.namespace)/\(.metadata.name)"] as $bad | "\(.items | length) ExternalSecrets, not Ready: \($bad | if length == 0 then "none" else join(" ") end)"'
+AWS_PROFILE=anhnv-stg aws eks list-pod-identity-associations --cluster-name svp-stg --region ap-southeast-1 \
+  --query 'associations[].[namespace,serviceAccount]' --output text | sort
+```
+
+Mong mọi pod `Running` và `READY` đủ; dòng `<N> ExternalSecrets, not Ready: none`; association có năm danh tính của
+module `eks` (`svp-obs/otel-collector`, `svp-obs/kps-prometheus`, `svp-obs/ack-prometheusservice-controller`,
+`kyverno/kyverno-admission-controller`, `argo-rollouts/argo-rollouts`) cạnh các danh tính có sẵn. ExternalSecret không Ready hay pod Kyverno
+không Ready: NetworkPolicy chưa mở 443 tới CIDR của VPC (value `awsEndpointCidrs`); dán output và
+`AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n external-secrets logs deploy/external-secrets --tail=30`.
+
+(c) Telemetry (ADR-0063): metric ở AMP (agent và Collector), log ở `/svp/stg/otel`, span ở `aws/spans`, series service graph do Collector
+sinh; trong lúc k6 giữ tải:
+
+```sh
+promql 'count by (job) (up{cluster="svp-stg"})'
+promql 'count by (service_name) ({__name__=~"svp_.+"})'
+promql 'sum by (client, server) (traces_service_graph_request_total)'
+insights /svp/stg/otel "$(( $(date +%s) - 900 ))" "$(date +%s)" 'stats count(*) as records'
+insights aws/spans "$(( $(date +%s) - 900 ))" "$(date +%s)" 'stats count(*) as spans, count_distinct(traceId) as traces'
+```
+
+Mong: mỗi job mà agent scrape một dòng (cluster `svp-stg`); mỗi service của lab đang nhận tải một dòng (metric OTLP của Collector, tên như trên
+Prometheus); cặp `client`, `server` của các lời gọi gateway → service; `records`, `spans`, `traces` lớn hơn 0. Rỗng: dán output và
+`AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp-obs logs deploy/otel-collector --tail=50` (lỗi SigV4, 403, timeout tới endpoint).
+Trễ remote write của agent (số đo cho ADR-0063 §8, giây; tiêu chí ≤ 30):
+
+```sh
+promql 'max(max_over_time((prometheus_remote_storage_highest_timestamp_in_seconds - ignoring(remote_name, url) group_right prometheus_remote_storage_queue_highest_sent_timestamp_seconds)[30m:30s]))'
+```
+
+Trên AMG (bước 11): **Explore** → data source `prometheus` → `up{cluster="svp-stg"}` có kết quả (metric qua AMG); **Dashboards**: năm dashboard
+"SVP — …" của repo code, mỗi cái khung 1 giờ gần nhất, ghi tên mọi panel "No data". Panel của "SVP — Web vitals (RUM)" chỉ có dữ liệu khi
+trình duyệt mở web (phép (d) của mục Gói Free); hai panel Tempo (TraceQL, service map) không có trên eks. Grafana Operator đã đồng bộ:
+
+```sh
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp-obs get \
+  grafanas.grafana.integreatly.org,grafanadatasources.grafana.integreatly.org,grafanadashboards.grafana.integreatly.org -o json |
+  jq -r '.items[] | "\(.kind) \(.metadata.name) \(.status.stage // "") \([.status.conditions[]? | "\(.type)=\(.status)"] | join(","))"'
+```
+
+Mong một `Grafana` (`stage` hoàn tất), hai `GrafanaDatasource`, năm `GrafanaDashboard`, mọi điều kiện `…=True`. Dán danh sách panel trống
+theo dashboard (rỗng là đạt).
+
+(d) Cảnh báo và canary (ADR-0063 §5, §8). Luật của chart ở AMP, chu kỳ 15 s (quota của bước (8) của
+[`platform-setup.md`](platform-setup.md#bước-8-quota-chu-kỳ-luật-amp)), Alertmanager của AMP gửi SNS:
+
+```sh
+AWS_PROFILE=anhnv-stg aws amp list-rule-groups-namespaces --workspace-id "$ws" --region ap-southeast-1 \
+  --query 'ruleGroupsNamespaces[].[name,status.statusCode]' --output text
+AWS_PROFILE=anhnv-stg aws amp describe-alert-manager-definition --workspace-id "$ws" --region ap-southeast-1 \
+  --query 'alertManagerDefinition.status.statusCode' --output text
+amp_get api/v1/rules | jq -r '.data.groups[] | "\(.name) \(.interval) \(.rules | length)"'
+```
+
+Mong hai namespace `svp-alerts`, `slo-generated` `ACTIVE`; `ACTIVE`; mỗi nhóm luật một dòng chu kỳ `15`. Namespace `CREATION_FAILED` (chu kỳ dưới
+quota) hay thiếu: dán output và
+`AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp-obs describe rulegroupsnamespaces.prometheusservice.services.k8s.aws`.
+
+Canary thật của gateway và một cảnh báo `page` dùng chung một revision mới: một PR ở `svp-gitops` thêm vào `envs/stg/gateway.yaml` một annotation
+của pod template (cùng image, revision mới, nên Argo Rollouts chạy canary; cách diễn tập canary của lab), mở và chờ check xanh **trước buổi**,
+chưa merge:
+
+```yaml
+podAnnotations:
+  svp-session-canary: "<UTC của buổi, vd 2026-11-20T03:00Z>"
+```
+
+Đường lỗi trước: một policy inline tạm chặn `aps:QueryMetrics` của role Pod Identity `svp-stg-argo-rollouts` (IAM xét policy ở mỗi request, nên
+credential đang có của controller bị chặn ngay; không sửa code), rồi merge PR. AnalysisRun nền lỗi ba lần liên tiếp thì Rollout bị abort,
+Application `gateway` thành Degraded, và sau 10 phút luật `ArgoCDApplicationDegraded` (`page`) cháy:
+
+```sh
+aws/scripts/check-account.sh stg
+AWS_PROFILE=anhnv-stg aws iam put-role-policy --role-name svp-stg-argo-rollouts --policy-name svp-session-deny-query --region us-east-1 \
+  --policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":"aps:QueryMetrics","Resource":"*"}]}'
+date -u +%Y-%m-%dT%H:%M:%SZ | tee "$SVP_SESSION_DIR/canary-deny-start"
+```
+
+Merge PR, rồi đọc mỗi phút (Argo CD sync trong vài phút; AnalysisRun nền đo từ giây 60 của canary):
+
+```sh
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp get rollout gateway -o jsonpath='{.status.phase} {.status.abort} {.status.message}{"\n"}'
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp get analysisruns.argoproj.io --sort-by=.metadata.creationTimestamp -o json |
+  jq -r '.items[-2:][] | "\(.metadata.name) \(.status.phase) \([.status.metricResults[]? | "\(.name): \(.measurements[-1] | "\(.phase) \(.value // "") \(.message // "")")"] | join("; "))"'
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp get httproute api -o jsonpath='{.spec.rules[0].backendRefs[*].weight}{"\n"}'
+```
+
+Mong: AnalysisRun mới nhất `gateway-…` `Error`, measurement `Error` nêu `AccessDenied` hay `403`; Rollout `Degraded true` với message
+`RolloutAborted…`; trọng số `100 0` (canary không được promote, bản stable nhận mọi request). Rồi chờ cảnh báo (khoảng 12 phút sau abort: `for`
+10 phút, `rule_query_offset` 60 s, chu kỳ đánh giá):
+
+```sh
+amp_get api/v1/alerts | jq -r '.data.alerts[] | "\(.labels.alertname) \(.labels.name // "-") \(.labels.severity) \(.state) \(.activeAt)"'
+```
+
+Mong dòng `ArgoCDApplicationDegraded gateway page firing` (Application cha có thể có dòng của mình); vài phút sau một thư SNS của topic
+`svp-stg-alarms` tới `alarm_email` mang `ArgoCDApplicationDegraded`, `severity` `page` và `runbook_url`
+`…/docs/runbooks/argocd-application-degraded.md`. Dán dòng `firing`, tiêu đề và giờ nhận thư, nguyên văn phần thân (che account). Không thư:
+đọc lại subscription (mục 3–5), rồi dán output của `amp_get api/v1/alerts`.
+
+Trả lại, rồi canary đi tiếp **trong lúc k6 giữ tải** (canary cần ít nhất 30 response không 4xx mỗi phút: chờ mốc `k6-<n>-start` của một bậc
+trong `timeline.tsv` cộng 2 phút lên tải; còn ≥ 6 phút giữ tải):
+
+```sh
+aws/scripts/check-account.sh stg
+AWS_PROFILE=anhnv-stg aws iam delete-role-policy --role-name svp-stg-argo-rollouts --policy-name svp-session-deny-query --region us-east-1
+AWS_PROFILE=anhnv-stg aws iam list-role-policies --role-name svp-stg-argo-rollouts --region us-east-1 --query PolicyNames --output text
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp patch rollout gateway --subresource=status --type=merge -p '{"status":{"abort":false}}'
+```
+
+Dòng `list-role-policies` không còn `svp-session-deny-query`. Lệnh `patch` là "retry" của Argo Rollouts (gỡ cờ abort): canary chạy lại từ 25 %,
+khoảng 3–4 phút. Đọc lại bằng khối đọc ở trên, rồi giá trị mọi lần đo của hai AnalysisRun mới nhất:
+
+```sh
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp get analysisruns.argoproj.io --sort-by=.metadata.creationTimestamp -o json |
+  jq -r '.items[-2:][] | "\(.metadata.name) \(.status.phase) \([.status.metricResults[]? | "\(.name)=\([.measurements[].value] | join(","))"] | join("; "))"'
+```
+
+Mong Rollout `Healthy` (cờ abort `false`), trọng số `100 0` sau khi promote xong, hai AnalysisRun (nền và `…-gate`) `Successful`, mọi
+giá trị ≥ 0 (không `-1`: số đo thật từ AMP). `Inconclusive` với `-1`: canary thiếu tải hay mẫu tới AMP trễ (trễ remote write ở (c));
+`Error` sau khi gỡ policy: chờ một phút rồi retry lại; còn thì dán output. Annotation ở lại trong `envs/stg/gateway.yaml` (không đổi gì
+ngoài pod template); bỏ nó là một revision mới, tức một canary nữa.
+
+Hai AnalysisRun thủ công, cùng metric `canary-5xx-ratio` của template `gateway-canary-gate` đọc từ cluster: một cái điều kiện thất bại luôn đúng
+(`result[0] >= -1`, mong `Failed`), một cái trỏ workspace không có (mong `Error`); không Rollout nào dùng chúng:
+
+```sh
+tpl=$(AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp get analysistemplate gateway-canary-gate -o json)
+jq '{apiVersion: "argoproj.io/v1alpha1", kind: "AnalysisRun",
+  metadata: {generateName: "session-check-failed-", namespace: "svp", labels: {"svp-session-check": "true"}},
+  spec: {metrics: [.spec.metrics[0] | del(.successCondition) | .failureCondition = "result[0] >= -1"]}}' <<<"$tpl" |
+  AWS_PROFILE=anhnv-stg kubectl --context svp-stg create -f -
+jq '{apiVersion: "argoproj.io/v1alpha1", kind: "AnalysisRun",
+  metadata: {generateName: "session-check-error-", namespace: "svp", labels: {"svp-session-check": "true"}},
+  spec: {metrics: [.spec.metrics[0] | .provider.prometheus.address |= sub("ws-[0-9a-f-]+"; "ws-00000000-0000-0000-0000-000000000000")]}}' <<<"$tpl" |
+  AWS_PROFILE=anhnv-stg kubectl --context svp-stg create -f -
+```
+
+Một phút sau, đọc rồi xoá:
+
+```sh
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp get analysisruns.argoproj.io -l svp-session-check=true -o json |
+  jq -r '.items[] | "\(.metadata.name) \(.status.phase) \(.status.metricResults[0].measurements[-1] | "\(.phase) \(.value // "") \(.message // "")")"'
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp delete analysisruns.argoproj.io -l svp-session-check=true
+```
+
+Mong `session-check-failed-… Failed Failed <số ≥ -1>` và `session-check-error-… Error Error … 404` (hay thông điệp không tìm thấy workspace).
+
+(e) Dữ liệu còn sau destroy (ADR-0063, "Xác nhận"): metric, log và trace của buổi nằm ở account, không ở cluster. Ghi lại **trước bước 12**,
+sau khi k6 xong, một khoảng thời gian tuyệt đối trong buổi và một trace của khoảng đó; rồi chạy lại đúng các truy vấn sau bước 20 (cùng ngày)
+và ở buổi kế. Kết quả nằm ở `.session/persist-stg/` (git bỏ qua, không commit; giữ qua các buổi, như thư mục buổi). `end` cách lúc ghi ít nhất 10
+phút, để mẫu, log, span đến trễ đã tới:
+
+```sh
+d=.session/persist-$E; mkdir -p "$d"
+printf 'start=%s\nend=%s\n' '<UTC đầu khoảng, sau mốc svp-root-healthy, vd 2026-11-20T03:30:00Z>' '<UTC cuối khoảng>' >"$d/window.env"
+. "$d/window.env"
+insights aws/spans "$(date -j -u -f %Y-%m-%dT%H:%M:%SZ "$start" +%s)" "$(date -j -u -f %Y-%m-%dT%H:%M:%SZ "$end" +%s)" \
+  'stats count(*) as spans by traceId | sort spans desc | limit 1'
+printf 'trace=%s\n' '<traceId vừa in>' >>"$d/window.env"
+# persist: đúng các truy vấn được so; đọc khoảng và trace từ window.env
+persist() {
+  local s e
+  . "$d/window.env"
+  s=$(date -j -u -f %Y-%m-%dT%H:%M:%SZ "$start" +%s); e=$(date -j -u -f %Y-%m-%dT%H:%M:%SZ "$end" +%s)
+  echo "== $start $end"
+  echo "== series per job"; promql "count by (job) (count_over_time(up{cluster=\"svp-$E\"}[$((e - s))s]))" "$e"
+  echo "== samples per job"; promql "sum by (job) (count_over_time(up{cluster=\"svp-$E\"}[$((e - s))s]))" "$e"
+  echo "== log records"; insights "/svp/$E/otel" "$s" "$e" 'stats count(*) as records' || echo "query failed"
+  echo "== spans of trace $trace"
+  insights aws/spans "$s" "$e" "filter traceId = \"$trace\" | stats count(*) as spans" || echo "query failed"
+}
+persist | tee "$d/before.txt"
+```
+
+Mong mỗi phần có dòng (series, số mẫu mỗi job, `records`, `spans` lớn hơn 0), không dòng `query failed`. Dán `window.env` (không có giá trị bí
+mật) và `before.txt`. Sau bước 20 cùng ngày (mục **Kết thúc buổi**) và ở buổi kế (trước bước 1, terminal có biến và hàm của khối dùng chung,
+`E`, `d` như trên):
+
+```sh
+persist | tee "$d/after-destroy.txt"; diff "$d/before.txt" "$d/after-destroy.txt" && echo same      # buổi kế: next-session.txt
+```
+
+Tiêu chí: `same`, tức metric bằng hệt (cùng series, cùng số), log và trace còn đủ. Khác: dán `diff`; ghi chênh lệch vào "Xác nhận". Buổi kế
+còn trong retention của workspace AMP, nhưng log ứng dụng và `aws/spans` giữ ngắn hơn (`log_retention_days`, `span_retention_days` ở `locals` của
+`aws/accounts/<env>`, ADR-0063 §10): quá hạn đó thì hai phần log, trace rỗng là đúng retention, ghi "ngoài retention", chỉ so metric.
+Dòng `query failed` là truy vấn hỏng, không phải dữ liệu mất: lỗi nằm trên terminal (stderr không vào file); sửa nguyên nhân (như
+`AWS_PROFILE=anhnv-$E aws sso login --region us-east-1` khi phiên SSO hết hạn) rồi chạy lại `persist`.
+
+(f) Quét sót: `sweep.sh stg` và `sweep.sh mgmt` sạch ở bước 19–20, cùng các loại mới (endpoint interface, rule groups namespace của AMP) và
+dòng `kept` của registry, observability.
 
 ### Finding bảo mật của buổi (sau bước 11, trước bước 12)
 
@@ -814,7 +1190,10 @@ chạy hay từ thư mục buổi mới. `FAIL kubeconfig context …` là accou
 1. ApplicationSet `svp-bootstrap` (nó dựng lại `svp-root`), `svp-root` và `svp-apps` (auto-sync prune + self-heal, không finalizer): xoá
    finalizer và `automated` của hai Application, rồi xoá riêng ba cái (child ở yên); tắt auto-sync của mọi Application còn lại (để
    `svp-cluster` không dựng lại Gateway).
-2. Application workload theo sync wave từ cao xuống (finalizer của mỗi cái xoá thứ nó triển khai), trừ `svp-cluster` và controller nền
+2. Trước hết luật và Alertmanager của AMP: xoá mọi `RuleGroupsNamespace`, `AlertManagerDefinition` của ACK khi controller ACK còn chạy (nó
+   xoá chúng ở AMP, chờ tối đa 5 phút); không pod ACK nào Ready hay quá hạn thì gỡ finalizer của chúng và in dòng `note left in AMP: …` kèm
+   lệnh xoá ở AMP (người học chạy sau bước 20; `sweep.sh stg` cũng liệt kê rule groups namespace còn lại). Mốc `pre-destroy-amp-rules`. Rồi
+   Application workload theo sync wave từ cao xuống (finalizer của mỗi cái xoá thứ nó triển khai), trừ `svp-cluster` và controller nền
    tảng (cả `karpenter`); rồi Gateway `svp-edge/svp`, rồi xoá tường minh TargetGroupBinding `envoy-gateway-system/svp-envoy` (chart
    `svp-cluster` render nó, không mất theo Gateway): LBC gỡ target của Envoy khỏi target group edge rồi mới thả nó, chờ có hạn. Chờ hết
    Service `LoadBalancer`, TargetGroupBinding, load balancer và target group mang tag `elbv2.k8s.aws/cluster=svp-stg` trong ELBv2 (của
@@ -914,6 +1293,11 @@ EKS, RDS tự tạo ngoài state và log broker `/aws/msk/svp-*`), Secrets Manag
 key, bản ghi của zone của account ngoài `NS`, `SOA`, `CAA` ở đỉnh và ngoài mọi `NS` dưới đỉnh (uỷ quyền zone con của baseline). Mỗi loại in theo thứ
 tự AWS cho xoá (cluster trước configuration, replication group trước user group, user group trước user).
 
+Nền tảng managed thêm các loại: endpoint interface `svp-<env>-<dịch vụ>` và security group `svp-<env>-endpoints` (của root env, sót là
+lỗi); rule groups namespace của AMP (ACK tạo mỗi buổi, `pre-destroy.sh` xoá; sót là ruler còn đánh giá và tính tiền); workspace AMP, workspace
+Grafana, repo ECR, rule pull-through cache cùng repo do cache tạo (không tag), IAM OIDC provider và role `svp-ci-*` của root
+`aws/accounts/<env>`: in là `kept` khi account giữ `Stack=baseline`.
+
 Edge thêm các loại: cert ACM tag `Project=svp` (region nhà và `us-east-1`), VPC origin CloudFront, security group
 `CloudFront-VPCOrigins-Service-SG` trong VPC của lab (loại riêng: xoá tay chỉ khi không còn VPC origin), delivery, delivery source và delivery
 destination của CloudWatch Logs (`us-east-1`), topic SNS `svp-*`; alarm, log group, topic SNS, KMS key và alias ở `us-east-1` (cái mang tag
@@ -921,8 +1305,8 @@ destination của CloudWatch Logs (`us-east-1`), topic SNS `svp-*`; alarm, log g
 ACL của edge theo bộ lọc ELBv2, WAF có sẵn.
 
 Được giữ, in thành dòng riêng, không đếm: tài nguyên tag `Stack=baseline` ở account stg (bucket state, KMS key state, zone `stg.aws.<domain>`
-với `NS`, `SOA`, `CAA` ở đỉnh) và ở account prd (thêm, ở `us-east-1`: key KMS DNSSEC, hai alarm DNSSEC, log group query log, topic
-`svp-prd-dns-alarms` và key của nó)
+với `NS`, `SOA`, `CAA` ở đỉnh; registry ECR, AMP, AMG, OIDC provider, role CI) và ở account prd (thêm, ở `us-east-1`: key KMS DNSSEC,
+hai alarm DNSSEC, log group query log, topic `svp-prd-dns-alarms` và key của nó)
 và `Stack=bootstrap|org` ở management (bucket state, bucket và KMS key của trail; management không có hosted zone) là `kept`, gói đã có
 lịch huỷ (`scheduledChange.changeType` `CANCELLATION`, chỉ gói trả phí; gói Free huỷ ngay) cũng là `kept`; KMS key ở trạng thái `PendingDeletion` (key của root env sau destroy: RDS, MSK, alarm, Secrets của EKS; tối thiểu 7 ngày) là `pending deletion`. Tìm: `ok nothing left
 in account … but what it keeps` (exit 0) ở **cả hai lượt**. Có dòng `FAIL <loại>: N left`: dưới mỗi tài nguyên sót là dòng `delete:` với lệnh
@@ -1097,6 +1481,31 @@ Bản ghi `NS` dưới đỉnh là uỷ quyền do baseline tạo (ở zone prd:
 Ở zone prd dùng cùng
 khối với `AWS_PROFILE=anhnv-prd`, `zone=aws.<domain>`, `aws/accounts/prd`. Management không có zone nên lượt `mgmt` không có bản ghi nào để xoá.
 
+Luật và Alertmanager của AMP sót (dòng `note left in AMP: …` của `pre-destroy.sh`, hay `AMP rule groups namespaces` của `sweep.sh`): xoá bằng
+lệnh dòng đó in, rồi đọc lại tới khi rỗng; workspace thì giữ (`kept`):
+
+```sh
+aws/scripts/check-account.sh stg
+ws=$(AWS_PROFILE=anhnv-stg terraform -chdir=aws/accounts/stg output -raw amp_workspace_id)
+AWS_PROFILE=anhnv-stg aws amp delete-rule-groups-namespace --workspace-id "$ws" --name <tên> --region ap-southeast-1
+AWS_PROFILE=anhnv-stg aws amp delete-alert-manager-definition --workspace-id "$ws" --region ap-southeast-1
+AWS_PROFILE=anhnv-stg aws amp list-rule-groups-namespaces --workspace-id "$ws" --region ap-southeast-1 --query 'ruleGroupsNamespaces[].name' --output text
+```
+
+Policy tạm `svp-session-deny-query` của phép kiểm canary (mục Phép kiểm nền tảng managed (d)) còn trên role `svp-stg-argo-rollouts`: gỡ trước
+destroy của root env (lệnh `delete-role-policy` của mục đó): Terraform không biết policy này, nên destroy có thể đỏ ở role đó (`DeleteConflict`).
+
+Role CI `svp-ci-*` hay IAM OIDC provider mà `sweep.sh` in là sót (không `kept`: account không còn giữ `Stack=baseline`, tức `aws/accounts/<env>` đã
+gỡ dở): Terraform của root đó là đường chính (mục "Gỡ baseline" của [README `aws/accounts`](../../aws/accounts/README.md#gỡ-baseline-có-chủ-đích));
+khi state mất, gỡ mọi policy inline của role rồi xoá role:
+
+```sh
+aws/scripts/check-account.sh stg
+AWS_PROFILE=anhnv-stg aws iam list-role-policies --role-name <svp-ci-…> --region us-east-1 --query PolicyNames --output text
+AWS_PROFILE=anhnv-stg aws iam delete-role-policy --role-name <svp-ci-…> --policy-name <từng tên trên> --region us-east-1
+AWS_PROFILE=anhnv-stg aws iam delete-role --role-name <svp-ci-…> --region us-east-1
+```
+
 **Secret Secrets Manager đang chờ xoá** (dòng `scheduled for deletion since …`): vẫn giữ tên tới hết thời gian chờ (7–30 ngày), nên
 **chặn tạo lại secret cùng tên** ở buổi sau (entry `svp/stg/*` do Terraform tạo với `recovery_window_in_days = 0` nên xoá ngay; dòng này là
 secret tạo cách khác). Secret master của RDS mang tên sinh ngẫu nhiên (`rds!db-<uuid>`), không chặn buổi sau, nhưng `sweep.sh` vẫn đếm nó tới
@@ -1182,7 +1591,12 @@ Không sửa entry hay Secret bằng tay, không ghi mật khẩu Kafka, Valkey 
    Phép kiểm (f) của ADR-0053 là cùng hai lượt sweep sạch: không còn dòng MSK, ElastiCache, `AmazonMSK_*` nào; KMS key của root env chỉ ở
    `pending deletion`. Phép kiểm `pre-destroy.sh` của ADR-0056: cùng lượt đó không còn instance, launch template, instance profile, hàng đợi
    SQS hay rule EventBridge nào của Karpenter.
-2. Cái ở lại giữa các buổi: ở account stg là baseline (`Stack=baseline`: bucket state, KMS key state, zone `stg.aws.<domain>` với `CAA`) và
+   Rồi chạy lại truy vấn dữ liệu đã ghi trước bước 12 (mục Phép kiểm nền tảng managed (e), `after-destroy.txt`), cùng ngày; dán `diff`.
+   Buổi đầu có span của account: retention của `aws/spans` theo bước (10) của
+   [`platform-setup.md`](platform-setup.md#bước-10-retention-của-awsspans).
+2. Cái ở lại giữa các buổi: ở account stg là baseline (`Stack=baseline`: bucket state, KMS key state, zone `stg.aws.<domain>` với `CAA`;
+   registry ECR cùng repo phát hành, rule và repo của pull-through cache, OIDC provider, role CI; workspace AMP, log group `/svp/stg/otel`,
+   Transaction Search của X-Ray cùng `aws/spans`, workspace AMG, hai key KMS của chúng) và
    baseline bảo mật (`Stack=security-baseline`: CMK EBS `alias/svp-ebs`; recorder Config, rule `svp-security-*` không phải tài nguyên `sweep.sh`
    liệt kê); ở account prd là hai baseline của nó, gồm zone `aws.<domain>` với `CAA`, bản ghi `NS` uỷ quyền `stg.aws.<domain>`, DNSSEC, query
    log và topic alarm DNSSEC (`sweep.sh` in chúng là `kept`); ở account Log Archive, bucket log CloudFront và delivery destination;

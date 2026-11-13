@@ -3,7 +3,8 @@
 Module nội bộ mỏng bọc [`terraform-aws-modules/eks/aws`](https://registry.terraform.io/modules/terraform-aws-modules/eks/aws/21.29.0)
 **21.29.0** (ghim chính xác): control plane, nhóm node hệ thống (managed node group Graviton on-demand), addon EKS, security group, IAM của
 cluster và node; submodule `karpenter` cùng version tạo IAM, hàng đợi interruption và rule EventBridge cho Karpenter; module nội bộ thêm role
-IAM và association EKS Pod Identity cho hai controller nền tảng (Load Balancer Controller, EBS CSI driver); không controller nào của cluster
+IAM và association EKS Pod Identity cho hai controller nền tảng (Load Balancer Controller, EBS CSI driver) và năm workload nền tảng
+(Collector, Prometheus agent, ACK, Kyverno, Argo Rollouts), cùng quyền pull-through cache của role node; không controller nào của cluster
 ghi DNS. Mức stg và prd chỉ khác ở biến (bảng dưới), một bộ code. Thiết kế node, Karpenter và version ghim: [ADR-0056](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0056-eks-platform-ha.md).
 
 Không có provider nào trong module (kể cả provider Kubernetes hay Helm: StorageClass `gp3` mặc định do chart `svp-cluster` render, controller
@@ -29,8 +30,19 @@ module "eks" {
   endpoint_public_access       = true
   endpoint_public_access_cidrs = var.eks_public_access_cidrs # *.auto.tfvars không commit
   system_node_max_size         = 4
+  guardduty_data_endpoint_id   = module.network.guardduty_data_endpoint_id
+
+  amp_workspace_arn         = "arn:aws:aps:ap-southeast-1:000000000000:workspace/ws-0123abcd-4567-89ef-0123-456789abcdef"
+  log_group_arn             = "arn:aws:logs:ap-southeast-1:000000000000:log-group:/svp/stg/otel"
+  observability_kms_key_arn = "arn:aws:kms:ap-southeast-1:000000000000:key/0123abcd-4567-89ef-0123-456789abcdef"
+  ecr_kms_key_arn           = "arn:aws:kms:ap-southeast-1:000000000000:key/89abcdef-0123-4567-89ab-cdef01234567"
+  release_repository_arns   = ["arn:aws:ecr:ap-southeast-1:000000000000:repository/svp-backend/gateway"]
+  ecr_cache_prefixes        = ["ghcr", "docker-hub", "quay", "k8s", "ecr-public"]
 }
 ```
+
+Sáu biến cuối là tài nguyên sống lâu của root `aws/accounts/<env>` (module `observability`, `registry`); root env đọc chúng bằng data
+source theo tên suy từ `svp-<env>`, không ghi cứng ARN như ví dụ.
 
 <!-- markdownlint-disable MD033 -->
 <!-- BEGIN_TF_DOCS -->
@@ -60,27 +72,45 @@ module "eks" {
 | ---- | ---- |
 | [aws_eks_addon.guardduty_agent](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/eks_addon) | resource |
 | [aws_eks_pod_identity_association.aws_load_balancer_controller](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/eks_pod_identity_association) | resource |
+| [aws_eks_pod_identity_association.pod_identity](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/eks_pod_identity_association) | resource |
 | [aws_iam_policy.aws_load_balancer_controller](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_policy) | resource |
 | [aws_iam_role.aws_load_balancer_controller](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role) | resource |
 | [aws_iam_role.ebs_csi](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role) | resource |
+| [aws_iam_role.pod_identity](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role) | resource |
+| [aws_iam_role_policy.node_ecr_cache](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy) | resource |
+| [aws_iam_role_policy.pod_identity](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy) | resource |
 | [aws_iam_role_policy_attachment.aws_load_balancer_controller](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy_attachment) | resource |
 | [aws_iam_role_policy_attachment.ebs_csi](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy_attachment) | resource |
+| [aws_caller_identity.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/caller_identity) | data source |
+| [aws_iam_policy_document.ack_prometheusservice](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
+| [aws_iam_policy_document.argo_rollouts](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
 | [aws_iam_policy_document.karpenter_trust](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
+| [aws_iam_policy_document.kyverno_admission](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
+| [aws_iam_policy_document.node_ecr_cache](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
+| [aws_iam_policy_document.otel_collector](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
 | [aws_iam_policy_document.pod_identity_trust](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
+| [aws_iam_policy_document.prometheus_agent](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
 | [aws_partition.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/partition) | data source |
+| [aws_region.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/region) | data source |
 
 ## Inputs
 
 | Name | Description | Type | Default | Required |
 | ---- | ----------- | ---- | ------- | :------: |
+| amp\_workspace\_arn | ARN of the Amazon Managed Service for Prometheus workspace of the env (output amp\_workspace\_arn of the observability module): the Collector and the Prometheus agent write to it, Argo Rollouts queries it, the ACK controller manages its rules and alert manager definition. | `string` | n/a | yes |
 | control\_plane\_log\_retention\_days | Days CloudWatch keeps the control plane logs when control\_plane\_log\_types is not empty. | `number` | `1` | no |
 | control\_plane\_log\_types | Control plane logs sent to CloudWatch, e.g. ["api", "audit"]. Empty (the default) sends none and creates no log group: ingestion is billed per GB. | `list(string)` | `[]` | no |
+| ecr\_cache\_prefixes | Repository prefixes of the pull through cache rules of the env's registry (output cache\_prefixes of the registry module). Nodes may import images and create repositories under <prefix>/* only. | `list(string)` | n/a | yes |
+| ecr\_kms\_key\_arn | ARN of the KMS key alias/svp-<env>-ecr (output kms\_key\_arn of the registry module), which encrypts every repository of the env's registry. Nodes may decrypt with it only through ECR of the region when they pull an image. | `string` | n/a | yes |
 | endpoint\_public\_access | Open the public endpoint of the Kubernetes API, reachable only from endpoint\_public\_access\_cidrs. The private endpoint is always on, so nodes and pods reach the API inside the VPC either way. | `bool` | `false` | no |
 | endpoint\_public\_access\_cidrs | IPv4 ranges allowed to call the public endpoint of the Kubernetes API, e.g. the address of the learner's machine as a /32. Personal data of a public repository: set it in an uncommitted *.auto.tfvars or TF\_VAR\_endpoint\_public\_access\_cidrs. | `list(string)` | `[]` | no |
 | guardduty\_data\_endpoint\_id | ID of the interface endpoint guardduty-data of the VPC (output guardduty\_data\_endpoint\_id of the network module). The GuardDuty agent add-on is created after it, so the agent's first reports have a way out. | `string` | n/a | yes |
 | kubernetes\_version | Kubernetes minor version of the control plane and of the node group, e.g. 1.36. Pick a minor in standard support: the cluster is created with the STANDARD support policy. | `string` | n/a | yes |
+| log\_group\_arn | ARN, without a trailing :*, of the log group /svp/<env>/otel of the observability module (output log\_group\_arn). The Collector writes to its stream otel-collector. | `string` | n/a | yes |
 | name | Name of the EKS cluster, e.g. svp-stg, and prefix of the names of its IAM roles, policies, security groups and node group. | `string` | n/a | yes |
+| observability\_kms\_key\_arn | ARN of the KMS key alias/svp-<env>-observability (output kms\_key\_arn of the observability module), which encrypts the log group the Collector writes to. | `string` | n/a | yes |
 | private\_subnet\_ids | Private subnets of the VPC, one per availability zone (output private\_subnet\_ids of the network module). The control plane's network interfaces and the nodes go into every one of them, so pods spread over all these zones. | `list(string)` | n/a | yes |
+| release\_repository\_arns | ARNs of the release repositories of the env's registry (values of output release\_repository\_arns of the registry module). The Kyverno admission controller reads images, signatures and attestations there. | `list(string)` | n/a | yes |
 | secrets\_kms\_encryption | Envelope-encrypt Kubernetes Secrets with a customer managed KMS key the module creates (alias <name>-eks-secrets, rotated yearly, 7-day deletion window). Off by default: EKS encrypts them with an AWS owned key, and a key of our own costs a month's fee and outlives the cluster for the deletion window. | `bool` | `false` | no |
 | system\_node\_instance\_type | Graviton (arm64) instance type of the system node group, On-Demand in every env. It holds what runs before Karpenter has a node of its own (add-ons, Argo CD, Karpenter), one replica of Karpenter per node. | `string` | `"m7g.large"` | no |
 | system\_node\_max\_size | Largest number of nodes of the system node group, room to scale it by hand. It starts with one node per zone (the number of private\_subnet\_ids) and nothing scales it on its own. | `number` | n/a | yes |
@@ -116,6 +146,8 @@ module "eks" {
 | `control_plane_log_retention_days` | (không dùng) | chốt khi dựng prd |
 | `system_node_instance_type` | mặc định | như stg |
 | `system_node_max_size` | 2 × số AZ | 2 × số AZ |
+| `amp_workspace_arn`, `log_group_arn`, `observability_kms_key_arn` | workspace AMP, log group `/svp/stg/otel`, khoá của `observability` stg | như stg, của prd |
+| `ecr_kms_key_arn`, `release_repository_arns`, `ecr_cache_prefixes` | khoá, repo phát hành, tiền tố cache của `registry` stg | như stg, của prd |
 
 Endpoint public mặc định tắt để module an toàn khi gọi thiếu biến; root của stg bật và đưa CIDR. **Vì sao private luôn bật:** giới hạn
 CIDR public mà tắt private thì node trong subnet private gọi API qua IP của NAT, IP đó không nằm trong danh sách, node không join được
@@ -176,8 +208,26 @@ API, gồm Secret, bằng key do AWS sở hữu theo mặc định), OIDC provid
 | --- | --- | --- | --- |
 | AWS Load Balancer Controller | `kube-system` / `aws-load-balancer-controller` | `<name>-aws-load-balancer-controller` | managed policy cùng tên, nội dung là `docs/install/iam_policy.json` của tag **v3.6.2** giữ nguyên ở `policies/aws-load-balancer-controller-v3.6.2.json`; chart `eks/aws-load-balancer-controller` phải ghim **3.6.2** (appVersion v3.6.2), nâng controller thì thay file bằng policy của tag mới trong cùng thay đổi |
 | EBS CSI driver | `kube-system` / `ebs-csi-controller-sa` | `<name>-ebs-csi-driver` | managed `service-role/AmazonEBSCSIDriverPolicy`; association do chính addon tạo (`pod_identity_association`) |
+| OpenTelemetry Collector | `svp-obs` / `otel-collector` | `<name>-otel-collector` | `aps:RemoteWrite` trên workspace; `logs:PutLogEvents` trên stream `otel-collector` của `log_group_arn`; `kms:Encrypt`, `Decrypt`, `ReEncrypt*`, `GenerateDataKey*`, `DescribeKey` trên `observability_kms_key_arn` với `kms:ViaService` = `logs.<region>.amazonaws.com`; `xray:PutTraceSegments` trên `*` |
+| Prometheus agent (2 replica, một association) | `svp-obs` / `kps-prometheus` | `<name>-prometheus-agent` | `aps:RemoteWrite` trên workspace |
+| ACK prometheusservice controller | `svp-obs` / `ack-prometheusservice-controller` | `<name>-ack-prometheusservice` | `aps:Create`, `Put`, `Describe`, `DeleteRuleGroupsNamespace`, `TagResource`, `UntagResource`, `ListTagsForResource` trên `rulegroupsnamespace/<ws>/*`; `aps:Create`, `Put`, `Describe`, `DeleteAlertManagerDefinition`, `ListRuleGroupsNamespaces` trên workspace |
+| Kyverno admission controller | `kyverno` / `kyverno-admission-controller` | `<name>-kyverno-admission` | `ecr:GetAuthorizationToken` trên `*`; `ecr:BatchGetImage`, `GetDownloadUrlForLayer` trên `release_repository_arns`; không KMS |
+| Argo Rollouts | `argo-rollouts` / `argo-rollouts` | `<name>-argo-rollouts` | `aps:QueryMetrics` trên workspace (phân tích canary chỉ chạy truy vấn tức thời) |
 
-Trust policy của hai role: `pods.eks.amazonaws.com`, `sts:AssumeRole` + `sts:TagSession`, kèm condition trên session tag mà Pod Identity
+Năm role cuối mang policy inline cùng tên role (`local.pod_identity_roles` ở `iam.tf`), association ở `pod-identity.tf`. Không action
+`*`; resource `*` chỉ cho `ecr:GetAuthorizationToken` và `xray:PutTraceSegments`, hai action không có resource type theo Service
+Authorization Reference. Không role nào trong bảng có quyền KMS của ECR: ECR giải mã repo mã hoá bằng key của khách hàng qua grant của
+chính nó.
+Action, resource theo [ADR-0062](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0062-ecr-registry-ci-oidc.md) §9 và
+[ADR-0063](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0063-managed-observability.md) §11.
+
+**Pull-through cache trên role node:** policy inline `<name>-ecr-pull-through-cache` trên role của nhóm `system` và role node Karpenter:
+`ecr:BatchImportUpstreamImage`, `ecr:CreateRepository` chỉ trên `repository/<tiền tố>/*` của từng tiền tố trong `ecr_cache_prefixes`
+(lần kéo đầu một image chưa có trong cache: node nhập image từ upstream vào repo nó tạo), và `kms:Decrypt` trên `ecr_kms_key_arn` chỉ với
+`kms:ViaService` = `ecr.<region>.amazonaws.com` (dùng khoá của registry chỉ qua ECR khi kéo image). Node không tạo hay ghi được repo phát
+hành; kéo vẫn qua managed policy đọc ECR có sẵn của role node.
+
+Trust policy của mọi role trong bảng: `pods.eks.amazonaws.com`, `sts:AssumeRole` + `sts:TagSession`, kèm condition trên session tag mà Pod Identity
 đặt (`aws:RequestTag/eks-cluster-name` = `name`, `…/kubernetes-namespace`, `…/kubernetes-service-account` đúng cặp ở bảng): association
 của cluster khác hay ServiceAccount khác không dùng được role dù có ai tạo. Chart cài controller phải dùng đúng namespace và tên
 ServiceAccount ở bảng (Pod Identity không cần annotation trên ServiceAccount).

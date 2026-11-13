@@ -19,14 +19,15 @@ Nguồn Secret của cluster EKS một env trong AWS Secrets Manager và quyền
 
 - Map namespace → entry (`local.namespace_entries` ở `main.tf`) là các `remoteRef` key của ExternalSecret mà chart `svp-cluster` của repo
   code render với store `aws`, object store managed (`s3.mode: external`), Kafka và Valkey ngoài cluster
-  (`externalSecrets.localKafkaValkey: false`) và Argo CD notifications bật. Khi đó chart không render entry của object store trong
-  cluster (`s3-root`, `s3-users`, `pg-backup-s3`) hay của CA local (`local-ca`, `local-tls`), nên map không có chúng. Map chép từ render
-  của `origin/main`, chart giải nén bằng `git archive` vào một thư mục trống:
+  (`externalSecrets.localKafkaValkey: false`), Argo CD notifications và Grafana Operator bật. Khi đó chart không render entry của object
+  store trong cluster (`s3-root`, `s3-users`, `pg-backup-s3`) hay của CA local (`local-ca`, `local-tls`), nên map không có chúng. Map chép
+  từ render của `origin/main`, chart giải nén bằng `git archive` vào một thư mục trống:
 
   ```sh
   helm template svp-cluster deploy/helm/svp-cluster --namespace svp --show-only templates/external-secrets.yaml \
     --set externalSecrets.enabled=true --set externalSecrets.store=aws --set externalSecrets.prefix=svp/stg/ \
     --set s3.mode=external --set externalSecrets.argocdNotifications=true --set externalSecrets.localKafkaValkey=false \
+    --set externalSecrets.grafanaOperator=true \
     --set externalSecrets.aws.region=ap-southeast-1 --set externalSecrets.aws.roles.<namespace>=<arn>   # mỗi namespace
   ```
 

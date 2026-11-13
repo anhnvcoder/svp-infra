@@ -12,8 +12,9 @@
 # an alias of the lab still on such a key is counted: it keeps its name, so the next session cannot make it again.
 
 # Reads the home region, and us-east-1 for what CloudFront keeps there (web ACLs, pricing plans, certificates, log
-# deliveries) and for the kinds a baseline keeps there too (the DNSSEC alarms of prd, its query log group, their SNS
-# topic and KMS keys): each of those kinds reads the Stack tag, so what a baseline keeps is "kept" in either region.
+# deliveries), for the OIDC providers and roles of CI (IAM is global, its endpoint in us-east-1) and for the kinds a
+# baseline keeps there too (the DNSSEC alarms of prd, its query log group, their SNS topic and KMS keys): each of those
+# kinds reads the Stack tag, so what a baseline keeps is "kept" in either region.
 
 # Design notes: README.md.
 
@@ -155,11 +156,11 @@ nat_gateways() {
 
 addresses() { q '.Addresses[] | "\(.AllocationId) \(.PublicIp) \(.AssociationId // "unassociated")"' ec2 describe-addresses --filters "$svp_tag"; }
 
-# Endpoints of the lab or in its VPCs left, such as the interface endpoint guardduty-data, billed by the hour, or one
-# GuardDuty makes itself outside any state when its agent management is on. Their network interfaces go with them.
+# Endpoints of the lab or in its VPCs left, such as the interface endpoints svp-<env>-<service>, billed by the hour, or
+# one GuardDuty makes itself outside any state when its agent management is on. Their network interfaces go with them.
 vpc_endpoints() {
   local f
-  for f in "$svp_tag" $(vpc_filter); do
+  for f in "$svp_tag" 'Name=tag:Name,Values=svp-*' $(vpc_filter); do
     q '.VpcEndpoints[] | select((.State | ascii_downcase) != "deleted") | "\(.VpcEndpointId) \(.VpcEndpointType) \(.ServiceName) \(.State)"' \
       ec2 describe-vpc-endpoints --filters "$f" || return 1
   done
@@ -183,7 +184,7 @@ interfaces() {
 
 security_groups() {
   local f
-  for f in "$svp_tag" "$k8s_tag" 'Name=tag:elbv2.k8s.aws/cluster,Values=svp-*' $(vpc_filter); do
+  for f in "$svp_tag" "$k8s_tag" 'Name=tag:elbv2.k8s.aws/cluster,Values=svp-*' 'Name=group-name,Values=svp-*' $(vpc_filter); do
     q '.SecurityGroups[] | select(.GroupName | startswith("CloudFront-VPCOrigins-Service-SG") | not) | "\(.GroupId) \(.GroupName)"' \
       ec2 describe-security-groups --filters "$f" || return 1
   done
@@ -416,14 +417,21 @@ log_groups() {
   done <<<"$lines"
 }
 
-# Secrets of the lab (the SCRAM secrets of MSK included), and the master secret RDS keeps for an instance svp-* (tag
-# aws:rds:primaryDBInstanceArn); one scheduled for deletion is listed with its date: until then no secret of that name
-# can be made.
+# Secrets of the lab (MSK's SCRAM secrets included) and RDS's master secret for an instance svp-* (tag
+# aws:rds:primaryDBInstanceArn); one scheduled for deletion shows its date: its name stays taken until then.
+# One with a kept Stack (the pull-through cache credentials, named by ECR, not by us) goes to the kept list.
 secrets() {
-  q '.SecretList[] | select((.Name | startswith("svp")) or (.Name | startswith("AmazonMSK_svp-")) or any(.Tags[]?; (.Key == "Project" and .Value == "svp")
+  local lines name stack
+  # shellcheck disable=SC2016 # $stack is jq's, not the shell's
+  lines=$(q '.SecretList[] | select((.Name | startswith("svp")) or (.Name | startswith("AmazonMSK_svp-")) or any(.Tags[]?; (.Key == "Project" and .Value == "svp")
       or (.Key == "aws:rds:primaryDBInstanceArn" and (.Value | test(":db:svp-")))))
-    | "\(.Name)\(if .DeletedDate then " (scheduled for deletion since \(.DeletedDate))" else "" end)"' \
-    secretsmanager list-secrets --include-planned-deletion
+    | ([.Tags[]? | select(.Key == "Stack") | .Value][0] // "") as $stack
+    | "\(.Name)\(if .DeletedDate then " (scheduled for deletion since \(.DeletedDate))" else "" end)\t\($stack)"' \
+    secretsmanager list-secrets --include-planned-deletion) || return 1
+  while IFS=$'\t' read -r name stack; do
+    [ -n "$name" ] || continue
+    if is_kept "$stack"; then keep "kept  secret $name (Stack=$stack)"; else echo "$name"; fi
+  done <<<"$lines"
 }
 
 # KMS keys behind an alias of the lab (alias/svp*, alias/eks/svp-*) or tagged Project=svp, each read once:
@@ -484,6 +492,106 @@ records() {
       | select((.Name == $apex and (.Type == "SOA" or .Type == "CAA")) | not)
       | select((.Type == "NS" and (.Name == $apex or (.Name | endswith("." + $apex)))) | not)
       | "\(.Name) \(.Type)"' route53 list-resource-record-sets --hosted-zone-id "$id" || return 1
+  done
+}
+
+# The pull-through cache rules and the repositories ECR makes for them carry no tags: aws/accounts/<env> makes the
+# rules, so both are kept in an account that keeps its Stack, and any other rule is left.
+cache_stack=baseline
+cache_prefixes=" ghcr docker-hub quay k8s ecr-public "
+is_cache_prefix() { case $cache_prefixes in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+
+cache_rules() {
+  local lines prefix upstream
+  lines=$(q '.pullThroughCacheRules[]? | "\(.ecrRepositoryPrefix) \(.upstreamRegistryUrl)"' ecr describe-pull-through-cache-rules) ||
+    return 1
+  while read -r prefix upstream; do
+    [ -n "$prefix" ] || continue
+    if is_kept "$cache_stack" && is_cache_prefix "$prefix"; then
+      keep "kept  ECR pull-through cache rule $prefix ($upstream)"
+    else
+      echo "$prefix $upstream"
+    fi
+  done <<<"$lines"
+}
+
+# ECR repositories of the lab: the release ones (svp-backend/*, svp-frontend/*, tagged) and those the cache made.
+ecr_repositories() {
+  local lines name arn tags stack
+  lines=$(q '.repositories[] | select(.repositoryName | test("^(svp-[^/]+|ghcr|docker-hub|quay|k8s|ecr-public)/"))
+    | "\(.repositoryName)\t\(.repositoryArn)"' ecr describe-repositories) || return 1
+  printing && lines=$(printf '%s\t%s' '<each-repository-above>' '<its-ARN>')
+  while IFS=$'\t' read -r name arn; do
+    [ -n "$name" ] || continue
+    if is_cache_prefix "${name%%/*}"; then
+      if is_kept "$cache_stack"; then keep "kept  ECR repository $name (made by the pull-through cache)"; else echo "$name"; fi
+      continue
+    fi
+    tags=$(aws_ ecr list-tags-for-resource --resource-arn "$arn" --output json) || return 1
+    printing && continue
+    stack=$(jq -r '[.tags[]? | select(.Key == "Stack") | .Value][0] // ""' <<<"$tags")
+    if is_kept "$stack"; then keep "kept  ECR repository $name (Stack=$stack)"; else echo "$name${stack:+ Stack=$stack}"; fi
+  done <<<"$lines"
+}
+
+# AMP workspaces svp-<env>, which aws/accounts/<env> keeps between sessions.
+amp_workspaces() {
+  local lines id alias stack
+  lines=$(q '.workspaces[]? | select((.alias // "") | startswith("svp-")) | "\(.workspaceId)\t\(.alias)\t\(.tags.Stack // "")"' \
+    amp list-workspaces) || return 1
+  while IFS=$'\t' read -r id alias stack; do
+    [ -n "$id" ] || continue
+    if is_kept "$stack"; then keep "kept  AMP workspace $id $alias (Stack=$stack)"; else echo "$id $alias${stack:+ Stack=$stack}"; fi
+  done <<<"$lines"
+}
+
+# The rule groups namespaces ACK makes in those workspaces each session, which pre-destroy.sh deletes: one left keeps
+# its ruler evaluating, billed, until the next session.
+amp_rule_groups() {
+  local ids id
+  ids=$(q '.workspaces[]? | select((.alias // "") | startswith("svp-")) | .workspaceId' amp list-workspaces) || return 1
+  printing && ids='<each-workspace-above>'
+  for id in $ids; do
+    q '.ruleGroupsNamespaces[]? | "\(.name) \(.arn | split("/")[1])"' amp list-rule-groups-namespaces --workspace-id "$id" ||
+      return 1
+  done
+}
+
+# Amazon Managed Grafana workspaces svp-<env>, which aws/accounts/<env> keeps between sessions.
+grafana_workspaces() {
+  local lines id name stack
+  lines=$(q '.workspaces[]? | select((.name // "") | startswith("svp-")) | "\(.id)\t\(.name)\t\(.tags.Stack // "")"' \
+    grafana list-workspaces) || return 1
+  while IFS=$'\t' read -r id name stack; do
+    [ -n "$id" ] || continue
+    if is_kept "$stack"; then keep "kept  Grafana workspace $id $name (Stack=$stack)"; else echo "$id $name${stack:+ Stack=$stack}"; fi
+  done <<<"$lines"
+}
+
+# IAM OIDC providers tagged Project=svp (GitHub's for the roles of CI); an untagged one is never touched.
+oidc_providers() {
+  local arns arn tags stack
+  arns=$(q '.OpenIDConnectProviderList[]?.Arn' iam list-open-id-connect-providers) || return 1
+  printing && arns='<each-provider-above>'
+  for arn in $arns; do
+    tags=$(aws_ iam list-open-id-connect-provider-tags --open-id-connect-provider-arn "$arn" --output json) || return 1
+    printing && continue
+    jq -e 'any(.Tags[]?; .Key == "Project" and .Value == "svp")' <<<"$tags" >/dev/null || continue
+    stack=$(stack_tag <<<"$tags")
+    if is_kept "$stack"; then keep "kept  IAM OIDC provider $arn (Stack=$stack)"; else echo "$arn${stack:+ Stack=$stack}"; fi
+  done
+}
+
+# The roles GitHub Actions assumes to push to ECR (svp-ci-*).
+ci_roles() {
+  local names n tags stack
+  names=$(q '.Roles[] | select(.RoleName | startswith("svp-ci-")) | .RoleName' iam list-roles) || return 1
+  printing && names='<each-role-above>'
+  for n in $names; do
+    tags=$(aws_ iam list-role-tags --role-name "$n" --output json) || return 1
+    printing && continue
+    stack=$(stack_tag <<<"$tags")
+    if is_kept "$stack"; then keep "kept  IAM role $n (Stack=$stack)"; else echo "$n${stack:+ Stack=$stack}"; fi
   done
 }
 
@@ -551,6 +659,13 @@ sweep_kind "EventBridge rules of Karpenter" event_rules \
 sweep_kind "CloudWatch alarms" alarms "aws cloudwatch delete-alarms --alarm-names {}"
 sweep_kind "CloudWatch log groups" log_groups "aws logs delete-log-group --log-group-name {}"
 sweep_kind "SNS topics" sns_topics "aws sns delete-topic --topic-arn {}"
+sweep_kind "AMP rule groups namespaces" amp_rule_groups "aws amp delete-rule-groups-namespace --name {} --workspace-id {rest}"
+sweep_kind "AMP workspaces" amp_workspaces "aws amp delete-workspace --workspace-id {}"
+sweep_kind "Managed Grafana workspaces" grafana_workspaces "aws grafana delete-workspace --workspace-id {}"
+sweep_kind "ECR repositories" ecr_repositories "aws ecr delete-repository --repository-name {} --force"
+sweep_kind "ECR pull-through cache rules" cache_rules "aws ecr delete-pull-through-cache-rule --ecr-repository-prefix {}"
+global sweep_kind "IAM OIDC providers" oidc_providers "aws iam delete-open-id-connect-provider --open-id-connect-provider-arn {}"
+global sweep_kind "IAM roles of CI" ci_roles "$runbook (delete-role-policy for each inline policy, then delete-role)"
 sweep_kind "Secrets Manager secrets (scheduled for deletion included)" secrets \
   "aws secretsmanager delete-secret --secret-id {} --force-delete-without-recovery"
 sweep_kind "KMS keys" kms_keys "aws kms schedule-key-deletion --key-id {} --pending-window-in-days 7"

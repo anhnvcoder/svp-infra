@@ -1,6 +1,6 @@
 # Values of the cluster.* contract: the GitOps bootstrap root aws/gitops/<env> reads this map from the state of this
 # root and hands it to the root Application, from which the charts of the platform take what depends on the account
-# or the session. A key added here is added to the templates of svp-gitops and to the fixture of the check as well.
+# or the session. A key added here is added to every other holder of the contract (README.md) as well.
 output "cluster_values" {
   description = "Values of the cluster.* contract of the GitOps root (read with terraform output -json cluster_values)."
 
@@ -24,6 +24,14 @@ output "cluster_values" {
     s3Cidrs            = sort(data.aws_ip_ranges.s3.cidr_blocks)
     # IAM role of the SecretStore of each namespace that reads Secrets Manager.
     externalSecretsRoles = module.external_secrets.roles
+    # Long-lived resources of the account (baseline.tf): the registry the images are pulled from, where telemetry
+    # goes, the Grafana the dashboards go to, and the topic of the alerts of the rules on the workspace.
+    ecrRegistry    = "${var.account_id}.dkr.ecr.${var.region}.amazonaws.com"
+    ampWorkspaceId = data.aws_prometheus_workspace.env.workspace_id
+    ampEndpoint    = data.aws_prometheus_workspace.env.prometheus_endpoint
+    logGroup       = data.aws_cloudwatch_log_group.otel.name
+    grafanaUrl     = "https://${data.aws_grafana_workspace.env.endpoint}"
+    alarmTopicArn  = module.alarms.topic_arn
   }
 
   precondition {

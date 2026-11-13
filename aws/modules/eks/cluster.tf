@@ -1,5 +1,9 @@
 data "aws_partition" "current" {}
 
+data "aws_region" "current" {}
+
+data "aws_caller_identity" "current" {}
+
 locals {
   # Provider default_tags do not reach what the node group's Auto Scaling group launches (instances, their volumes
   # and network interfaces get the tags of the launch template), so the tags session sweeps look for are passed in

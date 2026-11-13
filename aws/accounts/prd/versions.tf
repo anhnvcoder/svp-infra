@@ -5,8 +5,9 @@ terraform {
 
   required_providers {
     aws = {
-      source  = "hashicorp/aws"
-      version = "~> 6.0"
+      source = "hashicorp/aws"
+      # The X-Ray resources of modules/observability need 6.46 or later; the exact version is in the lock file.
+      version = "~> 6.46"
     }
   }
 

@@ -40,7 +40,7 @@ variables {
     keda     = ["kafka-users"]
     svp      = ["glitchtip-runtime", "jwt-signing", "jwt-verify", "kafka-users", "pg-roles", "valkey-users", "web"]
     svp-data = ["kafka-admin", "pg-roles", "pg-superuser", "valkey-users"]
-    svp-obs  = ["glitchtip-runtime", "kafka-users", "obs", "pg-roles"]
+    svp-obs  = ["glitchtip-runtime", "grafana-operator", "kafka-users", "obs", "pg-roles"]
   }
 }
 

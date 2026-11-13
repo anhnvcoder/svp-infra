@@ -30,6 +30,16 @@ variable "az_count" {
   }
 }
 
+variable "interface_endpoint_az_count" {
+  description = "Number of zones, from the first, whose private subnet holds a network interface of each interface endpoint of the AWS APIs. Fewer zones cost less; a caller in another zone then crosses zones, and losing those zones cuts every AWS API call of the VPC."
+  type        = number
+
+  validation {
+    condition     = floor(var.interface_endpoint_az_count) == var.interface_endpoint_az_count && var.interface_endpoint_az_count >= 1 && var.interface_endpoint_az_count <= var.az_count
+    error_message = "interface_endpoint_az_count must be a whole number from 1 to az_count."
+  }
+}
+
 variable "single_nat_gateway" {
   description = "true: one NAT gateway, in the first zone, for every private subnet (cheaper; losing that zone cuts the egress of the whole VPC). false: one NAT gateway per zone and one private route table per zone that sends its traffic to the NAT gateway of the same zone."
   type        = bool

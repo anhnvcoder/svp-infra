@@ -33,12 +33,21 @@ mock_provider "aws" {
       names = ["ap-southeast-1a", "ap-southeast-1b", "ap-southeast-1c", "ap-southeast-1d", "ap-southeast-1e", "ap-southeast-1f"]
     }
   }
+
+  # Every service offered in every zone and taking an endpoint policy: one mock serves every service.
+  mock_data "aws_vpc_endpoint_service" {
+    defaults = {
+      availability_zones            = ["ap-southeast-1a", "ap-southeast-1b", "ap-southeast-1c", "ap-southeast-1d", "ap-southeast-1e", "ap-southeast-1f"]
+      vpc_endpoint_policy_supported = true
+    }
+  }
 }
 
 variables {
-  name                = "svp-stg"
-  cluster_name        = "svp-stg"
-  flow_log_bucket_arn = "arn:aws:s3:::svp-flowlogs-111111111111-ap-southeast-1"
+  name                        = "svp-stg"
+  cluster_name                = "svp-stg"
+  flow_log_bucket_arn         = "arn:aws:s3:::svp-flowlogs-111111111111-ap-southeast-1"
+  interface_endpoint_az_count = 1
 }
 
 run "valid" {
@@ -103,6 +112,36 @@ run "flow_log_bucket_arn_with_prefix" {
   }
 
   expect_failures = [var.flow_log_bucket_arn]
+}
+
+run "interface_endpoint_az_count_zero" {
+  command = plan
+
+  variables {
+    interface_endpoint_az_count = 0
+  }
+
+  expect_failures = [var.interface_endpoint_az_count]
+}
+
+run "interface_endpoint_az_count_above_az_count" {
+  command = plan
+
+  variables {
+    interface_endpoint_az_count = 3
+  }
+
+  expect_failures = [var.interface_endpoint_az_count]
+}
+
+run "interface_endpoint_az_count_fraction" {
+  command = plan
+
+  variables {
+    interface_endpoint_az_count = 1.5
+  }
+
+  expect_failures = [var.interface_endpoint_az_count]
 }
 
 run "s3_endpoint_buckets_arn" {
@@ -278,18 +317,79 @@ run "guardduty_data_endpoint" {
   }
 }
 
+# The interface endpoints of the AWS APIs with the values of stg: exactly the services below, private DNS on each, one
+# security group that lets in TCP 443 from the VPC range only, the policy that denies principals of other accounts,
+# network interfaces in the first zone only.
+run "interface_endpoints" {
+  command = plan
+
+  assert {
+    condition = sort(keys(aws_vpc_endpoint.interface)) == sort([
+      "sts", "eks-auth", "secretsmanager", "logs", "ssm", "ssmmessages", "ec2messages", "ecr.api", "ecr.dkr", "ec2",
+      "elasticloadbalancing", "aps-workspaces", "aps", "xray", "sqs",
+    ])
+    error_message = "The module must make an interface endpoint for exactly the fifteen services the cluster calls, no kms."
+  }
+
+  assert {
+    condition = alltrue([for s, e in aws_vpc_endpoint.interface :
+      e.service_name == "com.amazonaws.ap-southeast-1.${s}" && e.vpc_endpoint_type == "Interface" && e.tags["Name"] == "svp-stg-${s}"
+    ])
+    error_message = "Each endpoint must be an interface endpoint of its regional service, named svp-<env>-<service>."
+  }
+
+  assert {
+    condition     = alltrue([for e in values(aws_vpc_endpoint.interface) : e.private_dns_enabled])
+    error_message = "Every endpoint must enable private DNS, so the regional service names resolve to it."
+  }
+
+  assert {
+    condition = (aws_security_group.endpoints.name == "svp-stg-endpoints" &&
+      aws_vpc_security_group_ingress_rule.endpoints_https.ip_protocol == "tcp" &&
+      aws_vpc_security_group_ingress_rule.endpoints_https.from_port == 443 &&
+      aws_vpc_security_group_ingress_rule.endpoints_https.to_port == 443 &&
+    aws_vpc_security_group_ingress_rule.endpoints_https.cidr_ipv4 == "10.0.0.0/16")
+    error_message = "The security group svp-stg-endpoints must let in TCP 443 from the VPC range only."
+  }
+
+  assert {
+    condition = alltrue([for e in values(aws_vpc_endpoint.interface) :
+      length(jsondecode(e.policy).Statement) == 2 &&
+      jsondecode(e.policy).Statement[0] == { Effect = "Allow", Principal = "*", Action = "*", Resource = "*" } &&
+      jsondecode(e.policy).Statement[1] == {
+        Effect    = "Deny", Principal = "*", Action = "*", Resource = "*",
+        Condition = { StringNotEquals = { "aws:PrincipalAccount" = "000000000000" } }
+      }
+    ])
+    error_message = "Every endpoint whose service takes a policy must allow all and deny principals outside the env's account."
+  }
+
+  assert {
+    condition     = local.interface_endpoint_azs == tolist(["ap-southeast-1a"]) && length(local.interface_endpoint_subnet_ids) == 1
+    error_message = "With interface_endpoint_az_count = 1 the endpoints must sit in the private subnet of the first zone only."
+  }
+
+  # The private NACL lets the callers reach the endpoints across subnets: TCP 443 from the VPC range.
+  assert {
+    condition = anytrue([for r in local.nacl_inbound.private :
+    r.rule_action == "allow" && r.protocol == "tcp" && r.cidr_block == "10.0.0.0/16" && r.from_port <= 443 && 443 <= r.to_port])
+    error_message = "The private NACL must let in TCP 443 from the VPC range, or callers in other subnets cannot reach the endpoints."
+  }
+}
+
 # Values of the prd root: three zones, one NAT gateway each, and the S3 endpoint limited to the env's buckets and the
 # ECR layer bucket of the region.
 run "prd_values" {
   command = plan
 
   variables {
-    name                   = "svp-prd"
-    cluster_name           = "svp-prd"
-    az_count               = 3
-    single_nat_gateway     = false
-    s3_endpoint_restricted = true
-    s3_endpoint_buckets    = ["svp-prd-uploads-222222222222-ap-southeast-1", "svp-prd-media-222222222222-ap-southeast-1"]
+    name                        = "svp-prd"
+    cluster_name                = "svp-prd"
+    az_count                    = 3
+    interface_endpoint_az_count = 3
+    single_nat_gateway          = false
+    s3_endpoint_restricted      = true
+    s3_endpoint_buckets         = ["svp-prd-uploads-222222222222-ap-southeast-1", "svp-prd-media-222222222222-ap-southeast-1"]
   }
 
   assert {
@@ -315,6 +415,13 @@ run "prd_values" {
   assert {
     condition     = length(jsondecode(aws_vpc_endpoint.s3.policy).Statement) == 2
     error_message = "The S3 endpoint policy of prd must hold exactly the two statements."
+  }
+
+  assert {
+    condition = (local.interface_endpoint_azs == tolist(["ap-southeast-1a", "ap-southeast-1b", "ap-southeast-1c"]) &&
+      length(local.interface_endpoint_subnet_ids) == 3 &&
+    alltrue([for e in values(aws_vpc_endpoint.interface) : e.tags["Name"] == "svp-prd-${trimprefix(e.service_name, "com.amazonaws.ap-southeast-1.")}"]))
+    error_message = "prd must put the interface endpoints in the private subnet of each of its three zones."
   }
 
   # Karpenter launches nodes only into the subnets with its discovery tag: every private subnet, nothing else.

@@ -2,13 +2,15 @@
 # deletion. Committed; it holds no personal value. Every plan and apply of this root passes it, and the teardown at the
 # end of a session adds teardown.tfvars; the commands are in README.md.
 
-# network: three zones, one NAT gateway per zone; flow logs go to the log archive account, which keeps them. The S3
-# gateway endpoint lets through only the env's buckets, the image layer bucket of Amazon ECR in the region (both added
-# by the root and the module) and the bucket registry.k8s.io redirects clients inside AWS to in this region.
-az_count                  = 3
-single_nat_gateway        = false
-s3_endpoint_restricted    = true
-s3_endpoint_extra_buckets = ["prod-registry-k8s-io-ap-southeast-1"]
+# network: three zones, one NAT gateway and one network interface of each interface endpoint of the AWS APIs per
+# zone; flow logs go to the log archive account, which keeps them. The S3 gateway endpoint lets through only the env's
+# buckets, the image layer bucket of Amazon ECR in the region (both added by the root and the module) and the bucket
+# registry.k8s.io redirects clients inside AWS to in this region.
+az_count                    = 3
+single_nat_gateway          = false
+interface_endpoint_az_count = 3
+s3_endpoint_restricted      = true
+s3_endpoint_extra_buckets   = ["prod-registry-k8s-io-ap-southeast-1"]
 
 # eks: no public endpoint (the API through the SSM tunnel of ssm-bastion.tf on its own local port), all five control
 # plane logs kept 30 days, Secrets encrypted with a customer managed KMS key. The eks module sizes the On-Demand system

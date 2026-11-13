@@ -2,14 +2,15 @@
 # sizes, short retention and no protection against deletion, disposable at the end of every session. Committed; it
 # holds no personal value. Every plan, apply and destroy of this root passes it; the commands are in README.md.
 
-# network: two zones, one NAT gateway; flow logs go to the log archive account, which keeps them. The S3 gateway
-# endpoint lets through the same buckets as in prd: the env's buckets, the image layer bucket of Amazon ECR in the
-# region (both added by the root and the module) and the bucket registry.k8s.io redirects clients inside AWS to in this
-# region.
-az_count                  = 2
-single_nat_gateway        = true
-s3_endpoint_restricted    = true
-s3_endpoint_extra_buckets = ["prod-registry-k8s-io-ap-southeast-1"]
+# network: two zones; one NAT gateway and the interface endpoints of the AWS APIs, both in the first zone; flow logs go
+# to the log archive account, which keeps them. The S3 gateway endpoint lets through the same buckets as in prd: the
+# env's buckets, the image layer bucket of Amazon ECR in the region (both added by the root and the module) and the
+# bucket registry.k8s.io redirects clients inside AWS to in this region.
+az_count                    = 2
+single_nat_gateway          = true
+interface_endpoint_az_count = 1
+s3_endpoint_restricted      = true
+s3_endpoint_extra_buckets   = ["prod-registry-k8s-io-ap-southeast-1"]
 
 # eks: no public endpoint (the API through the SSM tunnel of ssm-bastion.tf, on a local port other than prd's), all
 # five control plane logs kept 1 day, Secrets encrypted with a customer managed KMS key. The eks module sizes the

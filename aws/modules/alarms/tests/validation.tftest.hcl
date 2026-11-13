@@ -1,7 +1,7 @@
 # What the alarm topic guarantees: encrypted with the module's own key, only the listed publishers (CloudWatch alarms by
-# default, EventBridge rules for the security topic) of the account publish to it, over TLS only, and the email
-# subscription; then one plan per validation rule with a value that only that rule rejects. The AWS provider is a mock:
-# nothing reaches an account. Policies are asserted through the arguments of their aws_iam_policy_document data sources.
+# default, EventBridge rules for the security topic, the Prometheus workspace of an env) of the account publish to it,
+# over TLS only, and the email subscription; then one plan per validation rule with a value that only that rule rejects.
+# The AWS provider is a mock. Policies are asserted through the arguments of their aws_iam_policy_document data sources.
 
 mock_provider "aws" {
   mock_data "aws_partition" {
@@ -201,6 +201,68 @@ run "both_publishers" {
   }
 }
 
+# The topic of an env with rules on its Prometheus workspace: Alertmanager of that one workspace publishes and reads the
+# topic's attributes; on the key it gets only what publishing to an encrypted topic takes, without source conditions,
+# as the Prometheus guide gives it. CloudWatch keeps its statements unchanged.
+run "prometheus_publisher" {
+  command = plan
+
+  variables {
+    publisher_services = ["cloudwatch.amazonaws.com", "aps.amazonaws.com"]
+    aps_workspace_arn  = "arn:aws:aps:ap-southeast-1:000000000000:workspace/ws-0123abcd-4567-89ef-0123-456789abcdef"
+  }
+
+  assert {
+    condition     = [for s in data.aws_iam_policy_document.key.statement : s.sid] == ["EnableIamUserPermissions", "CloudWatchAlarmsUseKey", "PrometheusAlertsUseKey"] && [for s in data.aws_iam_policy_document.topic.statement : s.sid] == ["CloudWatchAlarmsPublish", "PrometheusAlertsPublish", "DenyPublishWithoutTls"]
+    error_message = "Each publisher must get its own key and topic statement."
+  }
+
+  assert {
+    condition = alltrue([for s in data.aws_iam_policy_document.topic.statement :
+      s.sid != "PrometheusAlertsPublish" || (
+        s.effect == "Allow" &&
+        toset(s.actions) == toset(["sns:Publish", "sns:GetTopicAttributes"]) &&
+        toset(s.resources) == toset(["arn:aws:sns:ap-southeast-1:000000000000:svp-stg-alarms"]) &&
+        length(s.principals) == 1 &&
+        alltrue([for p in s.principals : p.type == "Service" && toset(p.identifiers) == toset(["aps.amazonaws.com"])]) &&
+        toset([for c in s.condition : "${c.test} ${c.variable} ${join(",", c.values)}"]) == toset([
+          "StringEquals aws:SourceAccount 000000000000",
+          "ArnLike aws:SourceArn arn:aws:aps:ap-southeast-1:000000000000:workspace/ws-0123abcd-4567-89ef-0123-456789abcdef",
+        ])
+      )
+    ])
+    error_message = "Only the given workspace of this account may sns:Publish and sns:GetTopicAttributes on the topic as aps.amazonaws.com."
+  }
+
+  assert {
+    condition = alltrue([for s in data.aws_iam_policy_document.topic.statement :
+      s.sid != "CloudWatchAlarmsPublish" || (
+        toset(s.actions) == toset(["sns:Publish"]) &&
+        toset([for c in s.condition : "${c.test} ${c.variable} ${join(",", c.values)}"]) == toset(var.source_conditions)
+      )
+    ])
+    error_message = "CloudWatch must keep only sns:Publish, under the conditions of its alarms."
+  }
+
+  assert {
+    condition = alltrue([for s in data.aws_iam_policy_document.key.statement :
+      s.sid == "EnableIamUserPermissions" ||
+      (s.sid == "CloudWatchAlarmsUseKey" && toset([for c in s.condition : "${c.test} ${c.variable} ${join(",", c.values)}"]) == toset(var.source_conditions)) ||
+      (
+        s.sid == "PrometheusAlertsUseKey" && length(s.condition) == 0 &&
+        toset(s.actions) == toset(["kms:Decrypt", "kms:GenerateDataKey*"]) &&
+        alltrue([for p in s.principals : p.type == "Service" && toset(p.identifiers) == toset(["aps.amazonaws.com"])])
+      )
+    ])
+    error_message = "On the key, Prometheus may only kms:Decrypt and kms:GenerateDataKey*, and CloudWatch keeps its conditions."
+  }
+
+  assert {
+    condition     = aws_kms_key.this.description == "SNS topic svp-stg-alarms: CloudWatch alarms and Prometheus alerts of svp-stg"
+    error_message = "The key description must name every publisher."
+  }
+}
+
 # A topic in another region than the provider's (the DNSSEC alarms of us-east-1): every resource is made there, and the
 # topic ARN and the alarm ARNs of the policies name that region. Without region, the run "valid" above keeps the
 # provider's region in both policies.
@@ -298,4 +360,35 @@ run "publisher_services_repeated" {
   }
 
   expect_failures = [var.publisher_services]
+}
+
+run "aps_publisher_without_workspace" {
+  command = plan
+
+  variables {
+    publisher_services = ["cloudwatch.amazonaws.com", "aps.amazonaws.com"]
+  }
+
+  expect_failures = [var.publisher_services]
+}
+
+run "aps_workspace_without_publisher" {
+  command = plan
+
+  variables {
+    aps_workspace_arn = "arn:aws:aps:ap-southeast-1:000000000000:workspace/ws-0123abcd-4567-89ef-0123-456789abcdef"
+  }
+
+  expect_failures = [var.publisher_services]
+}
+
+run "aps_workspace_arn_wildcard" {
+  command = plan
+
+  variables {
+    publisher_services = ["aps.amazonaws.com"]
+    aps_workspace_arn  = "arn:aws:aps:ap-southeast-1:000000000000:workspace/*"
+  }
+
+  expect_failures = [var.aps_workspace_arn]
 }

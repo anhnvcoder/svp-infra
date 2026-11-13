@@ -3,7 +3,7 @@
 Module nội bộ mỏng bọc [`terraform-aws-modules/vpc/aws`](https://registry.terraform.io/modules/terraform-aws-modules/vpc/aws/6.7.3)
 **6.7.3** (ghim chính xác): VPC bốn tầng trên `az_count` AZ (subnet public, private, edge và database), Internet Gateway, route table, NAT
 gateway và Elastic IP theo `single_nat_gateway`, S3 gateway endpoint trên mọi route table private, interface endpoint `guardduty-data` cho
-agent GuardDuty của node EKS, mỗi tầng một NACL riêng không mở 22, 3389 ra Internet, security group và NACL mặc định không rule nào, flow log
+agent GuardDuty của node EKS, interface endpoint cho các API AWS chính mà cluster gọi (mục "Endpoint interface của API AWS"; vài API AWS vẫn qua NAT), mỗi tầng một NACL riêng không mở 22, 3389 ra Internet, security group và NACL mặc định không rule nào, flow log
 ghi thẳng vào bucket của account Log Archive. Mức stg và prd chỉ khác ở biến (bảng dưới), một bộ code.
 
 Policy của S3 gateway endpoint: mặc định không có (endpoint cho qua mọi bucket IAM cho phép, và NetworkPolicy của pod, vốn khớp S3 theo địa
@@ -21,11 +21,12 @@ Không có provider nào trong module: root gọi nó (`aws/envs/<env>`) đặt 
 module "network" {
   source = "../../modules/network"
 
-  name                = "svp-stg"
-  cluster_name        = "svp-stg"
-  az_count            = 2
-  single_nat_gateway  = true
-  flow_log_bucket_arn = "arn:aws:s3:::svp-flowlogs-000000000000-ap-southeast-1"
+  name                        = "svp-stg"
+  cluster_name                = "svp-stg"
+  az_count                    = 2
+  interface_endpoint_az_count = 1
+  single_nat_gateway          = true
+  flow_log_bucket_arn         = "arn:aws:s3:::svp-flowlogs-000000000000-ap-southeast-1"
 }
 ```
 
@@ -54,14 +55,18 @@ module "network" {
 
 | Name | Type |
 | ---- | ---- |
+| [aws_security_group.endpoints](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/security_group) | resource |
 | [aws_security_group.guardduty_data](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/security_group) | resource |
 | [aws_vpc_endpoint.guardduty_data](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/vpc_endpoint) | resource |
+| [aws_vpc_endpoint.interface](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/vpc_endpoint) | resource |
 | [aws_vpc_endpoint.s3](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/vpc_endpoint) | resource |
+| [aws_vpc_security_group_ingress_rule.endpoints_https](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/vpc_security_group_ingress_rule) | resource |
 | [aws_vpc_security_group_ingress_rule.guardduty_data_https](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/vpc_security_group_ingress_rule) | resource |
 | [aws_availability_zones.available](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/availability_zones) | data source |
 | [aws_caller_identity.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/caller_identity) | data source |
 | [aws_partition.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/partition) | data source |
 | [aws_region.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/region) | data source |
+| [aws_vpc_endpoint_service.interface](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/vpc_endpoint_service) | data source |
 
 ## Inputs
 
@@ -71,6 +76,7 @@ module "network" {
 | cidr | IPv4 range of the VPC, a /16 to /20. Pods take their addresses from the private subnets (VPC CNI), so the range must not overlap any network the cluster talks to. | `string` | `"10.0.0.0/16"` | no |
 | cluster\_name | Name of the EKS cluster that runs in this VPC. The public and private subnets get the tag kubernetes.io/cluster/<name> = shared, which the AWS Load Balancer Controller reads to pick subnets; the private subnets also get karpenter.sh/discovery = <name>, which the EC2NodeClass of Karpenter reads. | `string` | n/a | yes |
 | flow\_log\_bucket\_arn | ARN of the S3 bucket of the log archive account that receives the VPC flow logs (accepted and rejected traffic), e.g. arn:aws:s3:::svp-flowlogs-000000000000-ap-southeast-1. The bucket ARN alone, no prefix: the logs land under AWSLogs/aws-account-id=<account>/, which the bucket's retention rules match. | `string` | n/a | yes |
+| interface\_endpoint\_az\_count | Number of zones, from the first, whose private subnet holds a network interface of each interface endpoint of the AWS APIs. Fewer zones cost less; a caller in another zone then crosses zones, and losing those zones cuts every AWS API call of the VPC. | `number` | n/a | yes |
 | name | Name of the VPC and prefix of the names of its subnets, route tables, NAT gateways and Elastic IPs, e.g. svp-stg. | `string` | n/a | yes |
 | s3\_endpoint\_buckets | Names of the buckets of the env (uploads and media) reachable through the S3 gateway endpoint when s3\_endpoint\_restricted is true. | `list(string)` | `[]` | no |
 | s3\_endpoint\_restricted | Put a policy on the S3 gateway endpoint that lets through only the buckets of s3\_endpoint\_buckets and the image layer bucket of Amazon ECR in the region; every other bucket of the region is then unreachable from the private subnets. Off by default: the endpoint lets through every bucket IAM allows. | `bool` | `false` | no |
@@ -85,7 +91,9 @@ module "network" {
 | database\_subnet\_ids | IDs of the database subnets, one per zone, in the order of azs: RDS, MSK and ElastiCache. Their route table holds only the local route. |
 | edge\_subnet\_cidrs | IPv4 ranges of the edge subnets, in the order of azs: every connection from them to Envoy comes from the ALB, so the network policy of Envoy lets in these ranges. |
 | edge\_subnet\_ids | IDs of the edge subnets, one per zone, in the order of azs: the internal ALB that CloudFront reaches through a VPC origin. No node or pod takes an address there; their route table holds only the local route. |
+| endpoints\_security\_group\_id | ID of the security group of the interface endpoints of the AWS APIs: TCP 443 from the VPC range only. |
 | guardduty\_data\_endpoint\_id | ID of the interface endpoint guardduty-data the GuardDuty agent of the EKS nodes reports to; the eks module installs the agent only once it exists. |
+| interface\_endpoint\_ids | IDs of the interface endpoints of the AWS APIs, by service (sts, ecr.api, ...). |
 | nat\_public\_ips | Public IPv4 addresses of the NAT gateways: every connection from the nodes and pods to the internet leaves from one of them. |
 | private\_subnet\_cidrs | IPv4 ranges of the private subnets, in the order of azs. |
 | private\_subnet\_ids | IDs of the private subnets, one per zone, in the order of azs: nodes and pods. |
@@ -102,6 +110,7 @@ module "network" {
 | `name` | `svp-stg` | `svp-prd` |
 | `cidr` | mặc định | mặc định (hay dải khác nếu prd nối hai VPC) |
 | `az_count` | `2` | `3` |
+| `interface_endpoint_az_count` | `1` (ENI ở AZ đầu, cùng AZ với NAT đơn) | bằng `az_count` |
 | `single_nat_gateway` | `true` (một NAT ở AZ đầu) | `false` (một NAT mỗi AZ, route table private mỗi AZ trỏ NAT cùng AZ) |
 | `cluster_name` | tên cluster EKS stg | tên cluster EKS prd |
 | `flow_log_bucket_arn` | ARN bucket `svp-flowlogs-<log>-ap-southeast-1` | cùng bucket |
@@ -170,6 +179,49 @@ tố mà rule retention của bucket khớp. Trường: các trường mặc đ�
 quản nằm ngoài state, giữ ENI trong subnet nên `terraform destroy` không xoá được VPC. Output `guardduty_data_endpoint_id` đưa vào biến
 cùng tên của module `eks`, add-on agent tạo sau endpoint.
 
+**Endpoint interface của API AWS**
+([ADR-0064](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0064-interface-endpoints.md)): node và pod gọi các API AWS của bảng dưới qua
+endpoint trong VPC thay vì qua NAT. Danh sách dịch vụ là local `interface_endpoint_services`; ai gọi từng dịch vụ và vì sao cần nằm ở
+[phụ lục §1 của ADR](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0064-interface-endpoints.md#1-dịch-vụ),
+thứ còn đi qua NAT ở §6 của phụ lục đó.
+
+| Endpoint (`com.amazonaws.<region>.…`) | Thành phần gọi |
+| --- | --- |
+| `sts` | ACK, SDK của pod |
+| `eks-auth` | EKS Pod Identity Agent |
+| `secretsmanager` | External Secrets |
+| `logs` | OpenTelemetry Collector |
+| `ssm`, `ssmmessages`, `ec2messages` | SSM Agent của bastion; Karpenter (`ssm`) |
+| `ecr.api`, `ecr.dkr` | kubelet, containerd, Kyverno |
+| `ec2` | Karpenter, VPC CNI, EBS CSI, AWS Load Balancer Controller |
+| `elasticloadbalancing` | AWS Load Balancer Controller |
+| `aps-workspaces` | Prometheus agent, Argo Rollouts, Collector |
+| `aps` | ACK |
+| `xray` | Collector |
+| `sqs` | Karpenter |
+
+- Mỗi endpoint: tên `<name>-<dịch vụ>`, private DNS bật, ENI ở subnet private của `interface_endpoint_az_count` AZ đầu (local
+  `interface_endpoint_azs`), security group chung `<name>-endpoints` chỉ nhận TCP 443 từ CIDR VPC, không rule egress.
+- Data source `aws_vpc_endpoint_service` đọc từng dịch vụ lúc plan: dịch vụ không có ở region thì plan dừng; dịch vụ không có ở một AZ đã chọn
+  thì precondition của endpoint dừng plan, module không tự chọn subnet khác.
+- Policy: dịch vụ nhận policy (`vpc_endpoint_policy_supported`) nhận cùng policy với `guardduty-data` (local `account_only_endpoint_policy`):
+  cho mọi hành động, từ chối khi `aws:PrincipalAccount` khác account của env. Dịch vụ không nhận policy thì AWS cho toàn quyền qua endpoint;
+  IAM và RCP vẫn giữ nó.
+- Private DNS đổi phân giải cho cả VPC: `sts.<region>.amazonaws.com`, `api.ecr.<region>.amazonaws.com`, `*.dkr.ecr.<region>.amazonaws.com` và các
+  tên khác của bảng trả IP ENI trong dải private. NetworkPolicy chỉ mở 443 tới địa chỉ công khai (trừ dải private) thì chặn pod gọi các tên này;
+  chart mở thêm TCP 443 tới value `awsEndpointCidrs` (CIDR VPC trên eks), theo §5 của ADR.
+- NACL không đổi: ENI nằm ở tầng private, NACL private đã nhận TCP mọi cổng từ CIDR VPC (local `nacl_from_vpc`) và cho mọi đích ra, nên caller ở
+  subnet private khác AZ tới được ENI và nhận được trả lời; test `interface_endpoints` kiểm entry đó.
+
+```mermaid
+flowchart LR
+  caller["Node, pod<br/>(subnet private)"] -->|"DNS tên regional"| resolver["Route 53 Resolver<br/>của VPC"]
+  caller -->|"TCP 443 tới IP ENI"| eni["Endpoint &lt;name&gt;-&lt;dịch vụ&gt;<br/>SG &lt;name&gt;-endpoints"]
+  eni -->|"policy: chỉ principal của account env"| api["API AWS: STS, EKS Auth, ECR,<br/>Secrets Manager, Logs, X-Ray, AMP…"]
+  caller -->|"route prefix list"| s3gw["S3 gateway endpoint"] --> s3["S3"]
+  caller -->|"0.0.0.0/0"| nat["NAT gateway"] --> ext["GitHub, Sigstore, Telegram,<br/>registry upstream, Pricing API, AMG"]
+```
+
 ## Tài nguyên trong state
 
 Đọc từ code module ở version ghim (không từ `plan`, chỉ người học chạy):
@@ -187,14 +239,16 @@ cùng tên của module `eks`, add-on agent tạo sau endpoint.
 | `aws_vpc_endpoint` `s3` | 1 | loại Gateway, gắn mọi route table private: dữ liệu S3 không qua NAT (NAT tính tiền theo GB); miễn phí |
 | `aws_vpc_endpoint` `guardduty_data` | 1 | loại Interface, một ENI mỗi subnet private; private DNS; policy chỉ account của env |
 | `aws_security_group` `guardduty_data`, `aws_vpc_security_group_ingress_rule` | 1 mỗi loại | `<name>-guardduty-data`: TCP 443 từ CIDR VPC, không rule egress |
+| `aws_vpc_endpoint` `interface` | một mỗi dịch vụ của local `interface_endpoint_services` | loại Interface, một ENI mỗi subnet của `interface_endpoint_azs`; private DNS; policy chỉ account của env khi dịch vụ nhận |
+| `aws_security_group` `endpoints`, `aws_vpc_security_group_ingress_rule` `endpoints_https` | 1 mỗi loại | `<name>-endpoints`: TCP 443 từ CIDR VPC, không rule egress |
 | `aws_default_security_group` | 1 | module nhận quản lý và xoá mọi rule: tài nguyên tạo mà quên gán security group không nhận, không gửi được gì |
 | `aws_network_acl` public / private / edge / database, `aws_network_acl_rule` | 1 mỗi tầng; rule theo bảng NACL ở trên cộng ba outbound mỗi tầng (TCP, UDP, ICMP tới mọi đích) | gắn mọi subnet của tầng |
 | `aws_default_network_acl`, `aws_default_route_table` | 1 mỗi loại | module quản lý mặc định của VPC; NACL mặc định không còn entry nào |
 | `aws_flow_log` | 1 | đích S3 `flow_log_bucket_arn`, Parquet; không log group, không role IAM |
 
 Chi phí theo giờ (Singapore, ADR-0034 mục chi phí): mỗi NAT $0,059/giờ + $0,059/GB xử lý, mỗi IPv4 công khai (EIP của NAT) $0,005/giờ;
-stg một NAT, prd ba NAT. Endpoint `guardduty-data` tính theo giờ mỗi ENI (mỗi AZ) cộng theo GB xử lý (giá ở
-[trang giá AWS PrivateLink](https://aws.amazon.com/privatelink/pricing/)); flow log tính theo GB giao vào S3 (ADR-0060, phụ lục chi phí).
+stg một NAT, prd ba NAT. Endpoint `guardduty-data` và endpoint interface của API AWS tính theo giờ mỗi ENI (mỗi AZ) cộng theo GB xử lý (giá ở
+[trang giá AWS PrivateLink](https://aws.amazon.com/privatelink/pricing/); chi phí mỗi buổi của endpoint API AWS ở §7 phụ lục ADR-0064); flow log tính theo GB giao vào S3 (ADR-0060, phụ lục chi phí).
 
 ## Tài nguyên ngoài state và tag nhận diện
 
