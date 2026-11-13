@@ -52,8 +52,18 @@ variable "domain" {
   }
 }
 
+variable "grafana_workspace_id" {
+  description = "Id of the Grafana workspace svp-<env> of the env's account (g-<id>), made by aws/accounts/<env>: its URL is grafanaUrl of the cluster values. Personal value, in <env>.auto.tfvars."
+  type        = string
+
+  validation {
+    condition     = can(regex("^g-[0-9a-z]+$", var.grafana_workspace_id))
+    error_message = "grafana_workspace_id must be the id of a Grafana workspace, g-<id>."
+  }
+}
+
 variable "alarm_email" {
-  description = "Email subscribed to the SNS topic of the CloudWatch alarms of RDS, MSK and ElastiCache; nothing is delivered until the confirmation link SNS sends is opened."
+  description = "Email subscribed to the SNS topic of the CloudWatch alarms of RDS, MSK and ElastiCache and of the alerts of the Prometheus workspace; nothing is delivered until the confirmation link SNS sends is opened."
   type        = string
   sensitive   = true
 }
@@ -70,6 +80,11 @@ variable "az_count" {
 variable "single_nat_gateway" {
   description = "One NAT gateway for the whole VPC (true) or one per zone (false)."
   type        = bool
+}
+
+variable "interface_endpoint_az_count" {
+  description = "Number of zones, from the first, whose private subnet holds a network interface of each interface endpoint of the AWS APIs (1 to az_count)."
+  type        = number
 }
 
 variable "s3_endpoint_restricted" {

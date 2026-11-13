@@ -21,13 +21,29 @@ variable "alarm_email" {
 }
 
 variable "publisher_services" {
-  description = "Service principals that publish to the topic and use its key, each limited to its own resources of this account and region: cloudwatch.amazonaws.com (alarms), events.amazonaws.com (EventBridge rules)."
+  description = "Service principals that publish to the topic and use its key, each limited to its own resources of this account and region: cloudwatch.amazonaws.com (alarms), events.amazonaws.com (EventBridge rules), aps.amazonaws.com (Alertmanager of the Prometheus workspace aps_workspace_arn)."
   type        = list(string)
   default     = ["cloudwatch.amazonaws.com"]
 
   validation {
-    condition     = length(var.publisher_services) > 0 && length(distinct(var.publisher_services)) == length(var.publisher_services) && alltrue([for p in var.publisher_services : contains(["cloudwatch.amazonaws.com", "events.amazonaws.com"], p)])
-    error_message = "publisher_services must list, without repeats, at least one of cloudwatch.amazonaws.com and events.amazonaws.com."
+    condition     = length(var.publisher_services) > 0 && length(distinct(var.publisher_services)) == length(var.publisher_services) && alltrue([for p in var.publisher_services : contains(["cloudwatch.amazonaws.com", "events.amazonaws.com", "aps.amazonaws.com"], p)])
+    error_message = "publisher_services must list, without repeats, at least one of cloudwatch.amazonaws.com, events.amazonaws.com and aps.amazonaws.com."
+  }
+
+  validation {
+    condition     = contains(var.publisher_services, "aps.amazonaws.com") == (var.aps_workspace_arn != null)
+    error_message = "aps_workspace_arn must be set exactly when publisher_services lists aps.amazonaws.com."
+  }
+}
+
+variable "aps_workspace_arn" {
+  description = "ARN of the Amazon Managed Service for Prometheus workspace whose Alertmanager publishes to the topic (aws:SourceArn of the aps.amazonaws.com statement). Null: Prometheus does not publish."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.aps_workspace_arn == null || can(regex("^arn:aws:aps:[a-z]{2}(-[a-z]+)+-[0-9]+:[0-9]{12}:workspace/ws-[0-9a-f-]+$", var.aps_workspace_arn))
+    error_message = "aps_workspace_arn must be a workspace ARN such as arn:aws:aps:ap-southeast-1:000000000000:workspace/ws-0123abcd-..., or null."
   }
 }
 

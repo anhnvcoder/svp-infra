@@ -30,3 +30,13 @@ variable "budget_emails" {
   type        = list(string)
   sensitive   = true
 }
+
+variable "platform_admin_group_id" {
+  description = "Id of the IAM Identity Center group svp-platform-admins (output platform_admin_group_id of aws/org): the ADMIN role of the Grafana workspace. Set it in the uncommitted <env>.auto.tfvars or TF_VAR_platform_admin_group_id."
+  type        = string
+}
+
+variable "platform_viewer_group_id" {
+  description = "Id of the IAM Identity Center group svp-platform-viewers (output platform_viewer_group_id of aws/org): the VIEWER role of the Grafana workspace. Set it in the uncommitted <env>.auto.tfvars or TF_VAR_platform_viewer_group_id."
+  type        = string
+}

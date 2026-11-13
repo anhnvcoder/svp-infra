@@ -32,6 +32,13 @@ resource "aws_securityhub_organization_admin_account" "security" {
   depends_on = [aws_organizations_organization.this]
 }
 
+# Inspector scans the images of the workload registries, which live in the home region alone.
+resource "aws_inspector2_delegated_admin_account" "security" {
+  account_id = aws_organizations_account.security.id
+
+  depends_on = [aws_organizations_organization.this]
+}
+
 resource "aws_organizations_delegated_administrator" "security" {
   for_each = local.delegated_services
 

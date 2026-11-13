@@ -66,7 +66,9 @@ Kiểm: mỗi repo có PR "Configure Renovate" hay đã có `renovate.json`.
 1. **App promote:** `make github-app APP=svp-gitops-promoter`, `make github-app APP=svp-web-promoter` (khoá được giữ ở `github/.keys/`
    vì environment chưa có; client ID vào `github.auto.tfvars`).
 2. **Terraform:** `plan` rồi `apply` `github/` theo [`github/README.md`](../../github/README.md) mục "Lệnh người học chạy" (bỏ bước 1 ghi
-   `github.auto.tfvars`: bước 1 ở đây đã ghi). Tạo repo nếu chưa có, ruleset, environment `promote`, `promote-prd`, biến client ID.
+   `github.auto.tfvars`: bước 1 ở đây đã ghi). Tạo repo nếu chưa có, ruleset, quyền Actions (action được phép, gồm
+   `aws-actions/configure-aws-credentials` ở `svp-backend`, `svp-frontend` cho job ECR), environment `promote`, `promote-prd`, `ecr-rescan`
+   (chỉ `main`, không người duyệt: trust của role rescan ECR ghi tên environment này), biến client ID.
 3. **Khoá chờ environment:** các lệnh `make github-app-key …` script đã in ở bước 1; khoá thứ hai `prd` như mục trên.
 4. **App notifier:** `make github-app APP=svp-argocd-notifier` (khoá vào `backend/.env`).
 5. **Renovate** như mục trên.
@@ -83,10 +85,14 @@ Kiểm: mỗi repo có PR "Configure Renovate" hay đã có `renovate.json`.
    for r in svp-backend svp-frontend; do gh api -X PATCH repos/anhnvcoder/$r/code-scanning/default-setup -f state=configured; done
    ```
 
-7. **Package GHCR public:** sau lượt `images.yml` đầu của mỗi repo code (package mới mặc định private, không API đổi): trang
+7. **Secret account của CI ECR:** `SVP_AWS_STG_ACCOUNT_ID`, `SVP_AWS_PRD_ACCOUNT_ID` ở `svp-backend`, `svp-frontend` (workflow dựng ARN role
+   OIDC từ chúng; secret để GitHub che account ID trong log), giá trị qua stdin bằng `gh secret set`: bước (7) của
+   [`platform-setup.md`](platform-setup.md#bước-7-biến-ci-ecr), sau khi role của `aws/accounts/<env>` có. Kiểm: `gh secret list -R
+   anhnvcoder/<repo>` có hai tên đó.
+8. **Package GHCR public:** sau lượt `images.yml` đầu của mỗi repo code (package mới mặc định private, không API đổi): trang
    `https://github.com/users/anhnvcoder/packages/container/package/<repo>%2F<image>` → **Package settings** → **Change visibility** →
    **Public**. Danh sách image: `PUBLIC_PACKAGES` của `github/scripts/github-app.py`.
-8. **Kiểm cả bộ:** `make github-check WITH_APP_KEYS=1`: mọi dòng `ok`, dòng cuối `every setting matches`.
+9. **Kiểm cả bộ:** `make github-check WITH_APP_KEYS=1`: mọi dòng `ok`, dòng cuối `every setting matches`.
 
 ## Kiểm định kỳ
 

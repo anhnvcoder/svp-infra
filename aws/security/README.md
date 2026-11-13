@@ -1,9 +1,10 @@
 # `aws/security`: phát hiện và cảnh báo của tổ chức (account `svp-security`)
 
-Account Security Tooling `svp-security` là delegated admin của GuardDuty, Security Hub CSPM, AWS Config và IAM Access Analyzer cho mọi account
-của tổ chức, và là nơi mọi sự kiện bảo mật thành email. Thiết kế:
+Account Security Tooling `svp-security` là delegated admin của GuardDuty, Security Hub CSPM, Amazon Inspector, AWS Config và IAM Access
+Analyzer cho mọi account của tổ chức, và là nơi mọi sự kiện bảo mật thành email. Thiết kế:
 [ADR-0060](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0060-org-detection-logging.md) §1–§4, §10 (danh sách sự kiện, event
-pattern, lý do từng lựa chọn ở [phụ lục](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0060-org-detection-logging.md)).
+pattern, lý do từng lựa chọn ở [phụ lục](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0060-org-detection-logging.md));
+Inspector: [ADR-0062](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0062-ecr-registry-ci-oidc.md) §10.
 
 Root chạy từ management account (`AWS_PROFILE=anhnv-sso`), state ở bucket của `aws/bootstrap`. Ba provider, mỗi account một cái:
 
@@ -27,6 +28,10 @@ region. Region khác bị SCP `svp-deny-other-regions` chặn ở account thành
 | Finding aggregator Security Hub | nhà | `SPECIFIED_REGIONS` gom `us-east-1`; region nhà thành home region của cấu hình tập trung |
 | Cấu hình tổ chức Security Hub | nhà | `CENTRAL`; `auto_enable = false`, `auto_enable_standards = "NONE"` vì configuration policy quyết định |
 | Configuration policy `svp-security-standards`, gắn root của tổ chức | nhà | Security Hub bật; FSBP v1.0.0, CIS AWS Foundations Benchmark v5.0.0; control mới tự bật; tắt `GuardDuty.7`, `GuardDuty.12`, `GuardDuty.13` |
+| Cấu hình tổ chức Inspector (`aws_inspector2_organization_configuration`) | nhà | account mới vào tổ chức tự bật quét ECR; EC2, Lambda, Lambda code, code repository tắt |
+| Enabler Inspector `security` (khối `import`) | nhà | `svp-security` chỉ quét ECR: chỉ định delegated admin bật mọi loại quét ở account này, root nhận trạng thái đó rồi tắt các loại khác |
+| Liên kết thành viên Inspector `members` (`aws_inspector2_member_association`) | nhà | mỗi account thành viên `ACTIVE` khác `svp-security` (`svp-stg`, `svp-prd`, `svp-log-archive`), đọc từ tổ chức qua provider `management`, một liên kết với delegated admin |
+| Enabler Inspector `members` | nhà | quét ECR ở các account có liên kết trên |
 | Aggregator Config `svp-org`, role `svp-security-config-aggregator` | nhà | nguồn tổ chức, mọi region; role với managed policy `AWSConfigRoleForOrganizations` |
 | Analyzer Access Analyzer `svp-org` | hai region | loại `ORGANIZATION`: truy cập từ ngoài tổ chức |
 | Bus `svp-security-events` và policy của nó | nhà | đích của rule `svp-security-*` ở mọi account; chỉ principal có `aws:PrincipalOrgID` của tổ chức được `events:PutEvents` |
@@ -39,6 +44,30 @@ admin, và bước đó tự bật GuardDuty ở region của nó
 ([Security Hub: Organizations](https://docs.aws.amazon.com/securityhub/latest/userguide/designate-orgs-admin-account.html)). Root đọc detector
 bằng data source `aws_guardduty_detector` mỗi region; tạo lại thì API từ chối vì account đã có detector. Recorder Config của từng account do
 root `aws/baseline` tạo (module `security-baseline`).
+
+### Inspector
+
+- Chỉ ECR, chỉ region nhà: registry ECR của stg, prd ở `ap-southeast-1`. Không quét EC2 (node thay mỗi buổi từ AMI EKS ghim version, GuardDuty
+  Runtime Monitoring theo dõi node), không Lambda (lab không có function). Chế độ quét và filter repo đặt ở registry của từng account env (root
+  `aws/accounts/<env>`), không ở đây.
+- Chỉ định delegated admin bật mọi loại quét ở `svp-security`
+  ([Inspector: delegated admin](https://docs.aws.amazon.com/inspector/latest/user/designating-admin.html)). Provider không nhận delegated admin
+  và account thành viên trong cùng một enabler, nên có hai enabler.
+- Enabler `security` vào state bằng khối `import` (id `<security>-ECR`), không tạo mới: plan đọc các loại quét đang bật, apply đổi tại chỗ về
+  `["ECR"]`, tức gọi `Disable` các loại khác rồi chờ tới khi không loại nào còn `DISABLING`. Tạo mới thì provider gọi `Disable` rồi chờ cả account
+  `DISABLED`, điều không xảy ra khi ECR còn bật: apply hết thời gian chờ, enabler bị taint
+  ([provider: create của enabler](https://github.com/hashicorp/terraform-provider-aws/blob/v6.73.0/internal/service/inspector2/enabler.go#L165),
+  [báo lỗi](https://github.com/hashicorp/terraform-provider-aws/issues/50430)). Khối `import` ở lại trong code: resource đã có trong state thì
+  Terraform bỏ qua nó ([Terraform: import](https://developer.hashicorp.com/terraform/language/import)).
+- Liên kết thành viên lấy account `ACTIVE` từ tổ chức: account đã đóng (`SUSPENDED`) không vào. Management không nằm trong danh sách (không phải
+  thành viên của tổ chức Inspector), như ADR-0062 §10. Enabler `members` bật ECR sau khi có liên kết, theo trình tự mẫu của AWS: chỉ định, liên
+  kết thành viên, bật quét ([AWS sample: kích hoạt và gỡ](https://github.com/aws-samples/inspector2-enablement-with-cli#-4-activation-phase)).
+- Delegated admin chỉ tắt được Inspector khi không còn thành viên liên kết
+  ([Inspector: tắt dịch vụ](https://docs.aws.amazon.com/inspector/latest/user/deactivating-best-practices.html)); xoá enabler chỉ gọi `Disable`,
+  không gỡ liên kết. `depends_on` giữ thứ tự tạo: enabler `security`, rồi liên kết và cấu hình tổ chức, rồi enabler `members`; destroy đi ngược:
+  tắt quét ở thành viên và đặt lại cấu hình tổ chức, gỡ liên kết, cuối cùng tắt `svp-security`.
+- Finding Inspector vào Security Hub CSPM qua tích hợp sẵn của hai dịch vụ
+  ([Inspector: Security Hub](https://docs.aws.amazon.com/inspector/latest/user/securityhub-integration.html)), cạnh finding GuardDuty.
 
 Rule `svp-security-*`, role `svp-security-*` nằm dưới SCP `svp-protect-baseline`: chỉ `OrganizationAccountAccessRole` sửa được chúng, tức chỉ
 root này.
@@ -67,8 +96,8 @@ flowchart LR
   từ chối, đổi quản trị) và chuyển sang bus `svp-security-events`. Rule `svp-security-notify` khớp mọi sự kiện trên bus (`source` có tiền tố
   rỗng), vì việc chọn đã làm ở rule nguồn.
 - Rule `svp-security-findings` trên bus mặc định của region aggregator chỉ khớp finding `Severity.Label` `HIGH` hay `CRITICAL`, `RecordState`
-  `ACTIVE`, `Workflow.Status` `NEW`, `ProductName` `GuardDuty` hay `IAM Access Analyzer`. Finding control FSBP, CIS không gửi email: Security Hub
-  bắn lại event mỗi lần đánh giá, nên đọc trên bảng Security Hub theo runbook.
+  `ACTIVE`, `Workflow.Status` `NEW`, `ProductName` `GuardDuty` hay `IAM Access Analyzer`. Finding control FSBP, CIS và finding Inspector không
+  gửi email: đọc trên bảng Security Hub theo runbook.
 - Input transformer viết một dòng: tên sự kiện hay tiêu đề finding, account, region, principal, `errorCode` và URL runbook
   [`security-alert.md`](https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks/security-alert.md).
 - Topic cho `events.amazonaws.com` `sns:Publish` với `aws:SourceAccount` là `svp-security` và `aws:SourceArn` khớp
@@ -103,7 +132,8 @@ flowchart LR
 ## Phí
 
 Bảng giá, ước lúc không buổi và phần thêm mỗi buổi: ADR-0060 §12 và phụ lục. Khoản lớn nhất là Security Hub CSPM; 30 ngày đầu GuardDuty và
-Security Hub dùng thử.
+Security Hub dùng thử. Inspector tính theo image quét ở registry của account env (chỉ repo cache):
+[ADR-0062 §11](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0062-ecr-registry-ci-oidc.md#11-chi-phí-registry).
 
 ## Apply (bước 5 của thứ tự áp lần đầu)
 
@@ -111,8 +141,9 @@ Security Hub dùng thử.
 `docs/runbooks/org-security-setup.md`. Cần trước:
 
 - Bước (3): `aws/log-archive` đã apply (bucket `svp-guardduty-…`, key `alias/svp-log-archive` với key policy cho GuardDuty của `svp-security`).
-- Bước (4): `aws/org` đã apply đủ: trusted access và `svp-security` là delegated admin của GuardDuty (hai region), Security Hub, Config, Access
-  Analyzer. Thiếu bước này thì plan dừng ở data source `aws_guardduty_detector` (không có detector) hay apply lỗi quyền delegated admin.
+- Bước (4): `aws/org` đã apply đủ: trusted access và `svp-security` là delegated admin của GuardDuty (hai region), Security Hub, Inspector,
+  Config, Access Analyzer. Thiếu bước này thì plan dừng ở data source `aws_guardduty_detector` (không có detector) hay apply lỗi quyền delegated
+  admin.
 - Biến terminal `SVP_AWS_MGMT_ACCOUNT_ID`, `SVP_AWS_SECURITY_ACCOUNT_ID`, `SVP_AWS_LOG_ACCOUNT_ID` (output của `aws/org`).
 
 ### 1. Kiểm account
@@ -140,10 +171,19 @@ AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" TF_VAR_securi
   TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" terraform plan -out=security.tfplan
 ```
 
-Mong đợi `Plan: 40 to add, 0 to change, 0 to destroy`: mỗi region của hai region một cấu hình tổ chức, sáu protection plan, một publishing
-destination, một detector management, một member, một analyzer; bốn tài nguyên Security Hub; role, policy attachment và aggregator Config; bus,
-policy bus, hai rule, hai target; năm tài nguyên của module `alarms`. Dừng và dán plan lại nếu có dòng `destroy` hay `aws_guardduty_detector`
-nào khác `aws_guardduty_detector.management`.
+Mong đợi `Plan: 1 to import, 45 to add, 1 to change, 0 to destroy`: mỗi region của hai region một cấu hình tổ chức, sáu protection plan, một
+publishing destination, một detector management, một member, một analyzer; bốn tài nguyên Security Hub; cấu hình tổ chức Inspector, ba liên kết
+thành viên, enabler `members`; role, policy attachment và aggregator Config; bus, policy bus, hai rule, hai target; năm tài nguyên của module
+`alarms`. Import và đổi là enabler `security` (mục [Inspector](#inspector)). Dừng và dán plan lại nếu có dòng `destroy`, `aws_guardduty_detector`
+nào khác `aws_guardduty_detector.management`, hay nếu enabler `security` không đúng như mục [Kiểm plan Inspector](#kiểm-plan-inspector).
+
+#### Kiểm plan Inspector
+
+- `aws_inspector2_enabler.security` mang dòng `(imported from "<security>-ECR")`; `account_ids` giữ đúng id của `svp-security`, `resource_types`
+  bỏ các loại khác `"ECR"` (`EC2`, `LAMBDA`, `LAMBDA_CODE`…) và giữ `"ECR"`. `account_ids` cũ rỗng là Inspector chưa bật ở `svp-security`:
+  `aws/org` chưa chỉ định delegated admin, dừng.
+- Ba `aws_inspector2_member_association.members` và `account_ids` của `aws_inspector2_enabler.members` đúng ba id của `svp-stg`, `svp-prd`,
+  `svp-log-archive`.
 
 ### 4. Apply
 
@@ -203,9 +243,34 @@ AWS_PROFILE=anhnv-security-ro aws configservice describe-configuration-aggregato
 Mong đợi: `CENTRAL ENABLED`; association của root (`r-…`) `SUCCESS` (`PENDING` tới 24 giờ là bình thường); nguồn của aggregator `SUCCEEDED`
 sau khi `aws/baseline` (bước 6) bật recorder. Cảnh báo thử và phép thử guardrail ở bước (7) của runbook.
 
+Inspector, chỉ region nhà (`<id>` là id của `svp-security`, `svp-stg`, `svp-prd`, `svp-log-archive`, cách nhau bằng dấu cách):
+
+```sh
+AWS_PROFILE=anhnv-security-ro aws inspector2 describe-organization-configuration --region ap-southeast-1 \
+  --query 'autoEnable' --output json
+AWS_PROFILE=anhnv-security-ro aws inspector2 batch-get-account-status --account-ids <id> --region ap-southeast-1 \
+  --query 'accounts[].[accountId, resourceState.ecr.status, resourceState.ec2.status, resourceState.lambda.status]' --output text
+AWS_PROFILE=anhnv-security-ro aws inspector2 list-members --only-associated --region ap-southeast-1 \
+  --query 'members[].[accountId, relationshipStatus]' --output text
+```
+
+Mong đợi: `ecr` `true`, mọi khoá khác `false`; mỗi account một dòng `<id> ENABLED DISABLED DISABLED`; ba thành viên `svp-stg`, `svp-prd`,
+`svp-log-archive` `ENABLED`.
+
+## Thêm Inspector vào root đã áp
+
+Khi root này đã apply trước khi có Inspector: apply [`aws/org`](../org/README.md) trước (mục "Thêm Inspector và nhóm nền tảng vào tổ chức
+đã áp": trusted access `inspector2.amazonaws.com` và delegated admin `svp-security`), rồi root này bằng cùng lệnh của bước 1, 3, 4.
+
+Mong đợi `Plan: 1 to import, 5 to add, 1 to change, 0 to destroy`: import và đổi `aws_inspector2_enabler.security`; thêm
+`aws_inspector2_organization_configuration.this`, ba `aws_inspector2_member_association.members`, `aws_inspector2_enabler.members`. Dừng (không
+apply, dán plan lại) nếu có thay đổi nào khác, hay nếu Inspector không đúng như mục [Kiểm plan Inspector](#kiểm-plan-inspector). Sau apply: kiểm
+Inspector ở bước 6, rồi plan lần hai phải là `No changes.`.
+
 ## Gỡ
 
 Chỉ khi lab kết thúc, sau `aws/baseline` (rule nguồn trỏ bus của root này) và trước khi `aws/org` bỏ delegated admin. `terraform destroy` gỡ cấu
-hình tổ chức, publishing destination, member và detector của management, policy và aggregator Security Hub, aggregator Config, analyzer, bus,
-rule, topic; KMS key của topic vào `PendingDeletion` 7 ngày. GuardDuty và Security Hub của `svp-security` còn bật tới khi `aws/org` bỏ delegated
-admin và tắt dịch vụ trong account đó.
+hình tổ chức, publishing destination, member và detector của management, policy và aggregator Security Hub, Inspector theo thứ tự ở mục
+[Inspector](#inspector) (tắt quét ở thành viên và đặt lại cấu hình tổ chức, gỡ liên kết thành viên, tắt `svp-security`), aggregator Config,
+analyzer, bus, rule, topic; KMS key của topic vào `PendingDeletion` 7 ngày. GuardDuty và Security Hub của `svp-security` còn bật tới khi
+`aws/org` bỏ delegated admin và tắt dịch vụ trong account đó.

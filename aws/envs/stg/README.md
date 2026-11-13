@@ -1,9 +1,10 @@
 # `aws/envs/stg`: cấu hình gốc của env stg
 
-Tầng platform của stg trên AWS (ADR-0034 §2, ADR-0024 §6A, ADR-0048, ADR-0053, ADR-0055…0058, ADR-0060, ADR-0061): ghép các module `network`,
-`eks`, `rds`, `msk`, `elasticache`, `alarms`, `media`, `edge`, `waf`, `ssm-bastion`, `external-secrets`, thêm role IAM và Pod Identity association cho
-`svp/video-service`, `svp/media-worker`, xuất output `cluster_values` theo hợp đồng `cluster.*` và các output của cluster cho root bootstrap
-`aws/gitops/stg`. Ứng dụng trong cluster không ở đây: Argo CD triển khai từ `svp-gitops`.
+Tầng platform của stg trên AWS (ADR-0034 §2, ADR-0024 §6A, ADR-0048, ADR-0053, ADR-0055…0058, ADR-0060, ADR-0061): ghép
+các module `network`, `eks`, `rds`, `msk`, `elasticache`, `alarms`, `media`, `edge`, `waf`, `ssm-bastion`,
+`external-secrets`, thêm role IAM và Pod Identity association cho `svp/video-service`, `svp/media-worker`, đọc tài
+nguyên sống lâu của account (`baseline.tf`), xuất output `cluster_values` theo hợp đồng `cluster.*` và các output của
+cluster cho root bootstrap `aws/gitops/stg`. Ứng dụng trong cluster không ở đây: Argo CD triển khai từ `svp-gitops`.
 
 ## Account, profile, state
 
@@ -20,6 +21,24 @@ Tầng platform của stg trên AWS (ADR-0034 §2, ADR-0024 §6A, ADR-0048, ADR-
 Root chạy được khi baseline `aws/accounts/stg` đã apply, uỷ quyền DNS đã xong
 ([`aws/accounts/README.md`](../../accounts/README.md)) và root `aws/log-archive` đã apply (bucket nhận flow log, log WAF, log CloudFront và
 delivery destination `svp-cloudfront-stg`, [`aws/log-archive/README.md`](../../log-archive/README.md)).
+
+## Tài nguyên sống lâu của account
+
+Registry, telemetry và Grafana của env sống qua `destroy` của buổi nên nằm ở baseline `aws/accounts/stg` (module
+`registry`, `observability`). Root này không đọc state của root đó: `baseline.tf` tìm từng tài nguyên bằng data source
+theo tên suy từ `svp-stg`. Baseline chưa apply (hay thiếu một tài nguyên) thì `plan` dừng ở đúng data source đó, nêu tên
+tài nguyên thiếu; apply `aws/accounts/stg` trước rồi plan lại.
+
+| Tài nguyên | Tìm bằng | Dùng ở |
+| --- | --- | --- |
+| Workspace AMP `svp-stg` | alias đúng `svp-stg` trong `aws_prometheus_workspaces` (data source workspace chỉ nhận id); không có thì precondition dừng | `module.eks` (role Pod Identity), `module.alarms` (publisher `aps`), `ampWorkspaceId`, `ampEndpoint` |
+| Log group `/svp/stg/otel` | tên | `module.eks` (role Collector), `logGroup` |
+| Khoá KMS `alias/svp-stg-observability`, `alias/svp-stg-ecr` | alias | `module.eks` (Collector ghi log mã hoá; node giải mã image qua ECR) |
+| Repo phát hành `svp-backend/*`, `svp-frontend/*` | mọi repo của registry có tên bắt đầu bằng hai tiền tố đó | `module.eks` (role admission controller Kyverno) |
+| Rule pull-through cache `ghcr`, `docker-hub`, `quay`, `k8s`, `ecr-public` | tiền tố, một data source mỗi rule | `module.eks` (quyền cache của role node) |
+| Workspace AMG `svp-stg` | id từ `grafana_workspace_id` (AMG không tìm được theo tên); postcondition kiểm tên là `svp-stg` | `grafanaUrl` |
+
+Host registry (`ecrRegistry`) dựng từ `account_id` và `region`, không đọc API.
 
 ## Cái gì khác giữa các env
 
@@ -44,15 +63,18 @@ chúng là chỗ giá trị cá nhân hay nằm. Tệp cỡ của env cần comm
 `plan`, `apply`, `destroy`. Quên thì Terraform dừng ngay ở "No value for required variable" (các biến cỡ có từ đầu không có mặc định),
 không dựng gì sai.
 
-Mỗi nhóm biến của `stg.tfvars` và `prd.tfvars` (mạng, `eks`, `rds`, `msk`, `valkey`, `media`, `edge`) có một comment nói vì sao; hai file cùng thứ
-tự dòng để đọc cạnh nhau. Thành phần nào phải giống prd, được giảm hay giảm có điều kiện (mất gì, kiểm bù ở đâu) và nguồn của từng quyết
-định: bảng của [`environments.md`](https://github.com/anhnvcoder/svp-backend/blob/main/docs/explanation/environments.md) ở repo code. Tóm tắt: stg giữ cùng dịch vụ, version,
-cấu hình, xác thực, mã hoá (KMS key cho Secret của EKS, RDS, MSK, SNS), loại log (năm loại log control plane, flow log, export log RDS,
-Database Insights, enhanced monitoring, broker log MSK, slow-log Valkey, access log media), cùng bộ alarm và cùng đường tới API (tunnel SSM);
-stg giảm số AZ (2), NAT (một), lớp và số lượng (RDS một AZ, MSK RF 2, Valkey một node), retention của log CloudWatch (1 ngày), bảo vệ
-xoá (cả ALB edge: `edge_alb_deletion_protection = false`) và distribution media (gói flat-rate Free, không log chuẩn:
-`media_flat_rate_free = true`); mọi phần khác của đường vào giống prd. Flow log, log WAF và log CloudFront nằm ở Log Archive, retention theo
-mục [Log và phát hiện](#log-và-phát-hiện).
+Mỗi nhóm biến của `stg.tfvars` và `prd.tfvars` (mạng, `eks`, `rds`, `msk`, `valkey`, `media`, `edge`) có một comment nói
+vì sao; hai file cùng thứ tự dòng để đọc cạnh nhau. Thành phần nào phải giống prd, được giảm hay giảm có điều kiện (mất
+gì, kiểm bù ở đâu) và nguồn của từng quyết định: bảng của
+[`environments.md`](https://github.com/anhnvcoder/svp-backend/blob/main/docs/explanation/environments.md) ở repo code.
+Tóm tắt: stg giữ cùng dịch vụ, version, cấu hình, xác thực, mã hoá (KMS key cho Secret của EKS, RDS, MSK, SNS), loại log
+(năm loại log control plane, flow log, export log RDS, Database Insights, enhanced monitoring, broker log MSK, slow-log
+Valkey, access log media), cùng bộ alarm và cùng đường tới API (tunnel SSM); stg giảm số AZ (2), NAT (một), số AZ đặt
+ENI của endpoint interface (một: `interface_endpoint_az_count`), lớp và số lượng (RDS một AZ, MSK RF 2, Valkey một
+node), retention của log CloudWatch (1 ngày), bảo vệ xoá (cả ALB edge: `edge_alb_deletion_protection = false`) và
+distribution media (gói flat-rate Free, không log chuẩn: `media_flat_rate_free = true`); mọi phần khác của đường vào
+giống prd. Flow log, log WAF và log CloudFront nằm ở Log Archive, retention theo mục [Log và phát
+hiện](#log-và-phát-hiện).
 
 Số broker MSK là `az_count` (một broker mỗi AZ); phiên bản Kafka (`4.1.x.kraft`), Valkey (`9.1`) và EBS khởi đầu mỗi broker lấy mặc định
 của module, như ADR-0053 §2, §7; trần dung lượng broker (`msk_broker_volume_max_size`) là của env. Nhóm node hệ thống (loại, min = desired =
@@ -68,7 +90,8 @@ Giá trị cá nhân (`stg.auto.tfvars` hay `TF_VAR_*`):
 | --- | --- |
 | `hosted_zone_id` | output `zone_id` của `aws/accounts/stg`, dán tay (root này không đọc state của root khác); module `edge`, `media` ghi bản ghi alias và bản ghi validation ACM vào zone này |
 | `domain` | tên zone stg (`stg.aws.<domain>`, web ở apex) hay một tên trong zone đó; API là `api.<tên này>`, media là `media.<tên này>`; plan dừng ở precondition của `cluster_values` nếu tên khác |
-| `alarm_email` | hộp thư nhận CloudWatch alarm (subscription email của topic `svp-stg-alarms`, biến `sensitive`); người học mở link xác nhận SNS gửi sau apply |
+| `alarm_email` | hộp thư nhận CloudWatch alarm và cảnh báo của luật trên AMP (subscription email của topic `svp-stg-alarms`, biến `sensitive`); người học mở link xác nhận SNS gửi sau apply |
+| `grafana_workspace_id` | id `g-<id>` của workspace AMG `svp-stg` do `aws/accounts/stg` tạo, đọc bằng `aws grafana list-workspaces` (lệnh trong `example.auto.tfvars.example`); id không đổi giữa các buổi vì workspace sống lâu |
 
 Không có IP của máy người học: endpoint công khai của API tắt.
 
@@ -89,7 +112,7 @@ echo "$SVP_AWS_STG_ACCOUNT_ID"
 Dựng:
 
 ```sh
-cp example.auto.tfvars.example stg.auto.tfvars          # rồi sửa ba giá trị
+cp example.auto.tfvars.example stg.auto.tfvars          # rồi sửa bốn giá trị
 AWS_PROFILE=anhnv-stg terraform init -reconfigure -backend-config=../../backend-stg.hcl -backend-config=key=aws/stg/terraform.tfstate
 AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
   terraform plan -var-file=stg.tfvars -out=stg.tfplan
@@ -213,9 +236,20 @@ Khoá của `cluster_values`:
 | `uploadsBucket`, `mediaBucket`, `mediaDomain` | `module.media` |
 | `s3Cidrs` | `data "aws_ip_ranges"` dịch vụ `s3` của region, sắp xếp: NetworkPolicy của VPC CNI lọc theo địa chỉ, nên pod gọi S3 được mở đúng các dải này cổng 443. Danh sách đọc lại ở mỗi plan; dải AWS thêm giữa buổi chỉ tới được sau lần apply sau |
 | `externalSecretsRoles` | output `roles` của `module.external_secrets`: namespace (`svp`, `svp-data`, `svp-obs`, `keda`, `argocd`) → ARN role IAM của SecretStore namespace đó |
+| `ecrRegistry` | `<account_id>.dkr.ecr.<region>.amazonaws.com`: registry private của account, nơi cluster kéo image phát hành và image bên thứ ba qua pull-through cache |
+| `ampWorkspaceId` | id `ws-<uuid>` của workspace AMP `svp-stg` (`baseline.tf`): luật và Alertmanager của ACK đặt trên workspace này |
+| `ampEndpoint` | `prometheus_endpoint` của workspace, kết thúc bằng `/`: `api/v1/remote_write`, `api/v1/query` nối sau |
+| `logGroup` | `/svp/stg/otel`: Collector ghi log OTLP của service và web vào đây |
+| `grafanaUrl` | `https://` + endpoint của workspace AMG, không `/` cuối: Grafana Operator đẩy dashboard và data source tới đây |
+| `alarmTopicArn` | `module.alarms.topic_arn` (topic `svp-stg-alarms`): Alertmanager của AMP gửi cảnh báo tới đây |
 
-Thêm khoá thì sửa cả bốn nơi của hợp đồng (output này, mẫu `platforms/eks/*.values.tpl` của `svp-gitops`, fixture
-`deploy/ci/cluster-values.example.yaml` của repo code, bảng ở ADR-0034 §7).
+Dạng từng khoá (regex) là validation của module [`gitops-bridge`](../../modules/gitops-bridge/README.md)
+(`variables.tf`); dạng các khoá của AMP, AMG, SNS đối chiếu với tài liệu AWS ở [phụ lục
+ADR-0063](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0063-managed-observability.md). Thêm hay
+đổi khoá thì sửa mọi nơi giữ hợp đồng: output này ở hai root env, bảng này, `variables.tf` (danh sách khoá, validation
+dạng) và test của module `gitops-bridge`, `$shapes` của `argocd/apps/templates/applications.yaml`, mẫu
+`platforms/eks/*.values.tpl` và bảng ở `README.md` của `svp-gitops`, fixture `deploy/ci/cluster-values.example.yaml` của
+repo code.
 
 ## Quyền AWS trong cluster
 
@@ -228,9 +262,16 @@ Trust policy như role của controller trong module `eks`: `pods.eks.amazonaws.
 session tag `eks-cluster-name`, `kubernetes-namespace`, `kubernetes-service-account` đúng cặp ở bảng. ServiceAccount của chart `svp-service`
 mang tên release, nên tên release phải giữ `video-service`, `media-worker`. Chỉ hai service này gọi API AWS.
 
-Secret của cluster: module `external-secrets` tạo vỏ entry `svp/stg/<entry>` (giá trị của `kafka-admin`, `kafka-users`, `valkey-users`
-do module `msk`, `elasticache` ghi, mục dưới; entry khác người học ghi bằng `make eks-secrets`), role `svp-stg-external-secrets` của controller External Secrets (Pod Identity, ServiceAccount `external-secrets/external-secrets`) chỉ được
-assume năm role `svp-stg-external-secrets-<namespace>`, mỗi role chỉ đọc entry mà namespace đó dùng (README của module).
+Controller nền tảng (Collector, Prometheus agent, ACK, admission controller Kyverno, Argo Rollouts) nhận role Pod
+Identity của module [`eks`](../../modules/eks/README.md) trên workspace AMP, log group, khoá và repo phát hành mà
+`baseline.tf` đọc; role node được kéo qua pull-through cache và giải mã image qua ECR. Topic `svp-stg-alarms` nhận thêm
+publisher `aps.amazonaws.com`, giới hạn ở đúng workspace của env (module [`alarms`](../../modules/alarms/README.md)).
+
+Secret của cluster: module `external-secrets` tạo vỏ entry `svp/stg/<entry>` (giá trị của `kafka-admin`, `kafka-users`,
+`valkey-users` do module `msk`, `elasticache` ghi, mục dưới; `grafana-operator`, token của service account AMG, do
+script buổi ghi mỗi buổi; entry khác người học ghi bằng `make eks-secrets`), role `svp-stg-external-secrets` của
+controller External Secrets (Pod Identity, ServiceAccount `external-secrets/external-secrets`) chỉ được assume năm role
+`svp-stg-external-secrets-<namespace>`, mỗi role chỉ đọc entry mà namespace đó dùng (README của module).
 
 RDS (5432), MSK (9096) và ElastiCache (6379), cả ba ở subnet database, chỉ nhận từ security group node (pod mang IP của ENI node với VPC
 CNI) và security group cluster do EKS tạo. Security group cluster nằm trên ENI của control plane (EKS cũng gắn nó cho thứ chạy không có

@@ -24,6 +24,8 @@ module "network" {
   single_nat_gateway  = var.single_nat_gateway
   flow_log_bucket_arn = "arn:aws:s3:::${local.log_archive_buckets.flow_logs}"
 
+  interface_endpoint_az_count = var.interface_endpoint_az_count
+
   s3_endpoint_restricted = var.s3_endpoint_restricted
   s3_endpoint_buckets    = concat([module.media.uploads_bucket, module.media.media_bucket], var.s3_endpoint_extra_buckets)
 }
@@ -44,6 +46,15 @@ module "eks" {
   system_node_max_size = 2 * var.az_count
 
   control_plane_log_retention_days = var.control_plane_log_retention_days
+
+  # Pod Identity roles of the platform controllers and the pull through cache rights of the nodes, on the long-lived
+  # resources of baseline.tf.
+  amp_workspace_arn         = data.aws_prometheus_workspace.env.arn
+  log_group_arn             = data.aws_cloudwatch_log_group.otel.arn
+  observability_kms_key_arn = data.aws_kms_alias.observability.target_key_arn
+  ecr_kms_key_arn           = data.aws_kms_alias.ecr.target_key_arn
+  release_repository_arns   = [for r in data.aws_ecr_repository.release : r.arn]
+  ecr_cache_prefixes        = keys(data.aws_ecr_pull_through_cache_rule.cache)
 }
 
 module "rds" {
@@ -133,13 +144,16 @@ module "elasticache" {
   alarm_topic_arn        = module.alarms.topic_arn
 }
 
-# SNS topic every CloudWatch alarm of RDS, MSK and ElastiCache notifies: alarms live outside the cluster, so they still
-# fire when the cluster is down.
+# SNS topic every CloudWatch alarm of RDS, MSK and ElastiCache and every alert of the rules on the Prometheus workspace
+# notify: both are evaluated outside the cluster, so they still fire when the cluster is down.
 module "alarms" {
   source = "../../modules/alarms"
 
   name        = local.name
   alarm_email = var.alarm_email
+
+  publisher_services = ["cloudwatch.amazonaws.com", "aps.amazonaws.com"]
+  aps_workspace_arn  = data.aws_prometheus_workspace.env.arn
 }
 
 module "media" {

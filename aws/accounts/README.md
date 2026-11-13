@@ -1,10 +1,12 @@
 # `aws/accounts`: baseline của account stg và prd (chạy một lần mỗi account)
 
 Mỗi account thành viên của org (`svp-stg`, `svp-prd`) có một root ở đây, gọi module
-[`account-baseline`](../modules/account-baseline/README.md): bucket state và KMS key của nó, zone DNS của env với bản ghi `CAA` ở đỉnh,
-budget tháng. Root prd bật thêm DNSSEC (key KMS, KSK, hai alarm `page`) và query log cho zone prd, cùng topic SNS `svp-prd-dns-alarms` ở
-`us-east-1` (module [`alarms`](../modules/alarms/README.md)) nhận hai alarm đó. Mọi thứ sống giữa các buổi AWS, mang tag `Stack=baseline`
-(script quét sót của buổi giữ lại tag này).
+[`account-baseline`](../modules/account-baseline/README.md): bucket state và KMS key của nó, zone DNS của env với bản
+ghi `CAA` ở đỉnh, budget tháng; cùng module [`registry`](../modules/registry/README.md) và
+[`observability`](../modules/observability/README.md) (mục [Registry và observability](#registry-và-observability)).
+Root prd bật thêm DNSSEC (key KMS, KSK, hai alarm `page`) và query log cho zone prd, cùng topic SNS `svp-prd-dns-alarms`
+ở `us-east-1` (module [`alarms`](../modules/alarms/README.md)) nhận hai alarm đó. Mọi thứ sống giữa các buổi AWS, mang
+tag `Stack=baseline` (script quét sót của buổi giữ lại tag này).
 
 Zone của prd là zone gốc của lab, `aws.<domain>` (web prd ở đỉnh zone, API `api.aws.<domain>`), được DNS của domain cha (Cloudflare) uỷ
 quyền bằng bốn bản ghi `NS` tên `aws`. Zone của stg là `stg.aws.<domain>`, zone con mà zone prd uỷ quyền bằng bản ghi `NS` của biến
@@ -16,12 +18,13 @@ quyền bằng bốn bản ghi `NS` tên `aws`. Zone của stg là `stg.aws.<dom
 | `stg/` | `anhnv-stg` | `SVP_AWS_STG_ACCOUNT_ID` | key `aws/accounts/stg/terraform.tfstate` trong bucket của account stg |
 | `prd/` | `anhnv-prd` | `SVP_AWS_PRD_ACCOUNT_ID` | key `aws/accounts/prd/terraform.tfstate` trong bucket của account prd |
 
-Hai root chỉ khác `local.env` (`main.tf`), `key` của backend (`versions.tf`), những gì chỉ prd có (biến `delegated_subdomains`,
-`dnssec_signing`, `alarm_email`; `dnssec_enabled = true`, `query_log_enabled = true` và module `alarms` trong `main.tf`) và mô tả của biến,
-output theo zone của env. stg không DNSSEC, không query log (lý do:
-[ADR-0061](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0061-edge-cloudfront-waf-acm.md) §11). Trong bucket của mỗi account còn có state của root
-`aws/envs/<env>` (key `aws/<env>/terraform.tfstate`) và `aws/gitops/<env>` (key `aws/gitops/<env>/terraform.tfstate`), cả hai đọc
-`-backend-config=../../backend-<env>.hcl`.
+Hai root chỉ khác `local.env` và các giá trị theo env cạnh nó trong `locals` của `main.tf` (`ci_roles`, retention),
+`key` của backend (`versions.tf`), những gì chỉ prd có (biến `delegated_subdomains`, `dnssec_signing`, `alarm_email`;
+`dnssec_enabled = true`, `query_log_enabled = true` và module `alarms` trong `main.tf`) và mô tả của biến, output theo
+zone của env. stg không DNSSEC, không query log (lý do:
+[ADR-0061](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0061-edge-cloudfront-waf-acm.md) §11). Trong
+bucket của mỗi account còn có state của root `aws/envs/<env>` (key `aws/<env>/terraform.tfstate`) và `aws/gitops/<env>`
+(key `aws/gitops/<env>/terraform.tfstate`), cả hai đọc `-backend-config=../../backend-<env>.hcl`.
 
 ## Phí giữ giữa các buổi
 
@@ -39,14 +42,20 @@ Tổng R mỗi account khoảng $1,51/tháng năm đầu ($3,02 cho hai account)
 (`PendingDeletion`) không tính phí. Management account không giữ hosted zone: mỗi account prd, stg đúng một zone, tổng hai zone. Bản ghi
 `CAA` nằm trong phí zone.
 
+Registry và observability của mỗi account (key KMS, secret của cache, lưu trữ ECR tăng theo số bản phát hành, workspace
+Grafana tính cả tháng không buổi): bảng chi phí lúc không buổi của
+[ADR-0062](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0062-ecr-registry-ci-oidc.md) §11 và
+[ADR-0063](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0063-managed-observability.md) §12.
+
 Account prd giữ thêm key KMS DNSSEC, key KMS và topic của alarm DNSSEC, hai alarm và log query DNS; phí của chúng (có nguồn) ở bảng chi phí
 lúc không buổi của [ADR-0061](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0061-edge-cloudfront-waf-acm.md) §13.
 
 ## Dựng baseline
 
-**Người học chạy mọi lệnh dưới đây** (AI không chạy lệnh nào chạm account). Làm sau khi root `aws/org` đã tạo account và gán permission set
-`SvpAdmin`, trước buổi AWS đầu của env đó. Dựng mới cả hai env thì prd trước: zone stg được uỷ quyền từ zone prd (mục 5). Ví dụ dưới là
-stg; với prd thay `stg` bằng `prd`, `anhnv-stg` bằng `anhnv-prd`, `SVP_AWS_STG_ACCOUNT_ID` bằng `SVP_AWS_PRD_ACCOUNT_ID`.
+**Người học chạy mọi lệnh dưới đây** (AI không chạy lệnh nào chạm account). Làm sau khi root `aws/org` đã tạo account và
+gán permission set `SvpAdmin` và `aws/security` đã apply ([Thứ tự apply](#thứ-tự-apply)), trước buổi AWS đầu của env đó.
+Dựng mới cả hai env thì prd trước: zone stg được uỷ quyền từ zone prd (mục 5). Ví dụ dưới là stg; với prd thay `stg`
+bằng `prd`, `anhnv-stg` bằng `anhnv-prd`, `SVP_AWS_STG_ACCOUNT_ID` bằng `SVP_AWS_PRD_ACCOUNT_ID`.
 
 Cần: Terraform 1.15, AWS CLI v2, `jq`, `dig`; profile `anhnv-stg` đã tạo bằng `aws configure sso` (permission set `SvpAdmin` của account
 stg) và `aws sso login --profile anhnv-stg`; trong terminal của buổi (không file commit nào) đã `export SVP_AWS_STG_ACCOUNT_ID=<12 số>`.
@@ -69,8 +78,10 @@ bucket ở bước 4.
 cp stg.auto.tfvars.example stg.auto.tfvars
 ```
 
-Sửa `stg.auto.tfvars` (git bỏ qua): `budget_emails`, `zone_name` (không dấu chấm cuối: `stg.aws.<domain>` ở stg, `aws.<domain>` ở prd),
-`budget_limit_usd` nếu muốn khác $20; ở prd thêm `alarm_email` (hộp thư của topic `svp-prd-dns-alarms`). Ở prd bỏ khối `delegated_subdomains` của file ví dụ cho tới mục 5 (zone stg chưa có).
+Sửa `stg.auto.tfvars` (git bỏ qua): `budget_emails`, `zone_name` (không dấu chấm cuối: `stg.aws.<domain>` ở stg,
+`aws.<domain>` ở prd), `budget_limit_usd` nếu muốn khác $20, `platform_admin_group_id`, `platform_viewer_group_id`
+(output cùng tên của `aws/org`); ở prd thêm `alarm_email` (hộp thư của topic `svp-prd-dns-alarms`). Ở prd bỏ khối
+`delegated_subdomains` của file ví dụ cho tới mục 5 (zone stg chưa có).
 
 ### 3. Apply lần đầu, state local
 
@@ -82,11 +93,13 @@ AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform init
 AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform plan -out=stg.tfplan
 ```
 
-Đọc plan: ở stg `Plan: 11 to add, 0 to change, 0 to destroy` (KMS key và alias, bucket cùng 5 cấu hình của nó, hosted zone, bản ghi `caa`,
-budget; không bản ghi `delegation` nào). Ở prd `Plan: 25 to add, 0 to change, 0 to destroy`: 11 như stg, thêm 6 của DNSSEC (`aws_kms_key.dnssec`
-và alias ở `us-east-1`, `aws_route53_key_signing_key.this`, `aws_route53_hosted_zone_dnssec.this`, hai `aws_cloudwatch_metric_alarm.dnssec`), 3
-của query log (log group, resource policy, `aws_route53_query_log.this`) và 5 của `module.alarms` (key KMS, alias, topic, topic policy,
-subscription email). Rồi:
+Đọc plan: ở stg `Plan: 59 to add, 0 to change, 0 to destroy`: 11 của `module.baseline` (KMS key và alias, bucket cùng 5
+cấu hình của nó, hosted zone, bản ghi `caa`, budget; không bản ghi `delegation` nào) và 48 của `module.registry`,
+`module.observability` (danh sách ở [Thêm vào account đã có baseline](#thêm-vào-account-đã-có-baseline)). Ở prd
+`Plan: 71 to add, 0 to change, 0 to destroy`: 46 của hai module đó, 11 như stg, thêm 6 của DNSSEC (`aws_kms_key.dnssec`
+và alias ở `us-east-1`, `aws_route53_key_signing_key.this`, `aws_route53_hosted_zone_dnssec.this`, hai
+`aws_cloudwatch_metric_alarm.dnssec`), 3 của query log (log group, resource policy, `aws_route53_query_log.this`) và 5
+của `module.alarms` (key KMS, alias, topic, topic policy, subscription email). Rồi:
 
 ```sh
 AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform apply stg.tfplan
@@ -208,13 +221,108 @@ Mong đợi `Signing` là `SIGNING`, KSK `svp_prd_ksk` ở `ACTIVE`; `DSRecord` 
 trước, TTL, kiểm `dig +dnssec`, `delv`) và đường lui ở runbook `docs/runbooks/edge-setup.md` của repo này; tắt ký và gỡ DNSSEC ở mục
 [Tắt ký DNSSEC](../modules/account-baseline/README.md#tắt-ký-dnssec) của module.
 
-Account đã dựng baseline trước khi có `CAA`, DNSSEC và query log: plan của stg mong đợi `1 to add` (bản ghi `caa`), của prd `15 to add` (bản
-ghi `caa`, 6 của DNSSEC, 3 của query log, 5 của `module.alarms`), `0 to change, 0 to destroy` ở cả hai.
+Account đã dựng baseline trước khi có `CAA`, DNSSEC và query log: plan của stg mong đợi `1 to add` (bản ghi `caa`), của
+prd `15 to add` (bản ghi `caa`, 6 của DNSSEC, 3 của query log, 5 của `module.alarms`), `0 to change, 0 to destroy` ở cả
+hai; chưa có registry, observability thì cộng phần của mục
+[Thêm vào account đã có baseline](#thêm-vào-account-đã-có-baseline).
+
+## Registry và observability
+
+Dữ liệu và cấu hình phải sống qua `destroy` của buổi nằm ở root này, không ở `aws/envs/<env>`:
+
+- [`registry`](../modules/registry/README.md): registry ECR private của account (repo phát hành, pull-through cache,
+  quét Inspector, key `alias/svp-<env>-ecr`), IAM OIDC provider của GitHub Actions và các role CI chép bản phát hành vào
+  registry.
+- [`observability`](../modules/observability/README.md): workspace AMP `svp-<env>`, log group `/svp/<env>/otel`,
+  Transaction Search của X-Ray, workspace Amazon Managed Grafana `svp-<env>`, key `alias/svp-<env>-observability`.
+
+Root `aws/envs/<env>` tìm chúng bằng data source theo tên, alias. Giá trị theo env nằm trong `locals` của `main.tf`,
+cạnh `env`:
+
+- `ci_roles`: bộ role của bảng **Role CI ECR**
+  ([ADR-0062](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0062-ecr-registry-ci-oidc.md) §5). stg có
+  role release của `svp-backend`, `svp-frontend` (nhận bản từ `main`) và hai role rescan; prd có `svp-ci-ecr-promote`
+  (environment `promote-prd` của `svp-backend`) và hai role rescan, không role nào nhận `ref:refs/heads/main`. Trust
+  dùng `sub` dạng bất biến `repo:<owner>@<owner-id>/<repo>@<repo-id>:...`; `github_backend`, `github_frontend` giữ phần
+  đầu đó, id là số công khai của API GitHub.
+- `amp_retention_days`, `log_retention_days`, `span_retention_days`: retention của metric, log ứng dụng và span
+  ([ADR-0063](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0063-managed-observability.md) §10; stg ngắn
+  hơn prd).
+
+Biến `platform_admin_group_id`, `platform_viewer_group_id` là id nhóm `svp-platform-admins`, `svp-platform-viewers` của
+`aws/org` (vai trò `ADMIN`, `VIEWER` của Grafana); chỉ nằm trong `<env>.auto.tfvars` (git bỏ qua).
+
+| Output | Dùng ở |
+| --- | --- |
+| `registry_host` | khoá `ecrRegistry` của cluster values; host registry trong lệnh kiểm |
+| `ci_role_arns` | đối chiếu tên role mà workflow của `svp-backend`, `svp-frontend` dựng từ secret `SVP_AWS_<ENV>_ACCOUNT_ID` |
+| `amp_workspace_id` | khoá `ampWorkspaceId` của cluster values; lệnh kiểm metric còn sau `destroy` |
+| `grafana_url` | khoá `grafanaUrl` của cluster values; địa chỉ đăng nhập Grafana bằng IAM Identity Center |
+| `spans_retention_command` | lệnh đặt retention của log group `aws/spans`, chạy một lần mỗi account |
+
+### Thứ tự apply
+
+```mermaid
+flowchart LR
+  org["aws/org: delegated admin Inspector, nhóm nền tảng"] --> sec["aws/security: Inspector quét ECR của thành viên"]
+  sec --> acc["aws/accounts/#60;env#62;: registry, observability"]
+  org -->|"id nhóm vào #60;env#62;.auto.tfvars"| acc
+  acc --> envs["aws/envs/#60;env#62;: đọc bằng data source"]
+```
+
+`aws/org` tạo delegated admin của Inspector và hai nhóm nền tảng (id nhóm là biến của root này); `aws/security` bật
+Inspector cho ECR của mọi account thành viên, nên registry quét `ENHANCED` ngay khi tạo. Root `aws/envs/<env>` cần tài
+nguyên của root này có sẵn.
+
+### Thêm vào account đã có baseline
+
+**Người học chạy mọi lệnh dưới đây.** Ví dụ là stg; với prd thay `stg` bằng `prd`, `anhnv-stg` bằng `anhnv-prd`,
+`SVP_AWS_STG_ACCOUNT_ID` bằng `SVP_AWS_PRD_ACCOUNT_ID`. Trước hết `aws/org` và `aws/security` đã apply bản có Inspector
+và nhóm nền tảng ([`aws/org`](../org/README.md#thêm-inspector-và-nhóm-nền-tảng-vào-tổ-chức-đã-áp)), và `stg.auto.tfvars`
+có `platform_admin_group_id`, `platform_viewer_group_id` (dạng ở `stg.auto.tfvars.example`).
+
+```sh
+cd infra/aws/accounts/stg
+AWS_PROFILE=anhnv-stg aws sts get-caller-identity --region ap-southeast-1 --query '{Account:Account,Arn:Arn}' --output table
+AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform init -backend-config=../../backend-stg.hcl
+AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform plan -out=stg.tfplan
+```
+
+`Account` phải bằng `$SVP_AWS_STG_ACCOUNT_ID`, `Arn` chứa `assumed-role/AWSReservedSSO_SvpAdmin_`. Plan chỉ thêm: ở stg
+`Plan: 48 to add, 0 to change, 0 to destroy`, ở prd `Plan: 46 to add, 0 to change, 0 to destroy`, mọi tài nguyên dưới
+`module.registry` hay `module.observability`:
+
+- `module.registry` (stg 33, prd 31): key KMS và alias, 7 `aws_ecr_repository.release`,
+  `aws_ecr_registry_scanning_configuration.this`, 5 `aws_ecr_pull_through_cache_rule.this`, 2
+  `aws_secretsmanager_secret.cache`, 5 `aws_ecr_repository_creation_template.cache`, role `svp-<env>-ecr-template` và
+  policy của nó, `aws_iam_openid_connect_provider.github`, mỗi role của `ci_roles` một `aws_iam_role.ci` và một
+  `aws_iam_role_policy.ci` (stg 4, prd 3);
+- `module.observability` (15): key KMS và alias, workspace AMP và `aws_prometheus_workspace_configuration`, log group
+  `/svp/<env>/otel` và stream `otel-collector`, `aws_cloudwatch_log_resource_policy.xray_spans`,
+  `aws_xray_trace_segment_destination.this`, `aws_xray_indexing_rule.default`, role `svp-<env>-grafana` và policy,
+  workspace Grafana, hai `aws_grafana_role_association`, service account `svp-grafana-operator`.
+
+Dừng (không apply, dán plan lại) nếu có `change`, `destroy` hay tài nguyên của `module.baseline`, `module.alarms`. Rồi:
+
+```sh
+AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform apply stg.tfplan && rm stg.tfplan
+AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform plan    # mong đợi: No changes.
+AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform output -json ci_role_arns | jq -r 'keys[]'
+```
+
+Lệnh cuối in đúng tên role của `ci_roles` của env. Sau apply còn ba việc tay, làm theo README module:
+
+- Ghi giá trị hai secret `ecr-pullthroughcache/ghcr`, `ecr-pullthroughcache/docker-hub` (module chỉ tạo vỏ):
+  [Pull-through cache](../modules/registry/README.md#pull-through-cache).
+- Sau buổi đầu có span: chạy lệnh của output `spans_retention_command`
+  ([Bước tay](../modules/observability/README.md#bước-tay-retention-của-awsspans)).
+- Gán người vào hai nhóm nền tảng ([`aws/org`](../org/README.md#nhóm-nền-tảng)) để đăng nhập `grafana_url`.
 
 ## Gỡ baseline (có chủ đích)
 
-Chỉ khi bỏ hẳn env đó: bucket giữ state của mọi root của account, key giữ quyền đọc state. Trước hết mọi root của account đã `destroy`
-(`aws/gitops/<env>`, `aws/envs/<env>`), quét sót của buổi sạch.
+Chỉ khi bỏ hẳn env đó: bucket giữ state của mọi root của account, key giữ quyền đọc state. Gỡ hẳn cũng xoá bản phát
+hành trong ECR (GHCR còn bản gốc), metric, log, span và workspace Grafana của env. Trước hết mọi root của account đã
+`destroy` (`aws/gitops/<env>`, `aws/envs/<env>`), quét sót của buổi sạch.
 
 1. Bỏ uỷ quyền trước khi xoá zone: bản ghi `NS` ở zone cha còn trỏ tới name server của zone đã xoá thì người khác tạo zone cùng tên trên
    các name server đó chiếm được tên (subdomain takeover).
@@ -234,17 +342,71 @@ Chỉ khi bỏ hẳn env đó: bucket giữ state của mọi root của account
    `AWS_PROFILE=anhnv-stg aws route53 list-resource-record-sets --region ap-southeast-1 --hosted-zone-id "$(AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform output -raw zone_id)" --query 'ResourceRecordSets[].[Name,Type]' --output text`
 4. Đưa state về local (bucket và key sắp bị xoá): tạo lại `local_override.tf` như bước 3 của mục dựng, rồi
    `AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform init -migrate-state` (trả lời yes).
-5. Gỡ bảo vệ, chỉ trong bản sửa local này (không commit): trong `aws/modules/account-baseline/state.tf` và `kms.tf` đổi
-   `prevent_destroy = true` thành `false`, thêm `force_destroy = true` vào `aws_s3_bucket.state` (xoá được bucket còn version cũ và state
-   của các root khác). Rồi `AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform apply` (chỉ đổi `force_destroy`).
-6. Chỉ prd: Terraform không bao giờ xoá key DNSSEC (`dnssec.tf` giữ `prevent_destroy`). Ngay trước `destroy`, bỏ key và alias của nó khỏi
-   state như bước 1 của mục Gỡ hẳn ở [Tắt ký DNSSEC](../modules/account-baseline/README.md#tắt-ký-dnssec):
-   `AWS_PROFILE=anhnv-prd terraform state rm 'module.baseline.aws_kms_key.dnssec[0]' 'module.baseline.aws_kms_alias.dnssec[0]'`. Không
-   apply sau lệnh này: config còn DNSSEC thì Terraform tạo key mới.
-7. `AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform destroy` (ở prd: tắt DNSSEC của zone trước, rồi xoá KSK).
-   Key của state vào `PendingDeletion` 30 ngày (không tính phí), huỷ được trong thời gian đó (id key in ở output của `destroy`):
-   `AWS_PROFILE=anhnv-stg aws kms cancel-key-deletion --key-id <id key> --region ap-southeast-1`.
-8. Chỉ prd: lên lịch xoá key DNSSEC (còn ở AWS, ngoài state) bằng hai lệnh ở bước 3 của mục Gỡ hẳn đó (profile `anhnv-prd`,
-   `--region us-east-1`, chờ 30 ngày, huỷ được trong thời gian đó).
-9. `rm -f terraform.tfstate* ../../backend-stg.hcl stg.auto.tfvars local_override.tf`, hoàn tác sửa của bước 5
-   (`git checkout -- ../../modules/account-baseline`).
+5. Gỡ bảo vệ, chỉ trong bản sửa local này (không commit): đổi `prevent_destroy = true` thành `false` trong
+   `aws/modules/account-baseline/state.tf`, `kms.tf`, `aws/modules/registry/kms.tf` và
+   `aws/modules/observability/kms.tf`; thêm `force_destroy = true` vào `aws_s3_bucket.state` (xoá được bucket còn
+   version cũ và state của các root khác) và `force_delete = true` vào `aws_ecr_repository.release` của
+   `aws/modules/registry/repositories.tf` (ECR không xoá repo còn image). Rồi
+   `AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform apply` (ở prd, khi mặc định của
+   `dnssec_signing` còn `true`, thêm `-var dnssec_signing=false` như bước 1): mong đợi
+   `0 to add, 8 to change, 0 to destroy`, chỉ đổi `force_destroy` của bucket và `force_delete` của 7 repo phát hành.
+6. Xoá repo do pull-through cache tạo: ECR tạo chúng khi node kéo image qua cache, nên chúng nằm ngoài state, mã hoá
+   bằng key `alias/svp-<env>-ecr` mà bước 8 lên lịch xoá. Liệt kê theo tiền tố của các rule cache:
+
+   ```sh
+   AWS_PROFILE=anhnv-stg aws ecr describe-pull-through-cache-rules --region ap-southeast-1 \
+     --query 'pullThroughCacheRules[].ecrRepositoryPrefix' --output json | jq -r '.[]' > cache-prefixes.txt
+   while read -r p; do
+     AWS_PROFILE=anhnv-stg aws ecr describe-repositories --region ap-southeast-1 --output json \
+       --query "repositories[?starts_with(repositoryName, '$p/')].repositoryName" < /dev/null | jq -r '.[]'
+   done < cache-prefixes.txt > cache-repos.txt
+   cat cache-prefixes.txt cache-repos.txt
+   ```
+
+   `cache-prefixes.txt` là tiền tố của `local.cache_rules` (module `registry`); mỗi dòng của `cache-repos.txt` bắt
+   đầu bằng một tiền tố đó, không dòng nào là `svp-backend/`, `svp-frontend/`. Đúng vậy thì xoá chúng cùng image
+   (upstream còn bản gốc):
+
+   ```sh
+   while read -r r; do
+     AWS_PROFILE=anhnv-stg aws ecr delete-repository --region ap-southeast-1 --force --repository-name "$r" \
+       --query repository.repositoryName --output text < /dev/null
+   done < cache-repos.txt
+   rm cache-prefixes.txt cache-repos.txt
+   ```
+
+7. Chỉ prd: Terraform không bao giờ xoá key DNSSEC (`dnssec.tf` giữ `prevent_destroy`). Ngay trước `destroy`, bỏ key
+   và alias của nó khỏi state như bước 1 của mục Gỡ hẳn ở
+   [Tắt ký DNSSEC](../modules/account-baseline/README.md#tắt-ký-dnssec):
+   `AWS_PROFILE=anhnv-prd terraform state rm 'module.baseline.aws_kms_key.dnssec[0]' 'module.baseline.aws_kms_alias.dnssec[0]'`.
+   Không apply sau lệnh này: config còn DNSSEC thì Terraform tạo key mới.
+8. `AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform destroy` (ở prd: tắt DNSSEC của zone
+   trước, rồi xoá KSK). Key của state, `alias/svp-<env>-ecr` và `alias/svp-<env>-observability` vào `PendingDeletion`
+   30 ngày (không tính phí), huỷ được trong thời gian đó (id mỗi key in ở output của `destroy`):
+   `AWS_PROFILE=anhnv-stg aws kms cancel-key-deletion --key-id <id key> --region ap-southeast-1`. Hai secret
+   `ecr-pullthroughcache/ghcr`, `ecr-pullthroughcache/docker-hub` cũng chờ xoá 30 ngày, trong thời gian đó không tạo
+   được secret cùng tên: dựng lại env này sớm hơn thì xoá hẳn chúng trước (giá trị ghi lại sau apply như lần đầu):
+
+   ```sh
+   for s in ghcr docker-hub; do
+     AWS_PROFILE=anhnv-stg aws secretsmanager delete-secret --secret-id "ecr-pullthroughcache/$s" \
+       --force-delete-without-recovery --region ap-southeast-1
+   done
+   ```
+
+9. Chỉ prd: lên lịch xoá key DNSSEC (còn ở AWS, ngoài state) bằng hai lệnh ở bước 3 của mục Gỡ hẳn đó (profile
+   `anhnv-prd`, `--region us-east-1`, chờ 30 ngày, huỷ được trong thời gian đó).
+10. Gỡ thứ của X-Ray còn lại ngoài state: `destroy` không đổi đích segment của account (vẫn `CloudWatchLogs`), và log
+    group `aws/spans` (cùng `/aws/application-signals/data` nếu có) do X-Ray tạo vẫn giữ span. Đưa đích về `XRay`,
+    kiểm, rồi xoá hai log group (`ResourceNotFoundException` của một group nghĩa là X-Ray chưa từng tạo nó):
+
+    ```sh
+    AWS_PROFILE=anhnv-stg aws xray update-trace-segment-destination --destination XRay --region ap-southeast-1
+    AWS_PROFILE=anhnv-stg aws xray get-trace-segment-destination --region ap-southeast-1   # Destination: XRay
+    for g in aws/spans /aws/application-signals/data; do
+      AWS_PROFILE=anhnv-stg aws logs delete-log-group --log-group-name "$g" --region ap-southeast-1
+    done
+    ```
+
+11. `rm -f terraform.tfstate* ../../backend-stg.hcl stg.auto.tfvars local_override.tf`, hoàn tác sửa của bước 5
+    (`git checkout -- ../../modules/account-baseline ../../modules/registry ../../modules/observability`).

@@ -94,3 +94,26 @@ resource "github_actions_environment_variable" "promote_prd_app_client_id" {
   variable_name = "SVP_GITOPS_APP_CLIENT_ID"
   value         = var.svp_gitops_app_client_id
 }
+
+# ecr-rescan: the rescan jobs of svp-backend and svp-frontend take the AWS rescan roles of stg and prd, whose trust
+# names this environment, so only jobs on main may reach them. No reviewer: rescan runs on a schedule. No secret.
+resource "github_repository_environment" "ecr_rescan" {
+  for_each = toset(["svp-backend", "svp-frontend"])
+
+  repository        = github_repository.this[each.key].name
+  environment       = "ecr-rescan"
+  can_admins_bypass = true
+
+  deployment_branch_policy {
+    protected_branches     = false
+    custom_branch_policies = true
+  }
+}
+
+resource "github_repository_environment_deployment_policy" "ecr_rescan_main" {
+  for_each = toset(["svp-backend", "svp-frontend"])
+
+  repository     = github_repository_environment.ecr_rescan[each.key].repository
+  environment    = github_repository_environment.ecr_rescan[each.key].environment
+  branch_pattern = "main"
+}

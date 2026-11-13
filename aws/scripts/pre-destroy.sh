@@ -11,7 +11,11 @@
 #    then the ApplicationSet and both are deleted alone (no cascade: the children stay). The children's auto-sync is
 #    turned off too, so that svp-cluster does not make the Gateway again.
 
-# 2. Workload Applications, highest sync wave first, one wave at a time (their finalizer deletes what each deployed):
+# 2. The rules and alerting of AMP first (ACK's RuleGroupsNamespaces and AlertManagerDefinition), while ACK runs: it
+#    deletes them in AMP. With no ACK pod, or past the limit, their finalizers are cleared and what is left in AMP is
+#    printed with its delete commands, for the learner: it blocks nothing of the destroy.
+
+#    Then workload Applications, highest wave first, one wave at a time (their finalizer deletes what each deployed):
 #    all but svp-cluster and the platform controllers, whose finalizers and webhooks the workloads' objects need. Then
 #    Gateway svp of svp-edge and svp-cluster's TargetGroupBinding svp-envoy. Waits, with LBC and Envoy Gateway running,
 #    until no LoadBalancer Service, TargetGroupBinding or LBC load balancer is left (DNS records are root env's).
@@ -51,6 +55,7 @@ session_dir
 platform_apps=" svp-cluster cert-manager envoy-gateway external-secrets aws-load-balancer-controller keda argo-rollouts kyverno svp-policy karpenter "
 wave_limit=600
 platform_wave_limit=300
+ack_limit=300
 # The terminationGracePeriod of the NodePool (10 minutes) plus the time EC2 takes to end an instance.
 karpenter_limit=${SVP_KARPENTER_LIMIT:-900}
 
@@ -158,6 +163,28 @@ karpenter_instances_gone() {
   [ -z "$left" ]
 }
 
+ack_kinds=rulegroupsnamespaces.prometheusservice.services.k8s.aws,alertmanagerdefinitions.prometheusservice.services.k8s.aws
+# ack_left: "resource namespace name workspace AMP-name" of each ACK resource of AMP left in the cluster.
+ack_left() {
+  local out
+  out=$(kc get "$ack_kinds" -A -o json) || return 1
+  printing && return 0
+  jq -r '.items[] | "\(.kind | ascii_downcase)s.prometheusservice.services.k8s.aws \(.metadata.namespace) \(.metadata.name) \(.spec.workspaceID // "-") \(.spec.name // "-")"' <<<"$out"
+}
+ack_gone() {
+  local left
+  left=$(ack_left) || return 1
+  [ -z "$left" ]
+}
+# ack_running: a Ready pod of ACK's controller (its ServiceAccount is the one its Pod Identity names).
+ack_running() {
+  local out
+  out=$(kc get pods -A -o json) || return 1
+  printing && return 0
+  jq -e 'any(.items[]; .spec.serviceAccountName == "ack-prometheusservice-controller"
+    and any(.status.conditions[]?; .type == "Ready" and .status == "True"))' <<<"$out" >/dev/null
+}
+
 app_gone() {
   local out
   out=$(kc -n argocd get application "$1" --ignore-not-found -o name) || return 1
@@ -247,7 +274,37 @@ way_out() {
 }
 trap 'way_out $?' EXIT
 
-step "pre-destroy.sh 2/5: workload Applications, then Gateway svp, while LBC and Envoy Gateway run"
+step "pre-destroy.sh 2/5: the rules and alerting of AMP while ACK runs, workload Applications, then Gateway svp, while LBC and Envoy Gateway run"
+ack_crd=$(kc get crd rulegroupsnamespaces.prometheusservice.services.k8s.aws --ignore-not-found -o name) || fail "read the CRDs"
+if printing || [ -n "$ack_crd" ]; then
+  ack_up=
+  if ack_running; then ack_up=1; fi
+  kc delete "$ack_kinds" -A --all --wait=false >/dev/null || fail "delete the ACK resources of AMP"
+  if [ -n "$ack_up" ] && wait_until "ACK has deleted every rule groups namespace and alert manager definition in AMP" \
+    "$ack_limit" ack_gone; then
+    ok "rules and alerting of AMP deleted by ACK"
+  else
+    left=$(ack_left) || fail "list the ACK resources of AMP"
+    if [ -n "$left" ]; then
+      [ -n "$ack_up" ] || note "no Ready pod of ACK's controller: it deletes nothing in AMP"
+      while read -r kind ns name ws amp_name; do
+        # Their finalizer waits for ACK: cleared, so that the Application that made them can go.
+        kc -n "$ns" patch "$kind" "$name" --type merge -p '{"metadata":{"finalizers":null}}' >/dev/null ||
+          fail "clear the finalizer of $kind $ns/$name"
+        case $kind in
+          rulegroupsnamespaces.*) what="rule groups namespace $amp_name"
+            cmd="aws amp delete-rule-groups-namespace --workspace-id $ws --name $amp_name" ;;
+          *) what="alert manager definition" cmd="aws amp delete-alert-manager-definition --workspace-id $ws" ;;
+        esac
+        note "left in AMP: $what of workspace $ws; delete it: AWS_PROFILE=$profile $cmd --region $region"
+      done <<<"$left"
+    fi
+    ok "ACK resources of AMP gone from the cluster; what is left in AMP is listed above (aws/scripts/sweep.sh $env_name lists it too)"
+  fi
+else
+  ok "no ACK resource of AMP (ACK's CRDs are not installed)"
+fi
+mark pre-destroy-amp-rules
 left_apps=
 if [ -n "$argocd" ]; then
   delete_apps "$wave_limit" workload ||

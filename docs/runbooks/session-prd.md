@@ -14,7 +14,11 @@ Free chỉ ở media của stg),
 [ADR-0057](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0057-postgres17-verify-full.md) (PostgreSQL 17, `verify-full`, không proxy kết nối),
 [ADR-0058](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0058-managed-data-operations.md) (CloudWatch alarm tới email),
 [ADR-0061](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0061-edge-cloudfront-waf-acm.md) (edge: CloudFront, VPC origin, ALB
-internal, WAF, cert ACM, log CloudFront, DNS).
+internal, WAF, cert ACM, log CloudFront, DNS), [ADR-0062](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0062-ecr-registry-ci-oidc.md)
+(image từ ECR của account prd, chỉ vào qua `promote-prd`),
+[ADR-0063](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0063-managed-observability.md) (telemetry vào dịch vụ managed sống qua
+destroy), [ADR-0064](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0064-interface-endpoints.md) (endpoint interface ở mọi AZ của
+prd).
 
 Buổi prd đi đúng chuỗi script của buổi stg; khác biệt là dữ liệu (dòng `prd` của `env_table` trong `aws/scripts/lib.sh`: profile `anhnv-prd`,
 biến `SVP_AWS_PRD_ACCOUNT_ID`, tunnel cổng 6443, file `teardown.tfvars`, không thang k6) và các bước tay ở đây. Mọi mục chung (luật chạy lệnh,
@@ -34,9 +38,13 @@ aws/scripts/session.sh --print prd                 # mọi lệnh script của b
 - **Trần một buổi C ≈ $11,0** = 4 giờ × (H₀ $0,90 + H_k $1,09)/giờ + O₀ $2,8 + O_k $0,22 (ADR-0053 §16 và bảng ở phụ lục của nó; H_k là
   3 broker `kafka.m7g.large` cộng 2 node `cache.m7g.large` cộng phần nhỏ; H₀, O₀ ở phụ lục ADR-0048), cộng node Karpenter on-demand ngoài
   nhóm hệ thống, KMS key và CloudWatch alarm (ADR-0056, ADR-0058), cộng phần edge (ALB, ba web ACL, log; bảng "Thêm mỗi buổi" ở phụ lục
-  ADR-0061 §13); buổi prd đầu đo số thật ở Cost Explorer. **Phí giữ R ≈ $4,6/tháng** giữa các buổi (trail, KMS, bucket state của management;
-  bucket state, KMS key, zone của hai baseline), cộng phần edge lúc không buổi (key DNSSEC, topic và alarm DNSSEC, query log: bảng "Lúc không
-  buổi" ở phụ lục ADR-0061 §13), báo riêng, không cộng vào C.
+  ADR-0061 §13), cộng phần nền tảng managed (endpoint interface ở mọi AZ, mẫu AMP, log, span, Inspector mỗi digest bên thứ ba mới, AMG ở buổi
+  đầu tháng: bảng tổng ở
+  [ADR-0063 §12](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0063-managed-observability.md#12-chi-phí-hợp-đồng-cluster-và-adr-cũ)
+  và phụ lục của nó); buổi prd đầu đo số thật ở Cost Explorer. **Phí giữ R ≈ $4,6/tháng** giữa các buổi (trail, KMS, bucket state của
+  management; bucket state, KMS key, zone của hai baseline), cộng phần edge lúc không buổi (key DNSSEC, topic và alarm DNSSEC, query log: bảng
+  "Lúc không buổi" ở phụ lục ADR-0061 §13) và phần registry, observability lúc không buổi (key KMS, secret của cache, lưu trữ ECR, AMG: cùng
+  bảng của ADR-0063 §12), báo riêng, không cộng vào C.
 - **Cả buổi 4 giờ**, từ cổng promote tới hai lượt `sweep.sh` sạch. Quá 3 giờ mà chưa đo xong thì bỏ phần đo còn lại, sang gỡ. Quên gỡ 24
   giờ ≈ $48 (24 × (H₀ + H_k)); budget `svp-prd-monthly` và budget tổng của org gửi email ở 50 %, 80 %, 100 %.
 - Ba distribution của prd (web, api, media) và ba web ACL là pay-as-you-go, có access log; prd không đăng ký gói flat-rate nào. Web ACL sót
@@ -71,15 +79,18 @@ aws/scripts/session.sh --print prd                 # mọi lệnh script của b
    ([trang loại instance của AWS](https://aws.amazon.com/ec2/instance-types/)); thiếu thì xin tăng và chờ trước buổi.
 5. Trên máy, ngoài các công cụ của stg: `gh` đã đăng nhập.
 6. `aws/backend-prd.hcl` và `aws/envs/prd/prd.auto.tfvars` như điều kiện 4, 5 của stg (profile `anhnv-prd`, root `aws/accounts/prd`,
-   `domain = "aws.<domain>"`: tên zone prd, web ở đỉnh, API ở `api.aws.<domain>`; `alarm_email` là hộp thư nhận alarm):
+   `domain = "aws.<domain>"`: tên zone prd, web ở đỉnh, API ở `api.aws.<domain>`; `alarm_email` là hộp thư nhận alarm; `grafana_workspace_id`
+   là id của workspace AMG `svp-prd`):
 
    ```sh
    AWS_PROFILE=anhnv-prd terraform -chdir=aws/accounts/prd output -raw backend_hcl > aws/backend-prd.hcl
    zone=$(AWS_PROFILE=anhnv-prd terraform -chdir=aws/accounts/prd output -raw zone_id)
+   ws=$(AWS_PROFILE=anhnv-prd terraform -chdir=aws/accounts/prd output -raw grafana_url | sed -E 's#^https://(g-[0-9a-z]+)\..*#\1#')
    cat > aws/envs/prd/prd.auto.tfvars <<EOF
-   hosted_zone_id = "$zone"
-   domain         = "aws.<domain>"
-   alarm_email    = "<email>"
+   hosted_zone_id       = "$zone"
+   domain               = "aws.<domain>"
+   alarm_email          = "<email>"
+   grafana_workspace_id = "$ws"
    EOF
    ```
 
@@ -97,6 +108,9 @@ aws/scripts/session.sh --print prd                 # mọi lệnh script của b
 9. **Edge đã áp lần đầu** theo [`edge-setup.md`](edge-setup.md#thứ-tự-áp-lần-đầu) tới hết bước (3), như `session-stg.md` điều kiện 7 (destination
    `svp-cloudfront-prd`, `CAA`, zone `aws.<domain>` ký và có `DS` ở DNS cha); file có sẵn từ trước còn dòng `acme_email` thì xoá như
    `session-stg.md` điều kiện 5.
+10. **Nền tảng managed đã áp** theo [`platform-setup.md`](platform-setup.md#thứ-tự-áp-lần-đầu) tới hết bước (9) cho account prd, như
+    `session-stg.md` điều kiện 8: registry, cache có credential, AMP, log group `/svp/prd/otel`, AMG, quota chu kỳ luật 15 s; role
+    `svp-ci-ecr-promote` có, nên `promote-prd` của cổng dưới chép được image vào ECR prd.
 
 ## Mở terminal của buổi
 
@@ -114,8 +128,9 @@ export SVP_SESSION_DIR="$PWD/.session/$(date -u +%Y%m%dT%H%M%SZ)"
 ## Thứ tự
 
 Các bước script, theo đúng thứ tự `session.sh --print prd`; bước tay của prd chen giữa, ở các mục dưới (cổng promote trước bước 1, email
-của alarm và tunnel sau bước 5, CORS của media, phép kiểm edge, phép kiểm nền tảng, commit status và diễn tập sau bước 11, finding bảo
-mật trước bước 12, final snapshot sau bước 18):
+của alarm và tunnel sau bước 5, làm nóng cache sau bước 6, CORS của media, phép kiểm edge, phép kiểm nền tảng, phép kiểm nền tảng managed,
+commit status và diễn tập sau bước 11, ghi truy vấn dữ liệu và finding bảo mật trước bước 12, final snapshot sau bước 18, chạy lại truy vấn
+dữ liệu sau bước 20):
 
 | # | Lệnh | Hạn | Dán lại cho AI |
 | --- | --- | --- | --- |
@@ -163,6 +178,21 @@ gitops dừng khi khoá vắng, `require_pinned_revision = true`). Làm cổng n
    ```
 
 Job từ chối (`stg_ref` không có `argocd/stg` `success`, hay không trên `main`), environment hay PR bị từ chối: **dừng buổi**, không chạy bước 1.
+Job `promote-prd` chép và kiểm mọi image của `envs/stg/images/` vào ECR prd trước khi mở PR; một image lỗi thì không có PR: đọc log của job,
+dán dòng lỗi (`vuln` quá hạn thì dòng đó nêu lệnh rescan).
+
+**Chart có nền tảng managed** (sau bước 4, vẫn trước bước 1): `revision` vừa kiểm phải là commit của repo code có Collector theo nền tảng và
+value `canaryPrometheus`. Values eks của `svp-gitops` chỉ đúng với chart đó; chart cũ chạy với chúng thì Prometheus thành agent mà canary cũ vẫn
+hỏi nó (Inconclusive), Collector cũ gửi tới Prometheus, Loki, Tempo không còn trên eks (mất metric, log, trace), không luật trên AMP, không
+dashboard ở AMG, image kéo thẳng upstream, Kyverno và External Secrets bị NetworkPolicy chặn tới endpoint interface (Secret không tạo được).
+Mong hai dòng `ok`; thiếu thì **không dựng prd**: promote lại từ một `stg_ref` mà buổi stg đã chạy với chart mới.
+
+```sh
+rev=$(git -C ../gitops show origin/main:envs/prd/charts.yaml | sed -n 's/^revision: *//p')
+git -C ../backend fetch origin
+git -C ../backend cat-file -e "$rev:deploy/observability/otelcol/k8s-eks.yaml" && echo ok
+git -C ../backend show "$rev:deploy/helm/svp-service/values.yaml" | grep -q '^canaryPrometheus:' && echo ok
+```
 
 ## Bước 1–5: account, DNS, root env
 
@@ -196,7 +226,16 @@ eval "$(AWS_PROFILE=anhnv-prd terraform -chdir=aws/envs/prd output -raw api_tunn
 
 ## Bước 6–10: secret, root gitops, chờ
 
-Như `session-stg.md` bước 6–10, với `prd`. Hai commit phải khớp hai khoá đã kiểm ở bước 4 của cổng promote: `<sha>` của dòng `ok chart
+Như `session-stg.md` bước 6–10, với `prd`, gồm token Grafana Operator ở bước 6 (entry `svp/prd/grafana-operator`) và mục
+[Làm nóng cache](session-stg.md#làm-nóng-cache-sau-bước-6-trước-bước-7) giữa bước 6 và 7, với danh sách của prd (render chart ở `revision` của
+`envs/prd/charts.yaml`):
+
+```sh
+(cd ../backend && deploy/ci/image-list.sh ../gitops prd) >"$SVP_SESSION_DIR/images-prd.txt"
+aws/scripts/ecr-warm.sh prd "$SVP_SESSION_DIR/images-prd.txt"
+```
+
+Hai commit phải khớp hai khoá đã kiểm ở bước 4 của cổng promote: `<sha>` của dòng `ok chart
 svp-cluster at <sha>` (bước 8) là `revision` (commit repo code của chart), output `bootstrap_revision` (bước 9) là `gitopsRevision` (commit
 `svp-gitops`). Chat Telegram lấy từ `SVP_ALERT_TELEGRAM_CHAT_ID` của `.env` repo code (giá trị trần hay trong một cặp nháy kép hoặc nháy đơn,
 như `make eks-secrets` đọc). Lệnh `kubectl` tay vào prd ghi profile và context:
@@ -235,6 +274,24 @@ gh api "repos/anhnvcoder/svp-gitops/commits/<sha trên>/statuses" --jq '.[] | se
 
 Mong `success`; dán lại cả hai dòng.
 
+## Phép kiểm nền tảng managed
+
+Sau smoke, mục [Phép kiểm nền tảng managed](session-stg.md#phép-kiểm-nền-tảng-managed) của `session-stg.md` với `E=prd` ở khối dùng chung,
+`AWS_PROFILE=anhnv-prd`, `--context svp-prd`, `svp-prd`, `$SVP_AWS_PRD_ACCOUNT_ID`, `aws/accounts/prd`, log group `/svp/prd/otel`, cluster
+`svp-prd` trong truy vấn:
+
+- (a) image: như stg; image phát hành ở ECR prd chỉ tới qua `promote-prd` của cổng trên, nên mọi pod của `svp` có host ECR của account prd là
+  bằng chứng đường promote chép đủ; `cosign verify` cùng identity (nguồn của bản phát hành không đổi).
+- (b) mạng: mỗi endpoint interface `available True 3` (ENI ở mọi AZ của prd, ADR-0064 §4).
+- (c) telemetry: như stg, khung là lúc diễn tập (mục Đo dưới đây đọc dashboard trên AMG `svp-prd`).
+- (d) chỉ phần luật: hai namespace `ACTIVE`, Alertmanager `ACTIVE`, chu kỳ `15`. prd chạy commit `svp-gitops` mà stg đã chạy (`gitopsRevision`
+  ghim), nên không PR annotation nào tới được nó: canary, AnalysisRun thủ công và cảnh báo `page` qua AMP được kiểm ở stg, cùng chart; alarm
+  `page` của prd là mục 6 của **Đo**.
+- (e) dữ liệu còn sau destroy: như stg, thư mục `.session/persist-prd/`; ghi trước bước 12 (sau các diễn tập), chạy lại sau bước 20 cùng ngày
+  (mục **Kết thúc buổi**) và ở buổi prd kế. Retention của prd dài hơn stg (`locals` của `aws/accounts/prd`).
+
+Dán output của từng phép như mục của stg.
+
 ## Đo
 
 Mỗi phép đo ghi kết quả (đạt hay không, output chính, thời điểm UTC) vào một file trong `$SVP_SESSION_DIR`, để sau buổi điền cột Kết quả của
@@ -265,7 +322,7 @@ Deployment `svp-data/svp-ops`); một truy vấn tay vào database của service
 
    Dán lại: hai dòng AZ, các sự kiện `failover` (bắt đầu, xong), dòng cuối của smoke. **Thời gian nối lại** của service (số đo cho mục "Xem
    lại khi" của **Proxy kết nối**, ADR-0057): từ sự kiện failover bắt đầu tới request lỗi cuối của `user-service`, `video-service`,
-   `engagement-service`, `feed-service` ở dashboard SLO (Grafana như `session-stg.md` bước 11, panel lỗi theo route), ghi giây. Alarm
+   `engagement-service`, `feed-service` ở dashboard SLO (AMG `svp-prd` như `session-stg.md` bước 11, panel lỗi theo route), ghi giây. Alarm
    `rds-*` nào đổi trạng thái trong lúc đó: đọc lịch sử, đối chiếu thư tới `alarm_email`:
 
    ```sh
@@ -446,7 +503,9 @@ Theo thứ tự, mỗi bước xong mới sang bước sau:
 
 3. **`aws/scripts/sweep.sh prd`** (profile `anhnv-prd`): chỉ còn dòng `kept` (`Stack=baseline`: bucket state, KMS key state, zone
    `aws.<domain>` cùng `CAA` và bản ghi `NS` uỷ quyền `stg.aws.<domain>` dưới đỉnh của nó, ở `us-east-1` key DNSSEC, hai alarm DNSSEC, log
-   group query log, topic `svp-prd-dns-alarms` và key của nó; `Stack=security-baseline`: CMK EBS) và `pending deletion` (KMS key của root
+   group query log, topic `svp-prd-dns-alarms` và key của nó; registry ECR, rule và repo của cache, OIDC provider, role CI, workspace AMP, log
+   group `/svp/prd/otel`, workspace AMG và key của chúng; `Stack=security-baseline`: CMK EBS), không endpoint interface, không rule groups
+   namespace của AMP, và `pending deletion` (KMS key của root
    env: RDS, MSK, alarm, Secrets của EKS; 7 ngày), exit 0; không còn dòng MSK, ElastiCache, `AmazonMSK_*`, log group `/aws/msk/svp-prd` (phép kiểm (f) của ADR-0053),
    không còn instance, launch template, instance profile, hàng đợi SQS hay rule EventBridge nào của Karpenter.
    Còn gì khác: chạy lệnh `delete:` nó in, rồi chạy lại. Gói của account rỗng (mong `[]`), cùng lượt sweep sạch này:
@@ -459,8 +518,10 @@ Theo thứ tự, mỗi bước xong mới sang bước sau:
    baseline bảo mật, detector GuardDuty của management), không hosted zone, exit 0.
 
 Một lượt `sweep.sh prd` chạy trước bước 2 được phép exit khác 0 (final snapshot, backup tự động còn đó) và chỉ để xem. **Buổi chỉ xong khi
-lượt `sweep.sh prd` sau bước 2 và lượt `sweep.sh mgmt` cùng exit 0.** AI nhắc tới khi người học xác nhận đủ bốn bước. Sau 24 giờ: Cost
-Explorer của account prd theo dịch vụ, so với C.
+lượt `sweep.sh prd` sau bước 2 và lượt `sweep.sh mgmt` cùng exit 0.** AI nhắc tới khi người học xác nhận đủ bốn bước. Rồi, cùng ngày, chạy
+lại truy vấn dữ liệu đã ghi trước bước 12 (mục **Phép kiểm nền tảng managed** (e), `after-destroy.txt` của `.session/persist-prd/`) và dán
+`diff`; buổi đầu có span của account prd: retention của `aws/spans` theo bước (10) của
+[`platform-setup.md`](platform-setup.md#bước-10-retention-của-awsspans). Sau 24 giờ: Cost Explorer của account prd theo dịch vụ, so với C.
 
 ### Web ACL WAF sót
 

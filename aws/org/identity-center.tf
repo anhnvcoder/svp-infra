@@ -226,3 +226,17 @@ resource "aws_ssoadmin_account_assignment" "log_reader" {
     aws_ssoadmin_permission_set_inline_policy.log_reader,
   ]
 }
+
+# The groups the platform tools of the environments grant roles to (Amazon Managed Grafana). Members are assigned by
+# hand in IAM Identity Center: who belongs is a decision about people, not configuration.
+resource "aws_identitystore_group" "platform" {
+  provider = aws.sso
+  for_each = {
+    admins  = "Administrators of the platform tools of svp-stg and svp-prd"
+    viewers = "Read-only users of the platform tools of svp-stg and svp-prd"
+  }
+
+  identity_store_id = local.identity_store_id
+  display_name      = "svp-platform-${each.key}"
+  description       = each.value
+}

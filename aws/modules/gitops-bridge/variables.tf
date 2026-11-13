@@ -33,16 +33,17 @@ variable "cluster_values" {
     condition = try(toset(keys(var.cluster_values)) == toset([
       "name", "region", "vpcId", "vpcCidr", "serviceCidr", "dbCidrs", "edgeCidrs", "edgeTargetGroupArn", "domain",
       "rdsAddress", "kafkaBrokers", "valkeyHost", "uploadsBucket", "mediaBucket", "mediaDomain", "s3Cidrs",
-      "externalSecretsRoles",
+      "externalSecretsRoles", "ecrRegistry", "ampWorkspaceId", "ampEndpoint", "logGroup", "grafanaUrl", "alarmTopicArn",
     ]), false)
-    error_message = "cluster_values must hold exactly the keys name, region, vpcId, vpcCidr, serviceCidr, dbCidrs, edgeCidrs, edgeTargetGroupArn, domain, rdsAddress, kafkaBrokers, valkeyHost, uploadsBucket, mediaBucket, mediaDomain, s3Cidrs and externalSecretsRoles."
+    error_message = "cluster_values must hold exactly the keys name, region, vpcId, vpcCidr, serviceCidr, dbCidrs, edgeCidrs, edgeTargetGroupArn, domain, rdsAddress, kafkaBrokers, valkeyHost, uploadsBucket, mediaBucket, mediaDomain, s3Cidrs, externalSecretsRoles, ecrRegistry, ampWorkspaceId, ampEndpoint, logGroup, grafanaUrl and alarmTopicArn."
   }
 
   validation {
     condition = try(alltrue(concat(
       [for k in [
         "name", "region", "vpcId", "vpcCidr", "serviceCidr", "edgeTargetGroupArn", "domain", "rdsAddress",
-        "kafkaBrokers", "valkeyHost", "uploadsBucket", "mediaBucket", "mediaDomain",
+        "kafkaBrokers", "valkeyHost", "uploadsBucket", "mediaBucket", "mediaDomain", "ecrRegistry", "ampWorkspaceId",
+        "ampEndpoint", "logGroup", "grafanaUrl", "alarmTopicArn",
       ] : startswith(jsonencode(var.cluster_values[k]), "\"")],
       [for k in ["dbCidrs", "edgeCidrs", "s3Cidrs"] :
         startswith(jsonencode(var.cluster_values[k]), "[") &&
@@ -59,6 +60,20 @@ variable "cluster_values" {
   validation {
     condition     = try(toset(keys(var.cluster_values.externalSecretsRoles)) == toset(["svp", "svp-data", "svp-obs", "keda", "argocd"]), false)
     error_message = "cluster_values.externalSecretsRoles must name the role of exactly the namespaces svp, svp-data, svp-obs, keda and argocd."
+  }
+
+  # A malformed value would otherwise show only in the cluster, as a failed pull, remote write or alert; refused here,
+  # it stops the plan before anything is applied.
+  validation {
+    condition = try(alltrue([for k, re in {
+      ecrRegistry    = "^[0-9]{12}\\.dkr\\.ecr\\.[a-z]{2}(-[a-z]+)+-[0-9]+\\.amazonaws\\.com$"
+      ampWorkspaceId = "^ws-[0-9a-f-]+$"
+      ampEndpoint    = "^https://aps-workspaces\\.[a-z]{2}(-[a-z]+)+-[0-9]+\\.amazonaws\\.com/workspaces/ws-[0-9a-f-]+/$"
+      logGroup       = "^/svp/[a-z]+/otel$"
+      grafanaUrl     = "^https://g-[0-9a-z]+\\.grafana-workspace\\.[a-z]{2}(-[a-z]+)+-[0-9]+\\.amazonaws\\.com$"
+      alarmTopicArn  = "^arn:aws:sns:[a-z]{2}(-[a-z]+)+-[0-9]+:[0-9]{12}:svp-[a-z]+-alarms$"
+    } : can(regex(re, var.cluster_values[k]))]), false)
+    error_message = "cluster_values: ecrRegistry must be <account>.dkr.ecr.<region>.amazonaws.com, ampWorkspaceId ws-<id>, ampEndpoint https://aps-workspaces.<region>.amazonaws.com/workspaces/ws-<id>/, logGroup /svp/<env>/otel, grafanaUrl https://g-<id>.grafana-workspace.<region>.amazonaws.com without a trailing slash, alarmTopicArn arn:aws:sns:<region>:<account>:svp-<env>-alarms."
   }
 }
 

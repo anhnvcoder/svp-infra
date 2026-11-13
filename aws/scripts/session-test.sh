@@ -5,8 +5,8 @@
 # of their profile (anhnv-sso 000000000000, anhnv-stg 111111111111, anhnv-prd 222222222222).
 
 # Covers --print of the whole session and each script of the directory: the account and DNS guards, the order rules of
-# tf.sh and pre-destroy.sh, the secret handling and the edge's wait of bootstrap.sh, the ladder of measure.sh and the
-# leftovers of sweep.sh in both regions.
+# tf.sh and pre-destroy.sh, the secret handling and the edge's wait of bootstrap.sh, the ladder of measure.sh, the
+# pinned digests of ecr-warm.sh and the leftovers of sweep.sh in both regions.
 
 # Usage: aws/scripts/session-test.sh
 #
@@ -62,8 +62,8 @@ expect() {
 
 # --- fakes -------------------------------------------------------------------------------------------------------
 # Each fake logs its call to $FAKE_LOG. aws and terraform answer as the account of their profile, and log the profile
-# to $FAKE_LOG.profiles; aws checks the region (us-east-1 for WAF of CloudFront, the Pricing Plan Manager and the log
-# deliveries of CloudFront; either for the kinds the sweep reads in both) and answers as that region.
+# to $FAKE_LOG.profiles; aws checks the region (us-east-1 for WAF of CloudFront, the Pricing Plan Manager, the log
+# deliveries of CloudFront, IAM of CI; either for the kinds the sweep reads in both) and answers as that region.
 cat >"$bin/aws" <<'EOF'
 #!/usr/bin/env bash
 echo "aws $*" >>"$FAKE_LOG"
@@ -76,10 +76,11 @@ esac
 echo "$AWS_PROFILE" >>"$FAKE_LOG.profiles"
 # FAKE_ACCOUNT: the profile signs in to another account (a profile pointing at the wrong account).
 account=${FAKE_ACCOUNT:-$account}
+envname=${AWS_PROFILE#anhnv-}
 region= prev=
 for a in "$@"; do [ "$prev" != --region ] || region=$a; prev=$a; done
 case "$1 $2" in
-  wafv2\ * | pricing-plan-manager\ * | "logs describe-deliver"*) want=us-east-1 ;;
+  wafv2\ * | pricing-plan-manager\ * | "logs describe-deliver"* | "iam list-open-id-connect-provider"* | "iam list-role"*) want=us-east-1 ;;
   kms\ * | cloudwatch\ * | sns\ * | acm\ * | resourcegroupstaggingapi\ * | logs\ *) want="ap-southeast-1 us-east-1" ;;
   *) want=ap-southeast-1 ;;
 esac
@@ -100,13 +101,16 @@ case "$1 $2" in
   "eks list-clusters") echo '{"clusters":[]}' ;;
   "secretsmanager get-secret-value") printf '{"username":"postgres","password":"%s"}\n' "$FAKE_PASSWORD" ;;
   "secretsmanager list-secrets")
+    # The pull-through cache credentials of aws/accounts/<env> (names fixed by ECR), kept by their Stack.
+    cache='{"Name":"ecr-pullthroughcache/ghcr","Tags":[{"Key":"Project","Value":"svp"},{"Key":"Stack","Value":"baseline"}]},{"Name":"ecr-pullthroughcache/docker-hub","Tags":[{"Key":"Project","Value":"svp"},{"Key":"Stack","Value":"baseline"}]}'
+    [ -n "$zone" ] || cache='{"Name":"other-project","Tags":[]}'
     if [ "$left" = secret ]; then
-      echo '{"SecretList":[{"Name":"svp/stg/web","DeletedDate":"2026-10-30T10:00:00Z","Tags":[{"Key":"Project","Value":"svp"}]}]}'
+      echo "{\"SecretList\":[$cache,{\"Name\":\"svp/stg/web\",\"DeletedDate\":\"2026-10-30T10:00:00Z\",\"Tags\":[{\"Key\":\"Project\",\"Value\":\"svp\"}]}]}"
     elif [ "$left" = msk-secret ]; then
       # A SCRAM secret of MSK whose tags are gone: found by its name alone.
       echo '{"SecretList":[{"Name":"AmazonMSK_svp-stg-svp-admin","Tags":[]}]}'
     else
-      echo '{"SecretList":[{"Name":"other-project","Tags":[]}]}'
+      echo "{\"SecretList\":[$cache,{\"Name\":\"other-project\",\"Tags\":[]}]}"
     fi ;;
   "route53 list-hosted-zones-by-name") echo "{\"HostedZones\":[{\"Id\":\"/hostedzone/Z0FAKE\",\"Name\":\"$zone.\"}]}" ;;
   "route53 list-resource-record-sets")
@@ -277,9 +281,12 @@ case "$1 $2" in
     if [ "$left" = vpc-origin-sg ]; then echo '{"Vpcs":[{"VpcId":"vpc-0fake","CidrBlock":"10.20.0.0/16"}]}'; else echo '{"Vpcs":[]}'; fi ;;
   "ec2 describe-nat-gateways") echo '{"NatGateways":[]}' ;;
   "ec2 describe-addresses") echo '{"Addresses":[]}' ;;
-  # FAKE_LEFTOVER=endpoint: the interface endpoint guardduty-data, and a deleted one AWS still lists for a while.
+  # FAKE_LEFTOVER=endpoint: the interface endpoint guardduty-data, and a deleted one AWS still lists for a while;
+  # interface-endpoint: an interface endpoint of root env found by its name alone, its tags gone.
   "ec2 describe-vpc-endpoints")
-    if [ "$left" = endpoint ] && [[ "$*" == *tag:Project* ]]; then
+    if [ "$left" = interface-endpoint ] && [[ "$*" == *tag:Name,Values=svp-* ]]; then
+      echo '{"VpcEndpoints":[{"VpcEndpointId":"vpce-0sts","VpcEndpointType":"Interface","ServiceName":"com.amazonaws.ap-southeast-1.sts","State":"available","Tags":[{"Key":"Name","Value":"svp-stg-sts"}]}]}'
+    elif [ "$left" = endpoint ] && [[ "$*" == *tag:Project* ]]; then
       echo '{"VpcEndpoints":[{"VpcEndpointId":"vpce-0fake","VpcEndpointType":"Interface","ServiceName":"com.amazonaws.ap-southeast-1.guardduty-data","State":"available"},{"VpcEndpointId":"vpce-0gone","VpcEndpointType":"Gateway","ServiceName":"com.amazonaws.ap-southeast-1.s3","State":"deleted"}]}'
     else
       echo '{"VpcEndpoints":[]}'
@@ -300,7 +307,9 @@ case "$1 $2" in
   "ec2 describe-network-interfaces") echo '{"NetworkInterfaces":[]}' ;;
   # FAKE_LEFTOVER=vpc-origin-sg: the VPC of the lab is left with the group CloudFront made for a VPC origin in it.
   "ec2 describe-security-groups")
-    if [ "$left" = vpc-origin-sg ] && [[ "$*" == *vpc-id* ]]; then
+    if [ "$left" = interface-endpoint ] && [[ "$*" == *group-name,Values=svp-* ]]; then
+      echo '{"SecurityGroups":[{"GroupId":"sg-0ep","GroupName":"svp-stg-endpoints","VpcId":"vpc-0fake"}]}'
+    elif [ "$left" = vpc-origin-sg ] && [[ "$*" == *vpc-id* ]]; then
       echo '{"SecurityGroups":[{"GroupId":"sg-0cf","GroupName":"CloudFront-VPCOrigins-Service-SG-0fake","VpcId":"vpc-0fake"}]}'
     else
       echo '{"SecurityGroups":[]}'
@@ -401,6 +410,111 @@ case "$1 $2" in
   "elasticache describe-cache-parameter-groups")
     if [ "$left" = elasticache ]; then echo '{"CacheParameterGroups":[{"CacheParameterGroupName":"svp-stg-valkey9","CacheParameterGroupFamily":"valkey9"},{"CacheParameterGroupName":"default.valkey9","CacheParameterGroupFamily":"valkey9"}]}'
     else echo '{"CacheParameterGroups":[{"CacheParameterGroupName":"default.valkey9","CacheParameterGroupFamily":"valkey9"}]}'; fi ;;
+  # Amazon Managed Grafana: service account svp-grafana-operator (FAKE_NO_GRAFANA_SA: none) with two older tokens; a
+  # new token's key is $FAKE_GRAFANA_TOKEN.
+  "grafana list-workspace-service-accounts")
+    {
+      echo '{"id":"9","name":"other"}'
+      [ -n "${FAKE_NO_GRAFANA_SA:-}" ] || echo '{"id":"4","name":"svp-grafana-operator","grafanaRole":"ADMIN"}'
+    } | jq -s '{serviceAccounts: .}' ;;
+  "grafana list-workspace-service-account-tokens") echo '{"serviceAccountTokens":[{"id":"11","name":"old-1"},{"id":"12","name":"old-2"}]}' ;;
+  "grafana delete-workspace-service-account-token") echo '{}' ;;
+  "grafana create-workspace-service-account-token")
+    jq -n --arg k "$FAKE_GRAFANA_TOKEN" '{serviceAccountId: "4", serviceAccountToken: {id: "13", key: $k, name: "new"}}' ;;
+  # Logs whether the value read from --secret-string file://<path> is the token's map, and whether that path was a
+  # regular file, never the value.
+  "secretsmanager put-secret-value")
+    f= prev=
+    for a in "$@"; do [ "$prev" != --secret-string ] || f=${a#file://}; prev=$a; done
+    if [ -f "$f" ]; then kind=file; else kind=pipe; fi
+    v=$(cat "$f")
+    if [ "$v" = "$(jq -cn --arg k "$FAKE_GRAFANA_TOKEN" '{SVP_GRAFANA_OPERATOR_TOKEN: $k}')" ]; then r=match; else r=other; fi
+    echo "put-secret-value value=$r from=$kind" >>"$FAKE_LOG"
+    echo v1 ;;
+  # ECR: $FAKE_STATE/ecr-tags ("repository tag digest") is what the cache holds for a tag once pulled through it,
+  # $FAKE_STATE/ecr-digests ("repository digest") the digests it holds besides.
+  "ecr batch-get-image")
+    repo= tag= prev=
+    for a in "$@"; do case $prev in --repository-name) repo=$a ;; --image-ids) tag=${a#imageTag=} ;; esac; prev=$a; done
+    d=$(awk -v r="$repo" -v t="$tag" '$1 == r && $2 == t { print $3 }' "$FAKE_STATE/ecr-tags")
+    if [ -n "$d" ]; then
+      jq -n --arg a "$account" --arg r "$repo" --arg t "$tag" --arg d "$d" '{images: [{registryId: $a, repositoryName: $r, imageId: {imageDigest: $d, imageTag: $t}}], failures: []}'
+    else
+      jq -n --arg a "$account" --arg t "$tag" '{images: [], failures: [{imageId: {imageTag: $t}, failureCode: "ImageNotFound", failureReason: ("Requested image not found in registry " + $a)}]}'
+    fi ;;
+  "ecr describe-images")
+    repo= dg= prev=
+    for a in "$@"; do case $prev in --repository-name) repo=$a ;; --image-ids) dg=${a#imageDigest=} ;; esac; prev=$a; done
+    if awk '{ print $1, $3 }' "$FAKE_STATE/ecr-tags" | cat - "$FAKE_STATE/ecr-digests" | grep -qx "$repo $dg"; then
+      echo '{"imageDetails":[{}]}'
+    else
+      echo "An error occurred (ImageNotFoundException) when calling the DescribeImages operation: The image with imageId {imageDigest:'$dg'} does not exist within the repository with name '$repo' in the registry with id '$account'" >&2
+      exit 254
+    fi ;;
+  # What aws/accounts/<env> keeps (Stack=baseline): the five cache rules, a release repository and one the cache made,
+  # AMP and Grafana workspaces, GitHub's OIDC provider and roles of CI; another project's repository, provider and role
+  # always. FAKE_LEFTOVER=cache: a cache rule and its repository (left in the management account), ecr: a release
+  # repository of another Stack, amp-rules: the rule groups namespaces of ACK, oidc: an OIDC provider of root env.
+  "ecr describe-pull-through-cache-rules")
+    {
+      [ "$stack" != baseline ] || for p in ghcr docker-hub quay k8s ecr-public; do echo "$p"; done
+      [ "$left" != cache ] || echo k8s
+    } | jq -R '{ecrRepositoryPrefix: ., upstreamRegistryUrl: "upstream.example"}' | jq -s '{pullThroughCacheRules: .}' ;;
+  "ecr describe-repositories")
+    {
+      echo other-project/app
+      [ "$stack" != baseline ] || printf '%s\n' svp-backend/gateway docker-hub/library/alpine
+      [ "$left" != cache ] || echo k8s/pause
+      [ "$left" != ecr ] || echo svp-backend/old
+    } | jq -R --arg p "arn:aws:ecr:$region:$account:repository/" '{repositoryName: ., repositoryArn: ($p + .)}' | jq -s '{repositories: .}' ;;
+  "ecr list-tags-for-resource")
+    case $4 in
+      */svp-backend/old) echo '{"tags":[{"Key":"Project","Value":"svp"},{"Key":"Stack","Value":"stg"}]}' ;;
+      */svp-*) echo "{\"tags\":[{\"Key\":\"Project\",\"Value\":\"svp\"},{\"Key\":\"Stack\",\"Value\":\"$stack\"}]}" ;;
+      *) echo "fake aws: tags of $4 read" >&2; exit 98 ;;
+    esac ;;
+  "amp list-workspaces")
+    if [ "$stack" = baseline ]; then
+      jq -n --arg e "svp-$envname" '{workspaces: [{workspaceId: "ws-0fake", alias: $e, tags: {Project: "svp", Stack: "baseline"}}, {workspaceId: "ws-other", alias: "other"}]}'
+    else
+      echo '{"workspaces":[]}'
+    fi ;;
+  "amp list-rule-groups-namespaces")
+    if [ "$left" = amp-rules ]; then
+      for n in svp-alerts slo-generated; do
+        jq -n --arg a "arn:aws:aps:$region:$account:rulegroupsnamespace/$4/$n" --arg n "$n" '{name: $n, arn: $a}'
+      done | jq -s '{ruleGroupsNamespaces: .}'
+    else
+      echo '{"ruleGroupsNamespaces":[]}'
+    fi ;;
+  "grafana list-workspaces")
+    if [ "$stack" = baseline ]; then
+      jq -n --arg e "svp-$envname" '{workspaces: [{id: "g-0fake", name: $e, tags: {Project: "svp", Stack: "baseline"}}]}'
+    else
+      echo '{"workspaces":[]}'
+    fi ;;
+  "iam list-open-id-connect-providers")
+    {
+      echo "arn:aws:iam::$account:oidc-provider/other.example"
+      [ "$stack" != baseline ] || echo "arn:aws:iam::$account:oidc-provider/token.actions.githubusercontent.com"
+      [ "$left" != oidc ] || echo "arn:aws:iam::$account:oidc-provider/oidc.eks.ap-southeast-1.amazonaws.com/id/0FAKE"
+    } | jq -R '{Arn: .}' | jq -s '{OpenIDConnectProviderList: .}' ;;
+  "iam list-open-id-connect-provider-tags")
+    case $4 in
+      *token.actions*) echo '{"Tags":[{"Key":"Project","Value":"svp"},{"Key":"Stack","Value":"baseline"}]}' ;;
+      *oidc.eks*) echo '{"Tags":[{"Key":"Project","Value":"svp"},{"Key":"Stack","Value":"stg"}]}' ;;
+      *) echo '{"Tags":[]}' ;;
+    esac ;;
+  "iam list-roles")
+    {
+      echo other-role
+      [ "$stack" != baseline ] || printf '%s\n' svp-ci-ecr-release-backend svp-ci-ecr-rescan-backend
+    } | jq -R '{RoleName: .}' | jq -s '{Roles: .}' ;;
+  "iam list-role-tags")
+    case $4 in
+      svp-ci-*) echo '{"Tags":[{"Key":"Project","Value":"svp"},{"Key":"Stack","Value":"baseline"}]}' ;;
+      *) echo "fake aws: tags of role $4 read" >&2; exit 98 ;;
+    esac ;;
   *) echo "fake aws: unexpected $1 $2" >&2; exit 98 ;;
 esac
 EOF
@@ -436,7 +550,7 @@ case "${args#-chdir=* }" in
     if [ -n "${FAKE_TF_OLD_VALUES:-}" ]; then
       echo "{\"name\":\"svp-$env\",\"domain\":\"$domain\",\"hostedZoneId\":\"Z0FAKE\"}"
     else
-      echo "{\"name\":\"svp-$env\",\"domain\":\"$domain\",\"edgeTargetGroupArn\":\"arn:aws:elasticloadbalancing:ap-southeast-1:111111111111:targetgroup/svp-$env-envoy/2c3d\",\"edgeCidrs\":[\"10.20.240.0/27\"]}"
+      echo "{\"name\":\"svp-$env\",\"domain\":\"$domain\",\"edgeTargetGroupArn\":\"arn:aws:elasticloadbalancing:ap-southeast-1:111111111111:targetgroup/svp-$env-envoy/2c3d\",\"edgeCidrs\":[\"10.20.240.0/27\"],\"grafanaUrl\":\"https://g-0fake.grafana-workspace.ap-southeast-1.amazonaws.com\"}"
     fi ;;
   "output -raw rds_master_user_secret_arn") printf 'arn:aws:secretsmanager:ap-southeast-1:000000000000:secret:rds!db-fake' ;;
   "show -no-color "*.destroy.tfplan) printf '%s\n' 'Terraform will perform the following actions:' '  # aws_vpc.this will be destroyed' \
@@ -580,6 +694,25 @@ case "$*" in
     nodes="ip-10-0-1-1 ip-10-0-2-2 ip-10-0-3-3"
     if [ -n "${FAKE_NODE_LOST:-}" ] && [ "$c" -ge 2 ]; then nodes="ip-10-0-2-2 ip-10-0-3-3"; fi
     for n in $nodes; do jq -n --arg n "$n" '{metadata: {name: $n}, status: {conditions: [{type: "Ready", status: "True"}]}}'; done | items ;;
+  # ACK's resources of AMP ($s/ack-crs: "kind namespace name workspace"; the file alone means the CRDs are there),
+  # deleted by its controller while $s/ack-up is there, else held by their finalizer until it is cleared.
+  "get crd rulegroupsnamespaces.prometheusservice.services.k8s.aws --ignore-not-found -o name")
+    [ ! -e "$s/ack-crs" ] || echo customresourcedefinition.apiextensions.k8s.io/rulegroupsnamespaces.prometheusservice.services.k8s.aws ;;
+  "get rulegroupsnamespaces.prometheusservice.services.k8s.aws,alertmanagerdefinitions.prometheusservice.services.k8s.aws -A -o json")
+    while read -r k ns n ws; do [ -z "$n" ] || jq -n --arg k "$k" --arg ns "$ns" --arg n "$n" --arg ws "$ws" \
+      '{kind: $k, metadata: {namespace: $ns, name: $n}, spec: ({workspaceID: $ws} + (if $k == "RuleGroupsNamespace" then {name: $n} else {} end))}'
+    done <"$s/ack-crs" | items ;;
+  "get pods -A -o json")
+    if [ -e "$s/ack-up" ]; then
+      echo '{"items":[{"spec":{"serviceAccountName":"ack-prometheusservice-controller"},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}'
+    else
+      echo '{"items":[{"spec":{"serviceAccountName":"other"},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}'
+    fi ;;
+  "delete rulegroupsnamespaces.prometheusservice.services.k8s.aws,alertmanagerdefinitions.prometheusservice.services.k8s.aws -A --all --wait=false")
+    [ ! -e "$s/ack-up" ] || : >"$s/ack-crs" ;;
+  "-n "*" patch "*".prometheusservice.services.k8s.aws "*' --type merge -p {"metadata":{"finalizers":null}}')
+    case $4 in rulegroupsnamespaces.*) k=RuleGroupsNamespace ;; *) k=AlertManagerDefinition ;; esac
+    grep -v "^$k $2 $5 " "$s/ack-crs" >"$s/ack-crs.new" || true; mv "$s/ack-crs.new" "$s/ack-crs" ;;
   "top nodes --no-headers") echo "ip-10-0-1-1 250m 12% 2000Mi 30%" ;;
   "top pods -A --no-headers") echo "svp gateway-abc 50m 80Mi" ;;
   "-n svp-load get job svp-k6 --ignore-not-found -o json")
@@ -645,7 +778,8 @@ for e in stg prd; do
 done
 push_clone "$work/gitops"
 
-export PATH="$bin:$PATH" FAKE_LOG=$log FAKE_STATE=$state FAKE_PASSWORD=$password
+grafana_token=glsa_fakeOperatorToken_0123456789abcdef
+export PATH="$bin:$PATH" FAKE_LOG=$log FAKE_STATE=$state FAKE_PASSWORD=$password FAKE_GRAFANA_TOKEN=$grafana_token
 export SVP_BACKEND_DIR=$work/backend SVP_GITOPS_DIR=$work/gitops SVP_SESSION_POLL=0
 export SVP_AWS_MGMT_ACCOUNT_ID=000000000000 SVP_AWS_STG_ACCOUNT_ID=111111111111 SVP_AWS_PRD_ACCOUNT_ID=222222222222
 export SVP_AWS_LOG_ACCOUNT_ID=333333333333
@@ -1026,9 +1160,30 @@ for e in stg prd; do
     sh -c '! grep -rqF -e "$1" -e "$2" "$3" "$4" "$5"' _ "$kafka_pw" "$valkey_pw" "$work/boot.out" "$log" "$SVP_SESSION_DIR"
   expect "bootstrap.sh $e secrets says the apply of the root wrote the Kafka and Valkey entries" \
     grep -q "kafka-admin, kafka-users, valkey-users by the apply of aws/envs/$e" "$work/boot.out"
+  expect "bootstrap.sh $e secrets deletes both older tokens of svp-grafana-operator before it makes one" \
+    sh -c 'b() { a=$(grep -nE -- "$2" "$1" | head -n 1 | cut -d: -f1); c=$(grep -nE -- "$3" "$1" | head -n 1 | cut -d: -f1); [ -n "$a" ] && [ -n "$c" ] && [ "$a" -lt "$c" ]; }
+      for t in 11 12; do b "$1" "^aws grafana delete-workspace-service-account-token --workspace-id g-0fake --service-account-id 4 --token-id $t " \
+        "^aws grafana create-workspace-service-account-token " || exit 1; done' _ "$log"
+  expect "bootstrap.sh $e secrets makes a token of a day for service account svp-grafana-operator of the workspace of grafanaUrl" \
+    grep -qE "^aws grafana create-workspace-service-account-token --workspace-id g-0fake --service-account-id 4 --name svp-grafana-operator-[0-9TZ]+ --seconds-to-live 86400 --output json --region ap-southeast-1$" "$log"
+  expect "bootstrap.sh $e secrets writes the token's map to entry svp/$e/grafana-operator from a pipe" \
+    sh -c 'grep -q "^aws secretsmanager put-secret-value --secret-id svp/$2/grafana-operator --secret-string file:///dev/stdin --query VersionId --output text --region ap-southeast-1$" "$1" &&
+      grep -q "^put-secret-value value=match from=pipe$" "$1"' _ "$log" "$e"
+  expect "bootstrap.sh $e secrets: the token is in no argument, output or session file" \
+    sh -c '! grep -rqF -- "$1" "$2" "$3" "$4"' _ "$grafana_token" "$work/boot.out" "$log" "$SVP_SESSION_DIR"
+  expect "bootstrap.sh $e secrets: the token before secrets-written, then ecr-warm.sh named as the next step" \
+    sh -c 'grep -q "^ok    a token of svp-grafana-operator valid 24 h in entry svp/$2/grafana-operator (not shown)$" "$1" &&
+      grep -q "next: aws/scripts/ecr-warm.sh $2 <image list>, then aws/scripts/tf.sh $2 gitops init" "$1"' _ "$work/boot.out" "$e"
 done
 expect "bootstrap.sh prd secrets points the context at the tunnel, TLS server name the endpoint's host" \
   grep -q '^kubectl config set-cluster arn:aws:eks:ap-southeast-1:222222222222:cluster/svp-prd --server=https://127.0.0.1:6443 --tls-server-name=0123ABCD.gr7.ap-southeast-1.eks.amazonaws.com$' "$log"
+new_session
+expect "bootstrap.sh secrets fails without service account svp-grafana-operator, makes no token, writes nothing" \
+  sh -c '! FAKE_NO_GRAFANA_SA=1 bash "$1/bootstrap.sh" stg secrets >"$2" 2>&1 &&
+    grep -q "^FAIL  Grafana workspace g-0fake has no service account svp-grafana-operator (the apply of aws/accounts/stg makes it)$" "$2" &&
+    ! grep -qE "create-workspace-service-account-token|delete-workspace-service-account-token|put-secret-value" "$3"' _ "$here" "$work/out" "$log"
+expect "bootstrap.sh secrets without the token marks no secrets-written" \
+  sh -c '! grep -qs secrets-written "$1/timeline.tsv"' _ "$SVP_SESSION_DIR"
 new_session
 bash "$here/bootstrap.sh" stg secrets >/dev/null 2>&1 || true
 expect "bootstrap.sh stg secrets points the context at its own tunnel port" \
@@ -1088,8 +1243,10 @@ expect "bootstrap.sh secrets refuses cluster values without edgeTargetGroupArn (
 new_session
 printf '%s\n' "0 cert-manager" "0 envoy-gateway" "0 external-secrets" "0 karpenter" "1 svp-cluster" "1 aws-load-balancer-controller" \
   "2 keda" "2 argo-rollouts" "2 kyverno" "2 kube-prometheus-stack" "3 svp-policy" "3 loki" \
-  "4 svp-data" "5 svp-observability" "6 otel-collector" "7 gateway" "7 web" >"$state/apps"
-touch "$state/appset" "$state/root" "$state/svp-apps" "$state/lb" "$state/tgb"
+  "3 ack-prometheusservice" "4 svp-data" "5 svp-observability" "6 otel-collector" "7 gateway" "7 web" >"$state/apps"
+touch "$state/appset" "$state/root" "$state/svp-apps" "$state/lb" "$state/tgb" "$state/ack-up"
+printf '%s\n' "RuleGroupsNamespace svp-obs svp-alerts ws-0fake" "RuleGroupsNamespace svp-obs slo-generated ws-0fake" \
+  "AlertManagerDefinition svp-obs svp-alerts ws-0fake" >"$state/ack-crs"
 printf '%s\n' "svp-data data-0" "svp-obs prometheus-db-0" >"$state/pvcs"
 echo "default-x7k2p ip-10-0-9-9" >"$state/nodeclaims"
 echo "i-0karp running m7g.large default" >"$state/karpenter-instances"
@@ -1130,9 +1287,17 @@ expect "pre-destroy.sh: Application karpenter stays through step 2" \
 expect "pre-destroy.sh: no NodeClaim and no instance of Karpenter, marked pre-destroy-nodes" \
   sh -c 'grep -q "^ok    NodePools and EC2NodeClasses deleted, no NodeClaim$" "$1" && grep -q "^ok    no EC2 instance of Karpenter for svp-stg$" "$1" &&
     awk -F "\t" "\$3 == \"pre-destroy-nodes\" { f = 1 } END { exit !f }" "$2"' _ "$work/pre.out" "$SVP_SESSION_DIR/timeline.tsv"
+expect "pre-destroy.sh: auto-sync off, then the ACK resources of AMP deleted while ACK runs, before any Application" \
+  sh -c 'b() { a=$(grep -nE -- "$2" "$1" | head -n 1 | cut -d: -f1); c=$(grep -nE -- "$3" "$1" | head -n 1 | cut -d: -f1); [ -n "$a" ] && [ -n "$c" ] && [ "$a" -lt "$c" ]; }
+    d="delete rulegroupsnamespaces.prometheusservice.services.k8s.aws,alertmanagerdefinitions.prometheusservice.services.k8s.aws -A --all --wait=false"
+    b "$1" "patch application svp-observability .*automated" "$d" && b "$1" "$d" "delete application [a-z-]+ --wait=false"' _ "$log"
+expect "pre-destroy.sh: ACK left nothing; no finalizer cleared, nothing listed for AMP" \
+  sh -c '[ ! -s "$1/ack-crs" ] && ! grep -q "patch [a-z]*.prometheusservice.services.k8s.aws" "$2" &&
+    grep -q "^ok    rules and alerting of AMP deleted by ACK$" "$3" && ! grep -q "left in AMP" "$3"' _ "$state" "$log" "$work/pre.out"
 expect "pre-destroy.sh marks pre-destroy-start and pre-destroy-done" sh -c 'has() { awk -F "\t" -v e="$2" "\$3 == e { f = 1 } END { exit !f }" "$1"; }; has "$1" pre-destroy-start && has "$1" pre-destroy-done' _ "$SVP_SESSION_DIR/timeline.tsv"
 expect "pre-destroy.sh: no way-out note when every step passes; next is root gitops" \
   sh -c '! grep -q -- "--leftovers" "$1" && grep -q "ready for: aws/scripts/tf.sh stg gitops plan --destroy" "$1"' _ "$work/pre.out"
+rm -f "$state/ack-crs" "$state/ack-up"
 
 new_session
 : >"$state/apps"
@@ -1211,6 +1376,88 @@ expect "pre-destroy.sh without Karpenter's CRDs still fails on its instance, nam
   sh -c 'grep -q "^FAIL  instances of Karpenter left: i-0karp running m7g.large default (aws/scripts/sweep.sh stg lists them" "$1"' _ "$work/pre.out"
 : >"$state/nodeclaims"
 : >"$state/karpenter-instances"
+
+new_session
+printf '%s\n' "5 svp-observability" >"$state/apps"
+rm -f "$state/ack-up"
+printf '%s\n' "RuleGroupsNamespace svp-obs svp-alerts ws-0fake" "AlertManagerDefinition svp-obs svp-alerts ws-0fake" >"$state/ack-crs"
+bash "$here/pre-destroy.sh" stg >"$work/pre.out" 2>&1 || bad "pre-destroy.sh stg exits 0 with no pod of ACK ($(tail -n 3 "$work/pre.out"))"
+expect "pre-destroy.sh with no pod of ACK: says so, lists what is left in AMP with the delete commands" \
+  sh -c 'grep -q "^note  no Ready pod of ACK.s controller: it deletes nothing in AMP$" "$1" &&
+    grep -q "^note  left in AMP: rule groups namespace svp-alerts of workspace ws-0fake; delete it: AWS_PROFILE=anhnv-stg aws amp delete-rule-groups-namespace --workspace-id ws-0fake --name svp-alerts --region ap-southeast-1$" "$1" &&
+    grep -q "^note  left in AMP: alert manager definition of workspace ws-0fake; delete it: AWS_PROFILE=anhnv-stg aws amp delete-alert-manager-definition --workspace-id ws-0fake --region ap-southeast-1$" "$1"' _ "$work/pre.out"
+expect "pre-destroy.sh with no pod of ACK: their finalizers cleared, then svp-observability deleted, and on to the end" \
+  sh -c 'b() { a=$(grep -nE -- "$2" "$1" | head -n 1 | cut -d: -f1); c=$(grep -nE -- "$3" "$1" | head -n 1 | cut -d: -f1); [ -n "$a" ] && [ -n "$c" ] && [ "$a" -lt "$c" ]; }
+    [ ! -s "$2/ack-crs" ] && b "$1" "patch rulegroupsnamespaces.prometheusservice.services.k8s.aws svp-alerts --type merge" "delete application svp-observability" &&
+    grep -q "patch alertmanagerdefinitions.prometheusservice.services.k8s.aws svp-alerts --type merge" "$1"' _ "$log" "$state"
+expect "pre-destroy.sh with no pod of ACK marks pre-destroy-done" has_mark pre-destroy-done
+rm -f "$state/ack-crs"
+: >"$state/apps"
+
+# --- ecr-warm.sh --------------------------------------------------------------------------------------------------
+# Pinned digests whose hex holds long runs of decimal digits, as real ones may: none of them is taken for an account id.
+d1=sha256:$(printf 'a123456789012345%.0s' 1 2 3 4) d2=sha256:$(printf 'b2%.0s' $(seq 32)) d3=sha256:$(printf 'c3%.0s' $(seq 32))
+d4=sha256:$(printf 'd4%.0s' $(seq 32)) d5=sha256:$(printf 'e5%.0s' $(seq 32)) d9=sha256:$(printf 'f9%.0s' $(seq 32))
+images=$work/images.txt
+printf '%s\n' "docker.io/library/alpine:3.22@$d1" "ghcr.io/external-secrets/external-secrets:v1.1.0@$d2" \
+  "quay.io/jetstack/cert-manager-controller:v1.21.2@$d3" "registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.17.0@$d4" \
+  "public.ecr.aws/karpenter/controller:1.8.1@$d5" >"$images"
+printf '%s\n' "docker-hub/library/alpine 3.22 $d1" "ghcr/external-secrets/external-secrets v1.1.0 $d2" \
+  "quay/jetstack/cert-manager-controller v1.21.2 $d3" "k8s/kube-state-metrics/kube-state-metrics v2.17.0 $d4" \
+  "ecr-public/karpenter/controller 1.8.1 $d5" >"$state/ecr-tags"
+: >"$state/ecr-digests"
+new_session
+expect "ecr-warm.sh stg passes when every pinned digest is in the cache" bash "$here/ecr-warm.sh" stg "$images" >"$work/warm.out" 2>&1
+expect "ecr-warm.sh: account first" sh -c 'grep -m1 "^aws " "$1" | grep -q "^aws sts get-caller-identity "' _ "$log"
+expect "ecr-warm.sh: profile anhnv-stg alone" profiles_are anhnv-stg
+expect "ecr-warm.sh pulls each image by tag through the cache repository of its registry, in the home region" \
+  sh -c 'for r in "docker-hub/library/alpine 3.22" "ghcr/external-secrets/external-secrets v1.1.0" "quay/jetstack/cert-manager-controller v1.21.2" \
+      "k8s/kube-state-metrics/kube-state-metrics v2.17.0" "ecr-public/karpenter/controller 1.8.1"; do
+      set -- "$1" $r
+      grep -q "^aws ecr batch-get-image --repository-name $2 --image-ids imageTag=$3 --accepted-media-types application/vnd.oci.image.index.v1+json .* --output json --region ap-southeast-1$" "$1" || exit 1
+    done' _ "$log"
+expect "ecr-warm.sh marks ecr-warmed and names root gitops as next" \
+  sh -c 'grep -q "next: aws/scripts/tf.sh stg gitops init, plan, apply" "$1"' _ "$work/warm.out"
+expect "ecr-warm.sh marks ecr-warmed" has_mark ecr-warmed
+# The tag moved upstream after the digest was pinned.
+printf '%s\n' "docker-hub/library/alpine 3.22 $d9" >"$state/ecr-tags.moved"
+grep -v '^docker-hub/library/alpine ' "$state/ecr-tags" >>"$state/ecr-tags.moved"
+mv "$state/ecr-tags.moved" "$state/ecr-tags"
+new_session
+expect "ecr-warm.sh fails when ECR holds another digest for the tag and not the pinned one" \
+  sh -c '! bash "$1/ecr-warm.sh" stg "$2" >"$3" 2>&1' _ "$here" "$images" "$work/warm.out"
+expect "ecr-warm.sh names the image, tag, pinned digest and the digest ECR holds, and no account id" \
+  sh -c 'grep -q "^FAIL  docker.io/library/alpine:3.22: pinned digest $2 not in ECR docker-hub/library/alpine, which holds tag 3.22 at $3$" "$1" &&
+    grep -q "^FAIL  1 image(s) not in ECR at their pinned digest" "$1" && ! grep "^FAIL" "$1" | grep -q 111111111111' _ "$work/warm.out" "$d1" "$d9"
+expect "ecr-warm.sh: no ecr-warmed when an image is missing" no_mark ecr-warmed
+echo "docker-hub/library/alpine $d1" >"$state/ecr-digests"
+new_session
+expect "ecr-warm.sh passes when the tag moved but the pinned digest is still in ECR, and says so" \
+  sh -c 'bash "$1/ecr-warm.sh" stg "$2" >"$3" 2>&1 && grep -q "^note  docker.io/library/alpine:3.22: ECR holds tag 3.22 at $4, and the pinned $5 too$" "$3"' \
+  _ "$here" "$images" "$work/warm.out" "$d9" "$d1"
+grep -v '^ecr-public/' "$state/ecr-tags" >"$state/ecr-tags.new"; mv "$state/ecr-tags.new" "$state/ecr-tags"
+new_session
+expect "ecr-warm.sh fails on a tag the cache cannot pull, with the reason, account id masked" \
+  sh -c '! bash "$1/ecr-warm.sh" stg "$2" >"$3" 2>&1 &&
+    grep -q "^FAIL  public.ecr.aws/karpenter/controller:1.8.1: the cache ecr-public/karpenter/controller has no tag 1.8.1: ImageNotFound: Requested image not found in registry <account>$" "$3" &&
+    ! grep "^FAIL" "$3" | grep -q 111111111111' _ "$here" "$images" "$work/warm.out"
+for bad_line in "ghcr.io/anhnvcoder/svp-backend/gateway:v1@$d1" "docker.io/library/alpine@$d1" "docker.io/library/alpine:3.22@sha256:abc" \
+  "example.com/team/app:1.0@$d1"; do
+  printf '%s\n' "docker.io/library/alpine:3.22@$d1" "$bad_line" >"$work/bad.txt"
+  new_session
+  expect "ecr-warm.sh refuses line '$bad_line' before any call" \
+    sh -c '! bash "$1/ecr-warm.sh" stg "$2" >"$3" 2>&1 && grep -q "^FAIL  $2:2" "$3" && [ ! -s "$4" ]' _ "$here" "$work/bad.txt" "$work/warm.out" "$log"
+done
+new_session
+expect "ecr-warm.sh refuses a list that is not there" \
+  sh -c '! bash "$1/ecr-warm.sh" stg "$2/none.txt" >"$3" 2>&1 && grep -q "^FAIL  no readable list" "$3" && [ ! -s "$4" ]' _ "$here" "$work" "$work/warm.out" "$log"
+clear_log
+expect "ecr-warm.sh --print prd shows the pull and the check with profile and region, and calls nothing" \
+  sh -c 'bash "$1/ecr-warm.sh" --print prd "$2" >"$3" 2>&1 && [ ! -s "$4" ] &&
+    grep -q "^+ AWS_PROFILE=anhnv-prd aws ecr batch-get-image --repository-name docker-hub/library/alpine --image-ids imageTag=3.22 .*--region ap-southeast-1$" "$3" &&
+    grep -q "^+ AWS_PROFILE=anhnv-prd aws ecr describe-images --repository-name docker-hub/library/alpine --image-ids imageDigest=$5 --output json --region ap-southeast-1$" "$3"' \
+  _ "$here" "$images" "$work/warm.out" "$log" "$d1"
+unset SVP_SESSION_DIR
 
 # --- measure.sh ---------------------------------------------------------------------------------------------------
 start_measure() {
@@ -1296,6 +1543,17 @@ for e in stg prd mgmt; do
   expect "sweep.sh $e prints the key of a destroyed root as pending deletion" grep -q '^pending deletion  KMS key key-eks, deleted on 2026-11-12' "$work/sweep.out"
   expect "sweep.sh $e keeps the stacks that live between sessions, aws/baseline's in every account: $k" \
     grep -q "^ok    nothing left in account $e but what it keeps (Stack=$k) and keys pending deletion$" "$work/sweep.out"
+  if [ "$s" = baseline ]; then
+    expect "sweep.sh $e prints what aws/accounts/$e keeps as kept: AMP and Grafana workspaces, cache rules, ECR repositories, OIDC provider, roles of CI" \
+      sh -c 'grep -q "^kept  AMP workspace ws-0fake svp-$2 (Stack=baseline)$" "$1" && grep -q "^kept  Grafana workspace g-0fake svp-$2 (Stack=baseline)$" "$1" &&
+        [ "$(grep -c "^kept  ECR pull-through cache rule " "$1")" = 5 ] && grep -q "^kept  ECR pull-through cache rule k8s (upstream.example)$" "$1" &&
+        grep -q "^kept  ECR repository svp-backend/gateway (Stack=baseline)$" "$1" &&
+        grep -q "^kept  ECR repository docker-hub/library/alpine (made by the pull-through cache)$" "$1" &&
+        grep -q "^kept  IAM OIDC provider arn:aws:iam::$3:oidc-provider/token.actions.githubusercontent.com (Stack=baseline)$" "$1" &&
+        grep -q "^kept  IAM role svp-ci-ecr-release-backend (Stack=baseline)$" "$1" && grep -q "^kept  IAM role svp-ci-ecr-rescan-backend (Stack=baseline)$" "$1" &&
+        grep -q "^kept  secret ecr-pullthroughcache/ghcr (Stack=baseline)$" "$1" && grep -q "^kept  secret ecr-pullthroughcache/docker-hub (Stack=baseline)$" "$1" &&
+        ! grep -qE "other-project|other.example|other-role|ws-other" "$1"' _ "$work/sweep.out" "$e" "$a"
+  fi
   if [ -n "$z" ]; then
     expect "sweep.sh $e prints the EBS key of aws/baseline as kept (Stack=security-baseline)" \
       grep -q '^kept  KMS key key-ebs (Stack=security-baseline)$' "$work/sweep.out"
@@ -1312,6 +1570,10 @@ for e in stg prd mgmt; do
       "cloudwatch describe-alarms" "logs describe-log-groups" "resourcegroupstaggingapi get-resources --resource-type-filters logs:log-group" \
       "sns list-topics" "kms list-aliases" "resourcegroupstaggingapi get-resources --resource-type-filters kms:key"; do
         grep -q "^aws $c .*--region us-east-1$" "$1" || exit 1; done' _ "$log"
+  expect "sweep.sh $e reads the IAM OIDC providers and roles of CI, and their tags, in us-east-1 alone" \
+    sh -c 'grep -q "^aws iam list-open-id-connect-providers --output json --region us-east-1$" "$1" &&
+      grep -q "^aws iam list-roles --output json --region us-east-1$" "$1" && grep -q "^aws iam list-open-id-connect-provider-tags " "$1" &&
+      [ -z "$(grep -E "^aws iam list-(open-id-connect-provider|role)" "$1" | grep -v -- "--region us-east-1$")" ]' _ "$log"
   expect "sweep.sh $e reads the certificates of every key type, in both regions" \
     test "$(grep -c '^aws acm list-certificates --includes keyTypes=[^ ]*EC_prime256v1' "$log")" = 2
   if [ "$e" = prd ]; then
@@ -1345,6 +1607,10 @@ expect "sweep.sh fails on a leftover EBS volume, names it and the command that d
     grep -q "delete: AWS_PROFILE=anhnv-stg aws ec2 delete-volume --volume-id vol-0fake --region ap-southeast-1$" "$2"' _ "$here" "$work/sweep.out"
 expect "sweep.sh fails on a secret scheduled for deletion, and says so" \
   sh -c '! FAKE_LEFTOVER=secret bash "$1/sweep.sh" stg >"$2" 2>&1 && grep -q "svp/stg/web (scheduled for deletion since" "$2"' _ "$here" "$work/sweep.out"
+expect "sweep.sh stg keeps the pull-through cache secrets beside a leftover secret: kept, not listed, no delete command" \
+  sh -c '! FAKE_LEFTOVER=secret bash "$1/sweep.sh" stg >"$2" 2>&1 && grep -q "^FAIL  Secrets Manager secrets (scheduled for deletion included): 1 left$" "$2" &&
+    grep -q "^kept  secret ecr-pullthroughcache/ghcr (Stack=baseline)$" "$2" && ! grep -q "^        ecr-pullthroughcache" "$2" &&
+    ! grep -q "delete-secret --secret-id ecr-pullthroughcache" "$2"' _ "$here" "$work/sweep.out"
 expect "sweep.sh prd fails on the final snapshot, with its delete command" \
   sh -c '! FAKE_LEFTOVER=snapshot bash "$1/sweep.sh" prd >"$2" 2>&1 && grep -q "^FAIL  RDS snapshots: 1 left" "$2" &&
     grep -q "delete: AWS_PROFILE=anhnv-prd aws rds delete-db-snapshot --db-snapshot-identifier svp-prd-final-0a1b2c3d --region ap-southeast-1$" "$2"' _ "$here" "$work/sweep.out"
@@ -1488,6 +1754,29 @@ expect "sweep.sh stg fails on the alarm topic of root env in the home region, no
 expect "sweep.sh stg fails on a tagged log group whose Stack is not kept" \
   sh -c '! FAKE_LEFTOVER=log-group bash "$1/sweep.sh" stg >"$2" 2>&1 && grep -q "^FAIL  CloudWatch log groups: 1 left$" "$2" &&
     grep -q "^        /aws/rds/svp-stg/postgresql$" "$2"' _ "$here" "$work/sweep.out"
+expect "sweep.sh stg fails on the interface endpoint and the endpoints group of root env found by their names" \
+  sh -c '! FAKE_LEFTOVER=interface-endpoint bash "$1/sweep.sh" stg >"$2" 2>&1 && grep -q "^FAIL  VPC endpoints: 1 left$" "$2" &&
+    grep -q "^        vpce-0sts Interface com.amazonaws.ap-southeast-1.sts available$" "$2" &&
+    grep -q "^FAIL  security groups: 1 left$" "$2" && grep -q "^        sg-0ep svp-stg-endpoints$" "$2" &&
+    grep -q "delete: AWS_PROFILE=anhnv-stg aws ec2 delete-security-group --group-id sg-0ep --region ap-southeast-1$" "$2"' _ "$here" "$work/sweep.out"
+expect "sweep.sh stg fails on the rule groups namespaces of ACK left in the AMP workspace, with their delete commands" \
+  sh -c '! FAKE_LEFTOVER=amp-rules bash "$1/sweep.sh" stg >"$2" 2>&1 && grep -q "^FAIL  AMP rule groups namespaces: 2 left$" "$2" &&
+    grep -q "delete: AWS_PROFILE=anhnv-stg aws amp delete-rule-groups-namespace --name svp-alerts --workspace-id ws-0fake --region ap-southeast-1$" "$2" &&
+    grep -q "delete: AWS_PROFILE=anhnv-stg aws amp delete-rule-groups-namespace --name slo-generated --workspace-id ws-0fake --region ap-southeast-1$" "$2" &&
+    grep -q "^kept  AMP workspace ws-0fake svp-stg (Stack=baseline)$" "$2"' _ "$here" "$work/sweep.out"
+expect "sweep.sh stg fails on a release repository of a Stack it does not keep" \
+  sh -c '! FAKE_LEFTOVER=ecr bash "$1/sweep.sh" stg >"$2" 2>&1 && grep -q "^FAIL  ECR repositories: 1 left$" "$2" &&
+    grep -q "^        svp-backend/old Stack=stg$" "$2" &&
+    grep -q "delete: AWS_PROFILE=anhnv-stg aws ecr delete-repository --repository-name svp-backend/old --force --region ap-southeast-1$" "$2"' _ "$here" "$work/sweep.out"
+expect "sweep.sh mgmt fails on a cache rule and the repository it made: no account keeps them but the environments'" \
+  sh -c '! FAKE_LEFTOVER=cache bash "$1/sweep.sh" mgmt >"$2" 2>&1 && grep -q "^FAIL  ECR pull-through cache rules: 1 left$" "$2" &&
+    grep -q "delete: AWS_PROFILE=anhnv-sso aws ecr delete-pull-through-cache-rule --ecr-repository-prefix k8s --region ap-southeast-1$" "$2" &&
+    grep -q "^FAIL  ECR repositories: 1 left$" "$2" && grep -q "^        k8s/pause$" "$2"' _ "$here" "$work/sweep.out"
+expect "sweep.sh stg fails on an OIDC provider of root env, keeps GitHub's" \
+  sh -c '! FAKE_LEFTOVER=oidc bash "$1/sweep.sh" stg >"$2" 2>&1 && grep -q "^FAIL  IAM OIDC providers: 1 left$" "$2" &&
+    grep -q "^        arn:aws:iam::111111111111:oidc-provider/oidc.eks.ap-southeast-1.amazonaws.com/id/0FAKE Stack=stg$" "$2" &&
+    grep -q "delete: AWS_PROFILE=anhnv-stg aws iam delete-open-id-connect-provider --open-id-connect-provider-arn arn:aws:iam::111111111111:oidc-provider/oidc.eks.ap-southeast-1.amazonaws.com/id/0FAKE --region us-east-1$" "$2" &&
+    grep -q "^kept  IAM OIDC provider .*token.actions.githubusercontent.com (Stack=baseline)$" "$2"' _ "$here" "$work/sweep.out"
 expect "sweep.sh stops on another account before any other command" \
   sh -c '! FAKE_ACCOUNT=000000000000 bash "$1/sweep.sh" stg >/dev/null 2>&1' _ "$here"
 

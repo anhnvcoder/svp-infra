@@ -4,8 +4,10 @@ Mọi thứ cấp tổ chức của lab, ở management account (account sandbox
 chung, không chạy workload. Cấu trúc account theo AWS Security Reference Architecture (SRA): log ở account `svp-log-archive`, dịch vụ phát
 hiện do account `svp-security` quản, stg và prd chạy trong hai account thành viên riêng. Thiết kế và lý do:
 [ADR-0059](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0059-org-structure-guardrails.md) (account, OU, policy, root tập
-trung, permission set, liên hệ) và [ADR-0060](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0060-org-detection-logging.md)
-(delegated admin, trail org).
+trung, permission set, liên hệ), [ADR-0060](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0060-org-detection-logging.md)
+(delegated admin, trail org), [ADR-0062](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0062-ecr-registry-ci-oidc.md) §10
+(delegated admin của Inspector), [ADR-0063](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0063-managed-observability.md) và
+[ADR-0065](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0065-argocd-eks-capability.md) (nhóm nền tảng).
 
 ## Tài nguyên
 
@@ -16,10 +18,11 @@ trung, permission set, liên hệ) và [ADR-0060](https://github.com/anhnvcoder/
 | Account `svp-stg` (OU `NonProd`), `svp-prd` (OU `Prod`) | `organization.tf` | mỗi env một account; địa chỉ `aws_organizations_account.member["stg"\|"prd"]`, đổi OU là MoveAccount tại chỗ |
 | Account `svp-log-archive`, `svp-security` (OU `Security`) | `organization.tf` | Log Archive và Security Tooling của SRA; chỉ vào được từ management qua `OrganizationAccountAccessRole` |
 | Policy của tổ chức (module [`org-policies`](../modules/org-policies/README.md)) | `organization.tf` | SCP, RCP, declarative EC2, tag policy gắn root; `svp-prod-guardrails` gắn OU `Prod` |
-| Delegated admin `svp-security` | `delegated-admins.tf` | GuardDuty (`ap-southeast-1`, `us-east-1`), Security Hub CSPM (region nhà, cấu hình tập trung), Config (`config`, `config-multiaccountsetup`), IAM Access Analyzer; dịch vụ cấu hình ở [`aws/security`](../security/README.md) |
+| Delegated admin `svp-security` | `delegated-admins.tf` | GuardDuty (`ap-southeast-1`, `us-east-1`), Security Hub CSPM (region nhà, cấu hình tập trung), Amazon Inspector (`ap-southeast-1`, nơi có registry ECR), Config (`config`, `config-multiaccountsetup`), IAM Access Analyzer; dịch vụ cấu hình ở [`aws/security`](../security/README.md) |
 | Root tập trung (`aws_iam_organizations_features`) | `root-access.tf` | `RootCredentialsManagement`, `RootSessions`: account thành viên không giữ credential root; việc chỉ root làm đi qua `sts:AssumeRoot` từ management |
 | Liên hệ `SECURITY` của năm account | `contacts.tf` | AWS báo sự cố bảo mật tới người phụ trách, không chỉ email root (CIS AWS Foundations v5.0.0, 1.2); giá trị ở biến `security_contact` |
 | Permission set `SvpAdmin`, `SvpReadOnly`, `SvpLogReader` | `identity-center.tf` | xem mục [Permission set](#permission-set) |
+| Nhóm Identity Center `svp-platform-admins`, `svp-platform-viewers` | `identity-center.tf` | xem mục [Nhóm nền tảng](#nhóm-nền-tảng) |
 | Trail org `svp-audit` | `audit-trail.tf` | management event đọc + ghi của mọi account, mọi region; data event S3 của bucket người dùng prd; log file validation; giao về bucket `svp-cloudtrail-<log>-ap-southeast-1` của `svp-log-archive`, mã hoá bằng key `alias/svp-log-archive` của account đó |
 | Bucket `svp-cloudtrail-<mgmt>-<region>`, `svp-cloudtrail-access-<mgmt>-<region>`, KMS key `alias/svp-cloudtrail` | `audit-trail.tf` | nơi trail ghi trước khi có Log Archive; chỉ đọc, giữ tới khi Object Lock của version cuối hết hạn, rồi gỡ theo [Gỡ bucket trail cũ](#gỡ-bucket-trail-cũ) |
 
@@ -41,6 +44,7 @@ quét malware EC2 ở account thành viên
 | `cloudtrail.amazonaws.com` | trail org |
 | `guardduty.amazonaws.com`, `malware-protection.guardduty.amazonaws.com` | GuardDuty và Malware Protection for EC2 |
 | `securityhub.amazonaws.com` | Security Hub CSPM |
+| `inspector2.amazonaws.com` | Amazon Inspector quét image ECR của mọi account |
 | `config.amazonaws.com`, `config-multiaccountsetup.amazonaws.com` | aggregator và rule tổ chức của AWS Config |
 | `access-analyzer.amazonaws.com` | analyzer `ORGANIZATION` |
 | `account.amazonaws.com` | liên hệ `SECURITY` của account thành viên |
@@ -61,6 +65,21 @@ quét malware EC2 ở account thành viên
   phiên cổng truy cập. Profile kiểu cũ (không `sso-session`) không tự làm mới.
 - Permission set có sẵn của chính management không quản ở đây. Break-glass khi Identity Center hỏng: root của management (MFA phần cứng),
   quy trình ở runbook `docs/runbooks/break-glass.md`.
+
+### Nhóm nền tảng
+
+Hai nhóm của Identity Center mà công cụ nền tảng của stg, prd cấp quyền theo nhóm: `svp-platform-admins` (vai trò `ADMIN` của Amazon Managed
+Grafana) và `svp-platform-viewers` (`VIEWER` của Grafana). ADR-0065 dùng lại hai nhóm này cho vai trò `ADMIN`, `VIEWER` của Argo CD chạy bằng EKS
+Capability.
+
+- Code chỉ tạo nhóm, không thành viên: người học gán người vào nhóm trên console IAM Identity Center (Groups → nhóm → Add users).
+- Id nhóm là output `platform_admin_group_id`, `platform_viewer_group_id`. Người học chép vào biến cùng tên trong `<env>.auto.tfvars` của
+  `aws/accounts/<env>` (git bỏ qua): repo public không giữ id nhóm.
+
+```sh
+AWS_PROFILE=anhnv-sso terraform output -raw platform_admin_group_id
+AWS_PROFILE=anhnv-sso terraform output -raw platform_viewer_group_id
+```
 
 ## Trail org
 
@@ -175,10 +194,11 @@ Sau khi `aws/log-archive` đã apply (key `alias/svp-log-archive` và bucket `sv
 AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform plan -out=org.tfplan
 ```
 
-Mong đợi `Plan: 38 to add, 2 to change, 3 to destroy`:
+Mong đợi `Plan: 41 to add, 2 to change, 3 to destroy`:
 
-- thêm: delegated admin (2 GuardDuty, 1 Security Hub, 3 qua Organizations), `aws_iam_organizations_features.root_access`, 5 liên hệ
-  `SECURITY`, permission set `SvpReadOnly`, `SvpLogReader` với policy và gán (11), policy mới của `module.org_policies` và đích của chúng (12);
+- thêm: delegated admin (2 GuardDuty, 1 Security Hub, 1 Inspector, 3 qua Organizations), `aws_iam_organizations_features.root_access`, 5 liên
+  hệ `SECURITY`, permission set `SvpReadOnly`, `SvpLogReader` với policy và gán (11), hai nhóm nền tảng, policy mới của `module.org_policies` và
+  đích của chúng (12);
 - đổi tại chỗ: `aws_ssoadmin_permission_set.admin` (chỉ `session_duration` `PT4H` → `PT1H`); `aws_cloudtrail.audit` (`s3_bucket_name` sang
   bucket của `svp-log-archive`, `kms_key_id` dạng `arn:aws:kms:ap-southeast-1:<log>:key/<id>`, `event_selector` thay bằng ba
   `advanced_event_selector`);
@@ -202,6 +222,20 @@ AWS_PROFILE=anhnv-sso aws cloudtrail get-trail-status --name svp-audit --region 
 ```
 
 Mong đợi `[true, null, null]`; một lỗi giao log hay digest (bucket policy, key policy của `aws/log-archive` từ chối) hiện ở hai ô sau: dán lại.
+
+### Thêm Inspector và nhóm nền tảng vào tổ chức đã áp
+
+Khi bước (4) đã chạy trước khi root có Inspector và nhóm nền tảng, apply root này trước [`aws/security`](../security/README.md) (root đó cấu
+hình Inspector từ `svp-security`, cần delegated admin có sẵn), cùng lệnh `plan`, `apply` của bước (4).
+
+Mong đợi `Plan: 3 to add, 1 to change, 0 to destroy`:
+
+- thêm: `aws_inspector2_delegated_admin_account.security`, `aws_identitystore_group.platform["admins"]`,
+  `aws_identitystore_group.platform["viewers"]`;
+- đổi tại chỗ (`~`): chỉ tổ chức, chỉ một dòng `+ "inspector2.amazonaws.com"` trong `aws_service_access_principals`, không dòng `-` nào.
+
+Dừng (không apply, dán plan lại) nếu có `destroy`, `-/+` hay thay đổi nào khác. Sau apply, Inspector tự bật mọi loại quét ở `svp-security`;
+`aws/security` thu về chỉ ECR. Plan lần hai phải là `No changes.`; rồi ghi id nhóm theo mục [Nhóm nền tảng](#nhóm-nền-tảng).
 
 ### Profile
 
@@ -314,19 +348,21 @@ và bước 2 theo [mục gỡ của root đó](../log-archive/README.md#gỡ-c�
 
    `Account` phải bằng `$SVP_AWS_MGMT_ACCOUNT_ID` (management account), `Arn` là role SSO của người học. Khác thì dừng, không chạy bước nào dưới đây.
 
-1. **Tắt trail, bỏ delegated admin, root tập trung, liên hệ, quyền SSO** (không tài nguyên nào trong số này có `prevent_destroy`; log đã ghi
-   vẫn còn):
+1. **Tắt trail, bỏ delegated admin, root tập trung, liên hệ, quyền SSO, nhóm nền tảng** (không tài nguyên nào trong số này có
+   `prevent_destroy`; log đã ghi vẫn còn):
 
    ```sh
    AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform apply -destroy -target=aws_cloudtrail.audit \
      -target=aws_guardduty_organization_admin_account.security -target=aws_securityhub_organization_admin_account.security \
+     -target=aws_inspector2_delegated_admin_account.security \
      -target=aws_organizations_delegated_administrator.security -target=aws_iam_organizations_features.root_access \
      -target=aws_account_alternate_contact.security \
      -target=aws_ssoadmin_account_assignment.learner -target=aws_ssoadmin_managed_policy_attachment.admin -target=aws_ssoadmin_permission_set.admin \
      -target=aws_ssoadmin_account_assignment.read_only -target=aws_ssoadmin_managed_policy_attachment.read_only \
      -target=aws_ssoadmin_permission_set_inline_policy.read_only -target=aws_ssoadmin_permission_set.read_only \
      -target=aws_ssoadmin_account_assignment.log_reader -target=aws_ssoadmin_managed_policy_attachment.log_reader \
-     -target=aws_ssoadmin_permission_set_inline_policy.log_reader -target=aws_ssoadmin_permission_set.log_reader
+     -target=aws_ssoadmin_permission_set_inline_policy.log_reader -target=aws_ssoadmin_permission_set.log_reader \
+     -target=aws_identitystore_group.platform
    ```
 
 2. **Đóng bốn account thành viên theo quy trình AWS, không bằng destroy** (`close_on_deletion = false`, `prevent_destroy`): destroy chỉ gỡ
@@ -368,7 +404,8 @@ và bước 2 theo [mục gỡ của root đó](../log-archive/README.md#gỡ-c�
    ```sh
    R="$(AWS_PROFILE=anhnv-sso terraform output -raw root_id)"
    AWS_PROFILE=anhnv-sso terraform state rm aws_organizations_organization.this
-   for p in access-analyzer account cloudtrail config-multiaccountsetup config ec2 guardduty iam malware-protection.guardduty securityhub; do
+   for p in access-analyzer account cloudtrail config-multiaccountsetup config ec2 guardduty iam inspector2 malware-protection.guardduty \
+     securityhub; do
      AWS_PROFILE=anhnv-sso aws organizations disable-aws-service-access --service-principal "$p.amazonaws.com" --region us-east-1
    done
    for t in DECLARATIVE_POLICY_EC2 TAG_POLICY; do

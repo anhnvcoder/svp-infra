@@ -3,3 +3,7 @@
 budget_emails    = ["you@svp.example"]
 budget_limit_usd = 20
 zone_name        = "stg.aws.svp.example"
+
+# Outputs platform_admin_group_id and platform_viewer_group_id of aws/org (made-up ids below).
+platform_admin_group_id  = "0000000000-00000000-0000-0000-0000-000000000001"
+platform_viewer_group_id = "0000000000-00000000-0000-0000-0000-000000000002"

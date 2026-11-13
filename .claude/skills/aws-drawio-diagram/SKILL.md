@@ -14,7 +14,7 @@ nguồn ở dòng đầu, cộng các thay đổi ở mục "Khác bản gốc";
 | --- | --- |
 | [`scripts/drawio_lib.py`](scripts/drawio_lib.py) | Thư viện vẽ: `Page` (group / icon / flat / k8s / badge / text / box / edge / table), bảng màu và style aws4, `write()`, `export()` (PDF/PNG qua CLI draw.io). Từ chối ngay mọi toạ độ lệch lưới 40px. |
 | [`scripts/check_diagram.py`](scripts/check_diagram.py) | Cổng hình học cho mọi file `.drawio` (11 phép, liệt kê trong docstring), exit 1 khi có lỗi; `--counts` in số mỗi loại (icon, AZ, subnet) mỗi trang, `kind_counts()` cho spec import. |
-| [`scripts/build_svp.py`](scripts/build_svp.py) | Spec của [`docs/diagrams/svp-aws.drawio`](../../../docs/diagrams/svp-aws.drawio): trang `stg`, `prd`, `org`, `flows` (phát hành, upload tới phát lại, request tới web và API). |
+| [`scripts/build_svp.py`](scripts/build_svp.py) | Spec của [`docs/diagrams/svp-aws.drawio`](../../../docs/diagrams/svp-aws.drawio): trang `stg`, `prd`, `org`, `flows` (phát hành image tới ECR, upload tới phát lại, request tới web và API, telemetry). |
 | [`scripts/check_svp_counts.py`](scripts/check_svp_counts.py) | Đếm icon mỗi trang env so với cỡ của Terraform (AZ, subnet, NAT, node group, RDS, broker MSK, node ElastiCache và mọi loại khác) và trang `org` so với `org_expected()` (năm account, dịch vụ mỗi account), offline. |
 
 ## Vòng làm
@@ -56,10 +56,14 @@ inventory thì đặt `cid` của icon là id tài nguyên và `cid` của box s
    nhiều load balancer. Hai box edge bật viền để thấy biên. Box edge nằm trong khung AZ (luật 1) thì hai hàng AZ đầu chạm nhau (không
    khe) và icon bắc qua biên chung: cạnh trên tựa đáy box edge của AZ đầu, cạnh dưới tựa đỉnh box edge của AZ sau. Có ba AZ trở lên thì
    icon vẫn bắc qua hai AZ đầu, phụ đề ghi "một ALB trên mọi subnet edge".
+3a. **Interface endpoint là ENI trong subnet private, nên vẽ trong box private**: một icon `endpoints` mỗi AZ có ENI (`interface_endpoint_az_count`
+   của root: stg một AZ, prd mọi AZ), bên trái box cluster, nhãn nêu số dịch vụ (đọc từ `interface_endpoint_services` của module `network`, không gõ
+   lại); một đường đứt từ box cluster tới icon của AZ đầu (nhãn `443`). Gateway endpoint S3 vẫn ở luật 3.
 3. **Tài nguyên ngoài subnet nằm ở tầng riêng:** WAF regional (gắn ALB) trong Region ngoài VPC; VPC endpoint (cả gateway endpoint S3)
    trong VPC ngoài các subnet; IGW trong Region cạnh VPC; control plane EKS trong Region ngoài VPC; **tài nguyên theo AZ mà không theo
    subnet (volume EBS) trong khung AZ, ngoài các box subnet, một icon mỗi AZ**; dịch vụ regional (S3, Secrets Manager, KMS, CloudWatch
-   Logs, ACM của ALB) trong dải "Regional services" dưới VPC; dịch vụ toàn cầu của account (Route 53, mỗi distribution CloudFront, web ACL
+   Logs, ACM của ALB) trong dải "Regional services" dưới VPC, **hàng thứ hai của dải là dịch vụ cấp account sống qua `destroy`** (ECR, Inspector,
+   AMP, AMG, log group ứng dụng, X-Ray), cạnh nối láng giềng cùng hàng (Inspector → ECR, AMG → AMP, AMG và X-Ray → log group); dịch vụ toàn cầu của account (Route 53, mỗi distribution CloudFront, web ACL
    WAF của distribution đó) trong Account ngoài Region, ở trang env bên trái, mỗi distribution một icon với web ACL của nó là một icon
    nối bằng đường đứt không mũi tên, nhãn của icon web ACL đặt trên (`label_top`) để đường đứt không cắt chữ; distribution tới ALB
    bằng một đường vào mép trái của ALB (VPC origin), mỗi distribution một điểm vào (`entry` 0,25 và 0,75), đi trong lề dưới AZ đầu và lề
@@ -156,6 +160,10 @@ inventory thì đặt `cid` của icon là id tài nguyên và `cid` của box s
 
 ### Trang `org`
 
+14a. **Trang `flows`** gồm bốn khối dọc, mỗi khối một tiêu đề: phát hành image (GitHub Actions → GHCR → ECR của từng account qua role OIDC, đường copy
+    từ một thân chung ở x 880 rẽ vào từng account; PR promote → svp-gitops → Argo CD trong cluster), upload tới phát lại, request, telemetry
+    (Collector, Prometheus agent trong cluster → AMP, CloudWatch Logs, X-Ray; AMG đọc AMP và log; AMP → SNS). Mỗi khối có Cloud, Account hoặc
+    cluster riêng khi cần; tên role, repo, log group khớp code. Ba đường ra từ Collector dùng một thân dọc chung, nhãn đặt bên phải thân.
 14b. **Trang cấu trúc tổ chức, không có VPC, AZ, subnet.** Container ngoài cùng là root của Organization; trong đó hộp chính sách gắn ở root
     (tên và loại đọc từ `aws/modules/org-policies/main.tf` bởi `org_policies()`, không gõ lại), ba cột: account quản lý, OU `Security`
     (account `svp-log-archive`, `svp-security`), OU `Workloads` (OU `Prod` với `svp-prd`, OU `NonProd` với `svp-stg`). OU là group aws4
@@ -163,7 +171,7 @@ inventory thì đặt `cid` của icon là id tài nguyên và `cid` của box s
     Luồng log (xanh) từ mọi account vào bucket của `svp-log-archive`, mỗi loại log một bucket trong một cột để nguồn từ hai phía tới được;
     luồng phát hiện (đỏ): GuardDuty, Access Analyzer → Security Hub → bus `svp-security-events` ← rule `svp-security-*` của mọi account →
     SNS → email. Đường từ nguồn ngoài vào đi theo hành lang dọc (waypoint chung x) để không xuyên icon; chỗ hai đường cắt nhau chấp nhận.
-    Số icon mỗi loại ở `org_expected()`, `check_svp_counts.py` so với file.
+    Số icon mỗi loại ở `org_expected()`, `check_svp_counts.py` so với file. Account bảo mật có thêm Inspector (delegated admin, chỉ ECR; đường tới Security Hub đi dưới hàng icon, vào đáy hub); mỗi account env có icon AMG ghi hai vai trò `svp-platform-admins`, `svp-platform-viewers`; nhóm nền tảng ghi ở nhãn Identity Center.
 15b. **Trang env vẽ phần account `svp-log-archive` chỉ cho bucket mà env ghi vào** (flow log, log WAF, log
     CloudFront), dưới account của env, trong Cloud; mỗi web ACL một đường log, ba đường chung hành lang x 360 (giữa cột
     toàn cục và Region; bên trái là đường của users), đường VPC đi hành lang giữa Region và Account bên phải. Endpoint
@@ -182,6 +190,8 @@ y:  phụ đề 40, 80, 120 · Cloud 160 · Account 200 · Region 240 · ghi ch�
     subnet đầu); WAF media và CloudFront media ở hàng dải regional (-200, +0)
     AZ k ở 480 + 480k, các hàng chạm nhau; ba box subnet +40 (cao 400): MSK, NAT, node group +80, ElastiCache +160, bastion +200,
     EBS +200, node Karpenter +280 (dưới đường kube-system → EBS ở +240), RDS +280
+    dải regional cao 400: hàng 1 +40, hàng 2 +240 (ECR 640, Inspector 920, AMP 1200, AMG 1480, log group 1760, X-Ray 2040, ghi chú 2320)
+    interface endpoint: x 1360 (trái box cluster), +280 mỗi AZ có ENI
     hàng khung namespace của AZ đầu +200, +320, của AZ sau +160, +280; svp-data ba workload cách 40
     ALB ở biên hai AZ đầu (đỉnh = đáy box edge đầu), CloudFront web → ALB → Envoy chạy 20 trên biên, CloudFront api và
     kube-system → ALB 20 dưới biên; IGW ngang NAT đầu (+40), cạnh NAT → IGW thẳng
@@ -208,6 +218,9 @@ Thêm AZ hay dịch vụ: giữ các hàng, cột ở trên, chỉ thêm icon �
   trước "subnet") cộng nền cộng chiều cao (public và private cùng hàng, cùng cao; database cùng nền private); `ICON_RE` gồm cả
   `mxgraph.kubernetes` (luật đặt icon áp cho icon Kubernetes); `kind_counts()` (icon Kubernetes đếm là `k8s_<kind>`, nhóm Region và AWS
   Account là `region`, `account`, không là `az`) và cờ `--counts`.
+- `build_svp.py`: tên icon aws4 đã render thử cho dịch vụ mới: `ecr` (không phải `elastic_container_registry`: vẽ ô trống),
+  `managed_service_for_prometheus`, `managed_service_for_grafana` (không phải `managed_grafana`), `xray`, `inspector`; tên sai không báo lỗi,
+  chỉ PNG cho thấy ô trống.
 - `SKILL.md`: luật nội dung 0 (lồng Cloud, Account, Region), 1 (subnet trong khung AZ, tầng database), 2 cho mọi load balancer ELB và
   cách bắc qua hai AZ chạm nhau, 3 thêm gateway endpoint, tài nguyên theo AZ (EBS), dịch vụ toàn cầu của account và web ACL của
   CloudFront, 7–11 (EKS, khung namespace trên vùng node, mỗi workload một icon có replica, thư viện Kubernetes), 12 (một spec nhiều env,

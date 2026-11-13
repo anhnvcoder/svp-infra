@@ -1,11 +1,12 @@
 # Runbook: áp nền bảo mật cấp org lần đầu
 
 Áp lần đầu nền bảo mật của tổ chức AWS theo AWS Security Reference Architecture: hai account mới `svp-log-archive`, `svp-security`, OU
-`Security`, `Workloads/Prod`, `Workloads/NonProd`, policy của tổ chức, root tập trung, permission set chỉ đọc, dịch vụ phát hiện, baseline của
-năm account; rồi kiểm dịch vụ bật, guardrail chặn đúng và cảnh báo tới email. Thiết kế:
-[ADR-0059](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0059-org-structure-guardrails.md) (account, OU, policy, root tập trung,
-permission set, baseline) và [ADR-0060](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0060-org-detection-logging.md) (phát
-hiện, log, cảnh báo, chi phí).
+`Security`, `Workloads/Prod`, `Workloads/NonProd`, policy của tổ chức, root tập trung, permission set chỉ đọc, dịch vụ phát hiện (cả Amazon
+Inspector quét ECR của mọi account thành viên), baseline của năm account; rồi kiểm dịch vụ bật, guardrail chặn đúng và cảnh báo tới email.
+Thiết kế: [ADR-0059](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0059-org-structure-guardrails.md) (account, OU, policy, root
+tập trung, permission set, baseline), [ADR-0060](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0060-org-detection-logging.md)
+(phát hiện, log, cảnh báo, chi phí) và [ADR-0062](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0062-ecr-registry-ci-oidc.md)
+§10 (Inspector). Tổ chức đã áp trước khi có Inspector: thêm nó theo [`platform-setup.md`](platform-setup.md#thứ-tự-áp-lần-đầu), bước (1), (2).
 
 **Người học chạy mọi lệnh ở đây.** AI không chạy lệnh nào chạm account, kể cả lệnh chỉ đọc; AI đọc output dán lại. Lệnh `plan`, `apply` và
 mong đợi của từng plan nằm ở README của root; runbook này giữ thứ tự, điểm dừng và phần kiểm sau áp. Mọi lệnh chạy từ gốc repo này (`infra/`)
@@ -18,8 +19,8 @@ flowchart TD
   B1["(1) aws/bootstrap: key state, Cost Anomaly Detection, tag phân bổ; init -reconfigure mọi root"] --> B2
   B2["(2) aws/org -target: OU, account svp-log-archive, svp-security, chuyển OU của stg, prd"] -->|đặt SVP_AWS_LOG_ACCOUNT_ID, SVP_AWS_SECURITY_ACCOUNT_ID| B3
   B3["(3) aws/log-archive: bucket log, hai key alias/svp-log-archive"] --> B4
-  B4["(4) aws/org đủ: trusted access, delegated admin, policy, root tập trung, permission set, liên hệ, trail đổi đích"] -->|tạo bốn profile chỉ đọc| B5
-  B5["(5) aws/security: GuardDuty, Security Hub CSPM, Config aggregator, Access Analyzer, bus, SNS; xác nhận email"] --> B6
+  B4["(4) aws/org đủ: trusted access, delegated admin (cả Inspector), policy, root tập trung, permission set, nhóm nền tảng, liên hệ, trail đổi đích"] -->|tạo bốn profile chỉ đọc| B5
+  B5["(5) aws/security: GuardDuty, Security Hub CSPM, Config aggregator, Access Analyzer, Inspector ECR, bus, SNS; xác nhận email"] --> B6
   B6["(6) aws/baseline: BPA, EBS mặc định, Config recorder, rule svp-security-*, CMK EBS"] --> B7
   B7["(7) kiểm sau áp: dịch vụ, root tập trung, trail, phép thử guardrail, cảnh báo thử, chi phí"]
 ```
@@ -46,6 +47,8 @@ flowchart TD
 3. **Chi phí liên tục**: từ bước (5) dịch vụ phát hiện tính tiền mỗi tháng ở năm account, kể cả khi không có buổi; bước (1), (3), (6) thêm KMS
    key. Đọc bảng ở [ADR-0060 §12](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0060-org-detection-logging.md#12-chi-phí-liên-tục)
    và [phụ lục](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0060-org-detection-logging.md#12-chi-phí-liên-tục).
+   Inspector tính theo digest image được quét ở registry của account env (không có registry thì $0):
+   [ADR-0062 §11](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0062-ecr-registry-ci-oidc.md#11-chi-phí-registry).
    Budget tổng của org phải đủ cho khoản đó cộng các buổi: lệnh đọc ở cuối mục [Mở terminal](#mở-terminal) (cần biến và phiên SSO của mục đó).
 4. **Phụ thuộc buổi**: từ khi code này ở `main`, root `aws/envs/stg`, `aws/envs/prd` ghi flow log và log WAF vào bucket của `svp-log-archive`
    và cần `SVP_AWS_LOG_ACCOUNT_ID`. Buổi stg, prd chỉ chạy được sau khi bước (1)–(3) đã áp.
@@ -184,7 +187,8 @@ AWS_PROFILE=anhnv-sso aws organizations list-policies-for-target --filter SERVIC
 AWS_PROFILE=anhnv-security-ro aws securityhub list-members --region ap-southeast-1 --query 'Members[].[AccountId,MemberStatus]' --output text
 ```
 
-Mong: principal của GuardDuty, Security Hub, `config.amazonaws.com`, `config-multiaccountsetup.amazonaws.com`, Access Analyzer; ở root
+Mong: principal của GuardDuty, Security Hub, `config.amazonaws.com`, `config-multiaccountsetup.amazonaws.com`, Access Analyzer, Inspector
+(`inspector2.amazonaws.com`; trạng thái quét của từng account ở phần Inspector của "Kiểm nhanh" trên: chỉ ECR, ba thành viên `ENABLED`); ở root
 `FullAWSAccess` với năm SCP `svp-*` (danh sách ở README [`org-policies`](../../aws/modules/org-policies/README.md)), `RCPFullAWSAccess` với
 `svp-data-perimeter`, `svp-ec2-baseline`, `svp-tags`; ở OU `Prod` `FullAWSAccess` với `svp-prod-guardrails`; bốn member Security Hub `Enabled`.
 
@@ -382,8 +386,11 @@ dòng có tên sự kiện hay tiêu đề finding, account, region và URL runb
 - bốn thư `AssumeRoot` của mục 7b (rule `svp-security-root-session` của management);
 - một thư finding `[SAMPLE] …` mức HIGH của account stg (rule `svp-security-findings`).
 
-Dán danh sách tiêu đề và giờ nhận, cùng nguyên văn một thư (che account). Thiếu thư nào: đọc lại subscription (README `aws/security`, mục 5),
-rồi dán lệnh của probe đó và giờ chạy; rule nguồn, account, region theo phụ lục
+Finding của Inspector vào Security Hub như GuardDuty nhưng không tới email (rule `svp-security-findings` chỉ lọc GuardDuty, Access Analyzer):
+đọc chúng ở phép kiểm (a) của mục [Phép kiểm nền tảng managed](session-stg.md#phép-kiểm-nền-tảng-managed) của runbook buổi.
+
+Dán danh sách tiêu đề và giờ nhận, cùng nguyên văn một thư (che account). Thiếu thư nào: đọc lại subscription (README `aws/security`, mục
+5), rồi dán lệnh của probe đó và giờ chạy; rule nguồn, account, region theo phụ lục
 [ADR-0060 §10](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0060-org-detection-logging.md#10-đường-cảnh-báo).
 Finding mẫu ở lại tới khi GuardDuty tự xoá (90 ngày); đổi trạng thái nó theo runbook `security-alert.md`.
 
