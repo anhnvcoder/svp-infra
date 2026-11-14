@@ -56,11 +56,20 @@ module "alarms" {
   alarm_email = var.alarm_email
 }
 
+# One file holds the cost flags of every account, so the roots that switch the same service cannot disagree.
+# Design notes: aws/modules/paid-features/README.md.
+module "paid_features" {
+  source = "../../modules/paid-features"
+
+  features = jsondecode(file("${path.root}/../../paid-features.json"))
+}
+
 module "registry" {
   source = "../../modules/registry"
 
-  env      = local.env
-  ci_roles = local.ci_roles
+  env               = local.env
+  ci_roles          = local.ci_roles
+  enhanced_scanning = module.paid_features.flags[local.env].inspector_ecr == "always"
 }
 
 module "observability" {
@@ -72,4 +81,5 @@ module "observability" {
   span_retention_days      = local.span_retention_days
   platform_admin_group_id  = var.platform_admin_group_id
   platform_viewer_group_id = var.platform_viewer_group_id
+  grafana_enabled          = module.paid_features.flags[local.env].managed_grafana == "always" || var.session_open
 }

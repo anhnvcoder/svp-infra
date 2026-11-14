@@ -2,8 +2,11 @@
 
 Áp lần đầu nền bảo mật của tổ chức AWS theo AWS Security Reference Architecture: hai account mới `svp-log-archive`, `svp-security`, OU
 `Security`, `Workloads/Prod`, `Workloads/NonProd`, policy của tổ chức, root tập trung, permission set chỉ đọc, dịch vụ phát hiện (cả Amazon
-Inspector quét ECR của mọi account thành viên), baseline của mọi account của tổ chức (bảng "Áp gì ở account nào" của
+Inspector quét ECR của account thành viên), baseline của mọi account của tổ chức (bảng "Áp gì ở account nào" của
 [README `aws/baseline`](../../aws/baseline/README.md#áp-gì-ở-account-nào)); rồi kiểm dịch vụ bật, guardrail chặn đúng và cảnh báo tới email.
+Security Hub CSPM, AWS Config recorder và Inspector ECR của từng account theo cờ của
+[`aws/paid-features.json`](../../aws/paid-features.json) ([ADR-0071](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0071-paid-features.md));
+mong đợi dưới đây tính theo file của repo, nơi chỉ stg tắt ba dịch vụ đó. Đổi cờ sau khi đã áp: [`paid-features.md`](paid-features.md).
 Thiết kế: [ADR-0059](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0059-org-structure-guardrails.md) (account, OU, policy, root
 tập trung, permission set, baseline), [ADR-0060](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0060-org-detection-logging.md)
 (phát hiện, log, cảnh báo, chi phí) và [ADR-0062](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0062-ecr-registry-ci-oidc.md)
@@ -22,8 +25,8 @@ flowchart TD
   B2["(2) aws/org -target: OU, account svp-log-archive, svp-security, chuyển OU của stg, prd"] -->|đặt SVP_AWS_LOG_ACCOUNT_ID, SVP_AWS_SECURITY_ACCOUNT_ID| B3
   B3["(3) aws/log-archive: bucket log, hai key alias/svp-log-archive"] --> B4
   B4["(4) aws/org đủ: trusted access, delegated admin (cả Inspector), policy, root tập trung, permission set, nhóm nền tảng, liên hệ, trail đổi đích"] -->|tạo bốn profile chỉ đọc| B5
-  B5["(5) aws/security: GuardDuty, Security Hub CSPM, Config aggregator, Access Analyzer, Inspector ECR, bus, SNS; xác nhận email"] --> B6
-  B6["(6) aws/baseline: BPA, EBS mặc định, Config recorder, rule svp-security-*, CMK EBS"] --> B7
+  B5["(5) aws/security: GuardDuty, Security Hub CSPM, Config aggregator, Access Analyzer, Inspector ECR theo cờ, bus, SNS; xác nhận email"] --> B6
+  B6["(6) aws/baseline: BPA, EBS mặc định, Config recorder theo cờ, rule svp-security-*, CMK EBS"] --> B7
   B7["(7) kiểm sau áp: dịch vụ, root tập trung, trail, phép thử guardrail, cảnh báo thử, chi phí"]
 ```
 
@@ -51,6 +54,8 @@ flowchart TD
    và [phụ lục](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0060-org-detection-logging.md#12-chi-phí-liên-tục).
    Inspector tính theo digest image được quét ở registry của account env (không có registry thì $0):
    [ADR-0062 §11](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0062-ecr-registry-ci-oidc.md#11-chi-phí-registry).
+   Account có cờ `off` không trả phần đó:
+   [bảng tháng không buổi của ADR-0071](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0071-paid-features.md#bảng-tháng-không-buổi).
    Budget tổng của org phải đủ cho khoản đó cộng các buổi: lệnh đọc ở cuối mục [Mở terminal](#mở-terminal) (cần biến và phiên SSO của mục đó).
 4. **Phụ thuộc buổi**: từ khi code này ở `main`, root `aws/envs/stg`, `aws/envs/prd` ghi flow log và log WAF vào bucket của `svp-log-archive`
    và cần `SVP_AWS_LOG_ACCOUNT_ID`. Buổi stg, prd chỉ chạy được sau khi bước (1)–(3) đã áp.
@@ -154,7 +159,9 @@ cd aws/security
 ```
 
 Theo [README, Apply](../../aws/security/README.md#apply-bước-5-của-thứ-tự-áp-lần-đầu): giá trị cá nhân, plan, apply, **xác nhận email SNS**
-(thư "AWS Notification - Subscription Confirmation" tới `security_alert_email`), kiểm nhanh. `cd ../..` khi xong.
+(thư "AWS Notification - Subscription Confirmation" tới `security_alert_email`), kiểm nhanh. Root đọc cờ `security_hub`, `inspector_ecr`:
+account `off` gắn policy `svp-security-off`, không có liên kết Inspector, và có rule `svp-security-guardduty-findings` giữ email finding
+GuardDuty của nó (mục Cờ chi phí của [README `aws/security`](../../aws/security/README.md#cờ-chi-phí)). `cd ../..` khi xong.
 
 ## Bước (6): `aws/baseline`
 
@@ -165,7 +172,9 @@ cd aws/baseline
 
 Theo [README, Apply lần đầu](../../aws/baseline/README.md#apply-lần-đầu): kiểm cái đã có, plan, apply. Apply có thể sinh vài email
 `svp-security-detection` (recorder, delivery channel mới); thiếu email ở account hay region nào cũng chưa phải lỗi: rule có thể được tạo sau
-recorder trong cùng apply. Đường cảnh báo kiểm ở [7e](#7e-cảnh-báo-thử). `cd ../..` khi xong.
+recorder trong cùng apply. Account có cờ `config_recording` `off` không có recorder, delivery channel ở hai region (mục Cờ chi phí của
+[README `aws/baseline`](../../aws/baseline/README.md#cờ-chi-phí)). Lần đầu, (5) đi trước (6) với cờ của file; đổi cờ sau đó theo thứ tự của
+[`paid-features.md`](paid-features.md#thứ-tự-apply-cờ). Đường cảnh báo kiểm ở [7e](#7e-cảnh-báo-thử). `cd ../..` khi xong.
 
 ## Bước (7): kiểm sau áp
 
@@ -192,11 +201,12 @@ AWS_PROFILE=anhnv-security-ro aws securityhub list-members --region ap-southeast
 
 Mong: principal của GuardDuty, Security Hub, `config.amazonaws.com`, `config-multiaccountsetup.amazonaws.com`, Access Analyzer, Inspector
 (`inspector2.amazonaws.com`; trạng thái quét của từng account ở phần Inspector của "Kiểm nhanh" trên: chỉ ECR, mọi account thành viên
-`ACTIVE` trừ `svp-security` là thành viên `ENABLED`); ở root
+`ACTIVE` trừ `svp-security` và account có `inspector_ecr` `off` là thành viên `ENABLED`); ở root
 `FullAWSAccess` với năm SCP `svp-*` (danh sách ở README [`org-policies`](../../aws/modules/org-policies/README.md)), `RCPFullAWSAccess` với
 `svp-data-perimeter`, `svp-ec2-baseline`, `svp-tags`; ở OU `Prod` `FullAWSAccess` với `svp-prod-guardrails`; mỗi account `ACTIVE` của tổ
 chức trừ `svp-security`, kể cả management, một member Security Hub `Enabled` (danh sách account: lệnh `list-accounts` ở bước 4 của mục
-[Gỡ có chủ đích](../../aws/org/README.md#gỡ-có-chủ-đích) của README `aws/org`).
+[Gỡ có chủ đích](../../aws/org/README.md#gỡ-có-chủ-đích) của README `aws/org`); account có `security_hub` `off` không `Enabled` (policy
+`svp-security-off` tắt Security Hub ở đó).
 
 Chuẩn Security Hub và recorder Config của từng account, hai region (`anhnv-sso` là management; `svp-log-archive` hiện qua member Security Hub
 và nguồn aggregator ở trên):
@@ -216,7 +226,9 @@ done
 ```
 
 Mong mỗi cặp: hai chuẩn `…/aws-foundational-security-best-practices/v/1.0.0`, `…/cis-aws-foundations-benchmark/v/5.0.0` ở `READY`; recorder
-`CONTINUOUS`; trạng thái `True SUCCESS`. Lỗi quyền ở một profile chỉ đọc: dán lệnh và lỗi, đó cũng là kết quả kiểm của permission set.
+`CONTINUOUS`; trạng thái `True SUCCESS`. Trừ account có cờ `off` (`anhnv-stg-ro` với file của repo): `security_hub` `off` thì
+`get-enabled-standards` không in chuẩn nào hay báo lỗi `InvalidAccessException` (account không bật Security Hub); `config_recording` `off`
+thì hai lệnh Config không in gì. Lỗi quyền ở một profile chỉ đọc: dán lệnh và lỗi, đó cũng là kết quả kiểm của permission set.
 
 Control FAILED ban đầu, theo control (đầu vào của việc sửa sau, không phải lỗi của bước này):
 
@@ -377,7 +389,8 @@ Mong `HttpTokens` `required`, `HttpPutResponseHopLimit` `1`; serial console `fal
 
 ### 7e. Cảnh báo thử
 
-Finding mẫu GuardDuty mức HIGH ở `svp-stg`: finding đi về delegated admin và aggregator Security Hub ở `svp-security`, rồi tới email.
+Finding mẫu GuardDuty mức HIGH ở `svp-stg`: finding đi về delegated admin ở `svp-security`, rồi tới email: qua aggregator Security Hub và
+rule `svp-security-findings` khi cờ `security_hub` của stg là `always`, qua rule `svp-security-guardduty-findings` khi `off`.
 
 ```sh
 D="$(AWS_PROFILE=anhnv-stg aws guardduty list-detectors --region ap-southeast-1 --query 'DetectorIds[0]' --output text)"
@@ -391,10 +404,12 @@ dòng có tên sự kiện hay tiêu đề finding, account, region và URL runb
 
 - năm thư của năm probe chặn ở mục 7d, theo cột Email của bảng; probe Spot, declarative không bắt buộc;
 - bốn thư `AssumeRoot` của mục 7b (rule `svp-security-root-session` của management);
-- một thư finding `[SAMPLE] …` mức HIGH của account stg (rule `svp-security-findings`).
+- một thư finding `[SAMPLE] …` mức HIGH của account stg (rule `svp-security-findings`, hay `svp-security-guardduty-findings` khi
+  `security_hub` của stg là `off`).
 
 Finding của Inspector vào Security Hub như GuardDuty nhưng không tới email (rule `svp-security-findings` chỉ lọc GuardDuty, Access Analyzer):
-đọc chúng ở phép kiểm (a) của mục [Phép kiểm nền tảng managed](session-stg.md#phép-kiểm-nền-tảng-managed) của runbook buổi.
+đọc chúng ở phép kiểm (a) của mục [Phép kiểm nền tảng managed](session-stg.md#phép-kiểm-nền-tảng-managed) của runbook buổi (account có
+`inspector_ecr` `always`).
 
 Dán danh sách tiêu đề và giờ nhận, cùng nguyên văn một thư (che account). Thiếu thư nào: đọc lại subscription (README `aws/security`, mục
 5), rồi dán lệnh của probe đó và giờ chạy; rule nguồn, account, region theo phụ lục

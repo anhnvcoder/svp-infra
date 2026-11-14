@@ -16,8 +16,9 @@ hai region này.
 - **EBS mã hoá mặc định:** bật ở region nhà và `us-east-1`. Key mặc định ở region nhà là `ebs_kms_key_arn` khi có (CMK EBS của `svp-stg`,
   `svp-prd`); `null` giữ key AWS managed `aws/ebs`. `us-east-1` luôn dùng `aws/ebs`. Key phải cùng region nhà (precondition), vì EC2 chỉ nhận key
   mặc định của chính region. Xoá `ebs_kms_key_arn` thì Terraform xoá tài nguyên key mặc định, EC2 trở về `aws/ebs`.
-- **AWS Config**, mỗi region một bộ:
-  - Service-linked role `AWSServiceRoleForConfig`; recorder dùng ARN của role này, ghép từ partition và account để plan biết trước.
+- **AWS Config**, mỗi region một bộ khi `config_recording` là `true` (mặc định):
+  - Service-linked role `AWSServiceRoleForConfig`, có ở mọi giá trị của `config_recording`; recorder dùng ARN của role này, ghép từ partition và
+    account để plan biết trước.
   - Recorder `default`: mọi loại tài nguyên hỗ trợ, `recording_frequency` `CONTINUOUS`. Loại toàn cục (IAM) chỉ ghi ở region nhà
     ([điều kiện Config của Security Hub](https://docs.aws.amazon.com/securityhub/latest/userguide/securityhub-setup-prereqs.html)), không thì
     mọi region ghi cùng một thay đổi. Ghi liên tục thay vì hằng ngày vì tài nguyên của buổi chỉ sống vài giờ
@@ -26,6 +27,12 @@ hai region này.
     giao object bằng principal `config.amazonaws.com`, bucket policy của Log Archive cho phép
     ([quyền bucket](https://docs.aws.amazon.com/config/latest/developerguide/s3-bucket-policy.html)).
   - Trạng thái recorder bật, sau khi delivery channel có (`depends_on`): recorder không chạy được khi region chưa có delivery channel.
+- **`config_recording`** = `false`: account không có recorder, delivery channel, recorder status ở cả hai region. Service-linked role, S3 Block
+  Public Access, EBS mã hoá và mọi rule chuyển sự kiện giữ nguyên. Root ánh xạ cờ `config_recording` của file cờ chi phí (`off` → `false`); cờ,
+  giá trị theo account và cái giá ở [ADR-0071](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0071-paid-features.md).
+  Rule `svp-security-detection`, `svp-security-denied-detection` vẫn hợp lệ: chúng khớp lời gọi API Config do CloudTrail ghi, không cần recorder.
+  Đổi `true` → `false` xoá recorder status, delivery channel, recorder của hai region; lịch sử đã giao vào bucket Config của Log Archive còn.
+  Lần apply đó `svp-security-detection` báo `StopConfigurationRecorder`, `DeleteDeliveryChannel`, `DeleteConfigurationRecorder` thành công.
 - **Rule chuyển sự kiện** trên bus mặc định, đích là bus `svp-security-events` của Security Tooling (`security_event_bus_arn`), qua role
   `svp-security-forwarder`: đích là bus của account khác thì EventBridge cần role
   ([gửi sự kiện giữa account](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-cross-account.html)). Role chỉ tin
@@ -74,7 +81,8 @@ hai region này.
 
 Test (`make test DIRS=aws/modules/security-baseline`, provider giả): bốn cờ BPA, EBS mã hoá ở hai region, recorder `CONTINUOUS` với loại toàn cục
 chỉ ở region nhà, delivery channel đúng bucket và key, tập rule của account thành viên, của management và của `admin_events`, region và đích của
-từng rule, nội dung các pattern, role chuyển sự kiện; mỗi luật validation và precondition một plan.
+từng rule, nội dung các pattern, role chuyển sự kiện; số tài nguyên Config mỗi region và các tài nguyên giữ ở cả hai giá trị của
+`config_recording`; mỗi luật validation và precondition một plan.
 
 <!-- markdownlint-disable MD033 -->
 <!-- BEGIN_TF_DOCS -->
@@ -118,6 +126,7 @@ từng rule, nội dung các pattern, role chuyển sự kiện; mỗi luật va
 | ---- | ----------- | ---- | ------- | :------: |
 | admin\_events | Forward successful administrative changes to IAM, KMS keys and S3 buckets (svp-security-admin-iam, svp-security-admin-kms-s3). For accounts where such a change is rare; an env account creates dozens of roles, keys and buckets per session. | `bool` | `false` | no |
 | config\_bucket\_name | Name of the AWS Config bucket of the Log Archive account (svp-config-<log archive account>-<region>), where the delivery channels of both regions write. | `string` | n/a | yes |
+| config\_recording | Run AWS Config in both regions: recorder, delivery channel and recorder status. false leaves the account without them; the service-linked role, S3 Block Public Access, EBS encryption and every rule stay. | `bool` | `true` | no |
 | ebs\_kms\_key\_arn | ARN of the KMS key (key/<id> form, home region) that encrypts new EBS volumes of the home region by default; null keeps the AWS managed key aws/ebs. The other region always uses aws/ebs. | `string` | `null` | no |
 | identity\_center\_region | Region of the IAM Identity Center instance, for the account that holds it: forwards successful permission set and account assignment changes (svp-security-admin-sso), recorded in that region only. null: no such rule. | `string` | `null` | no |
 | log\_archive\_key\_arn | ARN of the KMS key of the Log Archive account in the home region, in its key/<id> form: the delivery channels encrypt with it. | `string` | n/a | yes |

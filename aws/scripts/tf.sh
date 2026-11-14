@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
-# Terraform of the two roots of a session, with the account checked before each command and the times of apply and
-# destroy in the session's timeline. ROOT is env (aws/envs/<env>) or gitops (aws/gitops/<env>: Argo CD and the root of
-# GitOps on that cluster, applied after env). apply and destroy take a saved plan
-# file only, never a plan made on the fly.
+# Terraform of the three roots of a session, with the account checked before each command and the times of apply and
+# destroy in the session's timeline. ROOT is env (aws/envs/<env>), gitops (aws/gitops/<env>: Argo CD and the root of
+# GitOps on that cluster, applied after env) or account (aws/accounts/<env>, below). apply and destroy take a saved
+# plan file only, never a plan made on the fly.
+
+# ROOT account (aws/accounts/<env>) opens the session's paid features (flags at session in aws/paid-features.json) with
+# plan --open (-var session_open=true) before env plan, and closes them with plan --close after env destroy; apply
+# applies whichever was planned. env plan is refused until the last of them applied is the open one, plan --close while
+# root env stands in this session; for an env with no such flag every account command says so and exits 0.
 
 # Design notes: README.md.
 
@@ -32,18 +37,20 @@
 
 # Usage: aws/scripts/tf.sh [--print] stg|prd env|gitops init|plan [--teardown|--destroy [--leftovers|--no-cluster]]|show|apply [--teardown]|destroy
 #        aws/scripts/tf.sh [--print] stg|prd env state-rm ADDRESS | env import ADDRESS ID
+#        aws/scripts/tf.sh [--print] stg|prd account init|plan --open|plan --close|apply
 set -euo pipefail
 
 # shellcheck source=aws/scripts/lib.sh
 . "$(dirname "$0")/lib.sh"
 printing && shift
-usage="usage: $(basename "$0") [--print] $(env_names session) env|gitops init|plan [--teardown|--destroy [--leftovers|--no-cluster]]|show|apply [--teardown]|destroy; $(basename "$0") [--print] $(env_names session) env state-rm ADDRESS | env import ADDRESS ID"
+usage="usage: $(basename "$0") [--print] $(env_names session) env|gitops init|plan [--teardown|--destroy [--leftovers|--no-cluster]]|show|apply [--teardown]|destroy; $(basename "$0") [--print] $(env_names session) env state-rm ADDRESS | env import ADDRESS ID; $(basename "$0") [--print] $(env_names session) account init|plan --open|plan --close|apply"
 [ $# -ge 3 ] && [ $# -le 5 ] || fail "$usage"
 env_arg "$1"
 root=$2
 case $root in
   env) root_dir=$env_root key=aws/$env_name/terraform.tfstate ;;
   gitops) root_dir=$gitops_root key=aws/gitops/$env_name/terraform.tfstate ;;
+  account) root_dir=$infra_root/aws/accounts/$env_name key=aws/accounts/$env_name/terraform.tfstate ;;
   *) fail "$usage" ;;
 esac
 cmd=$3
@@ -52,6 +59,11 @@ op=
 address=
 import_id=
 case "$root $cmd${flags:+ $flags}" in
+  'account init') op=init ;;
+  'account plan --open') op=plan-open ;;
+  'account plan --close') op=plan-close ;;
+  'account apply') op=apply-account ;;
+  'account '*) fail "$usage" ;;
   'env state-rm '*)
     [ $# -eq 4 ] || fail "$usage"
     op=state-rm address=$4 ;;
@@ -73,6 +85,15 @@ case "$root $cmd${flags:+ $flags}" in
   *) fail "$usage" ;;
 esac
 
+if [ "$root" = account ]; then
+  features=$(session_features "$env_name") || exit 1
+  if [ -z "$features" ]; then
+    printing && printf '  (ok no session feature of %s in aws/paid-features.json: nothing to run)\n' "$env_name" >&3
+    ok "no session feature of $env_name in aws/paid-features.json: root account has nothing to open or close"
+    exit 0
+  fi
+fi
+
 session_dir
 plan_file=$env_name.tfplan
 destroy_plan_file=$env_name.destroy.tfplan
@@ -83,19 +104,40 @@ if [ "$root" = env ]; then
   printing || [[ ${SVP_AWS_LOG_ACCOUNT_ID:-} =~ ^[0-9]{12}$ ]] ||
     fail "set SVP_AWS_LOG_ACCOUNT_ID to the 12 digits of the svp-log-archive account, output log_archive_account_id of aws/org (export SVP_AWS_LOG_ACCOUNT_ID=...; never in a committed file): root env writes its flow logs and WAF logs to that account's buckets"
   export TF_VAR_log_archive_account_id=${SVP_AWS_LOG_ACCOUNT_ID:-}
+fi
+if [ "$root" != gitops ]; then
+  case $root in
+    env) why='the RDS key of root env lets that account copy its snapshots' ;;
+    account) why='the key of the vault of root account lets that account copy its recovery points' ;;
+  esac
   printing || [[ ${SVP_AWS_BACKUP_ACCOUNT_ID:-} =~ ^[0-9]{12}$ ]] ||
-    fail "set SVP_AWS_BACKUP_ACCOUNT_ID to the 12 digits of the svp-backup account, output backup_account_id of aws/org (export SVP_AWS_BACKUP_ACCOUNT_ID=...; never in a committed file): the RDS key of root env lets that account copy its snapshots"
+    fail "set SVP_AWS_BACKUP_ACCOUNT_ID to the 12 digits of the svp-backup account, output backup_account_id of aws/org (export SVP_AWS_BACKUP_ACCOUNT_ID=...; never in a committed file): $why"
   export TF_VAR_backup_account_id=${SVP_AWS_BACKUP_ACCOUNT_ID:-}
 fi
 check_account
 export TF_VAR_account_id=${!account_var:-}
 var_files=("-var-file=$env_name.tfvars")
+open_plan_file=$env_name.account-open.tfplan
+close_plan_file=$env_name.account-close.tfplan
 if [ "$root" = env ] && [ -n "$teardown" ] && case $op in plan-teardown | plan-destroy*) true ;; *) false ;; esac; then
   var_files+=("-var-file=$teardown")
 fi
 
 # has_mark EVENT: the session's timeline holds EVENT.
 has_mark() { awk -F '\t' -v e="$1" '$3 == e { found = 1 } END { exit !found }' "$session/timeline.tsv" 2>/dev/null; }
+# last_mark EVENT...: the latest of EVENTs in the session's timeline, empty when it holds none of them.
+last_mark() {
+  awk -F '\t' -v l=" $* " 'index(l, " " $3 " ") { e = $3 } END { print e }' "$session/timeline.tsv" 2>/dev/null || true
+}
+
+# need_open: root env reads what the session's paid features make (the parameter of the Grafana workspace).
+need_open() {
+  local last
+  printing && return 0
+  last=$(last_mark account-open-applied account-close-applied)
+  [ "$last" = account-open-applied ] ||
+    fail "the session features of $env_name ($(oneline <<<"$features")) are not open (${last:-no account mark} last in $session/timeline.tsv): $(basename "$0") $env_name account plan --open, read it, $(basename "$0") $env_name account apply, then this again"
+}
 
 # need_drained: the destroy of root env waits for restore-drill.sh <env> cleanup after the last apply or drill.
 need_drained() {
@@ -139,11 +181,13 @@ write_plan_text() {
   ok "plan text in $plan_text${summary:+: $summary}"
 }
 
-# need_auto_tfvars: root env reads the personal values (zone, domain, alarm email) from <env>.auto.tfvars.
+# need_auto_tfvars: roots env and account read the personal values (zone, domain, emails) from <env>.auto.tfvars.
 need_auto_tfvars() {
-  [ "$root" = env ] || return 0
+  local example=example.auto.tfvars.example
+  [ "$root" != gitops ] || return 0
+  [ "$root" != account ] || example=$env_name.auto.tfvars.example
   printing || [ -f "$root_dir/$env_name.auto.tfvars" ] ||
-    fail "no $rel/$env_name.auto.tfvars: copy example.auto.tfvars.example and fill in the personal values"
+    fail "no $rel/$env_name.auto.tfvars: copy $example and fill in the personal values"
 }
 
 # gitops_inputs: what a plan of root gitops reads besides its tfvars. Chart svp-cluster of the code repository at the
@@ -198,6 +242,10 @@ case $op in
     ok "terraform init of $rel, state $key"
     ;;
   plan)
+    if [ "$root" = env ]; then
+      features=$(session_features "$env_name") || exit 1
+      [ -z "$features" ] || need_open
+    fi
     need_auto_tfvars
     [ "$root" = env ] || gitops_inputs
     tf_ "$root_dir" plan -input=false "${var_files[@]}" -out="$plan_file" || fail "terraform plan of $rel"
@@ -305,6 +353,43 @@ case $op in
     write_plan_text "$destroy_plan_file" "$env_name-$root-destroy-plan.txt"
     ok "destroy plan written to $rel/$destroy_plan_file: read $plan_text, then $(basename "$0") $env_name $root destroy"
     ;;
+  plan-open | plan-close)
+    if [ "$op" = plan-open ]; then
+      open=true file=$open_plan_file other=$close_plan_file text=$env_name-account-open-plan.txt
+    else
+      open=false file=$close_plan_file other=$open_plan_file text=$env_name-account-close-plan.txt
+      if ! printing; then
+        last=$(last_mark env-apply-start env-destroy-start env-destroy-end)
+        [ -z "$last" ] || [ "$last" = env-destroy-end ] ||
+          fail "root env of $env_name is not destroyed in this session ($last last in $session/timeline.tsv): the closed features are what its cluster reads; $(basename "$0") $env_name env plan --destroy and destroy first"
+      fi
+    fi
+    need_auto_tfvars
+    run_ rm -f "$root_dir/$other"
+    tf_ "$root_dir" plan -input=false -var "session_open=$open" -out="$file" || fail "terraform plan of $rel"
+    write_plan_text "$file" "$text"
+    ok "plan of session_open=$open written to $rel/$file: read $plan_text, then $(basename "$0") $env_name account apply"
+    ;;
+  apply-account)
+    if printing; then
+      files=("$open_plan_file" "$close_plan_file")
+    else
+      files=()
+      for f in "$open_plan_file" "$close_plan_file"; do
+        [ ! -f "$root_dir/$f" ] || files+=("$f")
+      done
+      [ ${#files[@]} -eq 1 ] ||
+        fail "$rel holds ${#files[@]} of $open_plan_file and $close_plan_file: run $(basename "$0") $env_name account plan --open or --close and read it first"
+    fi
+    for f in "${files[@]}"; do
+      if [ "$f" = "$open_plan_file" ]; then event='account-open-applied'; else event='account-close-applied'; fi
+      printing && printf '  (%s: when the plan is %s)\n' "$event" "$f" >&3
+      tf_ "$root_dir" apply -input=false "$f" || fail "terraform apply of $rel/$f (read the error, then plan again)"
+      mark "$event"
+      run_ rm -f "$root_dir/$f"
+    done
+    ok "applied $rel"
+    ;;
   state-rm)
     tf_ "$root_dir" state rm "$address" ||
       fail "terraform state rm $address of $rel ($(basename "$0") $env_name env init first)"
@@ -330,7 +415,11 @@ case $op in
     if [ "$root" = gitops ]; then
       ok "destroyed $rel; next: $(basename "$0") $env_name env plan --teardown"
     else
-      ok "destroyed $rel; now aws/scripts/sweep.sh $env_name"
+      if [ -n "$(session_features "$env_name")" ]; then
+        ok "destroyed $rel; next: $(basename "$0") $env_name account plan --close, read it, $(basename "$0") $env_name account apply, then aws/scripts/sweep.sh $env_name"
+      else
+        ok "destroyed $rel; now aws/scripts/sweep.sh $env_name"
+      fi
     fi
     ;;
 esac

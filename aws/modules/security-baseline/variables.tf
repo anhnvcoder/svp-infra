@@ -75,3 +75,9 @@ variable "identity_center_region" {
     error_message = "identity_center_region must be null or an AWS region name, e.g. ap-southeast-1."
   }
 }
+
+variable "config_recording" {
+  description = "Run AWS Config in both regions: recorder, delivery channel and recorder status. false leaves the account without them; the service-linked role, S3 Block Public Access, EBS encryption and every rule stay."
+  type        = bool
+  default     = true
+}

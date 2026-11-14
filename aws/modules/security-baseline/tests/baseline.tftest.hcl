@@ -1,7 +1,7 @@
-# What the security baseline of an account guarantees, for a member account (defaults) and for the management account
-# (every event group, the root sign-in rule in three regions, a default EBS key); then one plan per validation rule with
-# a value that only that rule rejects. The AWS provider is a mock: nothing reaches an account. The home region is the
-# mocked region of the provider; the other region of the module is us-east-1.
+# What the security baseline of an account guarantees, for a member account (defaults), the management account (every
+# event group, root sign-in in three regions, a default EBS key) and both values of config_recording; then one plan per
+# validation rule with a value only that rule rejects. The AWS provider is a mock: nothing reaches an account. The home
+# region is the mocked region of the provider; the other region of the module is us-east-1.
 
 mock_provider "aws" {
   mock_data "aws_partition" {
@@ -276,6 +276,75 @@ run "admin_events_only" {
   assert {
     condition     = toset(keys(aws_cloudwatch_event_rule.forward)) == setunion(toset(var.member_rules), ["svp-security-admin-iam/us-east-1", "svp-security-admin-kms-s3/ap-southeast-1", "svp-security-admin-kms-s3/us-east-1"])
     error_message = "admin_events must add the IAM, KMS and S3 change rules and nothing else; the denied rules stay."
+  }
+}
+
+# config_recording sets the AWS Config resources of each region and nothing else: the service-linked role, account
+# settings and every forwarding rule stay at both values.
+run "config_recording_on" {
+  command = plan
+
+  variables {
+    config_recording = true
+  }
+
+  assert {
+    condition = alltrue([for r in ["ap-southeast-1", "us-east-1"] :
+      length([for k, x in aws_config_configuration_recorder.this : k if k == r && x.region == r]) == 1 &&
+      length([for k, x in aws_config_delivery_channel.this : k if k == r && x.region == r]) == 1 &&
+      length([for k, x in aws_config_configuration_recorder_status.this : k if k == r && x.region == r && x.is_enabled]) == 1
+    ]) && length(aws_config_configuration_recorder.this) == 2 && length(aws_config_delivery_channel.this) == 2 && length(aws_config_configuration_recorder_status.this) == 2
+    error_message = "With config_recording each region must have one recorder, one delivery channel and one started recorder status."
+  }
+
+  assert {
+    condition = (
+      aws_iam_service_linked_role.config.aws_service_name == "config.amazonaws.com" &&
+      aws_s3_account_public_access_block.this.block_public_policy &&
+      toset(keys(aws_ebs_encryption_by_default.this)) == toset(["ap-southeast-1", "us-east-1"]) &&
+      toset(keys(aws_cloudwatch_event_rule.forward)) == toset(var.member_rules) &&
+      toset(keys(aws_cloudwatch_event_target.forward)) == toset(var.member_rules)
+    )
+    error_message = "The service-linked role, account settings and forwarding rules must not depend on config_recording."
+  }
+}
+
+run "config_recording_off" {
+  command = plan
+
+  variables {
+    config_recording = false
+  }
+
+  assert {
+    condition     = length(aws_config_configuration_recorder.this) == 0 && length(aws_config_delivery_channel.this) == 0 && length(aws_config_configuration_recorder_status.this) == 0
+    error_message = "Without config_recording no region may have a recorder, a delivery channel or a recorder status."
+  }
+
+  assert {
+    condition = (
+      aws_iam_service_linked_role.config.aws_service_name == "config.amazonaws.com" &&
+      alltrue([
+        aws_s3_account_public_access_block.this.block_public_acls,
+        aws_s3_account_public_access_block.this.block_public_policy,
+        aws_s3_account_public_access_block.this.ignore_public_acls,
+        aws_s3_account_public_access_block.this.restrict_public_buckets,
+      ]) &&
+      toset(keys(aws_ebs_encryption_by_default.this)) == toset(["ap-southeast-1", "us-east-1"]) &&
+      alltrue([for e in aws_ebs_encryption_by_default.this : e.enabled])
+    )
+    error_message = "Without config_recording the service-linked role, S3 Block Public Access and EBS encryption by default must stay."
+  }
+
+  # The Config events of these rules are CloudTrail API calls, recorded with or without a recorder.
+  assert {
+    condition = (
+      toset(keys(aws_cloudwatch_event_rule.forward)) == toset(var.member_rules) &&
+      toset(keys(aws_cloudwatch_event_target.forward)) == toset(var.member_rules) &&
+      contains(jsondecode(aws_cloudwatch_event_rule.forward["svp-security-detection/ap-southeast-1"].event_pattern).detail.eventSource, "config.amazonaws.com") &&
+      contains(jsondecode(aws_cloudwatch_event_rule.forward["svp-security-detection/ap-southeast-1"].event_pattern).detail.eventName, "PutConfigurationRecorder")
+    )
+    error_message = "Without config_recording every forwarding rule must stay, the detection rule still matching Config API calls."
   }
 }
 

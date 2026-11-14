@@ -25,7 +25,8 @@ Terraform không lặp được qua provider, nên mỗi account một provider 
 
 ## Áp gì ở account nào
 
-Khác biệt giữa account là dữ liệu của bảng `local.accounts` trong [`main.tf`](main.tf):
+Khác biệt giữa account là dữ liệu của bảng `local.accounts` trong [`main.tf`](main.tf) và cờ `config_recording` của
+[`aws/paid-features.json`](../paid-features.json) (mục [Cờ chi phí](#cờ-chi-phí)):
 
 | Account | Key EBS mặc định ở `ap-southeast-1` | Rule đổi quản trị (`admin_events`) | Rule chỉ của management |
 | --- | --- | --- | --- |
@@ -37,8 +38,8 @@ Khác biệt giữa account là dữ liệu của bảng `local.accounts` trong 
 | `svp-prd` | CMK EBS của account | không | — |
 
 - Mọi account: S3 BPA cấp account, EBS mã hoá mặc định ở `ap-southeast-1` và `us-east-1` (`us-east-1` luôn `aws/ebs`), Config recorder ghi
-  liên tục ở hai region, nhóm rule chuyển sự kiện chung (trail, dịch vụ phát hiện, rule `svp-security-*`, lệnh bị SCP từ chối), rule
-  `svp-security-root-signin` (đăng nhập console của root) ở `us-east-1`.
+  liên tục ở hai region (trừ account có `config_recording` `off`), nhóm rule chuyển sự kiện chung (trail, dịch vụ phát hiện, rule
+  `svp-security-*`, lệnh bị SCP từ chối), rule `svp-security-root-signin` (đăng nhập console của root) ở `us-east-1`.
 - `admin_events` tắt ở stg, prd: mỗi buổi tạo và xoá hàng chục role, key, bucket.
 - `svp-security-admin-sso` ở region của Identity Center (`sso_region`), vì CloudTrail chỉ ghi sự kiện `sso.amazonaws.com` ở đó.
 - Đích của mọi rule là bus `svp-security-events` của `svp-security` ở region nhà; ARN suy từ id account đó, không đọc state của `aws/security`.
@@ -55,6 +56,22 @@ flowchart LR
   role --> bus["Bus svp-security-events (svp-security)"]
   rec --> cfg["Bucket svp-config-… (svp-log-archive)"]
 ```
+
+## Cờ chi phí
+
+Root đọc [`aws/paid-features.json`](../paid-features.json) qua module [`paid-features`](../modules/paid-features/README.md), không tự đọc giá
+trị trong file. Mỗi lời gọi `security-baseline` truyền `config_recording` là `true` khi cờ `config_recording` của account đó (cùng khoá với
+`local.accounts`) là `always`. `off` thì module của account không có recorder, delivery channel, recorder status ở hai region; service-linked
+role `AWSServiceRoleForConfig`, rule và role `svp-security-*` giữ. Luật giá trị (`security_hub` `always` cần `config_recording` `always`) do
+`validation` của module kiểm. Mất gì và chi phí lúc bật lại:
+[ADR-0071](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0071-paid-features.md) §6, §10 và phụ lục.
+
+### Thứ tự apply cờ
+
+- Tắt cờ của một account: [`aws/security`](../security/README.md) trước (Security Hub, Inspector), rồi root này (Config), rồi
+  `aws/accounts/<env>` (quét cơ bản của registry).
+- Bật cờ: root này trước, rồi `aws/security`, rồi `aws/accounts/<env>`.
+- Lý do: control của Security Hub là rule Config, cần recorder đang ghi trước khi Security Hub bật lại, và còn ghi tới khi Security Hub đã tắt.
 
 ## CMK EBS
 
@@ -129,12 +146,13 @@ AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" TF_VAR_log_ar
   TF_VAR_stg_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_prd_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform plan -out=baseline.tfplan
 ```
 
-Mong đợi `Plan: 258 to add, 0 to change, 0 to destroy`: 54 ở `module.mgmt`, 42 ở mỗi `module.log_archive`, `module.security`, `module.backup`, 37
-ở mỗi `module.stg`, `module.prd` (thêm `aws_ebs_default_kms_key`), 4 key và alias EBS. Root đã áp trước khi có account mới thì plan chỉ thêm
-module của account đó: `Plan: 42 to add, 0 to change, 0 to destroy`, toàn bộ ở `module.backup`. Đọc: `aws_ebs_default_kms_key` chỉ ở stg, prd,
-`key_arn` là key `svp-ebs` của chính account đó; `svp-security-root-signin` của management ở ba region; `s3_kms_key_arn` của mọi delivery channel
-dạng `key/<id>`. Lỗi `AccessDenied` khi assume role là account hay profile sai; lỗi đọc alias `alias/svp-log-archive` là `aws/log-archive` chưa
-áp. Dừng và dán output nếu có dòng `change` hay `destroy`.
+Mong đợi với `aws/paid-features.json` chỉ tắt `config_recording` của stg `Plan: 252 to add, 0 to change, 0 to destroy`: 54 ở `module.mgmt`, 42
+ở mỗi `module.log_archive`, `module.security`, `module.backup`, 37 ở `module.prd` (thêm `aws_ebs_default_kms_key`), 31 ở `module.stg` (37 trừ
+recorder, delivery channel, recorder status của hai region), 4 key và alias EBS. Mỗi account `off` khác bớt 6 ở module của nó. Root đã áp
+trước khi có account mới thì plan chỉ thêm module của account đó: `Plan: 42 to add, 0 to change, 0 to destroy`, toàn bộ ở `module.backup`.
+Đọc: `aws_ebs_default_kms_key` chỉ ở stg, prd, `key_arn` là key `svp-ebs` của chính account đó; `svp-security-root-signin` của management ở ba
+region; `s3_kms_key_arn` của mọi delivery channel dạng `key/<id>`. Lỗi `AccessDenied` khi assume role là account hay profile sai; lỗi đọc
+alias `alias/svp-log-archive` là `aws/log-archive` chưa áp. Dừng và dán output nếu có dòng `change` hay `destroy`.
 
 ### 4. Apply
 

@@ -31,18 +31,13 @@ output "log_group_arn" {
 }
 
 output "grafana_url" {
-  description = "URL of the Grafana workspace, https:// and its endpoint, no trailing slash: grafanaUrl of the cluster values."
-  value       = "https://${aws_grafana_workspace.this.endpoint}"
+  description = "URL of the Grafana workspace, https:// and its endpoint, no trailing slash: grafanaUrl of the cluster values. Null when grafana_enabled is false."
+  value       = one([for w in aws_grafana_workspace.this : "https://${w.endpoint}"])
 
   precondition {
-    condition     = can(regex("^g-[0-9a-z]+\\.grafana-workspace\\.[a-z]{2}(-[a-z]+)+-[0-9]+\\.amazonaws\\.com$", aws_grafana_workspace.this.endpoint))
+    condition     = alltrue([for w in aws_grafana_workspace.this : can(regex("^g-[0-9a-z]+\\.grafana-workspace\\.[a-z]{2}(-[a-z]+)+-[0-9]+\\.amazonaws\\.com$", w.endpoint))])
     error_message = "The endpoint of the Grafana workspace must be g-<id>.grafana-workspace.<region>.amazonaws.com."
   }
-}
-
-output "grafana_workspace_id" {
-  description = "Id of the Grafana workspace (`g-<id>`), for the session script that makes the token of the service account svp-grafana-operator."
-  value       = aws_grafana_workspace.this.id
 }
 
 output "kms_key_arn" {

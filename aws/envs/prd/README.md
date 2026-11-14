@@ -67,8 +67,9 @@ Giá trị cá nhân (`prd.auto.tfvars` hay `TF_VAR_*`): `hosted_zone_id` (outpu
 `edge`, `media` ghi bản ghi alias và validation ACM vào zone này), `domain` (tên zone prd `aws.<domain>`, web ở apex,
 API ở `api.<tên này>`, media ở `media.<tên này>`; plan dừng ở precondition của `cluster_values` nếu tên khác),
 `alarm_email` (hộp thư của topic `svp-prd-alarms`, nhận CloudWatch alarm và cảnh báo của luật trên AMP; xác nhận link
-SNS gửi sau apply), `grafana_workspace_id` (id `g-<id>` của workspace AMG `svp-prd`, lệnh đọc trong
-`example.auto.tfvars.example`). Không có IP của máy người học.
+SNS gửi sau apply). Không có IP của máy người học. Id workspace AMG `svp-prd` không phải giá trị cá nhân: root đọc tham
+số SSM `/svp/prd/grafana-workspace-id` mà `aws/accounts/prd` ghi cùng workspace, theo cờ `managed_grafana` của prd trong
+`aws/paid-features.json` như ở stg ([README của stg](../stg/README.md#tài-nguyên-sống-lâu-của-account)).
 
 ## Tới API: tunnel SSM
 

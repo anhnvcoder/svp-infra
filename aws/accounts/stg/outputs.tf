@@ -34,8 +34,13 @@ output "amp_workspace_id" {
 }
 
 output "grafana_url" {
-  description = "URL of the Grafana workspace svp-<env>, where the platform groups sign in: key grafanaUrl of the cluster values."
+  description = "URL of the Grafana workspace svp-<env>, where the platform groups sign in: key grafanaUrl of the cluster values. Null while the workspace does not exist (managed_grafana at session and no session open)."
   value       = module.observability.grafana_url
+}
+
+output "session_features" {
+  description = "The cost flags of aws/paid-features.json whose value for this env is session: what the account commands of aws/scripts/tf.sh open and close with each session. Empty when every resource of this root lives between sessions."
+  value       = [for f, accounts in module.paid_features.session_accounts : f if contains(accounts, local.env)]
 }
 
 output "spans_retention_command" {

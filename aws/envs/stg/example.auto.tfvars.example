@@ -14,8 +14,3 @@ domain = "stg.aws.svp.example"
 
 # Inbox of the CloudWatch alarms of the env: open the confirmation link SNS sends after the apply.
 alarm_email = "you@svp.example"
-
-# Id of the Grafana workspace svp-stg of the stg account, made by aws/accounts/stg (AMG has no lookup by name):
-#   AWS_PROFILE=anhnv-stg aws grafana list-workspaces --region ap-southeast-1 \
-#     --query "workspaces[?name=='svp-stg'].id" --output text
-grafana_workspace_id = "g-0123456789"

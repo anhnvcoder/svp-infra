@@ -1,0 +1,8 @@
+{
+  "stg": {
+    "managed_grafana": "session",
+    "inspector_ecr": "off",
+    "security_hub": "off",
+    "config_recording": "off"
+  }
+}

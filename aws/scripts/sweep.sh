@@ -649,15 +649,34 @@ amp_rule_groups() {
   done
 }
 
-# Amazon Managed Grafana workspaces svp-<env>, which aws/accounts/<env> keeps between sessions.
+# Amazon Managed Grafana workspaces svp-<env>: aws/accounts/<env> keeps its own between sessions when flag
+# managed_grafana of the account is always, and makes it for a session alone (a leftover after it) when it is session.
 grafana_workspaces() {
   local lines id name stack
   lines=$(q '.workspaces[]? | select((.name // "") | startswith("svp-")) | "\(.id)\t\(.name)\t\(.tags.Stack // "")"' \
     grafana list-workspaces) || return 1
   while IFS=$'\t' read -r id name stack; do
     [ -n "$id" ] || continue
-    if is_kept "$stack"; then keep "kept  Grafana workspace $id $name (Stack=$stack)"; else echo "$id $name${stack:+ Stack=$stack}"; fi
+    if [ "$name" = "svp-$env_name" ] && [ "$grafana" = session ]; then
+      echo "$id $name (managed_grafana is session: made for a session alone)"
+    elif is_kept "$stack"; then
+      keep "kept  Grafana workspace $id $name (Stack=$stack)"
+    else
+      echo "$id $name${stack:+ Stack=$stack}"
+    fi
   done <<<"$lines"
+}
+
+# The parameter /svp/<env>/grafana-workspace-id of that workspace (root env reads it), made and deleted with it.
+grafana_parameters() {
+  local name=/svp/$env_name/grafana-workspace-id lines
+  lines=$(q '.Parameters[]?.Name' ssm describe-parameters --parameter-filters "Key=Name,Values=$name") || return 1
+  [ -n "$lines" ] || return 0
+  if [ "$grafana" = session ]; then
+    echo "$lines"
+  else
+    keep "kept  SSM parameter $lines (managed_grafana is $grafana)"
+  fi
 }
 
 # IAM OIDC providers tagged Project=svp (GitHub's for the roles of CI); an untagged one is never touched.
@@ -748,6 +767,7 @@ ci_roles() {
 }
 
 env_zone
+grafana=$(paid_feature "$env_name" managed_grafana) || exit 1
 kept_file=$(mktemp)
 trap 'rm -f "$kept_file"' EXIT
 runbook=docs/runbooks/session-stg.md#lệnh-xoá-tay-theo-loại
@@ -824,6 +844,7 @@ sweep_kind "SNS topics" sns_topics "aws sns delete-topic --topic-arn {}"
 sweep_kind "AMP rule groups namespaces" amp_rule_groups "aws amp delete-rule-groups-namespace --name {} --workspace-id {rest}"
 sweep_kind "AMP workspaces" amp_workspaces "aws amp delete-workspace --workspace-id {}"
 sweep_kind "Managed Grafana workspaces" grafana_workspaces "aws grafana delete-workspace --workspace-id {}"
+sweep_kind "SSM parameters of the Grafana workspace" grafana_parameters "aws ssm delete-parameter --name {}"
 sweep_kind "ECR repositories" ecr_repositories "aws ecr delete-repository --repository-name {} --force"
 sweep_kind "ECR pull-through cache rules" cache_rules "aws ecr delete-pull-through-cache-rule --ecr-repository-prefix {}"
 global sweep_kind "IAM OIDC providers" oidc_providers "aws iam delete-open-id-connect-provider --open-id-connect-provider-arn {}"

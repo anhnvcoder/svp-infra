@@ -30,10 +30,11 @@ resource "aws_inspector2_enabler" "security" {
 }
 
 locals {
-  # Every active member already in the organization; the closed accounts that wait to leave it are SUSPENDED.
+  # Every active member already in the organization whose inspector_ecr flag is not off; the closed accounts that wait
+  # to leave it are SUSPENDED.
   inspector_member_ids = sort([
     for account in data.aws_organizations_organization.this.non_master_accounts : account.id
-    if account.state == "ACTIVE" && account.id != var.security_account_id
+    if account.state == "ACTIVE" && account.id != var.security_account_id && !contains(local.inspector_off_ids, account.id)
   ])
 }
 

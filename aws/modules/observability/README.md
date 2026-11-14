@@ -2,10 +2,11 @@
 
 Nơi nhận telemetry của một account env (`svp-stg`, `svp-prd`), gọi từ root `aws/accounts/<env>` ([README](../../accounts/README.md)) nên dữ
 liệu và cấu hình sống qua `destroy` của buổi: workspace Amazon Managed Service for Prometheus (AMP), log group ứng dụng, Transaction Search của
-X-Ray, workspace Amazon Managed Grafana (AMG) và khoá KMS của chúng. Thiết kế và lý do từng giá trị:
+X-Ray, khoá KMS của chúng và, theo cờ `managed_grafana`, workspace Amazon Managed Grafana (AMG; mục [Biến `grafana_enabled`](#biến-grafana_enabled)). Thiết kế và lý do từng giá trị:
 [ADR-0063](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0063-managed-observability.md) và phụ lục của nó (số § dưới đây là §
 của ADR). Output `amp_workspace_id`, `amp_endpoint`, `log_group_name`, `grafana_url` là các khoá `ampWorkspaceId`, `ampEndpoint`, `logGroup`,
-`grafanaUrl` của cluster values; root `aws/envs/<env>` đọc tài nguyên của module bằng data source theo tên, alias.
+`grafanaUrl` của cluster values; root `aws/envs/<env>` đọc tài nguyên của module bằng data source theo tên, alias, và id workspace AMG
+qua SSM parameter `/svp/<env>/grafana-workspace-id`.
 
 ## Luồng telemetry
 
@@ -102,11 +103,23 @@ Kiểm: `AWS_PROFILE=anhnv-<env>-ro aws logs describe-log-groups --log-group-nam
   chỉ `ADMIN` làm được (`EDITOR` không thêm, sửa được data source:
   [vai trò của AMG](https://docs.aws.amazon.com/grafana/latest/userguide/Grafana-user-roles.html)). Cái giá: token quản được cả workspace;
   module không tạo token, script buổi tạo token ngắn hạn mỗi buổi và ghi vào Secrets Manager, nên token không nằm trong state (§4).
+- SSM parameter `/svp/<env>/grafana-workspace-id` (`String`, tier `Standard`) giữ id workspace (`g-<id>`): root `aws/envs/<env>` đọc id ở đây,
+  nên workspace dựng lại mỗi buổi không cần sửa tfvars nào. Test mocked chỉ kiểm tên, kiểu, tier: lúc plan id workspace chưa có.
+
+### Biến `grafana_enabled`
+
+`grafana_enabled` (mặc định `true`) bật hay tắt cả phần AMG trên: workspace, role `svp-<env>-grafana` và policy của nó, hai gán nhóm, service
+account `svp-grafana-operator`, SSM parameter (`count` theo cờ, địa chỉ `[0]`). `false` thì output `grafana_url` là `null`; workspace AMP, key,
+log group, X-Ray và output khác giữ nguyên, không policy nào còn lại trỏ tới tài nguyên AMG. Root `aws/accounts/<env>` đặt giá trị theo cờ
+`managed_grafana` của `aws/paid-features.json` và biến `session_open`
+([ADR-0071](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0071-paid-features.md)): env có cờ `session` chỉ có AMG trong buổi.
 
 ## Vòng đời
 
 Module sống ở root `aws/accounts/<env>`, không ở `aws/envs/<env>`: destroy của buổi, kể cả xoá hẳn env, không xoá workspace, log group, cài
-đặt X-Ray, AMG hay key; metric, log, span còn đọc được giữa các buổi. Gỡ hẳn module là việc của root accounts, key giữ `prevent_destroy`.
+đặt X-Ray hay key; metric, log, span còn đọc được giữa các buổi. AMG sống giữa các buổi khi `grafana_enabled` luôn `true`; env tắt nó giữa
+các buổi thì dashboard dựng lại trong buổi, dữ liệu ở AMP và CloudWatch không đổi. Gỡ hẳn module là việc của root accounts, key giữ
+`prevent_destroy`.
 
 <!-- BEGIN_TF_DOCS -->
 ## Requirements
@@ -139,6 +152,7 @@ Module sống ở root `aws/accounts/<env>`, không ở `aws/envs/<env>`: destro
 | [aws_kms_key.observability](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/kms_key) | resource |
 | [aws_prometheus_workspace.this](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/prometheus_workspace) | resource |
 | [aws_prometheus_workspace_configuration.this](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/prometheus_workspace_configuration) | resource |
+| [aws_ssm_parameter.grafana_workspace_id](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/ssm_parameter) | resource |
 | [aws_xray_indexing_rule.default](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/xray_indexing_rule) | resource |
 | [aws_xray_trace_segment_destination.this](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/xray_trace_segment_destination) | resource |
 | [aws_caller_identity.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/caller_identity) | data source |
@@ -155,6 +169,7 @@ Module sống ở root `aws/accounts/<env>`, không ở `aws/envs/<env>`: destro
 | ---- | ----------- | ---- | ------- | :------: |
 | amp\_retention\_days | Days the Prometheus workspace keeps metrics (1 to 1095, the range of Amazon Managed Service for Prometheus). | `number` | n/a | yes |
 | env | Environment of the account (stg, prd): names the workspaces `svp-<env>`, the log group `/svp/<env>/otel`, the KMS key `alias/svp-<env>-observability` and the role `svp-<env>-grafana`. | `string` | n/a | yes |
+| grafana\_enabled | Whether the Amazon Managed Grafana workspace `svp-<env>` exists, with its role `svp-<env>-grafana`, group role associations, service account svp-grafana-operator and SSM parameter `/svp/<env>/grafana-workspace-id`. The Prometheus workspace, the key, the log groups and X-Ray stay at either value. | `bool` | `true` | no |
 | log\_retention\_days | Days the log group `/svp/<env>/otel` keeps the application logs; one of the retention values CloudWatch Logs accepts. | `number` | n/a | yes |
 | platform\_admin\_group\_id | Id of the IAM Identity Center group svp-platform-admins, given the ADMIN role of the Grafana workspace. Kept out of committed files: the root reads it from its uncommitted `<env>.auto.tfvars`. | `string` | n/a | yes |
 | platform\_viewer\_group\_id | Id of the IAM Identity Center group svp-platform-viewers, given the VIEWER role of the Grafana workspace. Kept out of committed files like platform\_admin\_group\_id. | `string` | n/a | yes |
@@ -167,8 +182,7 @@ Module sống ở root `aws/accounts/<env>`, không ở `aws/envs/<env>`: destro
 | amp\_endpoint | Base URL of the Prometheus workspace, ending in /: ampEndpoint of the cluster values; api/v1/remote\_write and api/v1/query are appended to it. |
 | amp\_workspace\_arn | ARN of the Prometheus workspace, for the Pod Identity roles that write, query or manage rules on it. |
 | amp\_workspace\_id | Id of the Prometheus workspace `svp-<env>` (`ws-<uuid>`): ampWorkspaceId of the cluster values. |
-| grafana\_url | URL of the Grafana workspace, https:// and its endpoint, no trailing slash: grafanaUrl of the cluster values. |
-| grafana\_workspace\_id | Id of the Grafana workspace (`g-<id>`), for the session script that makes the token of the service account svp-grafana-operator. |
+| grafana\_url | URL of the Grafana workspace, https:// and its endpoint, no trailing slash: grafanaUrl of the cluster values. Null when grafana\_enabled is false. |
 | kms\_key\_arn | ARN of the key `alias/svp-<env>-observability`, for the Collector's permission to write the encrypted log group. |
 | log\_group\_arn | ARN of the application log group, without the :* suffix; its stream otel-collector is `<arn>:log-stream:otel-collector`. |
 | log\_group\_name | Name of the application log group `/svp/<env>/otel`: logGroup of the cluster values. |

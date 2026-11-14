@@ -32,7 +32,7 @@ quyết định chung của lab nằm ở `docs/` của repo code (bản clone `
   | `svp-log-archive` | — | `anhnv-log-ro` | `SVP_AWS_LOG_ACCOUNT_ID` | — |
   | `svp-security` | — | `anhnv-security-ro` | `SVP_AWS_SECURITY_ACCOUNT_ID` | — |
   | `svp-backup` | — | `anhnv-backup-ro` | `SVP_AWS_BACKUP_ACCOUNT_ID` | — |
-  | `svp-stg`, `svp-prd` | `anhnv-<env>` | `anhnv-<env>-ro` | `SVP_AWS_STG_ACCOUNT_ID`, `SVP_AWS_PRD_ACCOUNT_ID` | `aws/accounts/<env>` (sống giữa các buổi: baseline, registry ECR và role CI, observability AMP, CloudWatch Logs, X-Ray, AMG), `aws/envs/<env>`, `aws/gitops/<env>` |
+  | `svp-stg`, `svp-prd` | `anhnv-<env>` | `anhnv-<env>-ro` | `SVP_AWS_STG_ACCOUNT_ID`, `SVP_AWS_PRD_ACCOUNT_ID` | `aws/accounts/<env>` (sống giữa các buổi: baseline, registry ECR và role CI, observability AMP, CloudWatch Logs, X-Ray; AMG theo cờ `managed_grafana` của `aws/paid-features.json`: prd giữa các buổi, stg chỉ trong buổi), `aws/envs/<env>`, `aws/gitops/<env>` |
 
   Lệnh viết sẵn ghi profile của đúng account đó ngay trong lệnh, `TF_VAR_account_id` từ biến của account đó, và `--region` (`ap-southeast-1`
   cho dịch vụ theo region và STS, `us-east-1` cho Organizations, IAM, Cost Explorer, WAF, cert ACM và log chuẩn của CloudFront (delivery
@@ -42,7 +42,9 @@ quyết định chung của lab nằm ở `docs/` của repo code (bản clone `
   `TF_VAR_account_id` của management; provider của account đích assume `OrganizationAccountAccessRole`, id đích từ
   `TF_VAR_<log_archive|security|backup|stg|prd>_account_id` đặt trong lệnh từ biến tương ứng. Root `aws/envs/<env>` cần thêm
   `SVP_AWS_LOG_ACCOUNT_ID` và `SVP_AWS_BACKUP_ACCOUNT_ID` (`tf.sh` đặt `TF_VAR_log_archive_account_id`, `TF_VAR_backup_account_id`); root
-  `aws/accounts/<env>` cần `TF_VAR_backup_account_id` trong lệnh. Account của OU `Security` (`svp-log-archive`, `svp-security`, `svp-backup`)
+  `aws/accounts/<env>` cần `TF_VAR_backup_account_id` trong lệnh; trong buổi nó chỉ apply qua `aws/scripts/tf.sh <env> account plan --open`
+  (hay `--close`) rồi `tf.sh <env> account apply`: biến `session_open` mặc định `false`, nên `terraform plan`, `apply` trần trong buổi xoá
+  workspace AMG của env có cờ `session`. Account của OU `Security` (`svp-log-archive`, `svp-security`, `svp-backup`)
   không có profile ghi hay bucket state riêng, root của chúng chạy từ management qua role; không thêm. Trước mọi lệnh ghi: `aws sts
   get-caller-identity` với **cùng profile** (`aws/scripts/check-account.sh mgmt|stg|prd`), hai bên cùng đọc account. Script buổi lấy
   profile và biến từ bảng env của `aws/scripts/lib.sh`. Buổi tạo tài nguyên kết thúc bằng lệnh destroy và lệnh quét sót (`sweep.sh <env>`

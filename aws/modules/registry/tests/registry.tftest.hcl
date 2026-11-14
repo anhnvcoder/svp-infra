@@ -1,7 +1,7 @@
-# What the registry of an env guarantees, for the CI roles of stg and prd, then one plan per validation rule with a
-# value that only that rule rejects. The AWS provider is a mock: nothing reaches an account. Policies are asserted
-# through the arguments of their aws_iam_policy_document data sources; the ARNs of the KMS key and the secrets are
-# unknown in a plan, so their use is checked by type and name. Design notes: aws/modules/registry/README.md.
+# What the registry of an env guarantees, for the CI roles of stg and prd and both scan types, then one plan per
+# validation rule with a value only that rule rejects. The AWS provider is a mock: nothing reaches an account. Policies
+# are asserted through the arguments of their aws_iam_policy_document data sources; the ARNs of the KMS key and the
+# secrets are unknown in a plan, so their use is checked by type and name. Design notes: aws/modules/registry/README.md.
 
 mock_provider "aws" {
   mock_data "aws_partition" {
@@ -359,6 +359,66 @@ run "prd" {
         for arn in s.resources : arn == "*" || startswith(arn, "${var.repository_arn_prefix}/${regex("^repo:[^/]+/([^@:]+)", var.prd_ci_roles[name].subject)[0]}/")
     ]]))])
     error_message = "A rescan role of prd may reach only the repositories of its own source repository."
+  }
+}
+
+# Both values of enhanced_scanning: only the scan type and frequency change; the filter, the repositories, the key and
+# the cache rules are the same.
+run "scanning_enhanced" {
+  command = plan
+
+  variables {
+    enhanced_scanning = true
+  }
+
+  assert {
+    condition = (
+      aws_ecr_registry_scanning_configuration.this.scan_type == "ENHANCED" &&
+      length(aws_ecr_registry_scanning_configuration.this.rule) == 1 &&
+      one(aws_ecr_registry_scanning_configuration.this.rule).scan_frequency == "CONTINUOUS_SCAN" &&
+      toset([for f in one(aws_ecr_registry_scanning_configuration.this.rule).repository_filter : "${f.filter_type} ${f.filter}"]) ==
+      toset([for p in keys(var.cache_upstreams) : "WILDCARD ${p}/*"])
+    )
+    error_message = "enhanced_scanning = true must scan the five cache prefixes continuously with Inspector, and nothing else."
+  }
+
+  assert {
+    condition = (
+      toset(keys(aws_ecr_repository.release)) == toset(var.release_repositories) &&
+      aws_kms_key.ecr.enable_key_rotation && aws_kms_key.ecr.deletion_window_in_days == 30 &&
+      { for k, r in aws_ecr_pull_through_cache_rule.this : k => r.upstream_registry_url } == var.cache_upstreams &&
+      length(aws_ecr_repository_creation_template.cache) == 5
+    )
+    error_message = "enhanced_scanning must not change the release repositories, the ECR key or the pull through cache rules."
+  }
+}
+
+run "scanning_basic" {
+  command = plan
+
+  variables {
+    enhanced_scanning = false
+  }
+
+  assert {
+    condition = (
+      aws_ecr_registry_scanning_configuration.this.scan_type == "BASIC" &&
+      length(aws_ecr_registry_scanning_configuration.this.rule) == 1 &&
+      one(aws_ecr_registry_scanning_configuration.this.rule).scan_frequency == "SCAN_ON_PUSH" &&
+      toset([for f in one(aws_ecr_registry_scanning_configuration.this.rule).repository_filter : "${f.filter_type} ${f.filter}"]) ==
+      toset([for p in keys(var.cache_upstreams) : "WILDCARD ${p}/*"])
+    )
+    error_message = "enhanced_scanning = false must scan the five cache prefixes on push with basic scanning, and nothing else."
+  }
+
+  assert {
+    condition = (
+      toset(keys(aws_ecr_repository.release)) == toset(var.release_repositories) &&
+      aws_kms_key.ecr.enable_key_rotation && aws_kms_key.ecr.deletion_window_in_days == 30 &&
+      { for k, r in aws_ecr_pull_through_cache_rule.this : k => r.upstream_registry_url } == var.cache_upstreams &&
+      length(aws_ecr_repository_creation_template.cache) == 5
+    )
+    error_message = "enhanced_scanning must not change the release repositories, the ECR key or the pull through cache rules."
   }
 }
 

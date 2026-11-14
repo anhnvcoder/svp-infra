@@ -37,3 +37,9 @@ variable "ci_roles" {
     error_message = "Each repositories list of ci_roles must hold distinct release repositories of the module (e.g. svp-frontend/web) or groups of them (e.g. svp-backend/*), at least one."
   }
 }
+
+variable "enhanced_scanning" {
+  description = "Whether Amazon Inspector scans the cached repositories (ENHANCED, CONTINUOUS_SCAN). false scans them with free ECR basic scanning (BASIC, SCAN_ON_PUSH), for an account whose Inspector ECR scanning is off; the filter is the same."
+  type        = bool
+  default     = true
+}

@@ -2,12 +2,15 @@
 
 Áp một lần phần sống lâu của nền tảng managed: Inspector của tổ chức, hai nhóm nền tảng của IAM Identity Center, environment
 `ecr-rescan` và action AWS của hai repo code, registry ECR (repo phát hành, pull-through cache, role CI) và observability (workspace AMP, log
-group ứng dụng, Transaction Search của X-Ray, Amazon Managed Grafana) ở hai account env; rồi các bước tay Terraform không làm: credential của
+group ứng dụng, Transaction Search của X-Ray, Amazon Managed Grafana khi cờ `managed_grafana` của env là `always`) ở hai account env; rồi
+các bước tay Terraform không làm: credential của
 cache, secret account của CI, quota chu kỳ luật AMP, retention của `aws/spans`. Phần sống theo buổi (endpoint interface, role Pod Identity,
 luật trên AMP, dashboard) do root `aws/envs/<env>` và Argo CD dựng, gỡ theo runbook buổi. Thiết kế:
 [ADR-0062](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0062-ecr-registry-ci-oidc.md) (registry, cache, role CI, Inspector),
 [ADR-0063](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0063-managed-observability.md) (AMP, CloudWatch Logs, X-Ray, AMG, luật),
-[ADR-0064](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0064-interface-endpoints.md) (endpoint interface).
+[ADR-0064](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0064-interface-endpoints.md) (endpoint interface),
+[ADR-0071](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0071-paid-features.md) (cờ chi phí: AMG, Inspector ECR theo account).
+Cờ của từng account nằm ở [`aws/paid-features.json`](../../aws/paid-features.json); đổi cờ theo [`paid-features.md`](paid-features.md).
 
 **Người học chạy mọi lệnh ở đây.** AI không chạy lệnh nào chạm account, kể cả lệnh chỉ đọc; AI đọc output dán lại. Mọi lệnh chạy từ gốc repo
 này (`infra/`) trừ chỗ ghi `cd`. Bước nào đỏ thì dừng ở đó, dán output, không đi tiếp. Token và PAT chỉ đi qua stdin (prompt `read -s`, rồi
@@ -20,14 +23,14 @@ chạy được trong zsh (shell mặc định của macOS) và bash.
 flowchart TD
   M["Đã merge: svp-backend chart, svp-gitops nền tảng eks, svp-infra registry và observability"] --> B1
   B1["(1) aws/org: delegated admin Inspector, nhóm svp-platform-admins, svp-platform-viewers"] --> B2
-  B2["(2) aws/security: Inspector quét ECR của mọi account thành viên"] --> B3
+  B2["(2) aws/security: Inspector quét ECR của account thành viên có inspector_ecr always"] --> B3
   B3["(3) github/: action aws-actions/configure-aws-credentials, environment ecr-rescan"] --> B4
   B4["(4) gán người vào hai nhóm, id nhóm vào aws/accounts/ENV/ENV.auto.tfvars"] --> B5
-  B5["(5) aws/accounts/stg, prd: vỏ secret cache trước, rồi registry, OIDC, role CI, AMP, log group, X-Ray, AMG"] --> B6
+  B5["(5) aws/accounts/stg, prd: vỏ secret cache trước, rồi registry, OIDC, role CI, AMP, log group, X-Ray, AMG khi managed_grafana always"] --> B6
   B6["(6) credential pull-through cache (giữa hai lượt apply của 5)"] --> B7
   B7["(7) secret SVP_AWS_STG_ACCOUNT_ID, SVP_AWS_PRD_ACCOUNT_ID ở svp-backend, svp-frontend"] --> B8
   B8["(8) quota chu kỳ luật AMP 15 s ở hai account"] --> B9
-  B9["(9) id AMG vào aws/envs/ENV/ENV.auto.tfvars, đăng nhập AMG"] --> B10
+  B9["(9) đăng nhập AMG của env có managed_grafana always"] --> B10
   B10["(10) sau buổi đầu có span: retention aws/spans"]
 ```
 
@@ -40,7 +43,7 @@ flowchart TD
 | (5), (6) | `aws/accounts/stg`, `aws/accounts/prd` | [Bước (5)](#bước-5-awsaccountsenv), [Bước (6)](#bước-6-credential-của-pull-through-cache) | mỗi account: hai dòng `Plan:`, hai `Apply complete!`, `No changes.`, tên role, hai `VersionId` (che), `validate` |
 | (7) | GitHub | [Bước (7)](#bước-7-biến-ci-ecr) | `gh secret list` (chỉ tên) |
 | (8) | Service Quotas | [Bước (8)](#bước-8-quota-chu-kỳ-luật-amp) | mã quota, trạng thái yêu cầu |
-| (9) | tfvars, AMG | [Bước (9)](#bước-9-grafana-managed) | dòng `1`, vai trò thấy được sau khi đăng nhập |
+| (9) | AMG | [Bước (9)](#bước-9-grafana-managed) | vai trò thấy được sau khi đăng nhập |
 | (10) | log group `aws/spans` | [Bước (10)](#bước-10-retention-của-awsspans) | output `describe-log-groups` |
 
 Job ECR của `svp-backend`, `svp-frontend` (chép bản phát hành vào ECR, promote prd, rescan) chỉ chạy được sau bước (7): chúng nhận role của bước
@@ -52,8 +55,11 @@ Job ECR của `svp-backend`, `svp-frontend` (chép bản phát hành vào ECR, p
    `aws/security/inspector.tf`, environment `ecr-rescan` của `github/` đã merge. Phép thử trước khi dựng của ADR-0062, ADR-0063 (mục "Xác
    nhận": chép bản phát hành sang ECR `IMMUTABLE` rồi `cosign verify`, kéo qua cache theo tag rồi theo digest, đăng nhập AMG bằng Identity
    Center khác region) đã đạt ở account sandbox.
-2. **Chi phí liên tục**: từ bước (5), mỗi account env giữ hai key KMS, bốn secret, workspace AMG (tính cả tháng không buổi) và lưu trữ ECR tăng theo
-   số bản phát hành; từ bước (2) Inspector tính mỗi digest bên thứ ba mới. Bảng ở
+2. **Chi phí liên tục**: từ bước (5), mỗi account env giữ hai key KMS, bốn secret, lưu trữ ECR tăng theo số bản phát hành và, khi cờ
+   `managed_grafana` là `always`, workspace AMG (tính cả tháng không buổi); từ bước (2) Inspector tính mỗi digest bên thứ ba mới ở account có
+   `inspector_ecr` `always`. Phần theo cờ ở
+   [bảng tháng không buổi của ADR-0071](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0071-paid-features.md#bảng-tháng-không-buổi);
+   phần còn lại ở
    [ADR-0062 §11](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0062-ecr-registry-ci-oidc.md#11-chi-phí-registry) và
    [ADR-0063 §12](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0063-managed-observability.md#12-chi-phí-hợp-đồng-cluster-và-adr-cũ);
    budget của org đủ cho khoản đó cộng các buổi (lệnh đọc ở [`org-security-setup.md`](org-security-setup.md#mở-terminal)).
@@ -93,9 +99,9 @@ cd aws/security
 ```
 
 Theo [README `aws/security`, Thêm Inspector vào root đã áp](../../aws/security/README.md#thêm-inspector-vào-root-đã-áp): mong đợi
-`Plan: 1 to import, 5 to add, 1 to change, 0 to destroy`, đúng như mục "Kiểm plan Inspector" của README đó; sau apply phần Inspector của
-[Kiểm nhanh](../../aws/security/README.md#6-kiểm-nhanh) (`ecr` `true`, mỗi account `ENABLED DISABLED DISABLED`, ba thành viên `ENABLED`), plan
-lần hai `No changes.`. `cd ../..` khi xong.
+`1 to import`, `1 to change`, `0 to destroy`, một liên kết thành viên mỗi account thành viên có `inspector_ecr` khác `off`, đúng như mục
+"Kiểm plan Inspector" của README đó; sau apply phần Inspector của [Kiểm nhanh](../../aws/security/README.md#6-kiểm-nhanh) (`ecr` `true`, mỗi
+account `ENABLED DISABLED DISABLED`, các thành viên đó `ENABLED`, account `off` không có), plan lần hai `No changes.`. `cd ../..` khi xong.
 
 ## Bước (3): `github/`
 
@@ -171,7 +177,8 @@ cd aws/accounts/stg
 AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform plan -out=stg.tfplan
 ```
 
-Mong chỉ thêm: stg `Plan: 46 to add, 0 to change, 0 to destroy`, prd `Plan: 44 to add, 0 to change, 0 to destroy`: danh sách ở
+Mong chỉ thêm: stg `Plan: 40 to add, 0 to change, 0 to destroy`, prd `Plan: 45 to add, 0 to change, 0 to destroy` (với
+`aws/paid-features.json` của repo: stg không có AMG, prd có): danh sách ở
 [README `aws/accounts`, Thêm vào account đã có baseline](../../aws/accounts/README.md#thêm-vào-account-đã-có-baseline) trừ hai secret đã có. Có
 `change`, `destroy` hay tài nguyên của `module.baseline`, `module.alarms`: dừng, dán plan. Rồi:
 
@@ -191,8 +198,12 @@ Lệnh `output` in đúng tên role của `ci_roles` ở `locals` của root: st
 `svp-ci-ecr-rescan-*`; prd `svp-ci-ecr-promote` và hai `svp-ci-ecr-rescan-*`. Mỗi rule một dòng `<tiền tố> True None`; `False` ở `ghcr` hay
 `docker-hub` kèm `failure` là credential của bước (6) sai: ghi lại theo bước đó rồi chạy lại vòng `validate`.
 
-Apply đỏ ở `aws_grafana_workspace` khi Identity Center chưa bật cho AMG ở account thành viên hay khác region không đăng nhập được: dừng, dán lỗi
-(phép thử trước khi dựng của ADR-0063 đã kiểm điều này, khác kết quả đó là việc của ADR).
+Apply đỏ ở `aws_grafana_workspace` (env có `managed_grafana` `always`) khi Identity Center chưa bật cho AMG ở account thành viên hay khác
+region không đăng nhập được: dừng, dán lỗi (phép thử trước khi dựng của ADR-0063 đã kiểm điều này, khác kết quả đó là việc của ADR).
+
+Lệnh `plan` trần ở đây tính trạng thái giữa buổi: biến `session_open` của root mặc định `false`, nên env có `managed_grafana` `session` không
+có workspace AMG. Trong một buổi, root `aws/accounts/<env>` chỉ apply qua `aws/scripts/tf.sh <env> account` (mục 3–5 của
+[`session-stg.md`](session-stg.md#35-root-account-mở-tính-năng-của-buổi)): lệnh trần lúc đó xoá workspace mà cluster đang dùng.
 
 ## Bước (6): credential của pull-through cache
 
@@ -261,24 +272,15 @@ mới, không chạy với 30 s). Buổi stg đầu kiểm chu kỳ thật ở p
 
 ## Bước (9): Grafana managed
 
-AMG không có data source tìm theo tên, nên root `aws/envs/<env>` nhận id workspace qua biến `grafana_workspace_id` của `<env>.auto.tfvars` (git bỏ
-qua). Id là nhãn đầu của output `grafana_url`, không đổi giữa các buổi:
+Root `aws/envs/<env>` đọc id workspace AMG từ tham số SSM `/svp/<env>/grafana-workspace-id` mà `aws/accounts/<env>` ghi cùng workspace (AMG
+không có data source tìm theo tên), nên không có id nào phải chép vào `<env>.auto.tfvars`. Theo cờ `managed_grafana` của env:
 
-```sh
-for e in stg prd; do
-  f=aws/envs/$e/$e.auto.tfvars
-  ws=$(AWS_PROFILE=anhnv-$e terraform -chdir=aws/accounts/$e output -raw grafana_url | sed -E 's#^https://(g-[0-9a-z]+)\..*#\1#')
-  grep -q '^grafana_workspace_id ' "$f" || printf 'grafana_workspace_id = "%s"\n' "$ws" >>"$f"
-  grep -c '^grafana_workspace_id ' "$f"      # 1
-done
-unset ws
-```
-
-Mỗi file in `1`. File chưa có (env chưa có buổi nào): tạo theo điều kiện 5 của [`session-stg.md`](session-stg.md#điều-kiện-trước-buổi) trước.
-
-Đăng nhập: mở `grafana_url` của mỗi account (`AWS_PROFILE=anhnv-stg terraform -chdir=aws/accounts/stg output -raw grafana_url`) trên trình duyệt,
-**Sign in with AWS IAM Identity Center** bằng user của bước (4). Mong vào được, user nhóm admin thấy mục **Administration**, user nhóm viewer chỉ
-xem. Dashboard và data source chưa có: Grafana Operator tạo chúng trong buổi. Dán vai trò thấy được (không dán URL).
+- `always` (prd theo file của repo): workspace có từ bước (5). Đăng nhập: mở `grafana_url` của account
+  (`AWS_PROFILE=anhnv-prd terraform -chdir=aws/accounts/prd output -raw grafana_url`) trên trình duyệt, **Sign in with AWS IAM Identity
+  Center** bằng user của bước (4). Mong vào được, user nhóm admin thấy mục **Administration**, user nhóm viewer chỉ xem. Dashboard và data source
+  chưa có: Grafana Operator tạo chúng trong buổi. Dán vai trò thấy được (không dán URL).
+- `session` (stg theo file của repo): không có workspace giữa các buổi, output `grafana_url` là `null`. Đăng nhập lần đầu ở buổi stg đầu,
+  sau bước 5 của [`session-stg.md`](session-stg.md#35-root-account-mở-tính-năng-của-buổi), cùng cách và cùng mong đợi.
 
 ## Bước (10): retention của `aws/spans`
 
@@ -307,7 +309,8 @@ dòng nào: X-Ray chưa nhận span, làm sau buổi kế.
 
 Cache hết credential (PAT hết hạn) thì ECR vẫn trả bản đã cache, nhưng image chưa cache kéo lỗi: làm nóng cache của buổi đỏ ở dòng của GHCR,
 Docker Hub. Một PAT hay token lộ: thu hồi nó trên GitHub, Docker Hub trước, rồi tạo, ghi bản mới như trên. Token AMG lộ giữa buổi: chạy lại
-`aws/scripts/bootstrap.sh <env> secrets` (xoá mọi token cũ, ghi token mới); ngoài buổi, xoá token còn lại. Terminal có các biến của
+`aws/scripts/bootstrap.sh <env> secrets` (xoá mọi token cũ, ghi token mới); ngoài buổi, xoá token còn lại (env có `managed_grafana`
+`session` thì ngoài buổi không có workspace, cũng không token nào). Terminal có các biến của
 [Mở terminal](#mở-terminal) (`check-account.sh` cần biến account và `SVP_SESSION_DIR`). Ví dụ là stg; với prd thay như bước (5). Đọc trước:
 
 ```sh

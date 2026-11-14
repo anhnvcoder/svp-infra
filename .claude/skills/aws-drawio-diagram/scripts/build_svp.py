@@ -77,6 +77,12 @@ def cache_prefixes() -> list[str]:
     return re.findall(r'^\s*"?([a-z0-9-]+)"?\s*=\s*\{', block.group(1), re.M)
 
 
+def paid_feature(account: str, flag: str) -> str:
+    """Value of a cost flag in aws/paid-features.json; a missing account or flag is `always`, as in the Terraform module."""
+    given = json.loads((ROOT / "aws/paid-features.json").read_text(encoding="utf8"))
+    return given.get(account, {}).get(flag, "always")
+
+
 def backup_settings(env: str) -> dict:
     """Schedule and retention of the backup of `env`: the cron and the retention in days of the vault and of the copy from
     `locals` of modules/org-policies/main.tf, the governance lock range of the copy vault from aws/backup/main.tf."""
@@ -107,6 +113,8 @@ class Env:
     media_free: bool       # media distribution on the flat-rate Free plan (no access log); every other distribution pays as you go
     dnssec: bool           # the zone is DNSSEC signed and has a query log (the same two root variables of aws/accounts/<env>)
     endpoint_azs: int      # AZs whose private subnet holds the ENIs of the interface endpoints (stg 1, prd az_count)
+    grafana_session: bool = False   # managed_grafana = session: AMG exists only between session open and close
+    inspector: bool = True          # inspector_ecr = always: Inspector enhanced scanning; else ECR basic scanning
 
     @property
     def nat_rows(self) -> list[int]:
@@ -144,7 +152,8 @@ def envs() -> list[Env]:
                      if on)
         out.append(Env(name, v("region"), cidr, v("az_count"), v("single_nat_gateway"), NODEPOOL[name], v("rds_multi_az"),
                        v("valkey_node_count"), logs, v("eks_secrets_kms_encryption"), zone_label(name), v("media_flat_rate_free"),
-                       zone_flag(name, "dnssec_enabled"), v("interface_endpoint_az_count")))
+                       zone_flag(name, "dnssec_enabled"), v("interface_endpoint_az_count"),
+                       paid_feature(name, "managed_grafana") == "session", paid_feature(name, "inspector_ecr") == "always"))
     return out
 
 
@@ -185,7 +194,7 @@ def expected(env: Env) -> dict[str, int]:
             # backup: the vault of the env and its copy in svp-backup; keys of uploads, of the vault and of the copy
             # account-level services that outlive the session: ECR, Inspector (scans the cache repositories), AMP, AMG,
             # the application log group (cloudwatch_2 below counts the alarm icon too), X-Ray
-            "ecr": 1, "inspector": 1, "managed_service_for_prometheus": 1, "managed_service_for_grafana": 1, "xray": 1,
+            "ecr": 1, "inspector": int(env.inspector), "managed_service_for_prometheus": 1, "managed_service_for_grafana": 1, "xray": 1,
             "backup": 2, "account": 3, "region": 1, "az": n, "subnet": 4 * n,
             # Kubernetes: a ns icon per frame; a workload icon per svp service, per svp-data workload, and Envoy's
             # proxy Deployment and its ClusterIP Service
@@ -419,19 +428,29 @@ def env_page(env: Env) -> Page:
     # account-level services of the session's data: they live in aws/accounts/<env>, so destroy leaves them
     ecr = p.icon(f"ECR svp-{env.name}<br>svp-backend/*, svp-frontend/web<br>cache: {', '.join(cache_prefixes())}", "ecr",
                  640, row2, COMP, cid="ecr")
-    scan = p.icon("Inspector<br>enhanced scan of the cache repositories", "inspector", 920, row2, SEC, cid="inspector")
+    if env.inspector:
+        scan = p.icon("Inspector<br>enhanced scan of the cache repositories", "inspector", 920, row2, SEC, cid="inspector")
+    else:
+        scan = None
+        p.text("ECR basic scanning<br>on push, cache repositories<br>(inspector_ecr off)", 920, row2, 240, 80, color=MUTED)
     amp = p.icon(f"AMP workspace svp-{env.name}<br>metrics, rules, alerts", "managed_service_for_prometheus", 1200, row2, SEC, cid="amp")
-    amg = p.icon(f"AMG svp-{env.name}<br>IAM Identity Center sign-in", "managed_service_for_grafana", 1480, row2, SEC, cid="amg")
+    amg_note = "only during a session" if env.grafana_session else "IAM Identity Center sign-in"
+    amg = p.icon(f"AMG svp-{env.name}<br>{amg_note}", "managed_service_for_grafana", 1480, row2, SEC, cid="amg")
+    outlive = "ECR, AMP, the application log group and the X-Ray settings" if env.grafana_session else \
+        "ECR, AMP, AMG, the application log group and the X-Ray settings"
+    amg_life = [f"AMG svp-{env.name} and its grafana-workspace-id parameter exist only between session open and close "
+                "(session_open)"] if env.grafana_session else []
     app_logs = p.icon(f"CloudWatch Logs<br>/svp/{env.name}/otel, aws/spans", "cloudwatch_2", 1760, row2, SEC, cid="applogs")
     xray = p.icon("X-Ray<br>Transaction Search", "xray", 2040, row2, SEC, cid="xray")
     p.text(bullets(
-        f"ECR, AMP, AMG, the application log group and the X-Ray settings are in the root of the account, so they outlive the "
+        f"{outlive} are in the root of the account, so they outlive the "
         f"session; keys alias/svp-{env.name}-ecr and alias/svp-{env.name}-observability",
+        *amg_life,
         "Collector and Prometheus agent write to AMP, CloudWatch Logs and X-Ray; nodes pull images from ECR, third-party images "
         "through its pull-through cache",
         f"Interface endpoints: private DNS, 443 from the VPC, ENIs in the private subnets of the first {env.endpoint_azs} AZ(s); "
         "GitHub, Sigstore, Telegram, upstream registries, the Pricing API and AMG still go through NAT"),
-        2320, row2, 1160, 120, valign="top")
+        2320, row2, 1160, 160 if amg_life else 120, valign="top")
     p.icon(f"ACM · ALB certificate, {env.region}<br>viewer certificates in us-east-1", "certificate_manager_2", 2960, row, SEC, cid="acm")
 
     # transcode (modules/transcode): MediaConvert reads uploads and writes media with its role; the job-state rule fills
@@ -559,7 +578,8 @@ def env_page(env: Env) -> Page:
     if cw:
         p.edge(cw, sns, STROKE["integ"], label="alarm, OK")
     p.edge(events, queue, STROKE["integ"])
-    p.edge(scan, ecr, STROKE["sec"], dashed=True, label="scan", exit_=(0, 0.5), entry=(1, 0.5), label_pos=0.5)
+    if scan:
+        p.edge(scan, ecr, STROKE["sec"], dashed=True, label="scan", exit_=(0, 0.5), entry=(1, 0.5), label_pos=0.5)
     p.edge(amg, amp, STROKE["sec"], label="PromQL", exit_=(0, 0.5), entry=(1, 0.5))
     p.edge(amg, app_logs, STROKE["sec"], label="Logs Insights", exit_=(1, 0.5), entry=(0, 0.5))
     p.edge(xray, app_logs, STROKE["sec"], label="spans", exit_=(0, 0.5), entry=(1, 0.5))
@@ -621,7 +641,8 @@ def org_page() -> Page:
     p.text("org — organization, accounts and security flows", 40, 0, 920, 40, size=17, bold=1)
     p.text("The management account holds the organization, IAM Identity Center and the organization trail · accounts in OUs as in the "
            "AWS Security Reference Architecture: Security (log archive, security tooling, backup) and Workloads (Prod, NonProd) · every "
-           "account also runs the baseline (S3 Block Public Access, EBS default encryption, Config recorder to svp-config)",
+           "account also runs the baseline (S3 Block Public Access, EBS default encryption, Config recorder to svp-config unless "
+           "config_recording is off in aws/paid-features.json)",
            40, 40, 2760, 40, color=MUTED)
     p.text("Green: logs to the log archive account and backup copies to the backup account · red: detection and events to the "
            "security account, then SNS and email · "
@@ -632,7 +653,8 @@ def org_page() -> Page:
     p.box("<b>On the root: resource control, declarative, tag</b>" + bullets(*rest), 960, 240, 840, 200, "#F7F7F7", MUTED, valign="top")
     p.box("<b>Organization features</b>" + bullets(
         "Centralized root access: member accounts hold no root credentials",
-        "Delegated administrator svp-security: GuardDuty, Security Hub, Config, IAM Access Analyzer, Inspector (ECR scanning of every member account)",
+        "Delegated administrator svp-security: GuardDuty, Security Hub, Config, IAM Access Analyzer, Inspector (ECR scanning of "
+        "every member account with inspector_ecr always)",
         "Baseline roots apply from the management account through OrganizationAccountAccessRole",
         "AWS Backup: cross-account backup and the RDS, S3 opt-in set here; backup policies by OU, no delegated administrator"),
         1840, 240, 880, 200, "#F7F7F7", MUTED, valign="top")
@@ -662,7 +684,7 @@ def org_page() -> Page:
     b = {"cloudtrail": 720, "config": 880, "flowlogs": 1040, "waf": 1200, "guardduty": 1360, "cloudfront": 1360}
     buckets = {
         "cloudtrail": p.icon("S3 svp-cloudtrail<br>organization trail, Object Lock", "s3", 1000, b["cloudtrail"], STO, cid="b_trail"),
-        "config": p.icon("S3 svp-config<br>recorder of every account", "s3", 1000, b["config"], STO, cid="b_config"),
+        "config": p.icon("S3 svp-config<br>recorder of every account with config_recording always", "s3", 1000, b["config"], STO, cid="b_config"),
         "flowlogs": p.icon("S3 svp-flowlogs<br>VPC flow logs", "s3", 1000, b["flowlogs"], STO, cid="b_flow"),
         "waf": p.icon("S3 aws-waf-logs-svp<br>WAF logs, us-east-1", "s3", 1000, b["waf"], STO, cid="b_waf"),
         "guardduty": p.icon("S3 svp-guardduty<br>finding export", "s3", 1000, b["guardduty"], STO, cid="b_gd", label_top=True),
@@ -699,8 +721,15 @@ def org_page() -> Page:
             p.icon("WAF web ACL logging<br>aws-waf-logs-svp", "waf", 2160, top + 160, SEC, cid=f"{env}_waf"),
             p.icon("CloudFront standard logging<br>svp-cloudfront-" + env, "cloudfront", 2160, top + 320, NET, cid=f"{env}_cf"),
             p.icon("EventBridge svp-security-* rules<br>forwarder role", "eventbridge", 2160, top + 480, INTEG, cid=f"{env}_fwd", label_top=True))
-        p.icon(f"AMG svp-{env}<br>ADMIN svp-platform-admins<br>VIEWER svp-platform-viewers", "managed_service_for_grafana", 2440, top, SEC,
-               cid=f"{env}_amg")
+        session = paid_feature(env, "managed_grafana") == "session"
+        p.icon(f"AMG svp-{env}{'<br>only during a session' if session else ''}<br>ADMIN svp-platform-admins<br>VIEWER svp-platform-viewers",
+               "managed_service_for_grafana", 2440, top, SEC, cid=f"{env}_amg")
+        # services the cost flags turn off here; GuardDuty and CloudTrail never switch off, so they are not listed
+        off = [name for name, flag in (("Security Hub", "security_hub"), ("Config recorder", "config_recording"),
+                                       ("Inspector ECR", "inspector_ecr")) if paid_feature(env, flag) == "off"]
+        if off:
+            p.text(f"<b>Off in svp-{env}</b> (aws/paid-features.json):{bullets(*off)}GuardDuty and CloudTrail run in every account",
+                   2400, top + 320, 240, 160, color=MUTED, valign="top")
         vaults[env] = p.icon(f"AWS Backup vault svp-{env}<br>key alias/svp-{env}-backup<br>role svp-{env}-backup", "backup", 2440, top + 160, STO,
                              cid=f"{env}_vault")
 
@@ -845,7 +874,9 @@ def flows(region: str) -> Page:
     spans = p.icon("CloudWatch Logs aws/spans<br>Transaction Search", "cloudwatch_2", 1360, r1, SEC, cid="tspans", label_top=True)
     logs = p.icon("CloudWatch Logs<br>/svp/&lt;env&gt;/otel", "cloudwatch_2", 960, r2, SEC, cid="tlogs")
     amp = p.icon("AMP workspace svp-&lt;env&gt;<br>rules, alert manager", "managed_service_for_prometheus", 960, r3, SEC, cid="tamp", label_top=True)
-    amg = p.icon("AMG svp-&lt;env&gt;<br>dashboards", "managed_service_for_grafana", 1360, r3, SEC, cid="tamg")
+    grafana_session = [e for e in ("stg", "prd") if paid_feature(e, "managed_grafana") == "session"]
+    amg_note = f"dashboards; {', '.join(grafana_session)}: session only" if grafana_session else "dashboards"
+    amg = p.icon(f"AMG svp-&lt;env&gt;<br>{amg_note}", "managed_service_for_grafana", 1360, r3, SEC, cid="tamg")
     sns = p.icon("SNS svp-&lt;env&gt;-alarms<br>page, ticket", "sns", 960, r4, INTEG, cid="tsns")
     learner = p.flat("Learner<br>email", "users", 1360, r4, cid="tlearner")
     admins = p.flat("Platform admins, viewers<br>IAM Identity Center", "users", 1680, r3, cid="tadmins")
