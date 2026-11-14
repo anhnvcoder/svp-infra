@@ -1,12 +1,18 @@
-# AWS roles of the two services that use S3, assumed through EKS Pod Identity: one role per ServiceAccount of the svp
-# namespace, each with the policy the media module writes for it. The platform controllers get theirs in modules/eks.
+# AWS roles of the two services that call AWS APIs, assumed through EKS Pod Identity: one role per ServiceAccount of the
+# svp namespace, each with the policy the modules write for it. The platform controllers get theirs in modules/eks.
 locals {
   service_roles = {
     video-service = module.media.video_service_policy_json
-    media-worker  = module.media.media_worker_policy_json
+    media-worker  = data.aws_iam_policy_document.media_worker.json
   }
   # Namespace of the services; each service runs under a ServiceAccount named after its release.
   service_namespace = "svp"
+}
+
+# media-worker on AWS is the MediaConvert bridge: the S3 part of its rights comes from the media module, the
+# MediaConvert, iam:PassRole and SQS part from the transcode module, joined statement by statement.
+data "aws_iam_policy_document" "media_worker" {
+  source_policy_documents = [module.media.media_worker_policy_json, module.transcode.bridge_policy_json]
 }
 
 # The trust policy names the cluster, namespace and ServiceAccount through the session tags EKS Pod Identity sets, so
@@ -47,7 +53,7 @@ resource "aws_iam_role" "service" {
   for_each = local.service_roles
 
   name               = "${local.name}-${each.key}"
-  description        = "${each.key} of EKS cluster ${local.name} (S3 of the ${local.env} buckets)"
+  description        = "${each.key} of EKS cluster ${local.name} (AWS APIs the service calls in ${local.env})"
   assume_role_policy = data.aws_iam_policy_document.service_trust[each.key].json
 }
 
@@ -55,7 +61,7 @@ resource "aws_iam_role" "service" {
 resource "aws_iam_role_policy" "service" {
   for_each = local.service_roles
 
-  name   = "s3"
+  name   = "service"
   role   = aws_iam_role.service[each.key].id
   policy = each.value
 }

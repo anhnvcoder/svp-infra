@@ -32,6 +32,10 @@ output "cluster_values" {
     logGroup       = data.aws_cloudwatch_log_group.otel.name
     grafanaUrl     = "https://${data.aws_grafana_workspace.env.endpoint}"
     alarmTopicArn  = module.alarms.topic_arn
+    # Queue and role the jobs of the MediaConvert bridge run on, and the queue their final states arrive in.
+    mediaconvertQueueArn    = module.transcode.queue_arn
+    mediaconvertRoleArn     = module.transcode.role_arn
+    transcodeEventsQueueUrl = module.transcode.events_queue_url
   }
 
   precondition {

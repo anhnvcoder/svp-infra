@@ -18,7 +18,8 @@ internal, WAF, cert ACM, log CloudFront, DNS), [ADR-0062](https://github.com/anh
 (image từ ECR của account prd, chỉ vào qua `promote-prd`),
 [ADR-0063](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0063-managed-observability.md) (telemetry vào dịch vụ managed sống qua
 destroy), [ADR-0064](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0064-interface-endpoints.md) (endpoint interface ở mọi AZ của
-prd).
+prd), [ADR-0066](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0066-mediaconvert-transcode.md) (transcode bằng AWS Elemental
+MediaConvert, giống hệt stg).
 
 Buổi prd đi đúng chuỗi script của buổi stg; khác biệt là dữ liệu (dòng `prd` của `env_table` trong `aws/scripts/lib.sh`: profile `anhnv-prd`,
 biến `SVP_AWS_PRD_ACCOUNT_ID`, tunnel cổng 6443, file `teardown.tfvars`, không thang k6) và các bước tay ở đây. Mọi mục chung (luật chạy lệnh,
@@ -44,7 +45,10 @@ aws/scripts/session.sh --print prd                 # mọi lệnh script của b
   và phụ lục của nó); buổi prd đầu đo số thật ở Cost Explorer. **Phí giữ R ≈ $4,6/tháng** giữa các buổi (trail, KMS, bucket state của
   management; bucket state, KMS key, zone của hai baseline), cộng phần edge lúc không buổi (key DNSSEC, topic và alarm DNSSEC, query log: bảng
   "Lúc không buổi" ở phụ lục ADR-0061 §13) và phần registry, observability lúc không buổi (key KMS, secret của cache, lưu trữ ECR, AMG: cùng
-  bảng của ADR-0063 §12), báo riêng, không cộng vào C.
+  bảng của ADR-0063 §12), báo riêng, không cộng vào C. Phần transcode (job MediaConvert của buổi, endpoint `mediaconvert` ở mọi AZ, SQS, request
+  S3; $0 lúc không buổi) ở
+  [ADR-0066 §12](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0066-mediaconvert-transcode.md#12-chi-phí) và mục "Chi phí" của
+  phụ lục, cộng vào C.
 - **Cả buổi 4 giờ**, từ cổng promote tới hai lượt `sweep.sh` sạch. Quá 3 giờ mà chưa đo xong thì bỏ phần đo còn lại, sang gỡ. Quên gỡ 24
   giờ ≈ $48 (24 × (H₀ + H_k)); budget `svp-prd-monthly` và budget tổng của org gửi email ở 50 %, 80 %, 100 %.
 - Ba distribution của prd (web, api, media) và ba web ACL là pay-as-you-go, có access log; prd không đăng ký gói flat-rate nào. Web ACL sót
@@ -60,7 +64,10 @@ aws/scripts/session.sh --print prd                 # mọi lệnh script của b
    `delegated_subdomains` của chính root `aws/accounts/prd`.
 2. Buổi stg ở account `svp-stg` đã chạy xong theo [`session-stg.md`](session-stg.md), và mọi PR của code, `svp-gitops`, repo này đã merge.
 3. **Bằng chứng stg**: commit `svp-gitops` sẽ promote (`stg_ref`) có commit status `argocd/stg` trạng thái `success` (Argo CD Notifications
-   của stg ghi khi sync xong commit đó). Job `promote-prd` từ chối commit không có nó. Kiểm:
+   của stg ghi khi sync xong commit đó). Job `promote-prd` từ chối commit không có nó. `stg_ref` là commit ghi ở `stg-ref.txt` của thư mục buổi
+   stg (`session-stg.md` bước 11) mà buổi đó đã qua mục [Phép kiểm transcode](session-stg.md#phép-kiểm-transcode): prd chạy đúng `platforms/`
+   có bridge MediaConvert mà stg đã kiểm. Promote theo mục "Promote" của
+   [README `svp-gitops`](https://github.com/anhnvcoder/svp-gitops/blob/main/README.md#promote), làm ở **Cổng promote prd** dưới. Kiểm:
 
    ```sh
    gh api "repos/anhnvcoder/svp-gitops/commits/<stg_ref>/statuses" --jq '.[] | select(.context == "argocd/stg") | "\(.state) \(.created_at)"' | head -n 1
@@ -129,8 +136,8 @@ export SVP_SESSION_DIR="$PWD/.session/$(date -u +%Y%m%dT%H%M%SZ)"
 
 Các bước script, theo đúng thứ tự `session.sh --print prd`; bước tay của prd chen giữa, ở các mục dưới (cổng promote trước bước 1, email
 của alarm và tunnel sau bước 5, làm nóng cache sau bước 6, CORS của media, phép kiểm edge, phép kiểm nền tảng, phép kiểm nền tảng managed,
-commit status và diễn tập sau bước 11, ghi truy vấn dữ liệu và finding bảo mật trước bước 12, final snapshot sau bước 18, chạy lại truy vấn
-dữ liệu sau bước 20):
+commit status, phép kiểm transcode và diễn tập sau bước 11, ghi truy vấn dữ liệu và finding bảo mật trước bước 12, final snapshot
+sau bước 18, chạy lại truy vấn dữ liệu sau bước 20):
 
 | # | Lệnh | Hạn | Dán lại cho AI |
 | --- | --- | --- | --- |
@@ -193,6 +200,26 @@ git -C ../backend fetch origin
 git -C ../backend cat-file -e "$rev:deploy/observability/otelcol/k8s-eks.yaml" && echo ok
 git -C ../backend show "$rev:deploy/helm/svp-service/values.yaml" | grep -q '^canaryPrometheus:' && echo ok
 ```
+
+**Bản ghim có transcode MediaConvert** (sau bước 4, vẫn trước bước 1): ở `gitopsRevision` (`G`), release `media-worker` của nền tảng eks chạy
+lệnh con `mediaconvert`, nhận ba biến của queue, role, hàng đợi từ hợp đồng cluster và được ra TCP 443 trong VPC (endpoint interface); ở
+`revision` (`R`), schema của chart `svp-service` nhận value `args` và Deployment đưa nó vào container chính. Thiếu một điều: prd sẽ chạy
+`media-worker serve` (ffmpeg) hay pod không khởi động, **không dựng prd**; promote lại từ `stg_ref` của một buổi stg đã qua phép kiểm transcode.
+Chỉ đọc bản clone, không đổi nhánh:
+
+```sh
+G=$(git -C ../gitops show origin/main:envs/prd/charts.yaml | sed -n 's/^gitopsRevision: *//p')
+R=$(git -C ../gitops show origin/main:envs/prd/charts.yaml | sed -n 's/^revision: *//p')
+git -C ../gitops show "$G:platforms/eks/media-worker.yaml" | grep -x 'args: \[mediaconvert\]'
+git -C ../gitops show "$G:platforms/eks/media-worker.values.tpl" |
+  grep -c -E '^ +(MEDIACONVERT_QUEUE_ARN|MEDIACONVERT_ROLE_ARN|TRANSCODE_EVENTS_QUEUE_URL):|cidr: .*vpcCidr.*ports: \[443\]'
+git -C ../gitops show "$G:argocd/apps/templates/applications.yaml" | grep -c -E 'mediaconvertQueueArn|mediaconvertRoleArn|transcodeEventsQueueUrl'
+git -C ../backend show "$R:deploy/helm/svp-service/values.schema.json" | jq -e '.properties.args.type == "array"'
+git -C ../backend show "$R:deploy/helm/svp-service/templates/deployment.yaml" | grep -c 'with .Values.args'
+```
+
+Mong `args: [mediaconvert]`, `4` (ba biến và mục egress), `3` (ba khoá của hợp đồng cluster được kiểm dạng), `true`, `1`; dán lại cả
+năm dòng. Khác: dán cho AI trước bước 1.
 
 ## Bước 1–5: account, DNS, root env
 
@@ -291,6 +318,22 @@ Sau smoke, mục [Phép kiểm nền tảng managed](session-stg.md#phép-kiểm
   (mục **Kết thúc buổi**) và ở buổi prd kế. Retention của prd dài hơn stg (`locals` của `aws/accounts/prd`).
 
 Dán output của từng phép như mục của stg.
+
+## Phép kiểm transcode
+
+Sau smoke, (a) và (f) của mục [Phép kiểm transcode](session-stg.md#phép-kiểm-transcode) của `session-stg.md` với `AWS_PROFILE=anhnv-prd`,
+`--context svp-prd`, queue `svp-prd`, hàng đợi `svp-prd-transcode-events`, `svp-prd-transcode-events-dlq`, alarm `svp-prd-transcode-events-dlq`
+(không cần clip; của khối biến và hàm dùng chung chỉ cần hai dòng đầu, `values` và `media`):
+
+- (a) smoke đi qua MediaConvert: Deployment `media-worker` chạy `["mediaconvert"]`; bảng đếm chỉ có `record-job COMPLETE`, một cho video smoke
+  (khi đọc lại sau các diễn tập: một cho mỗi video smoke và `eks-seed` của mục **Đo**), cùng các dòng `orphan-job` được chấp nhận như ở stg
+  (job lạc không quyết kết quả).
+- (f) hai hàng đợi về hai số `0`, alarm DLQ `OK` hay `INSUFFICIENT_DATA`, log của bridge không có dòng bỏ message. Chạy lại sau các diễn tập của
+  mục **Đo** (failover, khởi động lại broker không được làm mất event của job), trước bước 12.
+
+Kiểm FF-9, lớp cắt và header qua CloudFront chạy ở stg trên cùng code và cùng module; prd không lặp lại. Một dòng kết luận mỗi phép vào
+"Xác nhận" của ADR-0066; DLQ có message: runbook
+[`transcode-events-dlq.md`](https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks/transcode-events-dlq.md) của repo code.
 
 ## Đo
 
@@ -507,7 +550,9 @@ Theo thứ tự, mỗi bước xong mới sang bước sau:
    group `/svp/prd/otel`, workspace AMG và key của chúng; `Stack=security-baseline`: CMK EBS), không endpoint interface, không rule groups
    namespace của AMP, và `pending deletion` (KMS key của root
    env: RDS, MSK, alarm, Secrets của EKS; 7 ngày), exit 0; không còn dòng MSK, ElastiCache, `AmazonMSK_*`, log group `/aws/msk/svp-prd` (phép kiểm (f) của ADR-0053),
-   không còn instance, launch template, instance profile, hàng đợi SQS hay rule EventBridge nào của Karpenter.
+   không còn instance, launch template, instance profile, hàng đợi SQS hay rule EventBridge nào của Karpenter; không còn queue MediaConvert
+   `svp-prd`, role `svp-prd-mediaconvert`, hàng đợi `svp-prd-transcode-events*`, rule `svp-prd-mediaconvert-job-state` (phép kiểm gỡ của
+   ADR-0066).
    Còn gì khác: chạy lệnh `delete:` nó in, rồi chạy lại. Gói của account rỗng (mong `[]`), cùng lượt sweep sạch này:
 
    ```sh

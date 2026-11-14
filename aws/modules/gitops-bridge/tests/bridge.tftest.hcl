@@ -40,6 +40,10 @@ variables {
     logGroup       = "/svp/stg/otel"
     grafanaUrl     = "https://g-abc123def4.grafana-workspace.ap-southeast-1.amazonaws.com"
     alarmTopicArn  = "arn:aws:sns:ap-southeast-1:111111111111:svp-stg-alarms"
+
+    mediaconvertQueueArn    = "arn:aws:mediaconvert:ap-southeast-1:111111111111:queues/svp-stg"
+    mediaconvertRoleArn     = "arn:aws:iam::111111111111:role/svp-stg-mediaconvert"
+    transcodeEventsQueueUrl = "https://sqs.ap-southeast-1.amazonaws.com/111111111111/svp-stg-transcode-events"
   }
 
   main_commit             = "1111111111111111111111111111111111111111"
@@ -579,6 +583,96 @@ run "cluster_value_alarm_topic_arn_other_topic" {
 
   variables {
     cluster_values = merge(var.cluster_values, { alarmTopicArn = "arn:aws:sns:ap-southeast-1:111111111111:svp-stg-budget" })
+  }
+
+  expect_failures = [var.cluster_values]
+}
+
+run "cluster_value_mediaconvert_queue_arn_missing" {
+  command = plan
+
+  variables {
+    cluster_values = { for k, v in var.cluster_values : k => v if k != "mediaconvertQueueArn" }
+  }
+
+  expect_failures = [var.cluster_values]
+}
+
+run "cluster_value_mediaconvert_queue_arn_wrong_kind" {
+  command = plan
+
+  variables {
+    cluster_values = merge(var.cluster_values, { mediaconvertQueueArn = ["arn:aws:mediaconvert:ap-southeast-1:111111111111:queues/svp-stg"] })
+  }
+
+  expect_failures = [var.cluster_values]
+}
+
+run "cluster_value_mediaconvert_queue_arn_default_queue" {
+  command = plan
+
+  variables {
+    cluster_values = merge(var.cluster_values, { mediaconvertQueueArn = "arn:aws:mediaconvert:ap-southeast-1:111111111111:queues/Default" })
+  }
+
+  expect_failures = [var.cluster_values]
+}
+
+run "cluster_value_mediaconvert_role_arn_missing" {
+  command = plan
+
+  variables {
+    cluster_values = { for k, v in var.cluster_values : k => v if k != "mediaconvertRoleArn" }
+  }
+
+  expect_failures = [var.cluster_values]
+}
+
+run "cluster_value_mediaconvert_role_arn_wrong_kind" {
+  command = plan
+
+  variables {
+    cluster_values = merge(var.cluster_values, { mediaconvertRoleArn = ["arn:aws:iam::111111111111:role/svp-stg-mediaconvert"] })
+  }
+
+  expect_failures = [var.cluster_values]
+}
+
+run "cluster_value_mediaconvert_role_arn_other_role" {
+  command = plan
+
+  variables {
+    cluster_values = merge(var.cluster_values, { mediaconvertRoleArn = "arn:aws:iam::111111111111:role/svp-stg-media-worker" })
+  }
+
+  expect_failures = [var.cluster_values]
+}
+
+run "cluster_value_transcode_events_queue_url_missing" {
+  command = plan
+
+  variables {
+    cluster_values = { for k, v in var.cluster_values : k => v if k != "transcodeEventsQueueUrl" }
+  }
+
+  expect_failures = [var.cluster_values]
+}
+
+run "cluster_value_transcode_events_queue_url_wrong_kind" {
+  command = plan
+
+  variables {
+    cluster_values = merge(var.cluster_values, { transcodeEventsQueueUrl = ["https://sqs.ap-southeast-1.amazonaws.com/111111111111/svp-stg-transcode-events"] })
+  }
+
+  expect_failures = [var.cluster_values]
+}
+
+run "cluster_value_transcode_events_queue_url_dlq" {
+  command = plan
+
+  variables {
+    cluster_values = merge(var.cluster_values, { transcodeEventsQueueUrl = "https://sqs.ap-southeast-1.amazonaws.com/111111111111/svp-stg-transcode-events-dlq" })
   }
 
   expect_failures = [var.cluster_values]

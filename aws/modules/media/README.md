@@ -26,7 +26,8 @@ CloudFront), [ADR-0061](https://github.com/anhnvcoder/svp-backend/blob/main/docs
   `cors_allowed_origins` (origin trơn, không `*`, không path). Rule của bucket `media` chỉ trả lời request gửi thẳng tới bucket; viewer đi qua
   CloudFront nhận CORS của distribution (mục dưới).
 - **Lifecycle:** `uploads/` 30 ngày ở lớp chuẩn → Glacier Deep Archive, xoá sau 365 ngày (sau 30 ngày không transcode lại được nếu chưa
-  restore, restore tới 48 giờ); multipart dở bị huỷ sau 1 ngày ở cả hai bucket. Hôm nay không service nào ghi bằng multipart (mỗi file một
+  restore, restore tới 48 giờ); `transcode-jobs/` của `media` (bản ghi job của bridge) xoá sau 30 ngày, lâu hơn mọi job và hạn giữ message
+  của SQS, Kafka; multipart dở bị huỷ sau 1 ngày ở cả hai bucket. Hôm nay không service nào ghi bằng multipart (mỗi file một
   `PutObject`, form của trình duyệt là một POST), nhưng `s3:PutObject` cho phép bắt đầu một lần multipart mà không service nào được abort,
   nên phần của một lần ghi dở (client sau này, credential bị lạm dụng) chỉ được dọn bằng rule này.
 - **Access log:** `access_logging_enabled = true` (mức prd) ghi S3 server access log của hai bucket vào bucket thứ ba
@@ -104,32 +105,45 @@ flowchart LR
   `record_fields` là danh sách tường minh, giống module `edge`: các trường của ví dụ standard logging v2 trừ `cs(Cookie)` (ADR-0061 phụ lục §8).
   Log có IP (`c-ip`), User-Agent của người xem; retention và người đọc theo bucket log CloudFront của Log Archive. Gói Free không có access log,
   nên media của stg không có log (FSBP CloudFront.5 chấp nhận ở stg).
-- **Đường của một object:** gateway ghép `MEDIA_PUBLIC_BASE_URL` = `https://<media_domain>` với key, key đã có `media/`. Ví dụ segment:
-  `https://media.svp.example/media/<video_id>/<version>/<attempt>/<rendition>/seg_000.ts` là object
-  `media/<video_id>/<version>/<attempt>/<rendition>/seg_000.ts` của bucket `media`; master là `…/media/<video_id>/<version>/master.m3u8`.
+- **Đường của một object:** gateway ghép `MEDIA_PUBLIC_BASE_URL` = `https://<media_domain>` với key, key đã có `media/`. Ví dụ playlist
+  rendition: `https://media.svp.example/media/<video_id>/<version>/<attempt>/index_720p.m3u8` là object
+  `media/<video_id>/<version>/<attempt>/index_720p.m3u8` của bucket `media` (segment nằm phẳng cùng thư mục); master là `…/media/<video_id>/<version>/master.m3u8`.
   Không có đoạn `/media` thêm như đường path-style của k3d.
 
 ## Policy IAM của hai service
 
-Dịch `deploy/s3/video-service-policy.json`, `media-worker-policy.json` của repo code sang ARN bucket thật, **thêm một quyền** mà store local
-không cần: `ListBucket` trên bucket `uploads` cho cả hai service (sid `ListUploads`). `s3:PutObject` đã gồm các bước multipart và ghi có
-điều kiện `If-None-Match: *`; không service nào được abort multipart.
+Policy của video-service dịch `deploy/s3/video-service-policy.json` của repo code sang ARN bucket thật, **thêm một quyền** mà store local
+không cần: `ListBucket` trên bucket `uploads` (sid `ListUploads`). Policy của media-worker là phần S3 của quyền bridge MediaConvert: trên AWS,
+release `media-worker` chạy lệnh con `mediaconvert`, không chạy ffmpeg
+([ADR-0066](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0066-mediaconvert-transcode.md) §9, bảng "Quyền bridge" ở phụ lục,
+mỗi dòng một nguồn); quyền MediaConvert, SQS, `iam:PassRole` của bridge ở module `transcode`. `s3:PutObject` đã gồm các bước multipart và
+ghi có điều kiện `If-None-Match: *`; không service nào được abort multipart. ARN bucket trong hai policy media-worker và CloudFront dựng từ
+tên bucket, nên biết lúc `plan`.
 
 | Service | Quyền |
 | --- | --- |
 | video-service | `PutObject`, `GetObject`, `DeleteObject` trên `<uploads>/uploads/*`; `ListBucket` trên `<uploads>` (không điều kiện, khác local); `ListBucket` trên `<media>` với `s3:prefix` `media/*`; `DeleteObject` trên `<media>/media/*` |
-| media-worker | `GetObject` trên `<uploads>/uploads/*`; `ListBucket` trên `<uploads>` (không điều kiện, khác local); `PutObject`, `GetObject` trên `<media>/media/*`; `ListBucket` trên `<media>` với `s3:prefix` `media/*` |
+| media-worker (bridge) | `GetObject` trên `<uploads>/uploads/*`; `PutObject`, `GetObject` trên `<media>/media/*` và `<media>/transcode-jobs/*`; `ListBucket` trên `<media>` với `s3:prefix` `media/*`, `transcode-jobs/*` |
 
-**Vì sao thêm `ListBucket` trên `uploads`:** caller không có `s3:ListBucket` trên bucket thì S3 trả `HEAD`/`GET` của key không có bằng
-**403**, không phải 404 (RustFS của local trả 404). Code dựa vào 404: video-service đổi 404 của `HEAD uploads/<id>` thành 400
-`UPLOAD_NOT_FOUND` (`POST /videos/{id}/complete` khi chưa tải file lên), lỗi khác thành 503 `DEPENDENCY_UNAVAILABLE` mà web thử lại mãi;
-media-worker đổi 404 của file gốc thành `SOURCE_MISSING` (event `video.uploaded` phát lại cho video đã `FAILED`, file gốc đã xoá), lỗi khác
-thành thử lại rồi vào DLQ. Thiếu quyền này thì "file không có" thành "store hỏng". Không gắn điều kiện `s3:prefix`: bucket chỉ chứa
-`uploads/<id>` (chỉ form do video-service ký ghi vào), nên điều kiện không thu hẹp gì, mà tài liệu S3 không nói phép quyết 403 hay 404 có
-xét điều kiện đó. Liệt kê chỉ lộ id video, thứ cả hai service đã biết. Bucket `media` giữ như local: code kiểm có hay không bằng
-`ListObjectsV2` theo tiền tố (`Exists`), thoả điều kiện `media/*`, không dựa vào 404 của `HEAD`.
+**Vì sao thêm `ListBucket` trên `uploads` cho video-service:** caller không có `s3:ListBucket` trên bucket thì S3 trả `HEAD`/`GET` của key
+không có bằng **403**, không phải 404 (RustFS của local trả 404). video-service đổi 404 của `HEAD uploads/<id>` thành 400
+`UPLOAD_NOT_FOUND` (`POST /videos/{id}/complete` khi chưa tải file lên), lỗi khác thành 503 `DEPENDENCY_UNAVAILABLE` mà web thử lại mãi.
+Thiếu quyền này thì "file không có" thành "store hỏng". Không gắn điều kiện `s3:prefix`: bucket chỉ chứa `uploads/<id>` (chỉ form do
+video-service ký ghi vào), nên điều kiện không thu hẹp gì, mà tài liệu S3 không nói phép quyết 403 hay 404 có xét điều kiện đó. Liệt kê chỉ
+lộ id video, thứ service đã biết.
 
-Kiểm ở buổi AWS: `POST /videos/{id}/complete` khi chưa tải file trả 400 `UPLOAD_NOT_FOUND`, không 503.
+**Quyền của bridge:**
+
+- `GetObject` trên `uploads/*`: bridge không tự mở file gốc, nhưng `Probe` của MediaConvert đọc S3 bằng quyền của người gọi. Bridge không
+  có `ListBucket` trên `uploads` (bảng của ADR không có): Probe trên file gốc đã xoá trả gì thì thử ở account sandbox (phụ lục §3 của ADR).
+- `GetObject`, `PutObject` trên `media/*`: đọc playlist, chép tại chỗ từng object của job để đặt `Cache-Control` (`CopyObject` cần đọc
+  nguồn, ghi đích), tạo master.
+- `GetObject`, `PutObject` trên `transcode-jobs/*`: bản ghi job `transcode-jobs/<video_id>/<version>.json`, chỉ tạo bằng
+  `If-None-Match: *`, quyết kết quả mỗi version. Tiền tố nằm ngoài `media/`, nên CloudFront không đọc được nó và việc xoá
+  `media/<video_id>/` của video-service không chạm nó.
+- `ListBucket` theo hai tiền tố: liệt kê thư mục một lần thử, hỏi một key có chưa bằng `ListObjectsV2` theo tiền tố (`Exists`) thay vì
+  dựa vào 404 của `HEAD`.
+- Không `DeleteObject`, không `ListBucket` trên `uploads`.
 
 Root của env gắn mỗi JSON vào role của Pod Identity association `svp/video-service`, `svp/media-worker`.
 
@@ -224,6 +238,7 @@ Bucket `uploads` mã hoá SSE-S3, nên không có statement KMS của mẫu (ch�
 | [aws_iam_policy_document.media_worker](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
 | [aws_iam_policy_document.tls_only](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
 | [aws_iam_policy_document.video_service](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
+| [aws_partition.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/partition) | data source |
 
 ## Inputs
 
@@ -249,7 +264,7 @@ Bucket `uploads` mã hoá SSE-S3, nên không có statement KMS của mẫu (ch�
 | media\_bucket | Name of the media bucket. |
 | media\_distribution\_arn | ARN of the CloudFront distribution in front of the media bucket. |
 | media\_domain | Public name of the media, `media.<domain>`: MEDIA\_PUBLIC\_BASE\_URL of the gateway and MEDIA\_ORIGIN of the web are https://<media\_domain>. |
-| media\_worker\_policy\_json | IAM policy of media-worker (JSON) for the role of its Pod Identity association. |
+| media\_worker\_policy\_json | S3 part of the IAM policy of media-worker, the MediaConvert bridge on AWS (JSON), for the role of its Pod Identity association. |
 | uploads\_bucket | Name of the uploads bucket (the web posts upload forms to https://<name>.s3.<region>.amazonaws.com). |
 | video\_service\_policy\_json | IAM policy of video-service (JSON) for the role of its Pod Identity association. |
 <!-- END_TF_DOCS -->

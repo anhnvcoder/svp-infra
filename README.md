@@ -81,7 +81,8 @@ aws/
   envs/<env>/                 cấu hình gốc của mỗi env (stg, prd: cùng *.tf kể cả bastion SSM, khác ở <env>.tfvars; prd thêm teardown.tfvars)
   gitops/<env>/               bootstrap GitOps của cluster EKS của env (GitOps Bridge): namespace, Argo CD, AppProject, cluster Secret, ApplicationSet svp-bootstrap
   modules/                    module nội bộ; lock file không commit
-    network, eks, rds, media  nền của mỗi env (network: bốn tầng subnet mỗi AZ, public chỉ NAT, private, database, edge chỉ ALB edge, NACL không mở 22, 3389, flow log về Log Archive, endpoint guardduty-data, endpoint interface có private DNS cho API AWS; eks: nhóm node hệ thống, IAM, SQS, EventBridge của Karpenter, add-on agent GuardDuty, role Pod Identity của controller nền tảng và telemetry; media: bucket, distribution media.<domain>, Malware Protection cho uploads)
+    network, eks, rds, media  nền của mỗi env (network: bốn tầng subnet mỗi AZ, public chỉ NAT, private, database, edge chỉ ALB edge, NACL không mở 22, 3389, flow log về Log Archive, endpoint guardduty-data, endpoint interface có private DNS cho API AWS (cả mediaconvert, sqs); eks: nhóm node hệ thống, IAM, SQS, EventBridge của Karpenter, add-on agent GuardDuty, role Pod Identity của controller nền tảng và telemetry; media: bucket, distribution media.<domain>, Malware Protection cho uploads, lifecycle transcode-jobs/)
+    transcode                 transcode của env bằng AWS Elemental MediaConvert: queue svp-<env>, role svp-<env>-mediaconvert, rule EventBridge svp-<env>-mediaconvert-job-state, SQS svp-<env>-transcode-events và DLQ, alarm DLQ; JSON policy của bridge cho role Pod Identity media-worker
     edge                      đường vào của web và API: distribution svp-<env>-web, svp-<env>-api, VPC origin, ALB internal svp-<env>-edge ở tầng edge, target group của Envoy, cert ACM, response headers policy, log chuẩn v2, bản ghi DNS
     msk                       Kafka của env: Amazon MSK provisioned, một broker mỗi AZ ở subnet database, SASL/SCRAM-SHA-512 trên TLS 9096
     elasticache               Valkey của env: ElastiCache for Valkey, cluster mode tắt, ở subnet database, TLS 6379, user RBAC theo db và tiền tố
@@ -319,7 +320,7 @@ vì finalizer và webhook của chúng cần cho việc xoá object của worklo
 
 ## Luồng vận hành
 
-Bốn luồng của một buổi; tên tài nguyên khớp code (trong sơ đồ, `ENV` là `stg` hay `prd`), bước và lệnh ở runbook buổi.
+Năm luồng của một buổi; tên tài nguyên khớp code (trong sơ đồ, `ENV` là `stg` hay `prd`), bước và lệnh ở runbook buổi.
 
 **Đường vào của người xem.** Web, API và media chỉ vào từ internet qua CloudFront, mỗi tên một distribution có web ACL riêng và cert ACM ở
 `us-east-1`; không load balancer nào internet-facing. Web và API đi qua VPC origin tới ALB internal ở tầng edge, rồi tới pod Envoy mà
@@ -372,20 +373,45 @@ flowchart LR
     SNS -->|email đã xác nhận| L["Hộp thư alarm_email"]
 ```
 
+**Đường transcode.** Ở stg, prd release `media-worker` chạy lệnh con `mediaconvert` (bridge): mỗi `video.uploaded` thành một
+`Probe` rồi một job trên queue `svp-<env>` của module [`transcode`](aws/modules/transcode/README.md), gọi qua endpoint interface
+`mediaconvert`. Job chạy với role `svp-<env>-mediaconvert`: đọc `uploads/*` của bucket uploads, ghi `media/*` của bucket media. Trạng thái
+cuối của job (`COMPLETE`, `ERROR`) đi qua rule EventBridge vào SQS `svp-<env>-transcode-events`; bridge đọc hàng đợi qua endpoint `sqs`,
+đặt header của output, tạo master và phát `transcode.*`. Message bridge không hành động được, hay event EventBridge không giao được, vào
+`svp-<env>-transcode-events-dlq`, nơi alarm mức page gửi topic `svp-<env>-alarms`. Mọi tài nguyên này ở root `aws/envs/<env>`, gỡ cùng buổi.
+Luồng của bridge (Probe, bản ghi job, quyết định kết quả): `docs/explanation/transcode.md` của repo code;
+[ADR-0066](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0066-mediaconvert-transcode.md).
+
+```mermaid
+flowchart LR
+    B["Pod media-worker mediaconvert"] -->|"Probe, CreateJob, GetJob qua endpoint mediaconvert"| MC["MediaConvert, queue svp-ENV"]
+    MC -->|"role svp-ENV-mediaconvert đọc uploads/*"| U[("Bucket uploads")]
+    MC -->|"role svp-ENV-mediaconvert ghi media/*"| M[("Bucket media")]
+    MC -->|"COMPLETE, ERROR"| R["Rule svp-ENV-mediaconvert-job-state"]
+    R --> Q["SQS svp-ENV-transcode-events"]
+    Q -->|"long polling qua endpoint sqs"| B
+    B -->|"chép tại chỗ, master, bản ghi job"| M
+    Q -.->|"quá maxReceiveCount"| D["SQS svp-ENV-transcode-events-dlq"]
+    R -.->|"không giao được"| D
+    D --> A["Alarm svp-ENV-transcode-events-dlq"]
+    A --> S["SNS svp-ENV-alarms"]
+```
+
 **Thứ tự gỡ.** Thứ Kubernetes tạo trong account đi trước, khi controller tạo ra nó còn chạy; cluster đi trước mạng. `pre-destroy.sh` xoá
-luật và Alertmanager của AMP (CR của ACK, khi ACK còn chạy), Application workload và Gateway (target của Envoy trong target group edge),
+luật và Alertmanager của AMP (CR của ACK, khi ACK còn chạy), Application workload, job MediaConvert còn dở (huỷ, khi `media-worker` đã gỡ) và
+Gateway (target của Envoy trong target group edge),
 PVC (volume EBS), rồi NodePool và EC2NodeClass (Karpenter drain và tắt node của nó, trần `terminationGracePeriod`), rồi controller nền
 tảng; root gitops gỡ qua tunnel; root env gỡ edge (bản ghi DNS, ba distribution, VPC origin, ALB, web ACL), cluster, node group hệ thống,
 dịch vụ dữ liệu, endpoint interface, rồi VPC; `sweep.sh` tìm phần còn sót (instance, launch template, instance profile của Karpenter, ENI và
-security group mà CloudFront tạo cho VPC origin cả, rule groups namespace của AMP).
+security group mà CloudFront tạo cho VPC origin cả, rule groups namespace của AMP, queue MediaConvert, role MediaConvert).
 
 ```mermaid
 flowchart TD
-    A["pre-destroy.sh 1-3: luật AMP của ACK, Application workload, Gateway, TargetGroupBinding, PVC"] --> B["pre-destroy.sh 4: NodePool, EC2NodeClass; chờ hết NodeClaim, instance"]
+    A["pre-destroy.sh 1-3: luật AMP của ACK, Application workload, job MediaConvert, Gateway, TargetGroupBinding, PVC"] --> B["pre-destroy.sh 4: NodePool, EC2NodeClass; chờ hết NodeClaim, instance"]
     B --> C["pre-destroy.sh 5: svp-cluster, controller nền tảng (Karpenter cuối cùng)"]
     C --> D["tf.sh ENV gitops destroy: Argo CD, namespace (qua tunnel)"]
     D --> E["tf.sh ENV env destroy: DNS, distribution, VPC origin, ALB edge, web ACL; cluster EKS, node group system, Karpenter"]
-    E --> F["cùng destroy: RDS, MSK, ElastiCache, bastion, endpoint interface, VPC, NAT"]
+    E --> F["cùng destroy: RDS, MSK, ElastiCache, transcode, bastion, endpoint interface, VPC, NAT"]
     F --> G["sweep.sh ENV, sweep.sh mgmt: exit 0"]
 ```
 

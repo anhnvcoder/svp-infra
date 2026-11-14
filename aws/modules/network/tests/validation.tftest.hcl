@@ -326,9 +326,9 @@ run "interface_endpoints" {
   assert {
     condition = sort(keys(aws_vpc_endpoint.interface)) == sort([
       "sts", "eks-auth", "secretsmanager", "logs", "ssm", "ssmmessages", "ec2messages", "ecr.api", "ecr.dkr", "ec2",
-      "elasticloadbalancing", "aps-workspaces", "aps", "xray", "sqs",
+      "elasticloadbalancing", "aps-workspaces", "aps", "xray", "sqs", "mediaconvert",
     ])
-    error_message = "The module must make an interface endpoint for exactly the fifteen services the cluster calls, no kms."
+    error_message = "The module must make an interface endpoint for exactly the sixteen services the cluster calls, no kms."
   }
 
   assert {

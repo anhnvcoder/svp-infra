@@ -25,6 +25,6 @@ output "video_service_policy_json" {
 }
 
 output "media_worker_policy_json" {
-  description = "IAM policy of media-worker (JSON) for the role of its Pod Identity association."
+  description = "S3 part of the IAM policy of media-worker, the MediaConvert bridge on AWS (JSON), for the role of its Pod Identity association."
   value       = data.aws_iam_policy_document.media_worker.json
 }

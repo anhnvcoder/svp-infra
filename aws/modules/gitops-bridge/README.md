@@ -26,11 +26,13 @@ resource hay data source của provider nào: nó chỉ tính những gì root [
   `svp.io/telegram-chat-id`.
 - **`cluster_values`** phải có đúng các khoá của hợp đồng `cluster.*` (output `cluster_values` của hai root env), mỗi khoá đúng loại: chuỗi,
   `dbCidrs`, `edgeCidrs`, `s3Cidrs` là danh sách chuỗi, `externalSecretsRoles` là map chuỗi của đúng năm namespace `svp`, `svp-data`,
-  `svp-obs`, `keda`, `argocd`; `kafkaBrokers` là một chuỗi `host:9096,host:9096,…` như MSK trả, không phải danh sách. Sáu khoá còn phải
-  đúng dạng (biểu thức chính quy khớp cả chuỗi trong `variables.tf`): `ecrRegistry` là host registry ECR private
+  `svp-obs`, `keda`, `argocd`; `kafkaBrokers` là một chuỗi `host:9096,host:9096,…` như MSK trả, không phải danh sách. Các khoá có luật
+  dạng trong `variables.tf` (biểu thức chính quy khớp cả chuỗi) còn phải đúng dạng: `ecrRegistry` là host registry ECR private
   `<account>.dkr.ecr.<region>.amazonaws.com`, `ampWorkspaceId` là `ws-<id>`, `ampEndpoint` là `prometheus_endpoint` của workspace AMP (kết thúc
   bằng `/`), `logGroup` là `/svp/<env>/otel`, `grafanaUrl` là `https://` + endpoint của workspace AMG (không `/` cuối), `alarmTopicArn` là ARN
-  topic `svp-<env>-alarms`. Giá trị sai dạng dừng plan, thay vì chỉ lộ ra trong cluster thành lỗi kéo image, ghi metric hay gửi cảnh báo.
+  topic `svp-<env>-alarms`, `mediaconvertQueueArn` là ARN queue `svp-<env>` của MediaConvert, `mediaconvertRoleArn` là ARN role
+  `svp-<env>-mediaconvert`, `transcodeEventsQueueUrl` là URL hàng đợi SQS `svp-<env>-transcode-events`. Giá trị sai dạng dừng
+  plan, thay vì chỉ lộ ra trong cluster thành lỗi kéo image, ghi metric hay gửi cảnh báo.
   Biến không khai kiểu object: đổi sang kiểu object sẽ âm thầm bỏ khoá thừa và báo khoá thiếu bằng lỗi kiểu thay vì luật kiểm.
 - **ApplicationSet `svp-bootstrap`:** cluster generator chọn Secret có label `svp.io/env`, `goTemplate` với `missingkey=error`; tạo
   `svp-root` (project `svp`, label `svp.io/notify: root`, annotation `argocd.argoproj.io/compare-options: ServerSideDiff=false`, chart
@@ -56,8 +58,8 @@ namespace `argocd` và namespace dự án, values của chart `platform-values` 
 AppProject, B là `main_commit`. Run `prd` kiểm host loopback qua tunnel, TLS server
 name vẫn là host của endpoint, B là `gitopsRevision`, chat Telegram. Mỗi luật còn lại có một run với giá trị chỉ luật đó từ chối (env, kiến
 trúc, khoá thiếu, khoá thừa như `hostedZoneId`, sai loại, thiếu role namespace, URL không phải loopback, khoá ghim vắng hay không phải commit,
-namespace `baseline`, thiếu `argocd`, chart Argo CD lạ, thiếu AppProject); mỗi khoá trong sáu khoá có dạng có ba run: thiếu, sai loại,
-sai dạng.
+namespace `baseline`, thiếu `argocd`, chart Argo CD lạ, thiếu AppProject); mỗi khoá có luật dạng trong `variables.tf` có ba
+run: thiếu, sai loại, sai dạng.
 
 <!-- BEGIN_TF_DOCS -->
 ## Requirements

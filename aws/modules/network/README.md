@@ -183,7 +183,8 @@ cùng tên của module `eks`, add-on agent tạo sau endpoint.
 ([ADR-0064](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0064-interface-endpoints.md)): node và pod gọi các API AWS của bảng dưới qua
 endpoint trong VPC thay vì qua NAT. Danh sách dịch vụ là local `interface_endpoint_services`; ai gọi từng dịch vụ và vì sao cần nằm ở
 [phụ lục §1 của ADR](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0064-interface-endpoints.md#1-dịch-vụ),
-thứ còn đi qua NAT ở §6 của phụ lục đó.
+thứ còn đi qua NAT ở §6 của phụ lục đó; `mediaconvert` theo §10 của
+[ADR-0066](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0066-mediaconvert-transcode.md).
 
 | Endpoint (`com.amazonaws.<region>.…`) | Thành phần gọi |
 | --- | --- |
@@ -198,7 +199,8 @@ thứ còn đi qua NAT ở §6 của phụ lục đó.
 | `aps-workspaces` | Prometheus agent, Argo Rollouts, Collector |
 | `aps` | ACK |
 | `xray` | Collector |
-| `sqs` | Karpenter |
+| `sqs` | Karpenter; `media-worker mediaconvert` (hàng đợi sự kiện transcode) |
+| `mediaconvert` | `media-worker mediaconvert` (`Probe`, `CreateJob`, `GetJob`) |
 
 - Mỗi endpoint: tên `<name>-<dịch vụ>`, private DNS bật, ENI ở subnet private của `interface_endpoint_az_count` AZ đầu (local
   `interface_endpoint_azs`), security group chung `<name>-endpoints` chỉ nhận TCP 443 từ CIDR VPC, không rule egress.
@@ -209,7 +211,9 @@ thứ còn đi qua NAT ở §6 của phụ lục đó.
   IAM và RCP vẫn giữ nó.
 - Private DNS đổi phân giải cho cả VPC: `sts.<region>.amazonaws.com`, `api.ecr.<region>.amazonaws.com`, `*.dkr.ecr.<region>.amazonaws.com` và các
   tên khác của bảng trả IP ENI trong dải private. NetworkPolicy chỉ mở 443 tới địa chỉ công khai (trừ dải private) thì chặn pod gọi các tên này;
-  chart mở thêm TCP 443 tới value `awsEndpointCidrs` (CIDR VPC trên eks), theo §5 của ADR.
+  chart mở thêm TCP 443 tới value `awsEndpointCidrs` (CIDR VPC trên eks), theo §5 của ADR. Release `media-worker`
+  (chart `svp-service`) mở bằng một mục `{cidr: <CIDR VPC>, ports: [443]}` trong `externalPeers.s3` của values eks;
+  cái giá: pod tới được TCP 443 của mọi IP trong VPC.
 - NACL không đổi: ENI nằm ở tầng private, NACL private đã nhận TCP mọi cổng từ CIDR VPC (local `nacl_from_vpc`) và cho mọi đích ra, nên caller ở
   subnet private khác AZ tới được ENI và nhận được trả lời; test `interface_endpoints` kiểm entry đó.
 

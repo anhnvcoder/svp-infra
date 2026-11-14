@@ -286,7 +286,7 @@ resource "aws_vpc_endpoint" "guardduty_data" {
 locals {
   interface_endpoint_services = [
     "sts", "eks-auth", "secretsmanager", "logs", "ssm", "ssmmessages", "ec2messages", "ecr.api", "ecr.dkr", "ec2",
-    "elasticloadbalancing", "aps-workspaces", "aps", "xray", "sqs",
+    "elasticloadbalancing", "aps-workspaces", "aps", "xray", "sqs", "mediaconvert",
   ]
 
   # The first zones of the private tier, the zone of the single NAT gateway first. A list of known length: the subnet

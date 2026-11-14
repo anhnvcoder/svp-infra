@@ -20,6 +20,10 @@
 #    Gateway svp of svp-edge and svp-cluster's TargetGroupBinding svp-envoy. Waits, with LBC and Envoy Gateway running,
 #    until no LoadBalancer Service, TargetGroupBinding or LBC load balancer is left (DNS records are root env's).
 
+#    Between the workloads and the Gateway, with media-worker gone (no new job), every job of MediaConvert queue
+#    svp-<env> still SUBMITTED or PROGRESSING is cancelled, and it waits until none is: such a job blocks the queue's
+#    delete and writes into the media bucket the destroy empties. Prints how many it cancelled.
+
 # 3. Every PVC of every namespace (volumeClaimTemplates: Argo CD never prunes them), with the EBS CSI driver running and
 #    svp-cluster's namespaces and StorageClass still there. Waits until no PVC, no PV of the driver and no EBS volume
 #    the driver made for the cluster are left.
@@ -58,6 +62,8 @@ platform_wave_limit=300
 ack_limit=300
 # The terminationGracePeriod of the NodePool (10 minutes) plus the time EC2 takes to end an instance.
 karpenter_limit=${SVP_KARPENTER_LIMIT:-900}
+mc_queue=svp-$env_name
+mc_limit=300
 
 step "pre-destroy.sh: account and cluster $context"
 check_account
@@ -185,6 +191,23 @@ ack_running() {
     and any(.status.conditions[]?; .type == "Ready" and .status == "True"))' <<<"$out" >/dev/null
 }
 
+# mc_jobs: "id status" of each job of MediaConvert queue $mc_queue still SUBMITTED or PROGRESSING. An error of
+# MediaConvert (no permission, throttled) is a FAIL that names the call, never an empty answer read as no job.
+mc_jobs() {
+  local s out
+  for s in SUBMITTED PROGRESSING; do
+    out=$(aws_ mediaconvert list-jobs --queue "$mc_queue" --status "$s" --output json) ||
+      fail "list the $s jobs of MediaConvert queue $mc_queue (error above)"
+    printing || jq -r '.Jobs[]? | "\(.Id) \(.Status)"' <<<"$out"
+  done
+}
+# Run in the script's shell by wait_until, so that the FAIL of mc_jobs ends the script rather than the wait.
+mc_jobs_gone() {
+  local left
+  left=$(mc_jobs) || exit 1
+  [ -z "$left" ]
+}
+
 app_gone() {
   local out
   out=$(kc -n argocd get application "$1" --ignore-not-found -o name) || return 1
@@ -274,7 +297,7 @@ way_out() {
 }
 trap 'way_out $?' EXIT
 
-step "pre-destroy.sh 2/5: the rules and alerting of AMP while ACK runs, workload Applications, then Gateway svp, while LBC and Envoy Gateway run"
+step "pre-destroy.sh 2/5: the rules and alerting of AMP while ACK runs, workload Applications, jobs of MediaConvert, then Gateway svp, while LBC and Envoy Gateway run"
 ack_crd=$(kc get crd rulegroupsnamespaces.prometheusservice.services.k8s.aws --ignore-not-found -o name) || fail "read the CRDs"
 if printing || [ -n "$ack_crd" ]; then
   ack_up=
@@ -310,6 +333,31 @@ if [ -n "$argocd" ]; then
   delete_apps "$wave_limit" workload ||
     fail "Application(s)$left_apps not gone after $wave_limit s: kubectl --context $context -n argocd get application <name> -o yaml (status.operationState, finalizers)"
   ok "every workload Application deleted"
+fi
+queues=$(aws_ mediaconvert list-queues --output json) || fail "list the queues of MediaConvert (error above)"
+if printing || jq -e --arg q "$mc_queue" 'any(.Queues[]?; .Name == $q)' <<<"$queues" >/dev/null; then
+  jobs=$(mc_jobs) || exit 1
+  printing && jobs='<each-job-above> <its-status>'
+  cancelled=0
+  while read -r id _; do
+    [ -n "$id" ] || continue
+    if ! aws_ mediaconvert cancel-job --id "$id" >/dev/null; then
+      # A job may end between the list and its cancel: that one is not a failure.
+      job=$(aws_ mediaconvert get-job --id "$id" --output json) || fail "read job $id of MediaConvert queue $mc_queue (error above)"
+      st=$(jq -r '.Job.Status' <<<"$job")
+      case $st in
+        SUBMITTED | PROGRESSING) fail "cancel job $id of MediaConvert queue $mc_queue, still $st (error above)" ;;
+      esac
+      note "job $id of MediaConvert queue $mc_queue ended $st before its cancel"
+      continue
+    fi
+    cancelled=$((cancelled + 1))
+  done <<<"$jobs"
+  wait_until "no job of MediaConvert queue $mc_queue is SUBMITTED or PROGRESSING" "$mc_limit" mc_jobs_gone ||
+    fail "jobs of MediaConvert queue $mc_queue still in flight after $mc_limit s: $(mc_jobs | oneline)"
+  ok "$cancelled job(s) of MediaConvert queue $mc_queue cancelled, none in flight"
+else
+  ok "no MediaConvert queue $mc_queue: no job to cancel"
 fi
 gw_crd=$(kc get crd gateways.gateway.networking.k8s.io --ignore-not-found -o name) || fail "read the CRDs"
 if printing || [ -n "$gw_crd" ]; then

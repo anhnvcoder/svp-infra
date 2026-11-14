@@ -201,16 +201,67 @@ case "$1 $2" in
       [ "$left" != karpenter ] ||
         echo '{"InstanceProfileName":"svp-stg_1234567890","Path":"/karpenter/ap-southeast-1/svp-stg/uid/","Roles":[{"RoleName":"svp-stg-karpenter-node"}]}'
     } | jq -s '{InstanceProfiles: .}' ;;
+  # FAKE_LEFTOVER=transcode: what module transcode of root env makes, left (MediaConvert queue and role, rule, both
+  # queues, alarm) with the interface endpoint mediaconvert.
   "sqs list-queues")
-    if [ "$left" = karpenter ]; then echo "{\"QueueUrls\":[\"https://sqs.ap-southeast-1.amazonaws.com/$account/svp-stg-karpenter\"]}"; else echo '{}'; fi ;;
-  # The rule GuardDuty manages for the Malware Protection plan of uploads is there whatever is left: it is GuardDuty's.
+    if [ "$left" = karpenter ]; then echo "{\"QueueUrls\":[\"https://sqs.ap-southeast-1.amazonaws.com/$account/svp-stg-karpenter\"]}"
+    elif [ "$left" = transcode ]; then
+      printf 'https://sqs.ap-southeast-1.amazonaws.com/%s/svp-stg-transcode-events%s\n' "$account" "" "$account" -dlq | jq -R . | jq -s '{QueueUrls: .}'
+    else echo '{}'; fi ;;
+  # MediaConvert: the account's own queue Default always; queue svp-<env> while $FAKE_STATE/mc-queue is there or
+  # FAKE_LEFTOVER=transcode. Its jobs are $FAKE_STATE/mc-jobs ("id status [ends]": ends, the job completes as its cancel
+  # arrives); FAKE_MC_DENIED, list-jobs is refused; FAKE_MC_THROTTLED, cancel-job is throttled.
+  "mediaconvert list-queues")
+    {
+      echo '{"Name":"Default","Status":"ACTIVE","PricingPlan":"ON_DEMAND"}'
+      if [ -e "$FAKE_STATE/mc-queue" ] || [ "$left" = transcode ]; then
+        jq -n --arg n "svp-$envname" '{Name: $n, Status: "ACTIVE", PricingPlan: "ON_DEMAND"}'
+      fi
+    } | jq -s '{Queues: .}' ;;
+  "mediaconvert list-jobs")
+    [ -z "${FAKE_MC_DENIED:-}" ] ||
+      { echo "fake aws: An error occurred (ForbiddenException) when calling the ListJobs operation" >&2; exit 254; }
+    mq= ms= prev=
+    for a in "$@"; do case $prev in --queue) mq=$a ;; --status) ms=$a ;; esac; prev=$a; done
+    [ "$mq" = "svp-$envname" ] || { echo "fake aws: list-jobs of queue '$mq'" >&2; exit 98; }
+    touch "$FAKE_STATE/mc-jobs"
+    awk -v s="$ms" '$2 == s { print $1, $2 }' "$FAKE_STATE/mc-jobs" |
+      while read -r i st; do jq -n --arg i "$i" --arg s "$st" '{Id: $i, Status: $s}'; done | jq -s '{Jobs: .}' ;;
+  "mediaconvert cancel-job")
+    [ -z "${FAKE_MC_THROTTLED:-}" ] ||
+      { echo "fake aws: An error occurred (TooManyRequestsException) when calling the CancelJob operation" >&2; exit 254; }
+    if [ -n "$(awk -v i="$4" '$1 == i && $3 == "ends"' "$FAKE_STATE/mc-jobs")" ]; then
+      awk -v i="$4" '$1 == i { $2 = "COMPLETE"; $3 = "" } { print }' "$FAKE_STATE/mc-jobs" >"$FAKE_STATE/mc-jobs.new"
+      mv "$FAKE_STATE/mc-jobs.new" "$FAKE_STATE/mc-jobs"
+      echo "fake aws: An error occurred (BadRequestException) when calling the CancelJob operation" >&2; exit 254
+    fi
+    awk -v i="$4" '$1 == i { $2 = "CANCELED" } { print }' "$FAKE_STATE/mc-jobs" >"$FAKE_STATE/mc-jobs.new"
+    mv "$FAKE_STATE/mc-jobs.new" "$FAKE_STATE/mc-jobs"
+    echo '{}' ;;
+  "mediaconvert get-job") awk -v i="$4" '$1 == i { print $2 }' "$FAKE_STATE/mc-jobs" | jq -R --arg i "$4" '{Job: {Id: $i, Status: .}}' ;;
+  # The rule GuardDuty manages for the Malware Protection plan of uploads, and a rule of aws/baseline, are there
+  # whatever is left: the first is GuardDuty's, the second stays between sessions (Stack=security-baseline).
+  # FAKE_LEFTOVER=mediaconvert-rule: a destroy that stopped after removing its target left the rule of job states alone.
   "events list-rules")
     prefix=$(sed -n 's/.* --name-prefix \([^ ]*\) .*/\1/p' <<<" $* ")
     {
       echo '{"Name":"DO-NOT-DELETE-AmazonGuardDutyMalwareProtectionS3ManagedRule-fake"}'
+      echo '{"Name":"svp-security-denied-storage"}'
       [ "$left" != karpenter ] || echo '{"Name":"KarpenterSpotInterrupt-2026"}'
-    } | jq -s --arg p "$prefix" '{Rules: map(select(.Name | startswith($p)))}' ;;
-  "events list-targets-by-rule") echo '{"Targets":[{"Id":"KarpenterInterruptionQueueTarget"}]}' ;;
+      case $left in transcode | mediaconvert-rule) echo '{"Name":"svp-stg-mediaconvert-job-state"}' ;; esac
+    } | jq -s --arg p "$prefix" --arg a "arn:aws:events:$region:$account:rule/" \
+      '{Rules: map(select(.Name | startswith($p)) | . + {Arn: ($a + .Name)})}' ;;
+  "events list-tags-for-resource")
+    case $4 in
+      *:rule/svp-security-*) echo '{"Tags":[{"Key":"Project","Value":"svp"},{"Key":"Stack","Value":"security-baseline"}]}' ;;
+      *) echo '{"Tags":[{"Key":"Project","Value":"svp"},{"Key":"Stack","Value":"stg"}]}' ;;
+    esac ;;
+  "events list-targets-by-rule")
+    case "$4 $left" in
+      "svp-stg-mediaconvert-job-state mediaconvert-rule") echo '{"Targets":[]}' ;;
+      svp-*) echo '{"Targets":[{"Id":"svp-stg-transcode-events"}]}' ;;
+      *) echo '{"Targets":[{"Id":"KarpenterInterruptionQueueTarget"}]}' ;;
+    esac ;;
   # FAKE_LEFTOVER=alarm: an alarm of the lab and the target tracking alarm of MSK's storage, beside another one's. In
   # us-east-1 of prd, the DNSSEC alarms aws/accounts/prd keeps; FAKE_LEFTOVER=us-east-1, an alarm of root env there.
   "cloudwatch describe-alarms")
@@ -222,6 +273,8 @@ case "$1 $2" in
       elif [ "$left" = alarm ]; then
         echo '{"AlarmName":"svp-stg-rds-storage-low"}'
         echo "{\"AlarmName\":\"TargetTracking-arn:aws:kafka:ap-southeast-1:$account:cluster/svp-stg/c-fake-AlarmHigh-0a1b\"}"
+      elif [ "$left" = transcode ]; then
+        echo '{"AlarmName":"svp-stg-transcode-events-dlq"}'
       fi
     } | jq -s --arg p "arn:aws:cloudwatch:$region:$account:alarm:" '{MetricAlarms: map(. + {AlarmArn: ($p + .AlarmName)})}' ;;
   # The DNSSEC alarms carry Stack=baseline, the alarms of root env their env's Stack, Application Auto Scaling's none.
@@ -286,6 +339,8 @@ case "$1 $2" in
   "ec2 describe-vpc-endpoints")
     if [ "$left" = interface-endpoint ] && [[ "$*" == *tag:Name,Values=svp-* ]]; then
       echo '{"VpcEndpoints":[{"VpcEndpointId":"vpce-0sts","VpcEndpointType":"Interface","ServiceName":"com.amazonaws.ap-southeast-1.sts","State":"available","Tags":[{"Key":"Name","Value":"svp-stg-sts"}]}]}'
+    elif [ "$left" = transcode ] && [[ "$*" == *tag:Project* ]]; then
+      echo '{"VpcEndpoints":[{"VpcEndpointId":"vpce-0mc","VpcEndpointType":"Interface","ServiceName":"com.amazonaws.ap-southeast-1.mediaconvert","State":"available"}]}'
     elif [ "$left" = endpoint ] && [[ "$*" == *tag:Project* ]]; then
       echo '{"VpcEndpoints":[{"VpcEndpointId":"vpce-0fake","VpcEndpointType":"Interface","ServiceName":"com.amazonaws.ap-southeast-1.guardduty-data","State":"available"},{"VpcEndpointId":"vpce-0gone","VpcEndpointType":"Gateway","ServiceName":"com.amazonaws.ap-southeast-1.s3","State":"deleted"}]}'
     else
@@ -509,7 +564,16 @@ case "$1 $2" in
     {
       echo other-role
       [ "$stack" != baseline ] || printf '%s\n' svp-ci-ecr-release-backend svp-ci-ecr-rescan-backend
+      case $left in transcode | mediaconvert-role) echo svp-stg-mediaconvert ;; esac
     } | jq -R '{RoleName: .}' | jq -s '{Roles: .}' ;;
+  # FAKE_LEFTOVER=transcode: the role of MediaConvert with its inline policy; mediaconvert-role: a destroy that stopped
+  # after deleting the policy left the role alone.
+  "iam list-role-policies")
+    case "$4 $left" in
+      "svp-stg-mediaconvert transcode") echo '{"PolicyNames":["s3"]}' ;;
+      "svp-stg-mediaconvert mediaconvert-role") echo '{"PolicyNames":[]}' ;;
+      *) echo "fake aws: inline policies of role $4 read" >&2; exit 98 ;;
+    esac ;;
   "iam list-role-tags")
     case $4 in
       svp-ci-*) echo '{"Tags":[{"Key":"Project","Value":"svp"},{"Key":"Stack","Value":"baseline"}]}' ;;
@@ -1243,8 +1307,9 @@ expect "bootstrap.sh secrets refuses cluster values without edgeTargetGroupArn (
 new_session
 printf '%s\n' "0 cert-manager" "0 envoy-gateway" "0 external-secrets" "0 karpenter" "1 svp-cluster" "1 aws-load-balancer-controller" \
   "2 keda" "2 argo-rollouts" "2 kyverno" "2 kube-prometheus-stack" "3 svp-policy" "3 loki" \
-  "3 ack-prometheusservice" "4 svp-data" "5 svp-observability" "6 otel-collector" "7 gateway" "7 web" >"$state/apps"
-touch "$state/appset" "$state/root" "$state/svp-apps" "$state/lb" "$state/tgb" "$state/ack-up"
+  "3 ack-prometheusservice" "4 svp-data" "5 svp-observability" "6 otel-collector" "7 gateway" "7 media-worker" "7 web" >"$state/apps"
+touch "$state/appset" "$state/root" "$state/svp-apps" "$state/lb" "$state/tgb" "$state/ack-up" "$state/mc-queue"
+printf '%s\n' "job-1 SUBMITTED" "job-2 PROGRESSING" "job-0 COMPLETE" >"$state/mc-jobs"
 printf '%s\n' "RuleGroupsNamespace svp-obs svp-alerts ws-0fake" "RuleGroupsNamespace svp-obs slo-generated ws-0fake" \
   "AlertManagerDefinition svp-obs svp-alerts ws-0fake" >"$state/ack-crs"
 printf '%s\n' "svp-data data-0" "svp-obs prometheus-db-0" >"$state/pvcs"
@@ -1297,7 +1362,15 @@ expect "pre-destroy.sh: ACK left nothing; no finalizer cleared, nothing listed f
 expect "pre-destroy.sh marks pre-destroy-start and pre-destroy-done" sh -c 'has() { awk -F "\t" -v e="$2" "\$3 == e { f = 1 } END { exit !f }" "$1"; }; has "$1" pre-destroy-start && has "$1" pre-destroy-done' _ "$SVP_SESSION_DIR/timeline.tsv"
 expect "pre-destroy.sh: no way-out note when every step passes; next is root gitops" \
   sh -c '! grep -q -- "--leftovers" "$1" && grep -q "ready for: aws/scripts/tf.sh stg gitops plan --destroy" "$1"' _ "$work/pre.out"
-rm -f "$state/ack-crs" "$state/ack-up"
+expect "pre-destroy.sh: media-worker deleted, then each job SUBMITTED or PROGRESSING of queue svp-stg cancelled, before the Gateway" \
+  sh -c 'b() { a=$(grep -nE -- "$2" "$1" | head -n 1 | cut -d: -f1); c=$(grep -nE -- "$3" "$1" | head -n 1 | cut -d: -f1); [ -n "$a" ] && [ -n "$c" ] && [ "$a" -lt "$c" ]; }
+    b "$1" "delete application media-worker " "^aws mediaconvert list-jobs --queue svp-stg --status SUBMITTED --output json --region ap-southeast-1$" &&
+    grep -q "^aws mediaconvert list-jobs --queue svp-stg --status PROGRESSING --output json --region ap-southeast-1$" "$1" &&
+    b "$1" "^aws mediaconvert cancel-job --id job-1 --region ap-southeast-1$" "delete gateway svp" &&
+    b "$1" "^aws mediaconvert cancel-job --id job-2 --region ap-southeast-1$" "delete gateway svp" &&
+    ! grep -q "cancel-job --id job-0" "$1" && [ "$(awk "\$2 == \"CANCELED\"" "$2/mc-jobs" | wc -l | tr -d " ")" = 2 ]' _ "$log" "$state"
+expect "pre-destroy.sh prints how many jobs it cancelled" grep -q '^ok    2 job(s) of MediaConvert queue svp-stg cancelled, none in flight$' "$work/pre.out"
+rm -f "$state/ack-crs" "$state/ack-up" "$state/mc-jobs"
 
 new_session
 : >"$state/apps"
@@ -1393,6 +1466,41 @@ expect "pre-destroy.sh with no pod of ACK: their finalizers cleared, then svp-ob
 expect "pre-destroy.sh with no pod of ACK marks pre-destroy-done" has_mark pre-destroy-done
 rm -f "$state/ack-crs"
 : >"$state/apps"
+
+# The jobs of MediaConvert: none, none of a queue, one that ends before its cancel, MediaConvert refusing or throttled.
+new_session
+FAKE_NO_ARGOCD=1 bash "$here/pre-destroy.sh" stg >"$work/pre.out" 2>&1 || bad "pre-destroy.sh stg exits 0 with no job ($(tail -n 3 "$work/pre.out"))"
+expect "pre-destroy.sh with no job: cancels nothing, prints 0" \
+  sh -c 'grep -q "^ok    0 job(s) of MediaConvert queue svp-stg cancelled, none in flight$" "$1" && ! grep -q "mediaconvert cancel-job" "$2"' _ "$work/pre.out" "$log"
+rm -f "$state/mc-queue"
+new_session
+FAKE_NO_ARGOCD=1 bash "$here/pre-destroy.sh" stg >"$work/pre.out" 2>&1 || bad "pre-destroy.sh stg exits 0 with no queue ($(tail -n 3 "$work/pre.out"))"
+expect "pre-destroy.sh without queue svp-stg says so and lists no job" \
+  sh -c 'grep -q "^ok    no MediaConvert queue svp-stg: no job to cancel$" "$1" && ! grep -q "mediaconvert list-jobs" "$2"' _ "$work/pre.out" "$log"
+touch "$state/mc-queue"
+printf '%s\n' "job-3 PROGRESSING ends" "job-4 SUBMITTED" >"$state/mc-jobs"
+new_session
+FAKE_NO_ARGOCD=1 bash "$here/pre-destroy.sh" stg >"$work/pre.out" 2>&1 || bad "pre-destroy.sh stg exits 0 when a job ends before its cancel ($(tail -n 3 "$work/pre.out"))"
+expect "pre-destroy.sh: a job that ends before its cancel is read again and noted, the other cancelled" \
+  sh -c 'grep -q "^note  job job-3 of MediaConvert queue svp-stg ended COMPLETE before its cancel$" "$1" &&
+    grep -q "^aws mediaconvert get-job --id job-3 --output json --region ap-southeast-1$" "$2" &&
+    grep -q "^ok    1 job(s) of MediaConvert queue svp-stg cancelled, none in flight$" "$1"' _ "$work/pre.out" "$log"
+echo "job-5 SUBMITTED" >"$state/mc-jobs"
+new_session
+FAKE_NO_ARGOCD=1 FAKE_MC_THROTTLED=1 bash "$here/pre-destroy.sh" stg >"$work/pre.out" 2>&1 &&
+  bad "pre-destroy.sh fails when MediaConvert throttles a cancel"
+expect "pre-destroy.sh throttled at a cancel: the FAIL names the job, then the way out; no PVC, no pre-destroy-done" \
+  sh -c 'grep -q "^FAIL  cancel job job-5 of MediaConvert queue svp-stg, still SUBMITTED (error above)$" "$1" &&
+    tail -n 1 "$1" | grep -q "^note  fix what the FAIL above names, then aws/scripts/pre-destroy.sh stg again; " &&
+    ! grep -q "get pvc" "$2" && ! awk -F "\t" "\$3 == \"pre-destroy-done\" { f = 1 } END { exit !f }" "$3/timeline.tsv"' _ "$work/pre.out" "$log" "$SVP_SESSION_DIR"
+new_session
+FAKE_NO_ARGOCD=1 FAKE_MC_DENIED=1 bash "$here/pre-destroy.sh" stg >"$work/pre.out" 2>&1 &&
+  bad "pre-destroy.sh fails when MediaConvert refuses to list the jobs"
+expect "pre-destroy.sh refused the list of jobs: the FAIL names the call, then the way out; no cancel, no PVC" \
+  sh -c 'grep -q "^FAIL  list the SUBMITTED jobs of MediaConvert queue svp-stg (error above)$" "$1" &&
+    tail -n 1 "$1" | grep -q "^note  fix what the FAIL above names, then aws/scripts/pre-destroy.sh stg again; " &&
+    ! grep -qE "mediaconvert cancel-job|get pvc" "$2"' _ "$work/pre.out" "$log"
+rm -f "$state/mc-queue" "$state/mc-jobs"
 
 # --- ecr-warm.sh --------------------------------------------------------------------------------------------------
 # Pinned digests whose hex holds long runs of decimal digits, as real ones may: none of them is taken for an account id.
@@ -1560,6 +1668,10 @@ for e in stg prd mgmt; do
   fi
   expect "sweep.sh $e reports neither another project's Malware Protection plan nor GuardDuty's own EventBridge rule" \
     sh -c 'grep -q "^ok    GuardDuty Malware Protection plans: none$" "$1" && ! grep -q "plan-other\|DO-NOT-DELETE" "$1"' _ "$work/sweep.out"
+  expect "sweep.sh $e prints the rule svp-security-denied-storage of aws/baseline as kept (Stack=security-baseline), reads none of its targets" \
+    sh -c 'grep -q "^kept  EventBridge rule svp-security-denied-storage (Stack=security-baseline)$" "$1" && grep -q "^ok    EventBridge rules: none$" "$1" &&
+      grep -q "^ok    EventBridge rule targets: none$" "$1" && [ "$(grep -c "^kept  EventBridge rule " "$1")" = 1 ] &&
+      ! grep -q "list-targets-by-rule --rule svp-security-" "$2"' _ "$work/sweep.out" "$log"
   expect "sweep.sh $e reads WAF of CloudFront in us-east-1" grep -q '^aws wafv2 list-web-acls --scope CLOUDFRONT --output json --region us-east-1$' "$log"
   expect "sweep.sh $e reads the pricing plan subscriptions in us-east-1" \
     sh -c 'grep -q "^aws pricing-plan-manager list-subscriptions --output json --region us-east-1$" "$1"' _ "$log"
@@ -1681,9 +1793,11 @@ expect "sweep.sh stg fails on what Karpenter made outside the state, each with t
     grep -q "delete: AWS_PROFILE=anhnv-stg aws iam remove-role-from-instance-profile --instance-profile-name svp-stg_1234567890 --role-name svp-stg-karpenter-node --region ap-southeast-1 && AWS_PROFILE=anhnv-stg aws iam delete-instance-profile --instance-profile-name svp-stg_1234567890 --region ap-southeast-1$" "$2" &&
     ! grep -q "other-profile" "$2" &&
     grep -q "delete: AWS_PROFILE=anhnv-stg aws sqs delete-queue --queue-url https://sqs.ap-southeast-1.amazonaws.com/111111111111/svp-stg-karpenter --region ap-southeast-1$" "$2" &&
-    grep -q "delete: AWS_PROFILE=anhnv-stg aws events remove-targets --rule KarpenterSpotInterrupt-2026 --ids KarpenterInterruptionQueueTarget --region ap-southeast-1 && AWS_PROFILE=anhnv-stg aws events delete-rule --name KarpenterSpotInterrupt-2026 --region ap-southeast-1$" "$2" &&
+    grep -q "delete: AWS_PROFILE=anhnv-stg aws events remove-targets --rule KarpenterSpotInterrupt-2026 --ids KarpenterInterruptionQueueTarget --region ap-southeast-1$" "$2" &&
+    grep -q "delete: AWS_PROFILE=anhnv-stg aws events delete-rule --name KarpenterSpotInterrupt-2026 --region ap-southeast-1$" "$2" &&
     grep -q "^FAIL  EC2 launch templates: 1 left$" "$2" && grep -q "^FAIL  IAM instance profiles of Karpenter: 1 left$" "$2" &&
-    grep -q "^FAIL  SQS queues: 1 left$" "$2" && grep -q "^FAIL  EventBridge rules of Karpenter: 1 left$" "$2"' _ "$here" "$work/sweep.out"
+    grep -q "^FAIL  SQS queues: 1 left$" "$2" && grep -q "^FAIL  EventBridge rule targets: 1 left$" "$2" &&
+    grep -q "^FAIL  EventBridge rules: 1 left$" "$2"' _ "$here" "$work/sweep.out"
 expect "sweep.sh stg fails on an alarm of the lab and the target tracking alarm of MSK, leaves another one's" \
   sh -c '! FAKE_LEFTOVER=alarm bash "$1/sweep.sh" stg >"$2" 2>&1 && grep -q "^FAIL  CloudWatch alarms: 2 left$" "$2" &&
     grep -q "delete: AWS_PROFILE=anhnv-stg aws cloudwatch delete-alarms --alarm-names svp-stg-rds-storage-low --region ap-southeast-1$" "$2" &&
@@ -1777,6 +1891,53 @@ expect "sweep.sh stg fails on an OIDC provider of root env, keeps GitHub's" \
     grep -q "^        arn:aws:iam::111111111111:oidc-provider/oidc.eks.ap-southeast-1.amazonaws.com/id/0FAKE Stack=stg$" "$2" &&
     grep -q "delete: AWS_PROFILE=anhnv-stg aws iam delete-open-id-connect-provider --open-id-connect-provider-arn arn:aws:iam::111111111111:oidc-provider/oidc.eks.ap-southeast-1.amazonaws.com/id/0FAKE --region us-east-1$" "$2" &&
     grep -q "^kept  IAM OIDC provider .*token.actions.githubusercontent.com (Stack=baseline)$" "$2"' _ "$here" "$work/sweep.out"
+expect "sweep.sh stg: the queue Default of MediaConvert is the account's, not a leftover" \
+  sh -c 'bash "$1/sweep.sh" stg >"$2" 2>&1 && grep -q "^ok    MediaConvert queues: none$" "$2"' _ "$here" "$work/sweep.out"
+FAKE_LEFTOVER=transcode bash "$here/sweep.sh" stg >"$work/sweep.out" 2>&1 && bad "sweep.sh stg fails on what module transcode left"
+expect "sweep.sh stg fails on the MediaConvert queue svp-stg, with its delete command" \
+  sh -c 'grep -q "^FAIL  MediaConvert queues: 1 left$" "$1" && grep -q "^        svp-stg ACTIVE ON_DEMAND$" "$1" &&
+    grep -q "delete: AWS_PROFILE=anhnv-stg aws mediaconvert delete-queue --name svp-stg --region ap-southeast-1$" "$1" && ! grep -q "Default" "$1"' _ "$work/sweep.out"
+expect "sweep.sh stg fails on the role of MediaConvert and its inline policy, the policy listed first, both deleted in us-east-1" \
+  sh -c 'grep -q "^FAIL  IAM inline policies of MediaConvert roles: 1 left$" "$1" && grep -q "^        svp-stg-mediaconvert s3$" "$1" &&
+    grep -q "delete: AWS_PROFILE=anhnv-stg aws iam delete-role-policy --role-name svp-stg-mediaconvert --policy-name s3 --region us-east-1$" "$1" &&
+    grep -q "^FAIL  IAM roles of MediaConvert: 1 left$" "$1" &&
+    grep -q "delete: AWS_PROFILE=anhnv-stg aws iam delete-role --role-name svp-stg-mediaconvert --region us-east-1$" "$1"' _ "$work/sweep.out"
+expect "sweep.sh stg lists the inline policies of the MediaConvert roles before the roles" \
+  before "$work/sweep.out" '^FAIL  IAM inline policies of MediaConvert roles: ' '^FAIL  IAM roles of MediaConvert: '
+expect "sweep.sh stg fails on the rule of job states and its target, each with its command, and keeps the rule of aws/baseline" \
+  sh -c 'grep -q "^FAIL  EventBridge rule targets: 1 left$" "$1" && grep -q "^        svp-stg-mediaconvert-job-state svp-stg-transcode-events$" "$1" &&
+    grep -q "delete: AWS_PROFILE=anhnv-stg aws events remove-targets --rule svp-stg-mediaconvert-job-state --ids svp-stg-transcode-events --region ap-southeast-1$" "$1" &&
+    grep -q "^FAIL  EventBridge rules: 1 left$" "$1" &&
+    grep -q "delete: AWS_PROFILE=anhnv-stg aws events delete-rule --name svp-stg-mediaconvert-job-state --region ap-southeast-1$" "$1" &&
+    grep -q "^kept  EventBridge rule svp-security-denied-storage (Stack=security-baseline)$" "$1" && ! grep -q "remove-targets --rule svp-security-" "$1"' _ "$work/sweep.out"
+expect "sweep.sh stg lists the targets of the EventBridge rules before the rules" \
+  before "$work/sweep.out" '^FAIL  EventBridge rule targets: ' '^FAIL  EventBridge rules: '
+expect "sweep.sh stg fails on the queue of job states and its dead-letter queue" \
+  sh -c 'grep -q "^FAIL  SQS queues: 2 left$" "$1" && grep -q "^        https://sqs.ap-southeast-1.amazonaws.com/111111111111/svp-stg-transcode-events$" "$1" &&
+    grep -q "delete: AWS_PROFILE=anhnv-stg aws sqs delete-queue --queue-url https://sqs.ap-southeast-1.amazonaws.com/111111111111/svp-stg-transcode-events-dlq --region ap-southeast-1$" "$1"' _ "$work/sweep.out"
+expect "sweep.sh stg fails on the alarm of the dead-letter queue" \
+  sh -c 'grep -q "^FAIL  CloudWatch alarms: 1 left$" "$1" &&
+    grep -q "delete: AWS_PROFILE=anhnv-stg aws cloudwatch delete-alarms --alarm-names svp-stg-transcode-events-dlq --region ap-southeast-1$" "$1"' _ "$work/sweep.out"
+expect "sweep.sh stg fails on the interface endpoint mediaconvert" \
+  sh -c 'grep -q "^FAIL  VPC endpoints: 1 left$" "$1" && grep -q "^        vpce-0mc Interface com.amazonaws.ap-southeast-1.mediaconvert available$" "$1" &&
+    grep -q "delete: AWS_PROFILE=anhnv-stg aws ec2 delete-vpc-endpoints --vpc-endpoint-ids vpce-0mc --region ap-southeast-1$" "$1"' _ "$work/sweep.out"
+expect "sweep.sh stg: a role of MediaConvert whose policy a destroy already deleted gets delete-role alone" \
+  sh -c '! FAKE_LEFTOVER=mediaconvert-role bash "$1/sweep.sh" stg >"$2" 2>&1 &&
+    grep -q "^ok    IAM inline policies of MediaConvert roles: none$" "$2" && grep -q "^FAIL  IAM roles of MediaConvert: 1 left$" "$2" &&
+    grep -q "delete: AWS_PROFILE=anhnv-stg aws iam delete-role --role-name svp-stg-mediaconvert --region us-east-1$" "$2" &&
+    ! grep -q "delete-role-policy" "$2"' _ "$here" "$work/sweep.out"
+expect "sweep.sh stg: a rule of job states whose target a destroy already removed gets delete-rule alone" \
+  sh -c '! FAKE_LEFTOVER=mediaconvert-rule bash "$1/sweep.sh" stg >"$2" 2>&1 &&
+    grep -q "^ok    EventBridge rule targets: none$" "$2" && grep -q "^FAIL  EventBridge rules: 1 left$" "$2" &&
+    grep -q "delete: AWS_PROFILE=anhnv-stg aws events delete-rule --name svp-stg-mediaconvert-job-state --region ap-southeast-1$" "$2" &&
+    ! grep -q "remove-targets" "$2"' _ "$here" "$work/sweep.out"
+expect "sweep.sh --print stg: the queues of MediaConvert in the home region, its roles and their policies in us-east-1, the tags of each rule" \
+  sh -c 'bash "$1/sweep.sh" --print stg >"$2" 2>&1 && grep -q "^+ AWS_PROFILE=anhnv-stg aws mediaconvert list-queues --output json --region ap-southeast-1$" "$2" &&
+    grep -q "^+ AWS_PROFILE=anhnv-stg aws events list-rules --name-prefix svp- --output json --region ap-southeast-1$" "$2" &&
+    grep -q "^+ AWS_PROFILE=anhnv-stg aws events list-tags-for-resource --resource-arn .<its-ARN>. --output json --region ap-southeast-1$" "$2" &&
+    grep -q "^+ AWS_PROFILE=anhnv-stg aws events list-targets-by-rule --rule .<each-rule-above>. --output json --region ap-southeast-1$" "$2" &&
+    grep -q "^+ AWS_PROFILE=anhnv-stg aws iam list-role-policies --role-name .<each-role-above>. --output json --region us-east-1$" "$2" &&
+    [ "$(grep -c "^+ AWS_PROFILE=anhnv-stg aws iam list-roles --output json --region us-east-1$" "$2")" = 3 ]' _ "$here" "$work/print-sweep.out"
 expect "sweep.sh stops on another account before any other command" \
   sh -c '! FAKE_ACCOUNT=000000000000 bash "$1/sweep.sh" stg >/dev/null 2>&1' _ "$here"
 
