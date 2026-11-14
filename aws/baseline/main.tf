@@ -1,5 +1,5 @@
-# The security baseline of the five accounts of the organization, applied from the management account. What differs
-# between accounts is data in local.accounts; each account gets one call of the security-baseline module.
+# The security baseline of every account of the organization, applied from the management account. The accounts and
+# what differs between them are data in local.accounts; each account gets one call of the security-baseline module.
 # Design notes: aws/baseline/README.md.
 
 data "aws_partition" "current" {
@@ -31,6 +31,13 @@ locals {
       identity_center_region = var.sso_region
     }
     log-archive = {
+      ebs_kms_key_arn        = null
+      admin_events           = true
+      organization_events    = false
+      root_signin_regions    = ["us-east-1"]
+      identity_center_region = null
+    }
+    backup = {
       ebs_kms_key_arn        = null
       admin_events           = true
       organization_events    = false
@@ -87,6 +94,20 @@ module "log_archive" {
   organization_events    = local.accounts.log-archive.organization_events
   root_signin_regions    = local.accounts.log-archive.root_signin_regions
   identity_center_region = local.accounts.log-archive.identity_center_region
+}
+
+module "backup" {
+  source    = "../modules/security-baseline"
+  providers = { aws = aws.backup }
+
+  config_bucket_name     = local.config_bucket_name
+  log_archive_key_arn    = data.aws_kms_alias.log_archive.target_key_arn
+  security_event_bus_arn = local.security_event_bus_arn
+  ebs_kms_key_arn        = local.accounts.backup.ebs_kms_key_arn
+  admin_events           = local.accounts.backup.admin_events
+  organization_events    = local.accounts.backup.organization_events
+  root_signin_regions    = local.accounts.backup.root_signin_regions
+  identity_center_region = local.accounts.backup.identity_center_region
 }
 
 module "security" {

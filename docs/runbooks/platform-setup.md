@@ -151,7 +151,7 @@ Rule cache của GHCR, Docker Hub trỏ secret có credential (`credentialArn`);
 aws/scripts/check-account.sh stg
 cd aws/accounts/stg
 AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform init -backend-config=../../backend-stg.hcl
-AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform plan \
+AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform plan \
   -target='module.registry.aws_secretsmanager_secret.cache' -out=stg.tfplan
 ```
 
@@ -159,7 +159,7 @@ Mong `Plan: 2 to add, 0 to change, 0 to destroy`: đúng `module.registry.aws_se
 "Resource targeting is in effect" là đúng ý. Khác thì dừng, dán plan. Rồi:
 
 ```sh
-AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform apply stg.tfplan && rm stg.tfplan
+AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform apply stg.tfplan && rm stg.tfplan
 cd ../../..
 ```
 
@@ -168,7 +168,7 @@ Làm bước (6) cho account này, rồi quay lại lượt đủ:
 ```sh
 aws/scripts/check-account.sh stg
 cd aws/accounts/stg
-AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform plan -out=stg.tfplan
+AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform plan -out=stg.tfplan
 ```
 
 Mong chỉ thêm: stg `Plan: 46 to add, 0 to change, 0 to destroy`, prd `Plan: 44 to add, 0 to change, 0 to destroy`: danh sách ở
@@ -176,8 +176,9 @@ Mong chỉ thêm: stg `Plan: 46 to add, 0 to change, 0 to destroy`, prd `Plan: 4
 `change`, `destroy` hay tài nguyên của `module.baseline`, `module.alarms`: dừng, dán plan. Rồi:
 
 ```sh
-AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform apply stg.tfplan && rm stg.tfplan
-AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform plan                 # No changes.
+AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform apply stg.tfplan && rm stg.tfplan
+# Expect: No changes.
+AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform plan
 AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform output -json ci_role_arns | jq -r 'keys[]'
 cd ../../..
 for p in ghcr docker-hub quay k8s ecr-public; do

@@ -3,6 +3,11 @@ output "uploads_bucket" {
   value       = aws_s3_bucket.this["uploads"].id
 }
 
+output "uploads_kms_key_arn" {
+  description = "ARN of the KMS key alias/<name_prefix>-uploads, the default encryption of the uploads bucket: every role that reads or writes uploads needs it (MediaConvert through the transcode module)."
+  value       = aws_kms_key.uploads.arn
+}
+
 output "media_bucket" {
   description = "Name of the media bucket."
   value       = aws_s3_bucket.this["media"].id
@@ -25,6 +30,6 @@ output "video_service_policy_json" {
 }
 
 output "media_worker_policy_json" {
-  description = "S3 part of the IAM policy of media-worker, the MediaConvert bridge on AWS (JSON), for the role of its Pod Identity association."
+  description = "S3 and uploads key part of the IAM policy of media-worker, the MediaConvert bridge on AWS (JSON), for the role of its Pod Identity association."
   value       = data.aws_iam_policy_document.media_worker.json
 }

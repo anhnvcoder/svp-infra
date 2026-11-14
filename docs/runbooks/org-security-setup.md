@@ -2,11 +2,13 @@
 
 Áp lần đầu nền bảo mật của tổ chức AWS theo AWS Security Reference Architecture: hai account mới `svp-log-archive`, `svp-security`, OU
 `Security`, `Workloads/Prod`, `Workloads/NonProd`, policy của tổ chức, root tập trung, permission set chỉ đọc, dịch vụ phát hiện (cả Amazon
-Inspector quét ECR của mọi account thành viên), baseline của năm account; rồi kiểm dịch vụ bật, guardrail chặn đúng và cảnh báo tới email.
+Inspector quét ECR của mọi account thành viên), baseline của mọi account của tổ chức (bảng "Áp gì ở account nào" của
+[README `aws/baseline`](../../aws/baseline/README.md#áp-gì-ở-account-nào)); rồi kiểm dịch vụ bật, guardrail chặn đúng và cảnh báo tới email.
 Thiết kế: [ADR-0059](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0059-org-structure-guardrails.md) (account, OU, policy, root
 tập trung, permission set, baseline), [ADR-0060](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0060-org-detection-logging.md)
 (phát hiện, log, cảnh báo, chi phí) và [ADR-0062](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0062-ecr-registry-ci-oidc.md)
 §10 (Inspector). Tổ chức đã áp trước khi có Inspector: thêm nó theo [`platform-setup.md`](platform-setup.md#thứ-tự-áp-lần-đầu), bước (1), (2).
+Account `svp-backup` và Backup policy thêm sau runbook này, theo [`backup-setup.md`](backup-setup.md#thứ-tự-áp-lần-đầu).
 
 **Người học chạy mọi lệnh ở đây.** AI không chạy lệnh nào chạm account, kể cả lệnh chỉ đọc; AI đọc output dán lại. Lệnh `plan`, `apply` và
 mong đợi của từng plan nằm ở README của root; runbook này giữ thứ tự, điểm dừng và phần kiểm sau áp. Mọi lệnh chạy từ gốc repo này (`infra/`)
@@ -44,8 +46,8 @@ flowchart TD
      cả account đã đóng hay `SUSPENDED`; `security_contact`; `sso_user_name`, `sso_region` (README `aws/org`, mục Chuẩn bị).
    - `aws/security/security.auto.tfvars`: `security_alert_email`, hộp thư nhận mọi cảnh báo bảo mật.
    - `aws/baseline/baseline.auto.tfvars`: `sso_region` bằng giá trị của `org.auto.tfvars`.
-3. **Chi phí liên tục**: từ bước (5) dịch vụ phát hiện tính tiền mỗi tháng ở năm account, kể cả khi không có buổi; bước (1), (3), (6) thêm KMS
-   key. Đọc bảng ở [ADR-0060 §12](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0060-org-detection-logging.md#12-chi-phí-liên-tục)
+3. **Chi phí liên tục**: từ bước (5) dịch vụ phát hiện tính tiền mỗi tháng ở mọi account của tổ chức, kể cả khi không có buổi; bước (1),
+   (3), (6) thêm KMS key. Đọc bảng ở [ADR-0060 §12](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0060-org-detection-logging.md#12-chi-phí-liên-tục)
    và [phụ lục](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0060-org-detection-logging.md#12-chi-phí-liên-tục).
    Inspector tính theo digest image được quét ở registry của account env (không có registry thì $0):
    [ADR-0062 §11](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0062-ecr-registry-ci-oidc.md#11-chi-phí-registry).
@@ -64,7 +66,8 @@ aws/scripts/check-account.sh mgmt
 ```
 
 Tìm `ok    account <12 số> of mgmt, arn:aws:sts::<12 số>:assumed-role/AWSReservedSSO_…`. Từ bước (2) thêm hai biến
-`SVP_AWS_LOG_ACCOUNT_ID`, `SVP_AWS_SECURITY_ACCOUNT_ID`. Mở lại terminal giữa chừng: đặt lại cả năm biến và chạy lại `check-account.sh mgmt`.
+`SVP_AWS_LOG_ACCOUNT_ID`, `SVP_AWS_SECURITY_ACCOUNT_ID`. Mở lại terminal giữa chừng: đặt lại mọi biến của khối trên và hai biến của bước
+(2), rồi chạy lại `check-account.sh mgmt`.
 Mọi lệnh ghi của bước (1)–(6) chạy bằng `anhnv-sso` (root `aws/log-archive`, `aws/security`, `aws/baseline` vào account đích qua
 `OrganizationAccountAccessRole`); trước mỗi bước, chạy lại `check-account.sh mgmt`.
 
@@ -188,9 +191,12 @@ AWS_PROFILE=anhnv-security-ro aws securityhub list-members --region ap-southeast
 ```
 
 Mong: principal của GuardDuty, Security Hub, `config.amazonaws.com`, `config-multiaccountsetup.amazonaws.com`, Access Analyzer, Inspector
-(`inspector2.amazonaws.com`; trạng thái quét của từng account ở phần Inspector của "Kiểm nhanh" trên: chỉ ECR, ba thành viên `ENABLED`); ở root
+(`inspector2.amazonaws.com`; trạng thái quét của từng account ở phần Inspector của "Kiểm nhanh" trên: chỉ ECR, mọi account thành viên
+`ACTIVE` trừ `svp-security` là thành viên `ENABLED`); ở root
 `FullAWSAccess` với năm SCP `svp-*` (danh sách ở README [`org-policies`](../../aws/modules/org-policies/README.md)), `RCPFullAWSAccess` với
-`svp-data-perimeter`, `svp-ec2-baseline`, `svp-tags`; ở OU `Prod` `FullAWSAccess` với `svp-prod-guardrails`; bốn member Security Hub `Enabled`.
+`svp-data-perimeter`, `svp-ec2-baseline`, `svp-tags`; ở OU `Prod` `FullAWSAccess` với `svp-prod-guardrails`; mỗi account `ACTIVE` của tổ
+chức trừ `svp-security`, kể cả management, một member Security Hub `Enabled` (danh sách account: lệnh `list-accounts` ở bước 4 của mục
+[Gỡ có chủ đích](../../aws/org/README.md#gỡ-có-chủ-đích) của README `aws/org`).
 
 Chuẩn Security Hub và recorder Config của từng account, hai region (`anhnv-sso` là management; `svp-log-archive` hiện qua member Security Hub
 và nguồn aggregator ở trên):
@@ -265,7 +271,8 @@ AWS_PROFILE=anhnv-sso aws s3api list-objects-v2 --bucket "svp-cloudtrail-$SVP_AW
   --query 'max_by(Contents, &LastModified).LastModified' --output text
 ```
 
-Mong năm dòng (4 số cuối và `/` của management và bốn account thành viên): log mới của cả năm account vào bucket Log Archive, đọc được bằng
+Mong một dòng mỗi account `ACTIVE` của tổ chức, kể cả management (4 số cuối và `/`; danh sách account như mục 7a): log mới của mọi account vào
+bucket Log Archive, đọc được bằng
 `SvpLogReader` (quyền `kms:Decrypt` qua S3 chưa được thử ở lệnh này; đọc một object bằng `aws s3 cp … -` khi cần). Lệnh sau là lần ghi cuối vào
 bucket trail cũ của management: trước lúc apply bước (4) cộng vài phút giao log, không mới hơn.
 

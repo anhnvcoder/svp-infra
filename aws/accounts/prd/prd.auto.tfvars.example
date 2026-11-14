@@ -1,5 +1,6 @@
 # Copy to prd.auto.tfvars (ignored by git) and fill in. Never commit the real values: the repository is public.
-# The account id is not here: every command sets TF_VAR_account_id from SVP_AWS_PRD_ACCOUNT_ID (aws/accounts/README.md).
+# The account ids are not here: every command sets TF_VAR_account_id from SVP_AWS_PRD_ACCOUNT_ID and
+# TF_VAR_backup_account_id from SVP_AWS_BACKUP_ACCOUNT_ID (aws/accounts/README.md).
 alarm_email      = "you@svp.example"
 budget_emails    = ["you@svp.example"]
 budget_limit_usd = 20

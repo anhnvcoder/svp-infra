@@ -80,7 +80,7 @@ envname=${AWS_PROFILE#anhnv-}
 region= prev=
 for a in "$@"; do [ "$prev" != --region ] || region=$a; prev=$a; done
 case "$1 $2" in
-  wafv2\ * | pricing-plan-manager\ * | "logs describe-deliver"* | "iam list-open-id-connect-provider"* | "iam list-role"*) want=us-east-1 ;;
+  wafv2\ * | pricing-plan-manager\ * | "logs describe-deliver"* | "iam list-open-id-connect-provider"* | "iam list-role"* | "iam list-attached-role-policies") want=us-east-1 ;;
   kms\ * | cloudwatch\ * | sns\ * | acm\ * | resourcegroupstaggingapi\ * | logs\ *) want="ap-southeast-1 us-east-1" ;;
   *) want=ap-southeast-1 ;;
 esac
@@ -90,6 +90,38 @@ us=
 left=${FAKE_LEFTOVER:-}
 # The management account has no hosted zone.
 [ "$1" != route53 ] || [ -n "$zone" ] || { echo "fake aws: no hosted zone in account $account" >&2; exit 98; }
+# AWS Backup, RDS restores and the objects of the media bucket, in files of $FAKE_STATE/bk, shaped as the output of the
+# sandbox probe of AWS Backup shows them. jobs: "kind id resource recovery_point created destination states", the
+# states a comma list whose first is the current one: each describe moves on to the next, the last stays.
+bk=$FAKE_STATE/bk
+mkdir -p "$bk"
+touch "$bk/jobs" "$bk/rps"
+args=("$@")
+# opt NAME: the value after --NAME in the call.
+opt() { local p='' a; for a in "${args[@]}"; do [ "$p" != "--$1" ] || { printf '%s' "$a"; return 0; }; p=$a; done; }
+job_state() {
+  awk -v i="$1" '$2 == i { split($7, s, ","); print s[1] }' "$bk/jobs"
+  awk -v i="$1" '$2 == i && index($7, ",") { sub(/^[^,]*,/, "", $7) } { print }' "$bk/jobs" >"$bk/jobs.new" && mv "$bk/jobs.new" "$bk/jobs"
+}
+job() { awk -v i="$1" -v n="$2" '$2 == i { print $n }' "$bk/jobs"; }
+# jobs_of KIND: "id state resource rp destination" of each job of KIND, then those of the current round of
+# $bk/rounds (one line per round, words "kind:id:state"), which each list-backup-jobs moves on by one.
+jobs_of() {
+  awk -v k="$1" '$1 == k { split($7, s, ","); print $2, s[1], $3, $4, $6 }' "$bk/jobs"
+  [ -s "$bk/rounds" ] || return 0
+  r=$(cat "$bk/round" 2>/dev/null || echo 1)
+  sed -n "${r}p" "$bk/rounds" | tr ' ' '\n' | awk -F : -v k="$1" '$1 == k { print $2, $3, "arn:aws:rds:ap-southeast-1:0:db:svp-stg", "-", "-" }'
+}
+# The source instance's LatestRestorableTime, one offset from now per read of $FAKE_LRT (seconds; the last stays).
+lrt() {
+  c=$(( $(cat "$bk/lrt-calls" 2>/dev/null || echo 0) + 1 )); echo "$c" >"$bk/lrt-calls"
+  set -- ${FAKE_LRT:--30 -30 +2 0}
+  [ "$c" -le $# ] || c=$#
+  eval "o=\${$c}"
+  jq -nr --argjson o "${o#+}" 'now + $o | floor | strftime("%Y-%m-%dT%H:%M:%S+00:00")'
+}
+pitr_now() { [ -s "$bk/pitr" ] && cut -d, -f1 "$bk/pitr"; }
+pitr_next() { [ ! -s "$bk/pitr" ] || { s=$(cat "$bk/pitr"); case $s in *,*) echo "${s#*,}" >"$bk/pitr" ;; gone) rm -f "$bk/pitr" ;; esac; }; }
 case "$1 $2" in
   "sts get-caller-identity") echo "{\"Account\":\"$account\",\"Arn\":\"arn:aws:sts::$account:assumed-role/AWSReservedSSO_SvpAdmin_0/learner\"}" ;;
   # FAKE_NO_CLUSTER: an account where the cluster was never made.
@@ -394,10 +426,13 @@ case "$1 $2" in
     [ "$c" -le $# ] || c=$#
     eval "st=\${$c}"
     jq -n --arg s "$st" '{TargetHealthDescriptions: [{Target: {Id: "10.0.4.20", Port: 10443}, TargetHealth: {State: $s}}]}' ;;
-  "rds describe-db-instances") echo '{"DBInstances":[]}' ;;
   "rds describe-db-snapshots")
     if [ "$left" = snapshot ]; then
       echo '{"DBSnapshots":[{"DBSnapshotIdentifier":"svp-prd-final-0a1b2c3d","DBInstanceIdentifier":"svp-prd","SnapshotType":"manual","Status":"available"}]}'
+    elif [ "$left" = probe ]; then
+      # Left by the sandbox probe: a recovery point of AWS Backup and an automated snapshot RDS has not removed yet.
+      echo '{"DBSnapshots":[{"DBSnapshotIdentifier":"awsbackup:job-1a4350b9","DBInstanceIdentifier":"svp-probe","SnapshotType":"awsbackup","Status":"available"},
+        {"DBSnapshotIdentifier":"rds:svp-probe-2026-11-13-16-59","DBInstanceIdentifier":"svp-probe","SnapshotType":"automated","Status":"available"}]}'
     else
       echo '{"DBSnapshots":[]}'
     fi ;;
@@ -408,7 +443,14 @@ case "$1 $2" in
       echo '{"DBInstanceAutomatedBackups":[]}'
     fi ;;
   "s3api list-buckets") echo "{\"Buckets\":[{\"Name\":\"svp-tfstate-$account-ap-southeast-1\"},{\"Name\":\"someone-else\"}]}" ;;
-  "s3api get-bucket-tagging") echo "{\"TagSet\":[{\"Key\":\"Project\",\"Value\":\"svp\"},{\"Key\":\"Stack\",\"Value\":\"$stack\"}]}" ;;
+  # The buckets of root env carry tag Backup until put-bucket-tagging writes a set without it.
+  "s3api get-bucket-tagging")
+    case $4 in
+      svp-*-uploads-* | svp-*-media-*)
+        if [ -e "$bk/untagged-$4" ]; then b=; else b=',{"Key":"Backup","Value":"daily"}'; fi
+        echo "{\"TagSet\":[{\"Key\":\"Project\",\"Value\":\"svp\"},{\"Key\":\"Stack\",\"Value\":\"$envname\"}$b]}" ;;
+      *) echo "{\"TagSet\":[{\"Key\":\"Project\",\"Value\":\"svp\"},{\"Key\":\"Stack\",\"Value\":\"$stack\"}]}" ;;
+    esac ;;
   # FAKE_LEFTOVER=distribution: distribution svp-stg-web, whose origin is the VPC origin to the internal ALB, beside
   # another one's.
   "cloudfront list-distributions")
@@ -565,6 +607,9 @@ case "$1 $2" in
       echo other-role
       [ "$stack" != baseline ] || printf '%s\n' svp-ci-ecr-release-backend svp-ci-ecr-rescan-backend
       case $left in transcode | mediaconvert-role) echo svp-stg-mediaconvert ;; esac
+      # The role of AWS Backup of aws/accounts/<env>; FAKE_LEFTOVER=probe, the probe's in management.
+      [ "$stack" != baseline ] || echo "svp-$envname-backup"
+      [ "$left" != probe ] || echo svp-probe-backup
     } | jq -R '{RoleName: .}' | jq -s '{Roles: .}' ;;
   # FAKE_LEFTOVER=transcode: the role of MediaConvert with its inline policy; mediaconvert-role: a destroy that stopped
   # after deleting the policy left the role alone.
@@ -572,12 +617,178 @@ case "$1 $2" in
     case "$4 $left" in
       "svp-stg-mediaconvert transcode") echo '{"PolicyNames":["s3"]}' ;;
       "svp-stg-mediaconvert mediaconvert-role") echo '{"PolicyNames":[]}' ;;
+      "svp-probe-backup probe") echo '{"PolicyNames":["probe-extra"]}' ;;
       *) echo "fake aws: inline policies of role $4 read" >&2; exit 98 ;;
     esac ;;
   "iam list-role-tags")
     case $4 in
-      svp-ci-*) echo '{"Tags":[{"Key":"Project","Value":"svp"},{"Key":"Stack","Value":"baseline"}]}' ;;
+      svp-ci-* | svp-stg-backup | svp-prd-backup) echo '{"Tags":[{"Key":"Project","Value":"svp"},{"Key":"Stack","Value":"baseline"}]}' ;;
+      svp-probe-backup) echo '{"Tags":[{"Key":"Project","Value":"svp"}]}' ;;
       *) echo "fake aws: tags of role $4 read" >&2; exit 98 ;;
+    esac ;;
+  # The source instance by its identifier; svp-<env>-pitr ($bk/pitr: its states, as jobs) or the source by filter.
+  "rds describe-db-instances")
+    id=$(opt db-instance-identifier) f=$(opt filters)
+    if [ "$id" = "svp-$envname" ]; then
+      jq -n --arg l "$(lrt)" --arg e "$envname" '{DBInstances: [{DBInstanceIdentifier: ("svp-" + $e), DBInstanceStatus: "available",
+        DBInstanceClass: "db.t4g.micro", LatestRestorableTime: $l, DBSubnetGroup: {DBSubnetGroupName: ("svp-" + $e + "-db-x")},
+        DBParameterGroups: [{DBParameterGroupName: ("svp-" + $e + "-pg18-x"), ParameterApplyStatus: "in-sync"}],
+        VpcSecurityGroups: [{VpcSecurityGroupId: "sg-0rds", Status: "active"}, {VpcSecurityGroupId: "sg-0two", Status: "active"}]}]}'
+    elif [ "$f" = "Name=db-instance-id,Values=svp-$envname-pitr" ]; then
+      st=$(pitr_now || true); pitr_next
+      if [ -z "$st" ] || [ "$st" = gone ]; then echo '{"DBInstances":[]}'
+      else jq -n --arg s "$st" --arg e "$envname" '{DBInstances: [{DBInstanceIdentifier: ("svp-" + $e + "-pitr"), DBInstanceStatus: $s,
+        Endpoint: {Address: ("svp-" + $e + "-pitr.fake.ap-southeast-1.rds.amazonaws.com"), Port: 5432}}]}'; fi
+    elif [ "$f" = "Name=db-instance-id,Values=svp-$envname" ]; then
+      if [ -n "${FAKE_NO_DB:-}" ]; then echo '{"DBInstances":[]}'; else echo "{\"DBInstances\":[{\"DBInstanceIdentifier\":\"svp-$envname\"}]}"; fi
+    else
+      echo '{"DBInstances":[]}'
+    fi ;;
+  # The restored instance gets the source's tables, with one more row (insert) or one row changed (update).
+  "rds restore-db-instance-to-point-in-time")
+    echo creating,available >"$bk/pitr"
+    rm -rf "$FAKE_STATE/db-pitr" && cp -R "$FAKE_STATE/db-source" "$FAKE_STATE/db-pitr"
+    case ${FAKE_PITR:-} in
+      insert) printf '9001\t(00000000-0000-0000-0000-00000000000f,inserted)\n' >>"$FAKE_STATE/db-pitr/video.videos" ;;
+      update) awk -F '\t' 'NR == 1 { sub(/,[a-z]*\)$/, ",changed)", $2); $1 = 9002 } { print $1 "\t" $2 }' "$FAKE_STATE/db-source/video.videos" \
+        >"$FAKE_STATE/db-pitr/video.videos" ;;
+    esac
+    echo '{"DBInstance":{"DBInstanceStatus":"creating"}}' ;;
+  "rds delete-db-instance") echo deleting,gone >"$bk/pitr"; echo '{"DBInstance":{"DBInstanceStatus":"deleting"}}' ;;
+  "rds remove-tags-from-resource") ;;
+  "backup list-backup-plans")
+    {
+      [ -z "$zone" ] || [ "${FAKE_BACKUP:-}" = no-plan ] || jq -n --arg e "$envname" '{BackupPlanName: ("svp-" + $e), BackupPlanId: ("plan-" + $e)}'
+      [ "$left" != probe ] || echo '{"BackupPlanName":"svp-probe","BackupPlanId":"7987bcc1-0daf-4965-a146-87c5ee56b05d"}'
+    } | jq -s '{BackupPlansList: .}' ;;
+  # The plan the backup policy makes: stg keeps 2 days, prd 35 (FAKE_BACKUP=plan-drift: another schedule).
+  "backup get-backup-plan")
+    case $envname in prd) d=35 ;; *) d=2 ;; esac
+    cron='cron(0 18 * * ? *)'; [ "${FAKE_BACKUP:-}" != plan-drift ] || cron='cron(17 17 * * ? *)'
+    jq -n --arg e "$envname" --argjson d "$d" --arg c "$cron" --arg b "${SVP_AWS_BACKUP_ACCOUNT_ID:-}" '{BackupPlan: {BackupPlanName: ("svp-" + $e),
+      Rules: [{RuleName: "daily", TargetBackupVaultName: ("svp-" + $e), ScheduleExpression: $c, StartWindowMinutes: 60,
+        CompletionWindowMinutes: 180, Lifecycle: {DeleteAfterDays: $d}, RuleId: "e2996def", ScheduleExpressionTimezone: "Etc/UTC",
+        CopyActions: [{Lifecycle: {DeleteAfterDays: $d},
+          DestinationBackupVaultArn: ("arn:aws:backup:ap-southeast-1:" + $b + ":backup-vault:svp-" + $e + "-copy")}]}]},
+      BackupPlanId: ("plan-" + $e), VersionId: "ODMy"}' ;;
+  "backup list-backup-selections")
+    jq -n --arg e "$envname" '{BackupSelectionsList: [{SelectionId: ("sel-" + $e), SelectionName: ("svp-" + $e + "-tagged")}]}' ;;
+  # FAKE_BACKUP=selection-drift: the selection takes tag value weekly.
+  "backup get-backup-selection")
+    v=daily; [ "${FAKE_BACKUP:-}" != selection-drift ] || v=weekly
+    jq -n --arg r "arn:aws:iam::$account:role/svp-$envname-backup" --arg v "$v" '{BackupSelection: {SelectionName: "x", IamRoleArn: $r,
+      Resources: ["arn:aws:s3:::*", "arn:aws:rds:*:*:db:*"], ListOfTags: [], NotResources: [],
+      Conditions: {StringEquals: [{ConditionKey: "aws:ResourceTag/Backup", ConditionValue: $v}], StringNotEquals: [], StringLike: [],
+        StringNotLike: []}}}' ;;
+  # FAKE_BACKUP=opt-out: S3 as the management account had it before the probe.
+  "backup describe-region-settings")
+    s3=true; [ "${FAKE_BACKUP:-}" != opt-out ] || s3=false
+    jq -n --argjson s "$s3" '{ResourceTypeOptInPreference: {Aurora: false, DynamoDB: true, EBS: true, RDS: true, S3: $s, "Storage Gateway": true},
+      ResourceTypeManagementPreference: {DynamoDB: false, EFS: true}}' ;;
+  # Jobs of the instance and both buckets; FAKE_BACKUP=job-failed: that of media fails, stuck: they never end.
+  "backup start-backup-job")
+    r=$(opt resource-arn)
+    case $r in *:db:*) n=rds ;; *-uploads-*) n=uploads ;; *) n=media ;; esac
+    case $n in
+      rds) rp=arn:aws:rds:ap-southeast-1:$account:snapshot:awsbackup:job-$n c=2026-11-14T01:03:47.359000+07:00 ;;
+      uploads) rp=arn:aws:backup:ap-southeast-1:$account:recovery-point:svp-$envname-uploads-$n c=2026-11-14T01:03:48.129000+07:00 ;;
+      media) rp=arn:aws:backup:ap-southeast-1:$account:recovery-point:svp-$envname-media-$n c=2026-11-14T01:03:47.896000+07:00 ;;
+    esac
+    seq=RUNNING,COMPLETED
+    case "${FAKE_BACKUP:-} $n" in "job-failed media") seq=RUNNING,FAILED ;; stuck\ *) seq=RUNNING ;; esac
+    echo "backup job-$n $r $rp $c - $seq" >>"$bk/jobs"
+    echo "{\"BackupJobId\":\"job-$n\",\"CreationDate\":\"$c\"}" ;;
+  "backup describe-backup-job")
+    id=$(opt backup-job-id) st=$(job_state "$(opt backup-job-id)")
+    if [ "$st" = COMPLETED ] && ! grep -q "^$(job "$id" 4) " "$bk/rps"; then echo "$(job "$id" 4) svp-$envname $(job "$id" 3)" >>"$bk/rps"; fi
+    jq -n --arg i "$id" --arg s "$st" --arg r "$(job "$id" 3)" --arg p "$(job "$id" 4)" --arg c "$(job "$id" 5)" --arg a "$account" \
+      '{AccountId: $a, BackupJobId: $i, BackupVaultName: "svp-x", RecoveryPointArn: $p, ResourceArn: $r, CreationDate: $c, State: $s,
+        PercentDone: "100.0", IamRoleArn: "arn:aws:iam::0:role/x", ResourceType: "S3", IsParent: false}' ;;
+  # FAKE_COPY=failed: the copy fails.
+  "backup start-copy-job")
+    rp=$(opt recovery-point-arn) id=copy-${rp##*[:-]}
+    seq=CREATED,RUNNING,COMPLETED; [ "${FAKE_COPY:-}" != failed ] || seq=CREATED,FAILED
+    r=$(awk -v p="$rp" '$4 == p { print $3 }' "$bk/jobs" | head -n 1)
+    echo "copy $id $r $rp - $(opt destination-backup-vault-arn) $seq" >>"$bk/jobs"
+    echo "{\"CopyJobId\":\"$id\",\"CreationDate\":\"2026-11-14T01:34:49.763000+07:00\"}" ;;
+  "backup describe-copy-job")
+    id=$(opt copy-job-id)
+    jq -n --arg i "$id" --arg s "$(job_state "$id")" --arg p "$(job "$id" 4)" --arg d "$(job "$id" 6)" \
+      '{CopyJob: {CopyJobId: $i, SourceRecoveryPointArn: $p, DestinationBackupVaultArn: $d, State: $s, ResourceType: "S3"}}' ;;
+  "backup list-backup-jobs")
+    c=$(( $(cat "$bk/round" 2>/dev/null || echo 0) + 1 )); echo "$c" >"$bk/round"
+    jobs_of backup | while read -r i s r p d; do jq -n --arg i "$i" --arg s "$s" --arg r "$r" \
+      '{BackupJobId: $i, State: $s, ResourceArn: $r, BackupVaultName: "svp-x"}'; done | jq -s '{BackupJobs: .}' ;;
+  "backup list-copy-jobs")
+    jobs_of copy | while read -r i s r p d; do jq -n --arg i "$i" --arg s "$s" --arg r "$r" --arg p "$p" --arg d "$d" \
+      '{CopyJobId: $i, State: $s, ResourceArn: $r, SourceRecoveryPointArn: $p, DestinationBackupVaultArn: $d}'; done | jq -s '{CopyJobs: .}' ;;
+  "backup list-restore-jobs")
+    jobs_of restore | while read -r i s r p d; do jq -n --arg i "$i" --arg s "$s" --arg r "$r" \
+      '{RestoreJobId: $i, Status: $s, CreatedResourceArn: $r}'; done | jq -s '{RestoreJobs: .}' ;;
+  # FAKE_RESTORE=failed: the restore fails; stuck: it never ends; other: the object comes back with other content.
+  "backup start-restore-job")
+    seq=PENDING,RUNNING,COMPLETED
+    case "${FAKE_RESTORE:-}" in failed) seq=PENDING,FAILED ;; stuck) seq=PENDING,RUNNING ;; esac
+    echo "restore restore-1 - $(opt recovery-point-arn) - - $seq" >>"$bk/jobs"
+    echo '{"RestoreJobId":"restore-1"}' ;;
+  "backup describe-restore-job")
+    st=$(job_state restore-1)
+    if [ "$st" = COMPLETED ] && [ -e "$bk/obj-deleted" ]; then
+      rm -f "$bk/obj-deleted"
+      [ "${FAKE_RESTORE:-}" != other ] || printf '#EXTM3U\n#EXT-X-VERSION:3\n#other\n' >"$bk/obj"
+      echo restored >"$bk/obj-etag"
+    fi
+    jq -n --arg s "$st" '{RestoreJobId: "restore-1", Status: $s, PercentDone: "100.00%", ResourceType: "S3"}' ;;
+  "backup list-recovery-points-by-backup-vault")
+    v=$(opt backup-vault-name)
+    awk -v v="$v" '$2 == v' "$bk/rps" | while read -r p vv r; do jq -n --arg p "$p" --arg v "$vv" --arg r "$r" \
+      '{RecoveryPointArn: $p, BackupVaultName: $v, ResourceArn: $r, Status: "COMPLETED"}'; done | jq -s '{RecoveryPoints: .}' ;;
+  "backup delete-recovery-point")
+    awk -v p="$(opt recovery-point-arn)" '$1 != p' "$bk/rps" >"$bk/rps.new" && mv "$bk/rps.new" "$bk/rps" ;;
+  # The vault of aws/accounts/<env> (Stack=baseline); FAKE_LEFTOVER=probe, in management, the two vaults of the probe.
+  "backup list-backup-vaults")
+    {
+      [ -z "$zone" ] || jq -n --arg e "$envname" --arg a "$account" \
+        '{BackupVaultName: ("svp-" + $e), BackupVaultArn: ("arn:aws:backup:ap-southeast-1:" + $a + ":backup-vault:svp-" + $e), Locked: false}'
+      if [ "$left" = probe ]; then
+        echo "{\"BackupVaultName\":\"svp-probe\",\"BackupVaultArn\":\"arn:aws:backup:ap-southeast-1:$account:backup-vault:svp-probe\",\"Locked\":false}"
+        echo "{\"BackupVaultName\":\"svp-probe-locked\",\"BackupVaultArn\":\"arn:aws:backup:ap-southeast-1:$account:backup-vault:svp-probe-locked\",\"Locked\":true,\"MinRetentionDays\":1,\"MaxRetentionDays\":7}"
+      fi
+    } | jq -s '{BackupVaultList: .}' ;;
+  "backup list-tags")
+    case $(opt resource-arn) in
+      *:svp-probe*) echo '{"Tags":{"Project":"svp"}}' ;;
+      *) echo '{"Tags":{"Project":"svp","Stack":"baseline"}}' ;;
+    esac ;;
+  # The objects under media/ of the media bucket: the .m3u8 first by name is newer than the recovery point.
+  "s3api list-objects-v2")
+    echo '{"Contents":[{"Key":"media/0new/1/index.m3u8","LastModified":"2026-11-13T18:30:00+00:00"},
+      {"Key":"media/a1/1/index.m3u8","LastModified":"2026-11-13T10:00:00+00:00"},{"Key":"media/a1/1/seg0.ts","LastModified":"2026-11-13T10:00:00+00:00"},
+      {"Key":"media/b2/1/index.m3u8","LastModified":"2026-11-13T09:00:00+00:00"}]}' ;;
+  "s3api get-object")
+    [ ! -e "$bk/obj-deleted" ] || { echo "fake aws: An error occurred (NoSuchKey) when calling the GetObject operation" >&2; exit 254; }
+    # The file to write is the word after the key.
+    out='' prev='' after_key=''
+    for a in "$@"; do
+      if [ -n "$after_key" ]; then out=$a; break; fi
+      [ "$prev" != --key ] || after_key=1
+      prev=$a
+    done
+    # A misplaced word (a flag, a region) must not become a file in the working directory.
+    case $out in
+      "$SVP_SESSION_DIR"/*) ;;
+      *) echo "fake aws: get-object writes '$out', not under the session directory" >&2; exit 98 ;;
+    esac
+    cat "$bk/obj" >"$out"
+    if [ -e "$bk/obj-etag" ]; then e=f3d7e4217d7eca16ca821d28f077825a; else e=75d2bdfaa3e061e663c61f5cef32bfb5; fi
+    jq -n --argjson l "$(wc -c <"$bk/obj" | tr -d ' ')" --arg e "\"$e\"" '{ContentLength: $l, ETag: $e, ContentType: "application/x-mpegurl"}' ;;
+  "s3api delete-object") touch "$bk/obj-deleted"; echo '{"DeleteMarker":true,"VersionId":"CpEY"}' ;;
+  "s3api put-bucket-tagging") touch "$bk/untagged-$(opt bucket)" ;;
+  "iam list-attached-role-policies")
+    case "$4 $left" in
+      "svp-probe-backup probe") printf '%s\n' service-role/AWSBackupServiceRolePolicyForBackup AWSBackupServiceRolePolicyForS3Backup |
+        jq -R '{PolicyName: (. | sub(".*/"; "")), PolicyArn: ("arn:aws:iam::aws:policy/" + .)}' | jq -s '{AttachedPolicies: .}' ;;
+      *) echo "fake aws: managed policies of role $4 read" >&2; exit 98 ;;
     esac ;;
   *) echo "fake aws: unexpected $1 $2" >&2; exit 98 ;;
 esac
@@ -592,6 +803,7 @@ case ${AWS_PROFILE:-} in anhnv-sso | anhnv-stg | anhnv-prd) ;; *) echo "fake ter
 echo "$AWS_PROFILE" >>"$FAKE_LOG.profiles"
 echo "account=${TF_VAR_account_id:-} chart=${TF_VAR_svp_cluster_chart:-} chat=${TF_VAR_telegram_chat_id-unset}" >>"$FAKE_LOG.tfenv"
 echo "log_archive=${TF_VAR_log_archive_account_id-unset}" >>"$FAKE_LOG.tfenv"
+echo "backup_account=${TF_VAR_backup_account_id-unset}" >>"$FAKE_LOG.tfenv"
 dir= out=
 for a in "$@"; do case $a in -chdir=*) dir=${a#-chdir=} ;; -out=*) out=${a#-out=} ;; esac; done
 env=${dir##*/}
@@ -624,6 +836,8 @@ case "${args#-chdir=* }" in
   "show -no-color "*.tfplan) printf '%s\n' 'Terraform will perform the following actions:' '  # aws_vpc.this will be created' \
     'Plan: 1 to add, 0 to change, 0 to destroy.' ;;
   plan\ *) [ -z "$out" ] || : >"$dir/$out" ;;
+  # FAKE_TF_APPLY_FAIL: an apply that stops with an error (after it wrote part of the plan).
+  apply\ *) [ -z "${FAKE_TF_APPLY_FAIL:-}" ] || { echo "fake terraform: Error: creating the resource failed" >&2; exit 1; } ;;
   # FAKE_TF_STATE: eks, a whole apply: cluster (and a data source of it), DB instance, edge ALB (with listener and
   # target group), buckets (a read of one, a resource of a type that starts like it); partial, an apply that failed
   # before the cluster and DB instance, with the buckets made; fail, no readable state; else, none of them.
@@ -777,6 +991,37 @@ case "$*" in
   "-n "*" patch "*".prometheusservice.services.k8s.aws "*' --type merge -p {"metadata":{"finalizers":null}}')
     case $4 in rulegroupsnamespaces.*) k=RuleGroupsNamespace ;; *) k=AlertManagerDefinition ;; esac
     grep -v "^$k $2 $5 " "$s/ack-crs" >"$s/ack-crs.new" || true; mv "$s/ack-crs.new" "$s/ack-crs" ;;
+  # svp-pg in pod svp-ops: the tables of $s/db-source (the platform's Postgres) or $s/db-pitr (--host of the restored
+  # instance), one file per "<service>.<table>" of "xmin<tab>row" lines; it answers the count and a digest of the rows
+  # with their xmin to the SQL of the data check alone. FAKE_SOURCE_CHANGE (update, revert: same row, new xmin, delete)
+  # changes video.videos of the source as the tenth read starts, the first of the second sample.
+  "-n svp-data exec deploy/svp-ops -c postgres -- /opt/svp/bin/svp-pg "*)
+    shift 8
+    svc=$1 where=source
+    shift
+    if [ "$1" = --host ]; then
+      case $2 in svp-*-pitr.fake.ap-southeast-1.rds.amazonaws.com) where=pitr ;; *) echo "fake svp-pg: host $2" >&2; exit 98 ;; esac
+      shift 2
+    fi
+    sql=$2 table=$(sed -n 's/.* FROM \([a-z_]*\) t) s$/\1/p' <<<"$2")
+    [ "$1" = -c ] && [ -n "$table" ] &&
+      [ "$sql" = "SELECT count(*), md5(coalesce(string_agg(r, '|' ORDER BY r), '')) FROM (SELECT t.xmin::text || ':' || t::text AS r FROM $table t) s" ] ||
+      { echo "fake svp-pg: unexpected $*" >&2; exit 98; }
+    if [ "$where" = source ]; then
+      c=$(( $(cat "$s/pg-source-calls" 2>/dev/null || echo 0) + 1 )); echo "$c" >"$s/pg-source-calls"
+      v=$s/db-source/video.videos
+      if [ "$c" = 10 ]; then
+        case ${FAKE_SOURCE_CHANGE:-} in
+          update) awk -F '\t' 'NR == 1 { $1 = 501; sub(/,[a-z]*\)$/, ",updated)", $2) } { print $1 "\t" $2 }' "$v" >"$v.new" && mv "$v.new" "$v" ;;
+          revert) awk -F '\t' 'NR == 1 { $1 = 502 } { print $1 "\t" $2 }' "$v" >"$v.new" && mv "$v.new" "$v" ;;
+          delete) sed '1d' "$v" >"$v.new" && mv "$v.new" "$v" ;;
+        esac
+      fi
+    fi
+    f=$s/db-$where/$svc.$table
+    [ -f "$f" ] || { echo "fake svp-pg: relation $table does not exist" >&2; exit 3; }
+    d=$(LC_ALL=C awk -F '\t' '{ print $1 ":" $2 }' "$f" | LC_ALL=C sort | paste -sd '|' - | cksum | awk '{ print $1 }')
+    printf '%s\t%032x\n' "$(grep -c . "$f" || true)" "$d" ;;
   "top nodes --no-headers") echo "ip-10-0-1-1 250m 12% 2000Mi 30%" ;;
   "top pods -A --no-headers") echo "svp gateway-abc 50m 80Mi" ;;
   "-n svp-load get job svp-k6 --ignore-not-found -o json")
@@ -846,7 +1091,7 @@ grafana_token=glsa_fakeOperatorToken_0123456789abcdef
 export PATH="$bin:$PATH" FAKE_LOG=$log FAKE_STATE=$state FAKE_PASSWORD=$password FAKE_GRAFANA_TOKEN=$grafana_token
 export SVP_BACKEND_DIR=$work/backend SVP_GITOPS_DIR=$work/gitops SVP_SESSION_POLL=0
 export SVP_AWS_MGMT_ACCOUNT_ID=000000000000 SVP_AWS_STG_ACCOUNT_ID=111111111111 SVP_AWS_PRD_ACCOUNT_ID=222222222222
-export SVP_AWS_LOG_ACCOUNT_ID=333333333333
+export SVP_AWS_LOG_ACCOUNT_ID=333333333333 SVP_AWS_BACKUP_ACCOUNT_ID=444444444444
 unset SVP_SESSION_DIR
 
 # clear_log: an empty log of calls, profiles and Terraform variables.
@@ -891,12 +1136,12 @@ for e in stg prd; do
   sed -n 's/^### step [0-9]*: aws\/scripts\///p' "$out" >"$work/order.print"
   sed -n 's/^| [0-9]* | `aws\/scripts\/\([^`]*\)`.*/\1/p' "$runbooks/session-$e.md" >"$work/order.runbook"
   expect "--print $e: the steps are the table of session-$e.md, in order" diff "$work/order.runbook" "$work/order.print"
-  expect "--print $e: twenty steps" test "$(grep -c . "$work/order.runbook")" = 20
-  sed -n '/^### step 20:/q;p' "$out" >"$work/print-env.out"
-  expect "--print $e: every aws and terraform command of steps 1 to 19 names profile anhnv-$e, every aws command a region" \
+  expect "--print $e: twenty-four steps" test "$(grep -c . "$work/order.runbook")" = 24
+  sed -n '/^### step 24:/q;p' "$out" >"$work/print-env.out"
+  expect "--print $e: every aws and terraform command of steps 1 to 23 names profile anhnv-$e, every aws command a region" \
     sh -c '[ -z "$(grep -E "^\+ ([^ ]+ )*(aws|terraform) " "$1" | grep -vE "^\+ ([^ ]+ )?AWS_PROFILE=anhnv-$2 (aws .*--region (ap-southeast-1|us-east-1)|terraform )")" ]' _ "$work/print-env.out" "$e"
-  expect "--print $e: step 20 is sweep.sh mgmt, with profile anhnv-sso alone" \
-    sh -c 'sed -n "/^### step 20:/,\$p" "$1" >"$1.20" && grep -q "^### step 20: aws/scripts/sweep.sh mgmt$" "$1.20" &&
+  expect "--print $e: step 24 is sweep.sh mgmt, with profile anhnv-sso alone" \
+    sh -c 'sed -n "/^### step 24:/,\$p" "$1" >"$1.20" && grep -q "^### step 24: aws/scripts/sweep.sh mgmt$" "$1.20" &&
       [ -z "$(grep -E "^\+ .* aws " "$1.20" | grep -vE "^\+ AWS_PROFILE=anhnv-sso aws .*--region (ap-southeast-1|us-east-1)")" ]' _ "$out"
   expect "--print $e: init of both roots with the account's backend, each its own key, -reconfigure" \
     sh -c 'grep -q "aws/envs/$2 init -input=false -reconfigure -backend-config=../../backend-$2.hcl -backend-config=key=aws/$2/terraform.tfstate$" "$1" &&
@@ -1124,7 +1369,8 @@ expect "tf.sh gitops destroy runs" bash "$here/tf.sh" stg gitops destroy >"$work
 expect "tf.sh gitops destroy applied the destroy plan file, never terraform destroy, and removed it" \
   sh -c 'grep -q "^terraform -chdir=.*/aws/gitops/stg apply -input=false stg.destroy.tfplan$" "$1" && ! grep -qE "^terraform -chdir=[^ ]* destroy" "$1" && [ ! -e "$2/aws/gitops/stg/stg.destroy.tfplan" ]' _ "$log" "$infra_root"
 expect "tf.sh gitops destroy marks gitops-destroy-end and says what is next" sh -c 'awk -F "\t" "\$3 == \"gitops-destroy-end\" { f = 1 } END { exit !f }" "$1" && grep -q "next: tf.sh stg env plan --teardown" "$2"' _ "$SVP_SESSION_DIR/timeline.tsv" "$work/out"
-expect "tf.sh stg env plan --destroy runs once root gitops is destroyed" bash "$here/tf.sh" stg env plan --destroy >/dev/null 2>&1
+add_mark backup-drained
+expect "tf.sh stg env plan --destroy runs once root gitops is destroyed and the backups drained" bash "$here/tf.sh" stg env plan --destroy >/dev/null 2>&1
 expect "tf.sh stg env plan --destroy: stg.tfvars alone" grep -q '^terraform -chdir=.*/aws/envs/stg plan -destroy -input=false -var-file=stg.tfvars -out=stg.destroy.tfplan$' "$log"
 clear_log
 expect "tf.sh stg env destroy runs and says to sweep next" sh -c 'bash "$1/tf.sh" stg env destroy >"$2" 2>&1 && grep -q "now aws/scripts/sweep.sh stg" "$2"' _ "$here" "$work/out"
@@ -1148,8 +1394,9 @@ expect "tf.sh prd env plan --destroy still refuses: the teardown plan is not app
 expect "tf.sh prd env apply --teardown applies it and marks env-teardown-applied" \
   sh -c 'bash "$1/tf.sh" prd env apply --teardown >/dev/null 2>&1 && grep -q "^terraform -chdir=.*/aws/envs/prd apply -input=false prd.teardown.tfplan$" "$2" &&
     awk -F "\t" "\$3 == \"env-teardown-applied\" { f = 1 } END { exit !f }" "$3/timeline.tsv" && [ ! -e "$4/prd/prd.teardown.tfplan" ]' _ "$here" "$log" "$SVP_SESSION_DIR" "$envs"
+add_mark backup-drained
 clear_log
-expect "tf.sh prd env plan --destroy runs once the teardown is applied" bash "$here/tf.sh" prd env plan --destroy >/dev/null 2>&1
+expect "tf.sh prd env plan --destroy runs once the teardown is applied and the backups drained" bash "$here/tf.sh" prd env plan --destroy >/dev/null 2>&1
 expect "tf.sh prd env plan --destroy: prd.tfvars and teardown.tfvars, no target, profile anhnv-prd" \
   sh -c 'grep -q "^terraform -chdir=.*/aws/envs/prd plan -destroy -input=false -var-file=prd.tfvars -var-file=teardown.tfvars -out=prd.destroy.tfplan$" "$1" && [ "$(sort -u "$1.profiles")" = anhnv-prd ]' _ "$log"
 rm -f "$envs/prd/prd.destroy.tfplan"
@@ -1165,8 +1412,11 @@ clear_log
 expect "tf.sh prd env plan --teardown after a failed apply targets the buckets of the state alone" \
   sh -c 'FAKE_TF_STATE=partial bash "$1/tf.sh" prd env plan --teardown >/dev/null 2>&1 &&
     grep -qxF "terraform -chdir=$3/prd plan -input=false -var-file=prd.tfvars -var-file=teardown.tfvars -target=module.media.aws_s3_bucket.this[\"media\"] -target=module.media.aws_s3_bucket.this[\"uploads\"] -out=prd.teardown.tfplan" "$2"' _ "$here" "$log" "$envs"
-expect "tf.sh prd env apply --teardown, then plan --destroy --no-cluster run after a failed apply" \
-  sh -c 'FAKE_TF_STATE=partial bash "$1/tf.sh" prd env apply --teardown >/dev/null 2>&1 && FAKE_TF_STATE=partial bash "$1/tf.sh" prd env plan --destroy --no-cluster >/dev/null 2>&1 &&
+expect "tf.sh prd env apply --teardown runs after a failed apply" \
+  sh -c 'FAKE_TF_STATE=partial bash "$1/tf.sh" prd env apply --teardown >/dev/null 2>&1' _ "$here"
+add_mark backup-drained
+expect "tf.sh prd env plan --destroy --no-cluster runs after a failed apply, its teardown and the cleanup of the backups" \
+  sh -c 'FAKE_TF_STATE=partial bash "$1/tf.sh" prd env plan --destroy --no-cluster >/dev/null 2>&1 &&
     grep -q "^terraform -chdir=.*/aws/envs/prd plan -destroy -input=false -var-file=prd.tfvars -var-file=teardown.tfvars -out=prd.destroy.tfplan$" "$2"' _ "$here" "$log"
 rm -f "$envs/prd/prd.destroy.tfplan"
 
@@ -1179,11 +1429,13 @@ expect "tf.sh prd env plan --teardown with no DB instance, ALB or bucket in the 
 expect "tf.sh prd env plan --teardown with nothing to lift marks env-teardown-applied" has_mark env-teardown-applied
 expect "tf.sh prd env apply --teardown skips once env-teardown-applied is recorded and no teardown plan is left" \
   sh -c 'bash "$1/tf.sh" prd env apply --teardown >"$2" 2>&1 && grep -q "^skip  no teardown plan left" "$2" && ! grep -q "^terraform .* apply" "$3"' _ "$here" "$work/out" "$log"
+add_mark backup-drained
 expect "tf.sh prd env plan --destroy --no-cluster runs when nothing was to lift" bash "$here/tf.sh" prd env plan --destroy --no-cluster >/dev/null 2>&1
 rm -f "$envs/prd/prd.destroy.tfplan"
 
 # --no-cluster: an apply that failed before EKS; root gitops was never applied.
 new_session
+add_mark backup-drained
 expect "tf.sh env plan --destroy --no-cluster runs with no cluster-values.json and no EKS cluster in the state" \
   bash "$here/tf.sh" stg env plan --destroy --no-cluster >/dev/null 2>&1
 expect "tf.sh env plan --destroy --no-cluster read the state before planning" before "$log" 'terraform .* state list' 'terraform .* plan -destroy'
@@ -1197,6 +1449,367 @@ echo '{"name":"svp-stg","domain":"stg.aws.svp.example"}' >"$SVP_SESSION_DIR/clus
 expect "tf.sh env plan --destroy --no-cluster refuses when the session has cluster-values.json" \
   sh -c '! bash "$1/tf.sh" stg env plan --destroy --no-cluster >"$2" 2>&1 && grep -q "cluster-values.json exists" "$2"' _ "$here" "$work/out"
 expect "tf.sh env plan --destroy --no-cluster refused: terraform plan -destroy never ran" test -z "$(grep '^terraform .* plan -destroy' "$log")"
+
+# --- tf.sh: state-rm and import of root env ----------------------------------------------------------------------
+# A for_each address keeps its brackets and quotes: it reaches terraform as one argument.
+new_session
+addr='module.media.aws_s3_bucket.this["media"]'
+expect "tf.sh stg env state-rm runs" bash "$here/tf.sh" stg env state-rm "$addr" >"$work/out" 2>&1
+expect "tf.sh stg env state-rm: terraform state rm of the address as one argument, in aws/envs/stg" \
+  sh -c '[ "$(grep "^terraform " "$1")" = "terraform -chdir=$2/stg state rm $3" ]' _ "$log" "$envs" "$addr"
+expect "tf.sh stg env state-rm: the account checked first" before "$log" '^aws sts get-caller-identity ' '^terraform .* state rm '
+expect "tf.sh stg env state-rm: profile anhnv-stg, TF_VAR_account_id of stg" \
+  sh -c '[ "$(sort -u "$1.profiles")" = anhnv-stg ] && [ "$(sed -n "s/^account=\([0-9]*\) .*/\1/p" "$1.tfenv")" = 111111111111 ]' _ "$log"
+expect "tf.sh stg env state-rm marks env-state-rm" has_mark env-state-rm
+clear_log
+expect "tf.sh stg env import runs" bash "$here/tf.sh" stg env import module.rds.aws_db_instance.this svp-stg >"$work/out" 2>&1
+expect "tf.sh stg env import: terraform import with stg.tfvars, the address, then the id" \
+  grep -qx "terraform -chdir=$envs/stg import -input=false -var-file=stg.tfvars module.rds.aws_db_instance.this svp-stg" "$log"
+expect "tf.sh stg env import: TF_VAR_log_archive_account_id and TF_VAR_backup_account_id set as for plan" \
+  sh -c 'grep -qx log_archive=333333333333 "$1.tfenv" && grep -qx backup_account=444444444444 "$1.tfenv"' _ "$log"
+expect "tf.sh stg env import marks env-import and says to plan next" \
+  sh -c 'awk -F "\t" "\$3 == \"env-import\" { f = 1 } END { exit !f }" "$1" && grep -q "next: tf.sh stg env plan" "$2"' _ "$SVP_SESSION_DIR/timeline.tsv" "$work/out"
+clear_log
+SVP_SESSION_DIR=$infra_root/.session/print-only-state-$$
+export SVP_SESSION_DIR
+expect "tf.sh --print prd env state-rm and import call nothing and write no session directory" \
+  sh -c 'bash "$1/tf.sh" --print prd env state-rm "$2" >"$3" 2>&1 && bash "$1/tf.sh" --print prd env import "$2" svp-prd >>"$3" 2>&1 &&
+    [ ! -s "$4" ] && [ ! -e "$SVP_SESSION_DIR" ]' _ "$here" "$addr" "$work/print-state.out" "$log"
+expect "tf.sh --print prd env state-rm and import: the account check, each command with its address quoted, each mark" \
+  sh -c 'grep -q "^+ AWS_PROFILE=anhnv-prd aws sts get-caller-identity " "$1" &&
+    grep -qxF "+ AWS_PROFILE=anhnv-prd terraform -chdir=$2/prd state rm '"'"'$3'"'"'" "$1" &&
+    grep -qxF "+ AWS_PROFILE=anhnv-prd terraform -chdir=$2/prd import -input=false -var-file=prd.tfvars '"'"'$3'"'"' svp-prd" "$1" &&
+    grep -q "(timeline: env-state-rm)" "$1" && grep -q "(timeline: env-import)" "$1"' _ "$work/print-state.out" "$envs" "$addr"
+new_session
+expect "tf.sh refuses state-rm and import of root gitops, before any aws or terraform" \
+  sh -c '! bash "$1/tf.sh" stg gitops state-rm "$2" >"$3" 2>&1 && grep -q "state-rm is for root env alone" "$3" &&
+    ! bash "$1/tf.sh" stg gitops import "$2" x >"$3" 2>&1 && grep -q "import is for root env alone" "$3" && [ ! -s "$4" ]' _ "$here" "$addr" "$work/out" "$log"
+expect "tf.sh refuses state-rm and import with missing, empty or extra arguments, before any aws or terraform" \
+  sh -c '! bash "$1/tf.sh" stg env state-rm >/dev/null 2>&1 && ! bash "$1/tf.sh" stg env state-rm "" >/dev/null 2>&1 &&
+    ! bash "$1/tf.sh" stg env state-rm "$2" extra >/dev/null 2>&1 && ! bash "$1/tf.sh" stg env import "$2" >/dev/null 2>&1 &&
+    ! bash "$1/tf.sh" stg env import "$2" "" >/dev/null 2>&1 && ! bash "$1/tf.sh" stg env import "" svp-stg >/dev/null 2>&1 && [ ! -s "$3" ]' \
+  _ "$here" "$addr" "$log"
+expect "tf.sh refuses state-rm and import without the account variables, before any terraform" \
+  sh -c '! env -u SVP_AWS_STG_ACCOUNT_ID bash "$1/tf.sh" stg env state-rm "$2" >"$3" 2>&1 && grep -q "set SVP_AWS_STG_ACCOUNT_ID" "$3" &&
+    ! env -u SVP_AWS_BACKUP_ACCOUNT_ID bash "$1/tf.sh" stg env import "$2" x >"$3" 2>&1 && grep -q "set SVP_AWS_BACKUP_ACCOUNT_ID" "$3" &&
+    ! grep -q "^terraform " "$4"' _ "$here" "$addr" "$work/out" "$log"
+expect "tf.sh: refused state-rm and import marked nothing" sh -c 'no_mark() { ! awk -F "\t" -v e="$2" "\$3 == e { f = 1 } END { exit !f }" "$1" 2>/dev/null; }
+  no_mark "$1" env-state-rm && no_mark "$1" env-import' _ "$SVP_SESSION_DIR/timeline.tsv"
+
+# --- restore-drill.sh ---------------------------------------------------------------------------------------------
+# The fakes answer in the shapes the sandbox probe of AWS Backup (docs/runbooks/backup-sandbox-probe.md) printed: jobs
+# and recovery points as describe-backup-job, describe-copy-job, describe-restore-job and
+# list-recovery-points-by-backup-vault print them, times with an offset, the source's LatestRestorableTime in UTC.
+drill_tables='video videos
+video outbox
+engagement likes
+engagement like_counts
+engagement view_counts
+engagement consumer_offsets
+feed follows
+feed videos
+feed timeline'
+pitr_host=svp-stg-pitr.fake.ap-southeast-1.rds.amazonaws.com
+media_bucket=svp-stg-media-111111111111-ap-southeast-1
+uploads_bucket=svp-stg-uploads-111111111111-ap-southeast-1
+copy_vault=arn:aws:backup:ap-southeast-1:444444444444:backup-vault:svp-stg-copy
+# reset_drill: no job, recovery point or restored instance; the source's tables two rows each; the playlist of 85 bytes.
+reset_drill() {
+  rm -rf "$state/bk" "$state/db-source" "$state/db-pitr" "$state/pg-source-calls"
+  mkdir -p "$state/bk" "$state/db-source"
+  while read -r svc t; do
+    printf '%s\t(%s-1,a)\n%s\t(%s-2,b)\n' 100 "$svc-$t" 101 "$svc-$t" >"$state/db-source/$svc.$t"
+  done <<<"$drill_tables"
+  printf '#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:4\n#EXTINF:4.0,\nseg0.ts\n#EXTINF:4.0,\nseg1.ts\n#EXT-X-ENDLIST\n' >"$state/bk/obj"
+}
+# before, for the checks run by sh -c: as the function of the same name above.
+before_fn='before() { a=$(grep -nE -- "$2" "$1" | head -n 1 | cut -d: -f1); c=$(grep -nE -- "$3" "$1" | head -n 1 | cut -d: -f1); [ -n "$a" ] && [ -n "$c" ] && [ "$a" -lt "$c" ]; }; '
+drill_row() { awk -F '\t' -v k="$1" '$1 == k' "$SVP_SESSION_DIR/restore-drill.tsv"; }
+last_mark() { awk -F '\t' '$3 ~ /^(backup-undrained|env-apply-end|env-teardown-applied|backup-drained)$/ { e = $3 } END { print e }' "$SVP_SESSION_DIR/timeline.tsv"; }
+
+for c in backup rds s3 cleanup; do
+  clear_log
+  SVP_SESSION_DIR=$infra_root/.session/print-only-$$
+  export SVP_SESSION_DIR
+  expect "restore-drill.sh --print stg $c calls nothing and writes no session directory" \
+    sh -c 'bash "$1/restore-drill.sh" --print stg "$2" >"$3" 2>&1 && [ ! -s "$4" ] && [ ! -e "$SVP_SESSION_DIR" ]' _ "$here" "$c" "$work/drill-print-$c.out" "$log"
+  expect "restore-drill.sh --print stg $c: every aws command with profile anhnv-stg and region ap-southeast-1, every kubectl to the API on context svp-stg" \
+    sh -c 'grep -q "^+ " "$1" && [ -z "$(grep -E "^\+ ([^ ]+ )*(aws|kubectl) " "$1" | grep -v "^+ kubectl config set-cluster " |
+      grep -vE "^\+ AWS_PROFILE=anhnv-stg (aws .*--region ap-southeast-1$|kubectl --context svp-stg )")" ]' _ "$work/drill-print-$c.out"
+done
+expect "restore-drill.sh --print stg backup: backup-undrained marked, the plan and selection read, three jobs into svp-stg, each copied to svp-stg-copy of account svp-backup" \
+  sh -c "$before_fn"'before "$1" "timeline: backup-undrained" "start-backup-job" && grep -q "aws backup get-backup-selection " "$1" &&
+    grep -q "aws backup describe-region-settings " "$1" &&
+    [ "$(grep -c "aws backup start-backup-job --backup-vault-name svp-stg --resource-arn [^ ]* --iam-role-arn arn:aws:iam::111111111111:role/svp-stg-backup " "$1")" = 3 ] &&
+    grep -q "resource-arn arn:aws:rds:ap-southeast-1:111111111111:db:svp-stg " "$1" && grep -q "resource-arn arn:aws:s3:::$2 " "$1" && grep -q "resource-arn arn:aws:s3:::$3 " "$1" &&
+    [ "$(grep -c "start-copy-job .* --destination-backup-vault-arn $4 " "$1")" = 3 ]' _ "$work/drill-print-backup.out" "$uploads_bucket" "$media_bucket" "$copy_vault"
+expect "restore-drill.sh --print stg rds: three samples of nine tables, the restore at T_r, then the restored instance deleted" \
+  sh -c "$before_fn"'[ "$(grep -c "/opt/svp/bin/svp-pg " "$1")" = 27 ] && grep -q "restore-db-instance-to-point-in-time .* --restore-time .<T_r: " "$1" &&
+    before "$1" "restore-db-instance-to-point-in-time" "delete-db-instance --db-instance-identifier svp-stg-pitr --skip-final-snapshot --delete-automated-backups"' _ "$work/drill-print-rds.out"
+expect "restore-drill.sh --print stg s3: the object deleted, restored item-level by the role of AWS Backup, read again" \
+  sh -c "$before_fn"'before "$1" "s3api delete-object --bucket $2 " "start-restore-job .* --iam-role-arn arn:aws:iam::111111111111:role/svp-stg-backup --resource-type S3 --metadata" &&
+    [ "$(grep -c "s3api get-object --bucket $2 " "$1")" = 2 ]' _ "$work/drill-print-s3.out" "$media_bucket"
+expect "restore-drill.sh --print stg cleanup: svp-stg-pitr deleted, tag Backup removed, jobs waited for, recovery points deleted, then backup-drained" \
+  sh -c "$before_fn"'before "$1" "delete-db-instance --db-instance-identifier svp-stg-pitr" "remove-tags-from-resource --resource-name arn:aws:rds:ap-southeast-1:111111111111:db:svp-stg --tag-keys Backup" &&
+    [ "$(grep -c "s3api put-bucket-tagging " "$1")" = 2 ] && before "$1" "list-restore-jobs" "delete-recovery-point --backup-vault-name svp-stg " &&
+    before "$1" "delete-recovery-point" "timeline: backup-drained" && ! grep -q "delete-backup-vault" "$1"' _ "$work/drill-print-cleanup.out"
+expect "restore-drill.sh refuses a subcommand it does not know, and mgmt" \
+  sh -c '! bash "$1/restore-drill.sh" stg restore >/dev/null 2>&1 && ! bash "$1/restore-drill.sh" mgmt backup >/dev/null 2>&1' _ "$here"
+
+# backup
+new_session
+reset_drill
+expect "restore-drill.sh stg backup: three jobs and their copies complete" bash "$here/restore-drill.sh" stg backup >"$work/drill.out" 2>&1
+expect "restore-drill.sh stg backup: jobs into svp-stg by role svp-stg-backup, kept the 2 days of rule daily" \
+  grep -q "^aws backup start-backup-job --backup-vault-name svp-stg --resource-arn arn:aws:rds:ap-southeast-1:111111111111:db:svp-stg --iam-role-arn arn:aws:iam::111111111111:role/svp-stg-backup --lifecycle DeleteAfterDays=2 --output json --region ap-southeast-1$" "$log"
+expect "restore-drill.sh stg backup: each recovery point copied to svp-stg-copy of account svp-backup, kept the 2 days of its copy action" \
+  test "$(grep -c "^aws backup start-copy-job --recovery-point-arn [^ ]* --source-backup-vault-name svp-stg --destination-backup-vault-arn $copy_vault --iam-role-arn arn:aws:iam::111111111111:role/svp-stg-backup --lifecycle DeleteAfterDays=2 " "$log")" = 3
+expect "restore-drill.sh stg backup: points of the session, one line per resource, creation date in UTC, copy completed" \
+  sh -c '[ "$(grep -c . "$1")" = 3 ] && grep -qx "arn:aws:s3:::$2	job-media	arn:aws:backup:ap-southeast-1:111111111111:recovery-point:svp-stg-media-media	2026-11-13T18:03:47Z	copy-media	COMPLETED" "$1" &&
+    grep -q "^arn:aws:rds:ap-southeast-1:111111111111:db:svp-stg	job-rds	arn:aws:rds:ap-southeast-1:111111111111:snapshot:awsbackup:job-rds	2026-11-13T18:03:47Z	copy-rds	COMPLETED$" "$1"' \
+  _ "$SVP_SESSION_DIR/restore-drill-points.tsv" "$media_bucket"
+expect "restore-drill.sh stg backup: backup-undrained the last mark" test "$(last_mark)" = backup-undrained
+expect "restore-drill.sh stg backup: a PASS row" test "$(drill_row backup | cut -f 6)" = PASS
+new_session
+reset_drill
+expect "restore-drill.sh prd backup keeps the 35 days of plan svp-prd" \
+  sh -c 'bash "$1/restore-drill.sh" prd backup >/dev/null 2>&1 && grep -q "start-backup-job .* --lifecycle DeleteAfterDays=35 .*--region ap-southeast-1$" "$2" &&
+    grep -q "start-copy-job .* --destination-backup-vault-arn arn:aws:backup:ap-southeast-1:444444444444:backup-vault:svp-prd-copy .* --lifecycle DeleteAfterDays=35 " "$2" &&
+    [ "$(sort -u "$2.profiles")" = anhnv-prd ]' _ "$here" "$log"
+for f in no-plan:"no backup plan svp-stg in the account of stg" plan-drift:"plan svp-stg is not the policy.s" selection-drift:"selection svp-stg-tagged is not the policy.s" \
+  opt-out:"RDS and S3 are .true false., not .true true."; do
+  new_session
+  reset_drill
+  expect "restore-drill.sh stg backup refuses on ${f%%:*}, before any job, with backup-undrained recorded" \
+    sh -c '! FAKE_BACKUP=$2 bash "$1/restore-drill.sh" stg backup >"$3" 2>&1 && grep -q "$4" "$3" && ! grep -q "start-backup-job" "$5" &&
+      awk -F "\t" "\$3 == \"backup-undrained\"" "$6/timeline.tsv" | grep -q .' _ "$here" "${f%%:*}" "$work/drill.out" "${f#*:}" "$log" "$SVP_SESSION_DIR"
+done
+new_session
+reset_drill
+expect "restore-drill.sh stg backup with a failed job: exit 1, the points of the two that completed, no copy of the failed one" \
+  sh -c '! FAKE_BACKUP=job-failed bash "$1/restore-drill.sh" stg backup >"$2" 2>&1 && grep -q "^FAIL  backup job job-media of arn:aws:s3:::$4 ended FAILED" "$2" &&
+    [ "$(grep -c . "$3/restore-drill-points.tsv")" = 2 ] && ! grep -q "media" "$3/restore-drill-points.tsv" && ! grep -q "start-copy-job --recovery-point-arn [^ ]*media" "$5"' \
+  _ "$here" "$work/drill.out" "$SVP_SESSION_DIR" "$media_bucket" "$log"
+new_session
+reset_drill
+expect "restore-drill.sh stg backup with a failed copy: exit 1, the points with copy_state FAILED, the command that reads the copy job" \
+  sh -c '! FAKE_COPY=failed bash "$1/restore-drill.sh" stg backup >"$2" 2>&1 && [ "$(grep -c "	FAILED$" "$3/restore-drill-points.tsv")" = 3 ] &&
+    grep -q "^FAIL  copy job copy-media .* is FAILED: read it with AWS_PROFILE=anhnv-stg aws backup describe-copy-job --copy-job-id copy-media --region ap-southeast-1$" "$2"' \
+  _ "$here" "$work/drill.out" "$SVP_SESSION_DIR"
+new_session
+reset_drill
+expect "restore-drill.sh stg backup past its limit: exit 1, the jobs and how to read them, no copy" \
+  sh -c '! FAKE_BACKUP=stuck SVP_DRILL_LIMIT=1 bash "$1/restore-drill.sh" stg backup >"$2" 2>&1 && grep -q "^        job-media RUNNING arn:aws:s3:::" "$2" &&
+    grep -q "backup jobs still running after 1 s: read each with AWS_PROFILE=anhnv-stg aws backup describe-backup-job" "$2" && ! grep -q "start-copy-job" "$3"' \
+  _ "$here" "$work/drill.out" "$log"
+clear_log
+expect "restore-drill.sh stg backup refuses without SVP_AWS_BACKUP_ACCOUNT_ID, before any job" \
+  sh -c '! env -u SVP_AWS_BACKUP_ACCOUNT_ID bash "$1/restore-drill.sh" stg backup >"$2" 2>&1 && grep -q "set SVP_AWS_BACKUP_ACCOUNT_ID to the 12 digits of the svp-backup account" "$2" &&
+    ! grep -q "start-backup-job" "$3"' _ "$here" "$work/drill.out" "$log"
+
+# rds
+new_session
+reset_drill
+expect "restore-drill.sh stg rds passes: R equals S1, RTO and RPO within the targets" bash "$here/restore-drill.sh" stg rds >"$work/drill.out" 2>&1
+tr_time=$(sed -n 's/^ok    sample S1 of svp-stg; T_r \(.*\)$/\1/p' "$work/drill.out")
+expect "restore-drill.sh stg rds: restore at T_r ($tr_time) to svp-stg-pitr, with the source's subnet group, security groups, parameter group and class" \
+  sh -c 'echo "$2" | grep -qE "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" &&
+    grep -qx "aws rds restore-db-instance-to-point-in-time --source-db-instance-identifier svp-stg --target-db-instance-identifier svp-stg-pitr --restore-time $2 --db-subnet-group-name svp-stg-db-x --vpc-security-group-ids sg-0rds sg-0two --db-parameter-group-name svp-stg-pg18-x --db-instance-class db.t4g.micro --no-multi-az --no-publicly-accessible --no-deletion-protection --tags Key=Project,Value=svp Key=Stack,Value=stg --output json --region ap-southeast-1" "$1" &&
+    ! grep -q "use-latest-restorable-time" "$1"' _ "$log" "$tr_time"
+expect "restore-drill.sh stg rds: the SQL of the data check on each table, twice on the source, once on the restored instance" \
+  sh -c 'printf "%s\n" "$3" | while read -r svc t; do
+      q="exec deploy/svp-ops -c postgres -- /opt/svp/bin/svp-pg $svc -c SELECT count(*), md5(coalesce(string_agg(r, '"'"'|'"'"' ORDER BY r), '"'"''"'"')) FROM (SELECT t.xmin::text || '"'"':'"'"' || t::text AS r FROM $t t) s"
+      [ "$(grep -cxF "kubectl --context svp-stg -n svp-data $q" "$1")" = 2 ] || exit 1
+      grep -qF "/opt/svp/bin/svp-pg $svc --host $2 -c SELECT count(*), md5(coalesce(string_agg(r, '"'"'|'"'"' ORDER BY r), '"'"''"'"')) FROM (SELECT t.xmin::text || '"'"':'"'"' || t::text AS r FROM $t t) s" "$1" || exit 1
+    done' _ "$log" "$pitr_host" "$drill_tables"
+expect "restore-drill.sh stg rds: a PASS row with RTO and RPO, svp-stg-pitr deleted after the sample R, backup-undrained recorded" \
+  sh -c 'awk -F "\t" "\$1 == \"rds\" && \$6 == \"PASS\" && \$4 ~ /^[0-9]+$/ && \$5 ~ /^-?[0-9]+$/" "$1/restore-drill.tsv" | grep -q . &&
+    d=$(grep -n "rds delete-db-instance --db-instance-identifier svp-stg-pitr --skip-final-snapshot --delete-automated-backups" "$2" | head -n 1 | cut -d: -f1) &&
+    h=$(grep -n "svp-pg .* --host " "$2" | tail -n 1 | cut -d: -f1) && [ -n "$d" ] && [ -n "$h" ] && [ "$h" -lt "$d" ] &&
+    awk -F "\t" "\$3 == \"backup-undrained\"" "$1/timeline.tsv" | grep -q .' _ "$SVP_SESSION_DIR" "$log"
+for f in update:"R differs" insert:"INSERT at T_r, DELETE after"; do
+  new_session
+  reset_drill
+  expect "restore-drill.sh stg rds, restore other than S1 (${f#*:}): FAIL without calling the restore wrong, svp-stg-pitr deleted all the same" \
+    sh -c '! FAKE_PITR=$2 bash "$1/restore-drill.sh" stg rds >"$3" 2>&1 && grep -q "^ok    sample S2 equals S1$" "$3" &&
+      awk -F "\t" "\$1 == \"rds\" && \$6 == \"FAIL\" && \$7 ~ /^restore differs from sample S1 .*not proof of a wrong restore/" "$4/restore-drill.tsv" | grep -q . &&
+      grep -q "^aws rds delete-db-instance --db-instance-identifier svp-stg-pitr --skip-final-snapshot --delete-automated-backups " "$5"' \
+    _ "$here" "${f%%:*}" "$work/drill.out" "$SVP_SESSION_DIR" "$log"
+done
+for c in update revert delete; do
+  new_session
+  reset_drill
+  expect "restore-drill.sh stg rds, source changed between S1 and S2 ($c): FAIL source changed during window, nothing restored" \
+    sh -c '! FAKE_SOURCE_CHANGE=$2 bash "$1/restore-drill.sh" stg rds >"$3" 2>&1 && grep -q "source changed during window" "$3" &&
+      awk -F "\t" "\$1 == \"rds\" && \$6 == \"FAIL\" && \$7 ~ /^source changed during window/" "$4/restore-drill.tsv" | grep -q . &&
+      ! grep -q "restore-db-instance-to-point-in-time" "$5"' _ "$here" "$c" "$work/drill.out" "$SVP_SESSION_DIR" "$log"
+done
+new_session
+reset_drill
+expect "restore-drill.sh stg rds, LatestRestorableTime 400 s before the restore: FAIL RPO over 300 s, svp-stg-pitr deleted" \
+  sh -c '! FAKE_LRT="-30 -30 +2 -400" bash "$1/restore-drill.sh" stg rds >"$2" 2>&1 &&
+    awk -F "\t" "\$1 == \"rds\" && \$6 == \"FAIL\" && \$5 >= 400 && \$7 ~ /RPO over 300 s/" "$3/restore-drill.tsv" | grep -q . &&
+    grep -q "^aws rds delete-db-instance --db-instance-identifier svp-stg-pitr " "$4"' _ "$here" "$work/drill.out" "$SVP_SESSION_DIR" "$log"
+new_session
+reset_drill
+expect "restore-drill.sh stg rds past its limit for LatestRestorableTime: exit 1, how to read it, nothing restored" \
+  sh -c '! FAKE_LRT=-30 SVP_DRILL_LIMIT=1 bash "$1/restore-drill.sh" stg rds >"$2" 2>&1 && grep -q "still before T_r .* after 1 s, nothing restored: read it with AWS_PROFILE=anhnv-stg aws rds describe-db-instances" "$2" &&
+    ! grep -q "restore-db-instance-to-point-in-time" "$3"' _ "$here" "$work/drill.out" "$log"
+new_session
+reset_drill
+echo available >"$state/bk/pitr"
+expect "restore-drill.sh stg rds stops on a svp-stg-pitr of an earlier run: the delete command, no restore, nothing deleted" \
+  sh -c '! bash "$1/restore-drill.sh" stg rds >"$2" 2>&1 && grep -q "svp-stg-pitr available is left from an earlier drill, nothing restored over it: AWS_PROFILE=anhnv-stg aws rds delete-db-instance --db-instance-identifier svp-stg-pitr --skip-final-snapshot --delete-automated-backups --region ap-southeast-1" "$2" &&
+    ! grep -qE "restore-db-instance-to-point-in-time|delete-db-instance|svp-pg" "$3"' _ "$here" "$work/drill.out" "$log"
+
+# s3: the session's points, uploads completed after media.
+drill_points() {
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+    arn:aws:rds:ap-southeast-1:111111111111:db:svp-stg job-rds arn:aws:rds:ap-southeast-1:111111111111:snapshot:awsbackup:job-rds 2026-11-13T18:03:47Z copy-rds COMPLETED \
+    "arn:aws:s3:::$media_bucket" job-media rp-media 2026-11-13T18:03:47Z copy-media COMPLETED \
+    "arn:aws:s3:::$uploads_bucket" job-uploads rp-uploads 2026-11-13T18:29:49Z copy-uploads COMPLETED >"$SVP_SESSION_DIR/restore-drill-points.tsv"
+}
+new_session
+reset_drill
+drill_points
+expect "restore-drill.sh stg s3 passes: same length and SHA-256, the ETag changed" bash "$here/restore-drill.sh" stg s3 >"$work/drill.out" 2>&1
+expect "restore-drill.sh stg s3: the ETag the fake answers changed across the restore (not compared)" \
+  sh -c '[ "$(cat "$1/bk/obj-etag")" = restored ]' _ "$state"
+expect "restore-drill.sh stg s3: the recovery point of the media bucket, not the later one of uploads; the oldest-named .m3u8 older than it" \
+  grep -qxF "aws backup start-restore-job --recovery-point-arn rp-media --iam-role-arn arn:aws:iam::111111111111:role/svp-stg-backup --resource-type S3 --metadata {\"DestinationBucketName\":\"$media_bucket\",\"ItemsToRestore\":\"[\\\"s3://$media_bucket/media/a1/1/index.m3u8\\\"]\",\"EncryptionType\":\"original\",\"RestoreACLs\":\"false\"} --output json --region ap-southeast-1" "$log"
+expect "restore-drill.sh stg s3: one delete-object, of that key of the media bucket alone" \
+  sh -c '[ "$(grep -c "s3api delete-object" "$1")" = 1 ] && grep -qx "aws s3api delete-object --bucket $2 --key media/a1/1/index.m3u8 --output json --region ap-southeast-1" "$1"' _ "$log" "$media_bucket"
+expect "restore-drill.sh stg s3: a PASS row, rpo_s the age of the recovery point" \
+  sh -c 'awk -F "\t" "\$1 == \"s3\" && \$6 == \"PASS\" && \$5 > 0" "$1/restore-drill.tsv" | grep -q .' _ "$SVP_SESSION_DIR"
+new_session
+reset_drill
+drill_points
+expect "restore-drill.sh stg s3 fails when the object comes back with other content" \
+  sh -c '! FAKE_RESTORE=other bash "$1/restore-drill.sh" stg s3 >"$2" 2>&1 &&
+    awk -F "\t" "\$1 == \"s3\" && \$6 == \"FAIL\" && \$7 ~ /with other content/" "$3/restore-drill.tsv" | grep -q .' _ "$here" "$work/drill.out" "$SVP_SESSION_DIR"
+# When the restore does not bring the object back, the command that removes the drill's delete marker is given.
+undo_cmd="AWS_PROFILE=anhnv-stg aws s3api delete-object --bucket $media_bucket --key media/a1/1/index.m3u8 --version-id CpEY --region ap-southeast-1"
+new_session
+reset_drill
+drill_points
+expect "restore-drill.sh stg s3, restore job FAILED: the command that deletes the delete marker is printed and in the row" \
+  sh -c '! FAKE_RESTORE=failed bash "$1/restore-drill.sh" stg s3 >"$2" 2>&1 && grep -qF "bring s3://$4/media/a1/1/index.m3u8 back with: $5" "$2" &&
+    awk -F "\t" "\$1 == \"s3\" && \$6 == \"FAIL\" && index(\$7, \"$5\")" "$3/restore-drill.tsv" | grep -q .' _ "$here" "$work/drill.out" "$SVP_SESSION_DIR" "$media_bucket" "$undo_cmd"
+new_session
+reset_drill
+drill_points
+expect "restore-drill.sh stg s3, restore job past its limit: the command that deletes the delete marker is printed" \
+  sh -c '! FAKE_RESTORE=stuck SVP_DRILL_LIMIT=1 bash "$1/restore-drill.sh" stg s3 >"$2" 2>&1 && grep -qF "to bring it back now: $3" "$2"' _ "$here" "$work/drill.out" "$undo_cmd"
+new_session
+reset_drill
+drill_points
+grep -v ":::$media_bucket" "$SVP_SESSION_DIR/restore-drill-points.tsv" >"$work/points" && mv "$work/points" "$SVP_SESSION_DIR/restore-drill-points.tsv"
+expect "restore-drill.sh stg s3 refuses without the media bucket's line in the points, deleting nothing" \
+  sh -c '! bash "$1/restore-drill.sh" stg s3 >"$2" 2>&1 && grep -q "no line of arn:aws:s3:::$4 in .*restore-drill-points.tsv: run restore-drill.sh stg backup first" "$2" &&
+    ! grep -qE "delete-object|start-restore-job" "$3"' _ "$here" "$work/drill.out" "$log" "$media_bucket"
+
+# cleanup: two recovery points in svp-stg, both copied.
+drill_copied() {
+  printf '%s\n' "arn:aws:rds:ap-southeast-1:111111111111:snapshot:awsbackup:job-rds svp-stg arn:aws:rds:ap-southeast-1:111111111111:db:svp-stg" \
+    "rp-media svp-stg arn:aws:s3:::$media_bucket" >"$state/bk/rps"
+  printf '%s\n' "copy copy-rds - arn:aws:rds:ap-southeast-1:111111111111:snapshot:awsbackup:job-rds - $copy_vault COMPLETED" \
+    "copy copy-media - rp-media - $copy_vault ${1:-COMPLETED}" >"$state/bk/jobs"
+}
+new_session
+reset_drill
+drill_copied
+expect "restore-drill.sh stg cleanup passes" sh -c 'bash "$1/restore-drill.sh" stg cleanup >"$2" 2>&1' _ "$here" "$work/drill.out"
+expect "restore-drill.sh stg cleanup records backup-drained" test "$(last_mark)" = backup-drained
+expect "restore-drill.sh stg cleanup: tag Backup removed from the instance and from both buckets, the rest of their tags kept" \
+  sh -c 'grep -qx "aws rds remove-tags-from-resource --resource-name arn:aws:rds:ap-southeast-1:111111111111:db:svp-stg --tag-keys Backup --region ap-southeast-1" "$1" &&
+    for b in "$2" "$3"; do grep -qxF "aws s3api put-bucket-tagging --bucket $b --tagging {\"TagSet\":[{\"Key\":\"Project\",\"Value\":\"svp\"},{\"Key\":\"Stack\",\"Value\":\"stg\"}]} --region ap-southeast-1" "$1" || exit 1; done' \
+  _ "$log" "$uploads_bucket" "$media_bucket"
+expect "restore-drill.sh stg cleanup: both recovery points deleted, after the wait for jobs; no vault deleted, nothing of svp-stg-copy touched, profile anhnv-stg alone" \
+  sh -c "$before_fn"'[ ! -s "$2/bk/rps" ] && before "$1" "aws backup list-restore-jobs" "aws backup delete-recovery-point --backup-vault-name svp-stg " &&
+    [ "$(grep -c "^aws backup delete-recovery-point --backup-vault-name svp-stg " "$1")" = 2 ] && ! grep -qE "delete-backup-vault|svp-stg-copy.* (delete|put|update)" "$1" &&
+    ! grep -E "^aws backup (delete|put|update|start)" "$1" | grep -q copy && [ "$(sort -u "$1.profiles")" = anhnv-stg ]' _ "$log" "$state"
+new_session
+reset_drill
+drill_copied
+echo available >"$state/bk/pitr"
+expect "restore-drill.sh stg cleanup deletes a svp-stg-pitr left, first" \
+  sh -c "$before_fn"'bash "$1/restore-drill.sh" stg cleanup >/dev/null 2>&1 && before "$2" "rds delete-db-instance --db-instance-identifier svp-stg-pitr " "remove-tags-from-resource"' _ "$here" "$log"
+new_session
+reset_drill
+drill_copied
+printf '%s\n' "copy:cj-1:RUNNING restore:rj-1:PENDING" "backup:bj-2:RUNNING" "" >"$state/bk/rounds"
+expect "restore-drill.sh stg cleanup waits on for a job that starts while it waits, then deletes" \
+  sh -c 'bash "$1/restore-drill.sh" stg cleanup >/dev/null 2>&1 && [ "$(grep -c "^aws backup list-backup-jobs " "$2")" -ge 3 ] && [ ! -s "$3/bk/rps" ]' _ "$here" "$log" "$state"
+rm -f "$state/bk/rounds" "$state/bk/round"
+new_session
+reset_drill
+drill_copied FAILED
+expect "restore-drill.sh stg cleanup keeps a recovery point whose copy failed: exit 1, the copy and delete commands, no backup-drained" \
+  sh -c '! bash "$1/restore-drill.sh" stg cleanup >"$2" 2>&1 && grep -q "^FAIL  recovery point rp-media of arn:aws:s3:::$4 has no completed copy in svp-stg-copy, kept$" "$2" &&
+    grep -q "copy: AWS_PROFILE=anhnv-stg aws backup start-copy-job --recovery-point-arn rp-media --source-backup-vault-name svp-stg --destination-backup-vault-arn $5 --iam-role-arn arn:aws:iam::111111111111:role/svp-stg-backup --lifecycle DeleteAfterDays=2 --region ap-southeast-1$" "$2" &&
+    grep -q "or accept its loss: AWS_PROFILE=anhnv-stg aws backup delete-recovery-point --backup-vault-name svp-stg --recovery-point-arn rp-media --region ap-southeast-1$" "$2" &&
+    grep -q "^rp-media " "$3/bk/rps" && ! grep -qs "	backup-drained$" "$6/timeline.tsv"' \
+  _ "$here" "$work/drill.out" "$state" "$media_bucket" "$copy_vault" "$SVP_SESSION_DIR"
+new_session
+reset_drill
+drill_copied
+echo "backup bj-9 arn:aws:s3:::$media_bucket - - - RUNNING" >>"$state/bk/jobs"
+expect "restore-drill.sh stg cleanup past its limit for a running job: exit 1, the job and how to stop it, nothing deleted, no backup-drained" \
+  sh -c '! SVP_DRILL_LIMIT=1 bash "$1/restore-drill.sh" stg cleanup >"$2" 2>&1 && grep -q "^        backup bj-9 RUNNING " "$2" &&
+    grep -q "jobs still running after 1 s, nothing deleted: a backup job can be stopped (AWS_PROFILE=anhnv-stg aws backup stop-backup-job" "$2" &&
+    ! grep -q "delete-recovery-point" "$3" && ! grep -qs "	backup-drained$" "$4/timeline.tsv"' _ "$here" "$work/drill.out" "$log" "$SVP_SESSION_DIR"
+
+# The destroy of root env waits for the cleanup after the last apply or drill.
+new_session
+reset_drill
+add_mark gitops-destroy-end
+export FAKE_TF_STATE=eks
+expect "prd: cleanup, then apply --teardown, then plan --destroy is refused, naming the cleanup" \
+  sh -c 'bash "$1/restore-drill.sh" prd cleanup >/dev/null 2>&1 && bash "$1/tf.sh" prd env plan --teardown >/dev/null 2>&1 && bash "$1/tf.sh" prd env apply --teardown >/dev/null 2>&1 &&
+    ! bash "$1/tf.sh" prd env plan --destroy >"$2" 2>&1 && grep -q "the backups of prd are not drained since the last apply or drill (env-teardown-applied last in .*): aws/scripts/restore-drill.sh prd cleanup" "$2" &&
+    ! grep -q "^terraform .* plan -destroy" "$3"' _ "$here" "$work/out" "$log"
+clear_log
+expect "prd: apply --teardown, then cleanup, then plan --destroy runs" \
+  sh -c 'bash "$1/restore-drill.sh" prd cleanup >/dev/null 2>&1 && bash "$1/tf.sh" prd env plan --destroy >/dev/null 2>&1 && grep -q "^terraform .*/aws/envs/prd plan -destroy " "$2"' _ "$here" "$log"
+reset_drill
+expect "prd: a drill between plan --destroy and destroy refuses the destroy" \
+  sh -c 'bash "$1/restore-drill.sh" prd backup >/dev/null 2>&1; ! bash "$1/tf.sh" prd env destroy >"$2" 2>&1 && grep -q "backups of prd are not drained" "$2" &&
+    ! grep -q "apply -input=false prd.destroy.tfplan" "$3"' _ "$here" "$work/out" "$log"
+rm -f "$envs/prd/prd.destroy.tfplan"
+unset FAKE_TF_STATE
+new_session
+reset_drill
+add_mark gitops-destroy-end
+expect "stg (no teardown file): cleanup, then plan --destroy runs" \
+  sh -c 'bash "$1/restore-drill.sh" stg cleanup >/dev/null 2>&1 && bash "$1/tf.sh" stg env plan --destroy >/dev/null 2>&1' _ "$here"
+rm -f "$envs/stg/stg.destroy.tfplan"
+new_session
+reset_drill
+add_mark gitops-destroy-end
+expect "stg: cleanup, then an apply that fails half-way, then plan --destroy is refused" \
+  sh -c 'bash "$1/restore-drill.sh" stg cleanup >/dev/null 2>&1 && bash "$1/tf.sh" stg env plan >/dev/null 2>&1 &&
+    ! FAKE_TF_APPLY_FAIL=1 bash "$1/tf.sh" stg env apply >/dev/null 2>&1 && ! bash "$1/tf.sh" stg env plan --destroy >"$2" 2>&1 && grep -q "backups of stg are not drained" "$2"' _ "$here" "$work/out"
+rm -f "$envs/stg/stg.tfplan"
+new_session
+reset_drill
+add_mark gitops-destroy-end
+expect "stg: cleanup, then restore-drill.sh backup failing half-way, then plan --destroy is refused" \
+  sh -c 'bash "$1/restore-drill.sh" stg cleanup >/dev/null 2>&1 && ! FAKE_BACKUP=job-failed bash "$1/restore-drill.sh" stg backup >/dev/null 2>&1 &&
+    ! bash "$1/tf.sh" stg env plan --destroy >"$2" 2>&1 && grep -q "backups of stg are not drained" "$2"' _ "$here" "$work/out"
+for e in stg prd; do
+  clear_log
+  expect "tf.sh $e env plan: TF_VAR_backup_account_id is SVP_AWS_BACKUP_ACCOUNT_ID" \
+    sh -c 'bash "$1/tf.sh" "$2" env plan >/dev/null 2>&1 && [ "$(sed -n "s/^backup_account=//p" "$3.tfenv" | sort -u)" = 444444444444 ]' _ "$here" "$e" "$log"
+  clear_log
+  expect "tf.sh $e env plan refuses without SVP_AWS_BACKUP_ACCOUNT_ID, before any aws or terraform, and says how to set it" \
+    sh -c '! env -u SVP_AWS_BACKUP_ACCOUNT_ID bash "$1/tf.sh" "$2" env plan >"$3" 2>&1 && grep -q "set SVP_AWS_BACKUP_ACCOUNT_ID to the 12 digits of the svp-backup account" "$3" &&
+      [ ! -s "$4" ]' _ "$here" "$e" "$work/out" "$log"
+done
+rm -f "$envs/stg/stg.tfplan" "$envs/prd/prd.tfplan"
+clear_log
+expect "tf.sh gitops plan runs without SVP_AWS_BACKUP_ACCOUNT_ID" sh -c 'env -u SVP_AWS_BACKUP_ACCOUNT_ID bash "$1/tf.sh" stg gitops plan >/dev/null 2>&1' _ "$here"
+rm -f "$infra_root"/aws/*/*/*.tfplan
+rm -rf "$state/bk"
 
 # --- bootstrap.sh -------------------------------------------------------------------------------------------------
 # The Kafka and Valkey passwords of the local stack are in .env too: the apply of the root writes those of EKS, so no
@@ -1931,13 +2544,55 @@ expect "sweep.sh stg: a rule of job states whose target a destroy already remove
     grep -q "^ok    EventBridge rule targets: none$" "$2" && grep -q "^FAIL  EventBridge rules: 1 left$" "$2" &&
     grep -q "delete: AWS_PROFILE=anhnv-stg aws events delete-rule --name svp-stg-mediaconvert-job-state --region ap-southeast-1$" "$2" &&
     ! grep -q "remove-targets" "$2"' _ "$here" "$work/sweep.out"
-expect "sweep.sh --print stg: the queues of MediaConvert in the home region, its roles and their policies in us-east-1, the tags of each rule" \
+expect "sweep.sh --print stg: the queues of MediaConvert in the home region, its roles, those of AWS Backup and their policies in us-east-1, the tags of each rule" \
   sh -c 'bash "$1/sweep.sh" --print stg >"$2" 2>&1 && grep -q "^+ AWS_PROFILE=anhnv-stg aws mediaconvert list-queues --output json --region ap-southeast-1$" "$2" &&
     grep -q "^+ AWS_PROFILE=anhnv-stg aws events list-rules --name-prefix svp- --output json --region ap-southeast-1$" "$2" &&
     grep -q "^+ AWS_PROFILE=anhnv-stg aws events list-tags-for-resource --resource-arn .<its-ARN>. --output json --region ap-southeast-1$" "$2" &&
     grep -q "^+ AWS_PROFILE=anhnv-stg aws events list-targets-by-rule --rule .<each-rule-above>. --output json --region ap-southeast-1$" "$2" &&
     grep -q "^+ AWS_PROFILE=anhnv-stg aws iam list-role-policies --role-name .<each-role-above>. --output json --region us-east-1$" "$2" &&
-    [ "$(grep -c "^+ AWS_PROFILE=anhnv-stg aws iam list-roles --output json --region us-east-1$" "$2")" = 3 ]' _ "$here" "$work/print-sweep.out"
+    [ "$(grep -c "^+ AWS_PROFILE=anhnv-stg aws iam list-roles --output json --region us-east-1$" "$2")" = 6 ]' _ "$here" "$work/print-sweep.out"
+# The leftovers of the sandbox probe of AWS Backup in management, as its sweep found and named them.
+clear_log
+expect "sweep.sh mgmt fails on what the probe of AWS Backup left" sh -c '! FAKE_LEFTOVER=probe bash "$1/sweep.sh" mgmt >"$2" 2>&1' _ "$here" "$work/sweep.out"
+expect "sweep.sh mgmt: both vaults of the probe, the lock of the locked one first" \
+  sh -c 'grep -q "^FAIL  AWS Backup vault locks: 1 left$" "$1" &&
+    grep -q "delete: AWS_PROFILE=anhnv-sso aws backup delete-backup-vault-lock-configuration --backup-vault-name svp-probe-locked --region ap-southeast-1$" "$1" &&
+    grep -q "^FAIL  AWS Backup vaults: 2 left$" "$1" && grep -q "^        svp-probe-locked Locked=true$" "$1" &&
+    grep -q "delete: AWS_PROFILE=anhnv-sso aws backup delete-backup-vault --backup-vault-name svp-probe --region ap-southeast-1$" "$1"' _ "$work/sweep.out"
+expect "sweep.sh mgmt: the snapshot awsbackup:* counted once, as a recovery point, not as an RDS snapshot" \
+  sh -c 'grep -q "^ok    RDS snapshots: none$" "$1" && [ "$(grep -c "awsbackup:job-1a4350b9" "$1")" = 0 ]' _ "$work/sweep.out"
+expect "sweep.sh mgmt: an automated snapshot left is its own kind, without delete-db-snapshot" \
+  sh -c 'grep -q "^FAIL  RDS automated snapshots: 1 left$" "$1" && grep -q "^        rds:svp-probe-2026-11-13-16-59 automated available$" "$1" &&
+    grep -q "delete: RDS removes it with the automated backups of its deleted instance: run the sweep again in a few minutes" "$1" &&
+    ! grep -q "delete-db-snapshot --db-snapshot-identifier rds:" "$1"' _ "$work/sweep.out"
+expect "sweep.sh mgmt: the local plan svp-probe, the role svp-probe-backup with its inline and managed policies" \
+  sh -c 'grep -q "^FAIL  AWS Backup plans: 1 left$" "$1" && grep -q "^        7987bcc1-0daf-4965-a146-87c5ee56b05d svp-probe$" "$1" &&
+    grep -q "^FAIL  IAM inline policies of AWS Backup roles: 1 left$" "$1" &&
+    grep -q "delete: AWS_PROFILE=anhnv-sso aws iam delete-role-policy --role-name svp-probe-backup --policy-name probe-extra --region us-east-1$" "$1" &&
+    grep -q "^FAIL  IAM managed policies attached to AWS Backup roles: 2 left$" "$1" &&
+    grep -q "delete: AWS_PROFILE=anhnv-sso aws iam detach-role-policy --role-name svp-probe-backup --policy-arn arn:aws:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForBackup --region us-east-1$" "$1" &&
+    grep -q "^FAIL  IAM roles of AWS Backup: 1 left$" "$1" && grep -q "delete: AWS_PROFILE=anhnv-sso aws iam delete-role --role-name svp-probe-backup --region us-east-1$" "$1"' _ "$work/sweep.out"
+printf '%s\n' "rp-left svp-probe arn:aws:s3:::svp-probe-000000000000-ap-southeast-1" \
+  "arn:aws:rds:ap-southeast-1:000000000000:snapshot:awsbackup:job-1a4350b9 svp-probe arn:aws:rds:ap-southeast-1:000000000000:db:svp-probe" >"$state/bk/rps"
+printf '%s\n' "copy cj-7 arn:aws:s3:::svp-probe-000000000000-ap-southeast-1 rp-left - - RUNNING" "backup bj-8 arn:aws:s3:::x - - - COMPLETED" >"$state/bk/jobs"
+expect "sweep.sh mgmt: every recovery point of a vault svp-*, and a copy job not ended (waited for, not stopped)" \
+  sh -c '! FAKE_LEFTOVER=probe bash "$1/sweep.sh" mgmt >"$2" 2>&1 && grep -q "^FAIL  AWS Backup recovery points: 2 left$" "$2" &&
+    grep -q "delete: AWS_PROFILE=anhnv-sso aws backup delete-recovery-point --recovery-point-arn arn:aws:rds:ap-southeast-1:000000000000:snapshot:awsbackup:job-1a4350b9 --backup-vault-name svp-probe --region ap-southeast-1$" "$2" &&
+    grep -q "^FAIL  AWS Backup copy jobs not ended: 1 left$" "$2" && grep -q "delete: a copy job cannot be stopped: wait until it ends" "$2" &&
+    grep -q "^ok    AWS Backup backup jobs not ended: none$" "$2" && [ "$(grep -c "awsbackup:job-1a4350b9" "$2")" = 2 ]' _ "$here" "$work/sweep.out"
+printf '%s\n' "restore rj-9 - rp-left - - RUNNING" "backup bj-8 arn:aws:s3:::x - - - COMPLETED" >"$state/bk/jobs"
+expect "sweep.sh stg: a restore job not ended (waited for, not stopped)" \
+  sh -c '! bash "$1/sweep.sh" stg >"$2" 2>&1 && grep -q "^FAIL  AWS Backup restore jobs not ended: 1 left$" "$2" &&
+    grep -q "^        rj-9 RUNNING -$" "$2" && grep -q "delete: a restore job cannot be stopped: wait until it ends" "$2" &&
+    grep -q "^ok    AWS Backup backup jobs not ended: none$" "$2"' _ "$here" "$work/sweep.out"
+echo "backup bj-9 arn:aws:s3:::svp-stg-media-x - - - RUNNING" >"$state/bk/jobs"
+: >"$state/bk/rps"
+expect "sweep.sh stg: the vault and the role of aws/accounts/stg kept, a backup job not ended with stop-backup-job, the policy's plan not counted" \
+  sh -c '! bash "$1/sweep.sh" stg >"$2" 2>&1 && grep -q "^kept  backup vault svp-stg (Stack=baseline)$" "$2" && grep -q "^kept  IAM role svp-stg-backup (Stack=baseline)$" "$2" &&
+    grep -q "^ok    AWS Backup vaults: none$" "$2" && grep -q "^ok    AWS Backup plans: none$" "$2" && grep -q "^ok    IAM roles of AWS Backup: none$" "$2" &&
+    grep -q "delete: AWS_PROFILE=anhnv-stg aws backup stop-backup-job --backup-job-id bj-9 --region ap-southeast-1$" "$2" &&
+    grep -q "^FAIL  1 leftover(s) in account stg" "$2"' _ "$here" "$work/sweep.out"
+rm -rf "$state/bk"
 expect "sweep.sh stops on another account before any other command" \
   sh -c '! FAKE_ACCOUNT=000000000000 bash "$1/sweep.sh" stg >/dev/null 2>&1' _ "$here"
 

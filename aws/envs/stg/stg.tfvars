@@ -21,9 +21,10 @@ control_plane_log_types          = ["api", "audit", "authenticator", "controller
 control_plane_log_retention_days = 1
 eks_secrets_kms_encryption       = true
 
-# rds: smallest Graviton class, one zone, storage growing up to 40 GiB, one day of backups, deleted with the env and
-# with nothing left behind; Performance Insights at the free retention, enhanced monitoring every 60 s, PostgreSQL logs
-# exported, logs and OS metrics kept 1 day.
+# rds: smallest Graviton class, one zone, storage growing up to 40 GiB, one day of backups, deleted with the env with
+# no automated backup or final snapshot left behind (the copies of AWS Backup stay in the backup account); Performance
+# Insights at the free retention, enhanced monitoring every 60 s, PostgreSQL logs exported, logs and OS metrics kept
+# 1 day.
 rds_instance_class                        = "db.t4g.small"
 rds_max_allocated_storage                 = 40
 rds_multi_az                              = false
@@ -53,11 +54,12 @@ valkey_node_count              = 1
 valkey_apply_immediately       = true
 valkey_slow_log_retention_days = 1
 
-# media: destroy empties and deletes both buckets; no earlier versions kept, S3 access logs in a log bucket of the env,
-# its web ACL of waf.tf in front of CloudFront. The distribution stays on the flat-rate Free plan, so it writes no
-# standard logs; every other part of the edge is prd's.
+# media: destroy empties and deletes both buckets, every version included; earlier versions kept 30 days as in prd,
+# because AWS Backup backs up only versioned buckets. S3 access logs in a log bucket of the env, its web ACL of waf.tf
+# in front of CloudFront. The distribution stays on the flat-rate Free plan, so it writes no standard logs; every
+# other part of the edge is prd's.
 media_force_destroy          = true
-media_versioning_enabled     = false
+media_versioning_enabled     = true
 media_access_logging_enabled = true
 media_flat_rate_free         = true
 

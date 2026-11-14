@@ -82,14 +82,66 @@ resource "aws_db_parameter_group" "this" {
 }
 
 # One key of the instance for its storage, its Performance Insights data and the secret of its master password, so the
-# env controls and audits every use of the data and can revoke it. The default key policy: who may use the key is
-# decided by IAM of the account, and RDS uses it through grants it creates.
+# env controls and audits every use of the data and can revoke it. Inside the account IAM decides who may use the key,
+# as with the default key policy, and RDS uses it through grants it creates.
 resource "aws_kms_key" "this" {
   description              = "RDS ${var.name}: storage, Performance Insights and master user secret"
   key_usage                = "ENCRYPT_DECRYPT"
   customer_master_key_spec = "SYMMETRIC_DEFAULT"
   enable_key_rotation      = true
   deletion_window_in_days  = 7
+  policy                   = data.aws_iam_policy_document.key.json
+}
+
+# A snapshot encrypted with a customer managed key can be copied to another account only when that account may use the
+# key: the backup account decrypts the snapshot and re-encrypts the copy with its own vault key, so the copy outlives
+# this key. CreateGrant only for AWS resources: RDS of the backup account copies through a grant.
+data "aws_iam_policy_document" "key" {
+  statement {
+    sid       = "EnableIamUserPermissions"
+    effect    = "Allow"
+    actions   = ["kms:*"]
+    resources = ["*"]
+
+    principals {
+      type        = "AWS"
+      identifiers = ["arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:root"]
+    }
+  }
+
+  statement {
+    sid       = "BackupAccountUseForCopy"
+    effect    = "Allow"
+    actions   = ["kms:Decrypt", "kms:DescribeKey", "kms:GenerateDataKey"]
+    resources = ["*"]
+
+    principals {
+      type        = "AWS"
+      identifiers = [local.backup_account_root]
+    }
+  }
+
+  statement {
+    sid       = "BackupAccountGrantForCopy"
+    effect    = "Allow"
+    actions   = ["kms:CreateGrant"]
+    resources = ["*"]
+
+    principals {
+      type        = "AWS"
+      identifiers = [local.backup_account_root]
+    }
+
+    condition {
+      test     = "Bool"
+      variable = "kms:GrantIsForAWSResource"
+      values   = ["true"]
+    }
+  }
+}
+
+locals {
+  backup_account_root = "arn:${data.aws_partition.current.partition}:iam::${var.backup_copy_account_id}:root"
 }
 
 resource "aws_kms_alias" "this" {
@@ -156,8 +208,10 @@ resource "aws_db_instance" "this" {
   monitoring_role_arn                   = var.monitoring_interval > 0 ? aws_iam_role.monitoring[0].arn : null
   enabled_cloudwatch_logs_exports       = var.cloudwatch_logs_exports
 
+  # Backup = daily puts the instance in the selection of the organization's backup policy.
   tags = {
-    Name = var.name
+    Name   = var.name
+    Backup = "daily"
   }
 
   # RDS creates the log group of an export, and the one of enhanced monitoring, itself when it does not exist yet,
@@ -184,17 +238,13 @@ resource "aws_cloudwatch_log_group" "os_metrics" {
   retention_in_days = var.cloudwatch_logs_retention_days
 }
 
-data "aws_partition" "current" {
-  count = var.monitoring_interval > 0 ? 1 : 0
-}
+data "aws_partition" "current" {}
 
 data "aws_region" "current" {
   count = var.monitoring_interval > 0 ? 1 : 0
 }
 
-data "aws_caller_identity" "current" {
-  count = var.monitoring_interval > 0 ? 1 : 0
-}
+data "aws_caller_identity" "current" {}
 
 # The role enhanced monitoring assumes to write OS metrics to CloudWatch Logs. The trust policy is the one of the RDS
 # guide, with both confused deputy conditions: only RDS acting for this instance, in this account, may assume it
@@ -211,8 +261,8 @@ resource "aws_iam_role" "monitoring" {
       Principal = { Service = "monitoring.rds.amazonaws.com" }
       Action    = "sts:AssumeRole"
       Condition = {
-        StringLike   = { "aws:SourceArn" = "arn:${data.aws_partition.current[0].partition}:rds:${data.aws_region.current[0].region}:${data.aws_caller_identity.current[0].account_id}:db:${var.name}" }
-        StringEquals = { "aws:SourceAccount" = data.aws_caller_identity.current[0].account_id }
+        StringLike   = { "aws:SourceArn" = "arn:${data.aws_partition.current.partition}:rds:${data.aws_region.current[0].region}:${data.aws_caller_identity.current.account_id}:db:${var.name}" }
+        StringEquals = { "aws:SourceAccount" = data.aws_caller_identity.current.account_id }
       }
     }]
   })
@@ -223,5 +273,5 @@ resource "aws_iam_role_policy_attachment" "monitoring" {
   count = var.monitoring_interval > 0 ? 1 : 0
 
   role       = aws_iam_role.monitoring[0].name
-  policy_arn = "arn:${data.aws_partition.current[0].partition}:iam::aws:policy/service-role/AmazonRDSEnhancedMonitoringRole"
+  policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/service-role/AmazonRDSEnhancedMonitoringRole"
 }

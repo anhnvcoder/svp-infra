@@ -1,10 +1,13 @@
 # Module `org-policies`
 
-Mọi policy của AWS Organizations: sáu service control policy (SCP), một resource control policy (RCP), một declarative policy EC2 và một tag
-policy. Root `aws/org` truyền ba id: root của org (`root_id`), OU `Prod` (`prod_ou_id`) và id tổ chức (`organization_id`, cho RCP). Mỗi policy
-gắn đúng một đích: `svp-prod-guardrails` ở OU `Prod`, mọi policy khác ở root. Thiết kế và statement đủ:
+Mọi policy của AWS Organizations: service control policy (SCP), resource control policy (RCP), declarative policy EC2, tag policy và Backup
+policy. Root `aws/org` truyền root của org (`root_id`), OU `Prod` (`prod_ou_id`), OU `NonProd` (`nonprod_ou_id`), id tổ chức
+(`organization_id`, cho RCP) và id account `svp-backup` (`backup_account_id`, đích copy của Backup policy). Mỗi policy gắn đúng một đích:
+`svp-prod-guardrails` và `svp-backup-prd` ở OU `Prod`, `svp-backup-stg` ở OU `NonProd`, mọi policy khác ở root. Thiết kế và statement đủ:
 [ADR-0059](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0059-org-structure-guardrails.md) và
-[phụ lục](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0059-org-structure-guardrails.md).
+[phụ lục](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0059-org-structure-guardrails.md); Backup policy:
+[ADR-0067](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0067-backup-dr.md) §4 và
+[phụ lục](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0067-backup-dr.md#4-backup-policy).
 
 | Policy | Loại | Đích | Chặn hay đặt | Vì sao |
 | --- | --- | --- | --- | --- |
@@ -16,7 +19,8 @@ gắn đúng một đích: `svp-prod-guardrails` ở OU `Prod`, mọi policy kh�
 | `svp-prod-guardrails` | SCP | OU `Prod` | Spot qua `ec2:RunInstances` (`ec2:InstanceMarketType` = `spot`), `RequestSpotInstances`, `RequestSpotFleet` | prd chạy on-demand |
 | `svp-data-perimeter` | RCP | root | S3, SQS, KMS, Secrets Manager, STS: principal ngoài org, dịch vụ AWS thay tài nguyên ngoài org, request không TLS | dữ liệu và credential không tới được ai ngoài org |
 | `svp-ec2-baseline` | declarative EC2 | root | IMDSv2 bắt buộc (hop 1), chặn chia sẻ public AMI mới và mọi snapshot EBS public, tắt serial console | thiết lập EC2 an toàn không phụ thuộc từng launch template |
-| `svp-tags` | tag policy | root | hoa thường và giá trị được phép của `Project`, `Env`, `ManagedBy`, `Stack`; enforce cho `ec2`, `eks`, `kms` | tag phân bổ chi phí và điều kiện theo tag (`ProtectEbsKey`) chỉ đúng khi tag đúng |
+| `svp-tags` | tag policy | root | hoa thường và giá trị được phép của `Project`, `Env`, `ManagedBy`, `Stack`, `Backup`; enforce cho `ec2`, `eks`, `kms` | tag phân bổ chi phí, điều kiện theo tag (`ProtectEbsKey`) và selection của Backup policy chỉ đúng khi tag đúng |
+| `svp-backup-prd`, `svp-backup-stg` | Backup policy | OU `Prod`, OU `NonProd` | plan `svp-<env>` ở `ap-southeast-1`, rule `daily` vào vault `svp-<env>`, copy sang vault `svp-<env>-copy` của `svp-backup`, selection theo tag `Backup=daily` | admin của account env đọc được plan, không sửa, không xoá được; bản copy nằm ngoài account env |
 
 - **Chỉ `Deny` ở SCP và RCP:** `FullAWSAccess`, `RCPFullAWSAccess` AWS gắn sẵn vẫn cho phép những gì IAM cho; hai loại này chỉ lấy bớt. Cả
   hai không áp lên management account
@@ -41,12 +45,21 @@ gắn đúng một đích: `svp-prod-guardrails` ở OU `Prod`, mọi policy kh�
 - **`us-east-1` được phép** vì AWS chỉ phục vụ ở đó chứng chỉ ACM và web ACL WAF của CloudFront, cùng IAM Identity Center của org.
 - **Cỡ và số lượng** theo [AWS Organizations quotas](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_reference_limits.html):
   policy viết bằng `jsonencode` (không khoảng trắng), test kiểm cỡ theo loại và số SCP, RCP mỗi đích.
-- **Policy type** declarative EC2 và tag policy phải bật ở tổ chức trước (`enabled_policy_types` của `aws/org`); module không bật.
+- **Backup policy:** mỗi policy một plan `svp-<env>`, một rule `daily` (`cron(0 18 * * ? *)` UTC, start window 60 phút, completion window
+  180 phút, không continuous backup), một selection `svp-<env>-tagged` và một `copy_actions`. Retention (ngày) ở `local.backup_retention_days`,
+  vault env và bản copy: prd 35 và 35, stg 2 và 2. Mọi retention ≥ 2 ngày: bản trước còn tới khi bản kế tiếp hoàn tất muộn nhất (24 giờ cộng hai
+  cửa sổ, 28 giờ), nên lúc nào cũng có một bản hoàn tất; test kiểm retention × 24 ≥ 24 + (hai cửa sổ) / 60 cho cả hai env, cả vault env lẫn
+  bản copy.
+- **Selection** nhận đúng hai mẫu ARN, DB instance RDS (`arn:aws:rds:*:*:db:*`) và bucket S3 (`arn:aws:s3:::*`), có tag `Backup=daily`:
+  snapshot RDS kế thừa tag qua `copy_tags_to_snapshot` nhưng ARN `…:snapshot:…` không khớp. Role là
+  `arn:aws:iam::$account:role/svp-<env>-backup`: `$account` là account thành viên chạy plan. Đích copy chéo account phải ghi id thật, nên module nhận `backup_account_id`.
+- **Policy type** declarative EC2, tag policy và Backup policy phải bật ở tổ chức trước (`enabled_policy_types` của `aws/org`); module không bật.
 - **Đổi đích** là thay `aws_organizations_policy_attachment` (khoá `for_each` giữ nguyên), không tạo lại policy.
 
 Test (`make test DIRS=aws/modules/org-policies`, provider giả) đọc lại JSON gửi lên Organizations: tập policy theo loại và đích, chỉ `Deny`,
 cỡ, statement và action của từng SCP, miễn trừ đúng một role ở `svp-protect-baseline`, điều kiện của RCP, thiết lập declarative, khoá và giá trị
-của tag policy, validation của ba id.
+của tag policy; plan, rule, lịch, hai cửa sổ, retention và bất đẳng thức retention, vault, copy, selection của hai Backup policy; validation của
+các id.
 
 <!-- markdownlint-disable MD033 -->
 <!-- BEGIN_TF_DOCS -->
@@ -74,6 +87,8 @@ của tag policy, validation của ba id.
 
 | Name | Description | Type | Default | Required |
 | ---- | ----------- | ---- | ------- | :------: |
+| backup\_account\_id | The account svp-backup (12 digits), whose vaults svp-<env>-copy receive the copy of every recovery point of the backup policies. | `string` | n/a | yes |
+| nonprod\_ou\_id | The organizational unit (ou-...) of the non-production accounts, which the backup policy of stg is attached to. | `string` | n/a | yes |
 | organization\_id | The id of the organization (o-...), the only one whose principals and services the resource control policy lets reach member account resources. | `string` | n/a | yes |
 | prod\_ou\_id | The organizational unit (ou-...) of the production accounts, which the production guardrails are attached to. | `string` | n/a | yes |
 | root\_id | The root of the organization (r-...): every policy but the production guardrails is attached here, so it applies to every member account (and, for the declarative and tag policies, to the management account too). | `string` | n/a | yes |
@@ -82,5 +97,5 @@ của tag policy, validation của ba id.
 
 | Name | Description |
 | ---- | ----------- |
-| policy\_ids | Id of each policy of the organization, by key (deny-leave-organization, protect-cloudtrail, deny-other-regions, protect-baseline, deny-iam-users, prod-guardrails, data-perimeter, ec2-baseline, tags). |
+| policy\_ids | Id of each policy of the organization, by key (deny-leave-organization, protect-cloudtrail, deny-other-regions, protect-baseline, deny-iam-users, prod-guardrails, data-perimeter, ec2-baseline, tags, backup-prd, backup-stg). |
 <!-- END_TF_DOCS -->

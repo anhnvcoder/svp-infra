@@ -6,10 +6,12 @@ resource "aws_organizations_organization" "this" {
 
   # A principal missing here would be turned off by the next apply, those the services enable themselves included:
   # sso and cloudtrail were on before; account for the alternate contacts, iam for centralized root access, ec2 for the
-  # declarative policy, and the detection services delegated-admins.tf registers. Design notes: README.md.
+  # declarative policy, backup for the backup policies, and the detection services delegated-admins.tf registers.
+  # Design notes: README.md.
   aws_service_access_principals = [
     "access-analyzer.amazonaws.com",
     "account.amazonaws.com",
+    "backup.amazonaws.com",
     "cloudtrail.amazonaws.com",
     "config-multiaccountsetup.amazonaws.com",
     "config.amazonaws.com",
@@ -24,6 +26,7 @@ resource "aws_organizations_organization" "this" {
 
   # RESOURCE_CONTROL_POLICY was on before this root and stays: dropping a type here would turn it off.
   enabled_policy_types = [
+    "BACKUP_POLICY",
     "DECLARATIVE_POLICY_EC2",
     "RESOURCE_CONTROL_POLICY",
     "SERVICE_CONTROL_POLICY",
@@ -121,12 +124,29 @@ resource "aws_organizations_account" "security" {
   }
 }
 
+# Backup account: the copies of the env recovery points, in vaults the env administrators cannot reach. Reached only
+# from the management account through OrganizationAccountAccessRole.
+resource "aws_organizations_account" "backup" {
+  name      = "svp-backup"
+  email     = var.account_emails["backup"]
+  parent_id = aws_organizations_organizational_unit.security.id
+
+  close_on_deletion = false
+
+  lifecycle {
+    prevent_destroy = true
+    ignore_changes  = [role_name, iam_user_access_to_billing]
+  }
+}
+
 module "org_policies" {
   source = "../modules/org-policies"
 
-  root_id         = local.root_id
-  prod_ou_id      = aws_organizations_organizational_unit.prod.id
-  organization_id = aws_organizations_organization.this.id
+  root_id           = local.root_id
+  prod_ou_id        = aws_organizations_organizational_unit.prod.id
+  nonprod_ou_id     = aws_organizations_organizational_unit.nonprod.id
+  organization_id   = aws_organizations_organization.this.id
+  backup_account_id = aws_organizations_account.backup.id
 
   # Policies of a type the organization has not enabled are refused.
   depends_on = [aws_organizations_organization.this]

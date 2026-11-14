@@ -22,6 +22,12 @@ mock_provider "aws" {
       account_id = "000000000000"
     }
   }
+
+  mock_data "aws_iam_policy_document" {
+    defaults = {
+      json = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"kms:DescribeKey\",\"Resource\":\"*\"}]}"
+    }
+  }
 }
 
 variables {
@@ -32,6 +38,7 @@ variables {
   deletion_protection     = false
   skip_final_snapshot     = true
   alarm_topic_arn         = "arn:aws:sns:ap-southeast-1:000000000000:svp-stg-alarms"
+  backup_copy_account_id  = "222222222222"
 }
 
 run "valid" {
@@ -177,6 +184,56 @@ run "cloudwatch_logs_retention_days_not_offered" {
   }
 
   expect_failures = [var.cloudwatch_logs_retention_days]
+}
+
+run "backup_copy_account_id_short" {
+  command = plan
+
+  variables {
+    backup_copy_account_id = "22222222222"
+  }
+
+  expect_failures = [var.backup_copy_account_id]
+}
+
+run "backup_copy_account_id_arn" {
+  command = plan
+
+  variables {
+    backup_copy_account_id = "arn:aws:iam::222222222222:root"
+  }
+
+  expect_failures = [var.backup_copy_account_id]
+}
+
+# Key policy: the account administers and uses the key through IAM; the backup account gets only what a cross-account
+# copy of a snapshot needs, and grants for AWS resources only. The instance carries the tag the backup policy selects.
+run "backup_copy" {
+  command = plan
+
+  assert {
+    condition = toset([for st in data.aws_iam_policy_document.key.statement : jsonencode([
+      st.sid, st.effect, sort(st.actions), sort(st.resources), [for p in st.principals : [p.type, sort(p.identifiers)]],
+      [for c in st.condition : [c.test, c.variable, c.values]], st.not_actions, st.not_resources,
+      ])]) == toset([
+      jsonencode(["EnableIamUserPermissions", "Allow", ["kms:*"], ["*"], [["AWS", ["arn:aws:iam::000000000000:root"]]], [], null, null]),
+      jsonencode(["BackupAccountUseForCopy", "Allow", ["kms:Decrypt", "kms:DescribeKey", "kms:GenerateDataKey"], ["*"],
+      [["AWS", ["arn:aws:iam::222222222222:root"]]], [], null, null]),
+      jsonencode(["BackupAccountGrantForCopy", "Allow", ["kms:CreateGrant"], ["*"], [["AWS", ["arn:aws:iam::222222222222:root"]]],
+      [["Bool", "kms:GrantIsForAWSResource", ["true"]]], null, null]),
+    ])
+    error_message = "The key policy must be the account's IAM statement plus Decrypt, DescribeKey, GenerateDataKey and CreateGrant for AWS resources for the backup account, nothing else."
+  }
+
+  assert {
+    condition     = aws_kms_key.this.policy == data.aws_iam_policy_document.key.json
+    error_message = "The key of the instance must carry the key policy above."
+  }
+
+  assert {
+    condition     = aws_db_instance.this.tags == tomap({ Name = "svp-stg", Backup = "daily" }) && aws_db_instance.this.copy_tags_to_snapshot
+    error_message = "The instance must carry Backup = daily, the tag the backup policy selects."
+  }
 }
 
 # The defaults keep the instance as it was before the monitoring variables existed: no Performance Insights, no

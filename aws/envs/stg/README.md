@@ -1,10 +1,11 @@
 # `aws/envs/stg`: cấu hình gốc của env stg
 
-Tầng platform của stg trên AWS (ADR-0034 §2, ADR-0024 §6A, ADR-0048, ADR-0053, ADR-0055…0058, ADR-0060, ADR-0061): ghép
-các module `network`, `eks`, `rds`, `msk`, `elasticache`, `alarms`, `media`, `transcode`, `edge`, `waf`, `ssm-bastion`,
-`external-secrets`, thêm role IAM và Pod Identity association cho `svp/video-service`, `svp/media-worker`, đọc tài
-nguyên sống lâu của account (`baseline.tf`), xuất output `cluster_values` theo hợp đồng `cluster.*` và các output của
-cluster cho root bootstrap `aws/gitops/stg`. Ứng dụng trong cluster không ở đây: Argo CD triển khai từ `svp-gitops`.
+Tầng platform của stg trên AWS (ADR-0034 §2, ADR-0024 §6A, ADR-0048, ADR-0053, ADR-0055…0058, ADR-0060, ADR-0061,
+ADR-0067): ghép các module `network`, `eks`, `rds`, `msk`, `elasticache`, `alarms`, `media`, `transcode`, `edge`, `waf`,
+`ssm-bastion`, `external-secrets`, `backup-alarms`, thêm role IAM và Pod Identity association cho `svp/video-service`,
+`svp/media-worker`, đọc tài nguyên sống lâu của account (`baseline.tf`), xuất output `cluster_values` theo hợp đồng
+`cluster.*` và các output của cluster cho root bootstrap `aws/gitops/stg`. Ứng dụng trong cluster không ở đây: Argo CD
+triển khai từ `svp-gitops`.
 
 ## Account, profile, state
 
@@ -14,6 +15,7 @@ cluster cho root bootstrap `aws/gitops/stg`. Ứng dụng trong cluster không �
 | Profile SSO | `anhnv-stg` (permission set `SvpAdmin`), người học tự tạo bằng `aws configure sso` |
 | Biến account | `SVP_AWS_STG_ACCOUNT_ID`, export trong terminal của buổi; mọi lệnh đặt `TF_VAR_account_id` từ nó (`allowed_account_ids`) |
 | Biến account Log Archive | `SVP_AWS_LOG_ACCOUNT_ID` (output `log_archive_account_id` của `aws/org`), export cùng terminal; mọi lệnh đặt `TF_VAR_log_archive_account_id` từ nó (tên bucket flow log, log WAF và delivery destination của log CloudFront, mục "Log và phát hiện") |
+| Biến account backup | `SVP_AWS_BACKUP_ACCOUNT_ID` (output `backup_account_id` của `aws/org`), export cùng terminal; mọi lệnh đặt `TF_VAR_backup_account_id` từ nó (account được dùng key RDS khi copy backup, mục [Backup và mã hoá](#backup-và-mã-hoá)) |
 | Backend | `../../backend-stg.hcl` (bucket `svp-tfstate-<account stg>-<region>`, KMS key `alias/svp-tfstate`, lock file S3), sinh từ output `backend_hcl` của `aws/accounts/stg`, dạng ở `backend.hcl.example` |
 | Key của state | `aws/stg/terraform.tfstate`, truyền bằng `-backend-config` thứ hai lúc `init`; khối `backend "s3" {}` trong `versions.tf` trống |
 | Zone | `stg.aws.<domain>` của account stg (output `zone_id` của `aws/accounts/stg`), uỷ quyền từ zone `aws.<domain>` của account prd (bản ghi `NS` do `aws/accounts/prd` tạo) |
@@ -57,6 +59,7 @@ Cỡ, mức bảo vệ, log, mã hoá và gói CloudFront của media nằm ở 
 | `../../backend-stg.hcl` | **không** | phần chung của backend trong account stg |
 | `TF_VAR_account_id` | biến môi trường, đặt ngay trong lệnh | account được phép đổi (`allowed_account_ids`) |
 | `TF_VAR_log_archive_account_id` | biến môi trường, đặt ngay trong lệnh | account `svp-log-archive`, chủ bucket flow log, log WAF, log CloudFront |
+| `TF_VAR_backup_account_id` | biến môi trường, đặt ngay trong lệnh | account `svp-backup`, nơi nhận bản copy backup của env |
 
 **Vì sao `stg.tfvars` mà không `terraform.tfvars`:** repo bỏ qua mọi `terraform.tfvars` và `*.auto.tfvars` (hai tên Terraform tự nạp) vì
 chúng là chỗ giá trị cá nhân hay nằm. Tệp cỡ của env cần commit nên mang tên khác và phải truyền bằng `-var-file=stg.tfvars` ở **mọi**
@@ -67,14 +70,14 @@ Mỗi nhóm biến của `stg.tfvars` và `prd.tfvars` (mạng, `eks`, `rds`, `m
 vì sao; hai file cùng thứ tự dòng để đọc cạnh nhau. Thành phần nào phải giống prd, được giảm hay giảm có điều kiện (mất
 gì, kiểm bù ở đâu) và nguồn của từng quyết định: bảng của
 [`environments.md`](https://github.com/anhnvcoder/svp-backend/blob/main/docs/explanation/environments.md) ở repo code.
-Tóm tắt: stg giữ cùng dịch vụ, version, cấu hình, xác thực, mã hoá (KMS key cho Secret của EKS, RDS, MSK, SNS), loại log
-(năm loại log control plane, flow log, export log RDS, Database Insights, enhanced monitoring, broker log MSK, slow-log
-Valkey, access log media), cùng bộ alarm và cùng đường tới API (tunnel SSM); stg giảm số AZ (2), NAT (một), số AZ đặt
-ENI của endpoint interface (một: `interface_endpoint_az_count`), lớp và số lượng (RDS một AZ, MSK RF 2, Valkey một
-node), retention của log CloudWatch (1 ngày), bảo vệ xoá (cả ALB edge: `edge_alb_deletion_protection = false`) và
-distribution media (gói flat-rate Free, không log chuẩn: `media_flat_rate_free = true`); mọi phần khác của đường vào
-giống prd. Flow log, log WAF và log CloudFront nằm ở Log Archive, retention theo mục [Log và phát
-hiện](#log-và-phát-hiện).
+Tóm tắt: stg giữ cùng dịch vụ, version, cấu hình, xác thực, mã hoá (KMS key cho Secret của EKS, RDS, MSK, SNS, bucket
+`uploads`), versioning của media, loại log (năm loại log control plane, flow log, export log RDS, Database Insights,
+enhanced monitoring, broker log MSK, slow-log Valkey, access log media), cùng bộ alarm và cùng đường tới API (tunnel
+SSM); stg giảm số AZ (2), NAT (một), số AZ đặt ENI của endpoint interface (một: `interface_endpoint_az_count`), lớp và
+số lượng (RDS một AZ, MSK RF 2, Valkey một node), retention của log CloudWatch (1 ngày), bảo vệ xoá (cả ALB edge:
+`edge_alb_deletion_protection = false`) và distribution media (gói flat-rate Free, không log chuẩn:
+`media_flat_rate_free = true`); mọi phần khác của đường vào giống prd. Flow log, log WAF và log CloudFront nằm ở Log
+Archive, retention theo mục [Log và phát hiện](#log-và-phát-hiện).
 
 Số broker MSK là `az_count` (một broker mỗi AZ); phiên bản Kafka (`4.1.x.kraft`), Valkey (`9.1`) và EBS khởi đầu mỗi broker lấy mặc định
 của module, như ADR-0053 §2, §7; trần dung lượng broker (`msk_broker_volume_max_size`) là của env. Nhóm node hệ thống (loại, min = desired =
@@ -115,9 +118,9 @@ Dựng:
 cp example.auto.tfvars.example stg.auto.tfvars          # rồi sửa bốn giá trị
 AWS_PROFILE=anhnv-stg terraform init -reconfigure -backend-config=../../backend-stg.hcl -backend-config=key=aws/stg/terraform.tfstate
 AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
-  terraform plan -var-file=stg.tfvars -out=stg.tfplan
+  TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform plan -var-file=stg.tfvars -out=stg.tfplan
 AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
-  terraform apply stg.tfplan
+  TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform apply stg.tfplan
 ```
 
 `-reconfigure` bỏ cấu hình backend cũ trong `.terraform` (kể cả của bucket management trước đây) và không migrate state.
@@ -145,11 +148,12 @@ Root `aws/gitops/stg` tới API qua cùng tunnel (`api_server_url` của `aws/gi
 state root này).
 
 Kết thúc buổi: `aws/scripts/pre-destroy.sh stg` (tunnel mở; nó xoá cả NodePool, EC2NodeClass và chờ hết node của
-Karpenter), destroy `aws/gitops/stg`, rồi root này, rồi lệnh quét tài nguyên sót:
+Karpenter), destroy `aws/gitops/stg`, `aws/scripts/restore-drill.sh stg cleanup` (mục [Backup và mã
+hoá](#backup-và-mã-hoá)), rồi root này, rồi lệnh quét tài nguyên sót:
 
 ```sh
 AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
-  terraform destroy -var-file=stg.tfvars
+  TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform destroy -var-file=stg.tfvars
 ```
 
 Instance, launch template và instance profile do Karpenter tạo nằm ngoài state: `pre-destroy.sh` gỡ chúng khi controller
@@ -207,12 +211,34 @@ GuardDuty bật ở mức tổ chức (root `aws/security`). Root này thêm ph�
 ## Transcode
 
 Module [`transcode`](../../modules/transcode/README.md) dựng phần MediaConvert của env: queue on-demand `svp-stg`, role
-`svp-stg-mediaconvert` mà job chạy với (đọc `uploads/*` của bucket uploads, ghi `media/*` của bucket media), rule
-EventBridge `svp-stg-mediaconvert-job-state`, SQS `svp-stg-transcode-events` và dead-letter queue
-`svp-stg-transcode-events-dlq`, alarm `page` `svp-stg-transcode-events-dlq` gửi topic `svp-stg-alarms`. Root truyền ARN
-hai bucket của module `media` và topic của module `alarms`. Không tài nguyên nào giữ dữ liệu cần sống qua buổi, nên tất
-cả nằm ở root này và bị gỡ cùng `destroy`. Thiết kế:
+`svp-stg-mediaconvert` mà job chạy với (đọc `uploads/*` của bucket uploads và giải mã bằng key `uploads`, ghi `media/*`
+của bucket media), rule EventBridge `svp-stg-mediaconvert-job-state`, SQS `svp-stg-transcode-events` và dead-letter
+queue `svp-stg-transcode-events-dlq`, alarm `page` `svp-stg-transcode-events-dlq` gửi topic `svp-stg-alarms`. Root
+truyền ARN hai bucket và ARN key `uploads` của module `media`, topic của module `alarms`. Không tài nguyên nào giữ dữ
+liệu cần sống qua buổi, nên tất cả nằm ở root này và bị gỡ cùng `destroy`. Thiết kế:
 [ADR-0066](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0066-mediaconvert-transcode.md).
+
+## Backup và mã hoá
+
+AWS Backup chụp instance RDS và hai bucket của env mỗi ngày theo Backup policy của Organizations, copy bản chụp sang
+vault `svp-stg-copy` của account `svp-backup`. Thiết kế:
+[ADR-0067](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0067-backup-dr.md). Plan nằm ở policy của
+`aws/org`; vault `svp-stg`, key `alias/svp-stg-backup` và role `svp-stg-backup` sống giữa các buổi ở `aws/accounts/stg`,
+root này không đọc chúng. Phần của root này sống theo buổi:
+
+| Phần | Ở đâu | Ghi chú |
+| --- | --- | --- |
+| Tag `Backup = "daily"` trên instance RDS, bucket `uploads`, `media` | module `rds`, `media` | selection của plan chọn tài nguyên theo tag này |
+| Key RDS cho account `svp-backup` dùng khi copy snapshot | module `rds` (`backup_copy_account_id = var.backup_account_id`) | bản copy mã hoá lại bằng key của vault đích, dùng được sau khi key RDS bị xoá |
+| Key `alias/svp-stg-uploads`, SSE-KMS với Bucket Key của bucket `uploads` | module `media` (output `uploads_kms_key_arn`, truyền vào `transcode`) | bucket `media` giữ SSE-S3: nội dung công khai qua CloudFront |
+| Versioning của hai bucket (`media_versioning_enabled = true`) | `stg.tfvars` | AWS Backup chỉ backup bucket có versioning; version cũ giữ 30 ngày như prd |
+| Alarm `svp-stg-backup-job-failed`, `svp-stg-backup-copy-failed` (`Severity=ticket`) | module [`backup-alarms`](../../modules/backup-alarms/README.md) (`backup.tf`) | gửi topic `svp-stg-alarms` |
+
+`media_force_destroy = true` vẫn đúng khi bật versioning: `destroy` xoá mọi version và delete marker của bucket trước
+khi xoá bucket, nên `teardown.tfvars` không cần cho stg. Recovery point của vault `svp-stg` thì không thuộc state: trước
+`destroy` của root này, `aws/scripts/restore-drill.sh stg cleanup` gỡ tag `Backup`, chờ mọi job của account kết thúc và
+xoá recovery point đã có bản copy `COMPLETED` (mục "Xoá cuối buổi" của ADR-0067, §11). Key RDS, key `uploads` chỉ vào
+`PendingDeletion` ở `destroy` sau bước này.
 
 ## Output
 
@@ -268,8 +294,8 @@ repo code.
 
 | ServiceAccount (`svp`) | Role | Policy (inline `service`) |
 | --- | --- | --- |
-| `video-service` | `svp-stg-video-service` | `video_service_policy_json` của module `media` |
-| `media-worker` | `svp-stg-media-worker` | `media_worker_policy_json` của module `media` (S3) gộp với `bridge_policy_json` của module `transcode` (MediaConvert, `iam:PassRole`, SQS) |
+| `video-service` | `svp-stg-video-service` | `video_service_policy_json` của module `media` (S3, `kms:GenerateDataKey` trên key `uploads` để ký form upload) |
+| `media-worker` | `svp-stg-media-worker` | `media_worker_policy_json` của module `media` (S3, giải mã bằng key `uploads`) gộp với `bridge_policy_json` của module `transcode` (MediaConvert, `iam:PassRole`, SQS) |
 
 Trên EKS, `media-worker` chạy lệnh con `mediaconvert` (bridge tới MediaConvert), nên role của nó mang quyền bridge của
 [phụ lục ADR-0066](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0066-mediaconvert-transcode.md)
@@ -324,3 +350,7 @@ Transcode (MediaConvert theo phút output, SQS, EventBridge, request S3, endpoin
 lượng dùng trong buổi, $0 lúc không buổi: §12 của
 [ADR-0066](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0066-mediaconvert-transcode.md) và mục "Chi phí"
 của [phụ lục](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0066-mediaconvert-transcode.md).
+
+Key `uploads` tính $1 mỗi key-tháng theo giờ (key chờ xoá không tính), hai alarm của AWS Backup tính theo giờ sống; mỗi
+khoản dưới một cent cho một buổi vài giờ, bảng ở mục "Chi phí" của [phụ lục
+ADR-0067](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0067-backup-dr.md).

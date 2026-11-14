@@ -2,32 +2,37 @@
 
 Mọi thứ cấp tổ chức của lab, ở management account (account sandbox, profile `anhnv-sso`). Management account chỉ giữ phần quản trị và dùng
 chung, không chạy workload. Cấu trúc account theo AWS Security Reference Architecture (SRA): log ở account `svp-log-archive`, dịch vụ phát
-hiện do account `svp-security` quản, stg và prd chạy trong hai account thành viên riêng. Thiết kế và lý do:
+hiện do account `svp-security` quản, bản copy backup ở account `svp-backup`, stg và prd chạy trong hai account thành viên riêng. Thiết kế
+và lý do:
 [ADR-0059](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0059-org-structure-guardrails.md) (account, OU, policy, root tập
 trung, permission set, liên hệ), [ADR-0060](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0060-org-detection-logging.md)
 (delegated admin, trail org), [ADR-0062](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0062-ecr-registry-ci-oidc.md) §10
 (delegated admin của Inspector), [ADR-0063](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0063-managed-observability.md) và
-[ADR-0065](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0065-argocd-eks-capability.md) (nhóm nền tảng).
+[ADR-0065](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0065-argocd-eks-capability.md) (nhóm nền tảng),
+[ADR-0067](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0067-backup-dr.md) (account backup, Backup policy, opt-in).
 
 ## Tài nguyên
 
 | Tài nguyên | File | Vì sao |
 | --- | --- | --- |
-| Tổ chức (`aws_organizations_organization`, có sẵn, import) | `organization.tf` | feature set `ALL`; policy type SCP, RCP, declarative EC2, tag policy; trusted access của mọi dịch vụ dưới đây (danh sách ở mục [Trusted access](#trusted-access)) |
-| OU `Security`, `Workloads` (có sẵn), `Workloads/Prod`, `Workloads/NonProd` | `organization.tf` | `Security` giữ hai account bảo mật; prd có guardrail riêng ở OU `Prod` |
+| Tổ chức (`aws_organizations_organization`, có sẵn, import) | `organization.tf` | feature set `ALL`; policy type SCP, RCP, declarative EC2, tag policy, Backup policy; trusted access của mọi dịch vụ dưới đây (danh sách ở mục [Trusted access](#trusted-access)) |
+| OU `Security`, `Workloads` (có sẵn), `Workloads/Prod`, `Workloads/NonProd` | `organization.tf` | `Security` giữ hai account bảo mật và account backup; prd có guardrail riêng ở OU `Prod` |
 | Account `svp-stg` (OU `NonProd`), `svp-prd` (OU `Prod`) | `organization.tf` | mỗi env một account; địa chỉ `aws_organizations_account.member["stg"\|"prd"]`, đổi OU là MoveAccount tại chỗ |
 | Account `svp-log-archive`, `svp-security` (OU `Security`) | `organization.tf` | Log Archive và Security Tooling của SRA; chỉ vào được từ management qua `OrganizationAccountAccessRole` |
-| Policy của tổ chức (module [`org-policies`](../modules/org-policies/README.md)) | `organization.tf` | SCP, RCP, declarative EC2, tag policy gắn root; `svp-prod-guardrails` gắn OU `Prod` |
+| Account `svp-backup` (OU `Security`) | `organization.tf` | bản copy của recovery point stg, prd, ngoài tầm admin của account env (Central Backup account của SRA); chỉ vào được từ management qua `OrganizationAccountAccessRole`, vault và key ở `aws/backup` |
+| Policy của tổ chức (module [`org-policies`](../modules/org-policies/README.md)) | `organization.tf` | SCP, RCP, declarative EC2, tag policy gắn root; `svp-prod-guardrails`, Backup policy `svp-backup-prd` gắn OU `Prod`; `svp-backup-stg` gắn OU `NonProd` |
+| Cross-account backup (`aws_backup_global_settings`) | `backup.tf` | `isCrossAccountBackupEnabled`: chỉ management bật được, có hiệu lực cho mọi account thành viên; account env copy recovery point sang vault của `svp-backup`. `isMpaEnabled`, `isDelegatedAdministratorEnabled` ghi rõ `false` |
+| Opt-in loại tài nguyên của management (`aws_backup_region_settings`, `ap-southeast-1`) | `backup.tf` | plan của Backup policy chạy theo opt-in của management, không theo opt-in của account thành viên; xem mục [Backup](#backup) |
 | Delegated admin `svp-security` | `delegated-admins.tf` | GuardDuty (`ap-southeast-1`, `us-east-1`), Security Hub CSPM (region nhà, cấu hình tập trung), Amazon Inspector (`ap-southeast-1`, nơi có registry ECR), Config (`config`, `config-multiaccountsetup`), IAM Access Analyzer; dịch vụ cấu hình ở [`aws/security`](../security/README.md) |
 | Root tập trung (`aws_iam_organizations_features`) | `root-access.tf` | `RootCredentialsManagement`, `RootSessions`: account thành viên không giữ credential root; việc chỉ root làm đi qua `sts:AssumeRoot` từ management |
-| Liên hệ `SECURITY` của năm account | `contacts.tf` | AWS báo sự cố bảo mật tới người phụ trách, không chỉ email root (CIS AWS Foundations v5.0.0, 1.2); giá trị ở biến `security_contact` |
+| Liên hệ `SECURITY` của sáu account | `contacts.tf` | AWS báo sự cố bảo mật tới người phụ trách, không chỉ email root (CIS AWS Foundations v5.0.0, 1.2); giá trị ở biến `security_contact` |
 | Permission set `SvpAdmin`, `SvpReadOnly`, `SvpLogReader` | `identity-center.tf` | xem mục [Permission set](#permission-set) |
 | Nhóm Identity Center `svp-platform-admins`, `svp-platform-viewers` | `identity-center.tf` | xem mục [Nhóm nền tảng](#nhóm-nền-tảng) |
 | Trail org `svp-audit` | `audit-trail.tf` | management event đọc + ghi của mọi account, mọi region; data event S3 của bucket người dùng prd; log file validation; giao về bucket `svp-cloudtrail-<log>-ap-southeast-1` của `svp-log-archive`, mã hoá bằng key `alias/svp-log-archive` của account đó |
 | Bucket `svp-cloudtrail-<mgmt>-<region>`, `svp-cloudtrail-access-<mgmt>-<region>`, KMS key `alias/svp-cloudtrail` | `audit-trail.tf` | nơi trail ghi trước khi có Log Archive; chỉ đọc, giữ tới khi Object Lock của version cuối hết hạn, rồi gỡ theo [Gỡ bucket trail cũ](#gỡ-bucket-trail-cũ) |
 
 `<mgmt>`, `<log>`, `<prd>` là id của management, `svp-log-archive`, `svp-prd`; tên suy từ id lúc chạy, không account nào nằm trong file
-commit. Mọi tài nguyên mang tag `Project=svp`, `ManagedBy=terraform`, `Stack=org` và sống giữa các buổi. Tổ chức, bốn account, KMS key và hai
+commit. Mọi tài nguyên mang tag `Project=svp`, `ManagedBy=terraform`, `Stack=org` và sống giữa các buổi. Tổ chức, năm account, KMS key và hai
 bucket cũ có `prevent_destroy`: root này không bao giờ `terraform destroy` cả khối, gỡ theo mục [Gỡ có chủ đích](#gỡ-có-chủ-đích).
 
 ### Trusted access
@@ -49,6 +54,7 @@ quét malware EC2 ở account thành viên
 | `access-analyzer.amazonaws.com` | analyzer `ORGANIZATION` |
 | `account.amazonaws.com` | liên hệ `SECURITY` của account thành viên |
 | `iam.amazonaws.com` | root tập trung |
+| `backup.amazonaws.com` | Backup policy `svp-backup-prd`, `svp-backup-stg` (đòi trusted access cùng policy type `BACKUP_POLICY`) |
 | `ec2.amazonaws.com` | declarative policy EC2 `svp-ec2-baseline`: tài liệu EC2 đòi bật cùng policy type; console bật nó khi mở trang EC2 policy, nên thiếu ở đây thì apply kế tiếp tắt và plan không bao giờ sạch ([Getting started with EC2 policies](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies-ec2_getting-started.html), đọc 2026-11-12) |
 
 ### Permission set
@@ -56,11 +62,13 @@ quét malware EC2 ở account thành viên
 | Permission set | Quyền | Phiên | Gán ở | Profile |
 | --- | --- | --- | --- | --- |
 | `SvpAdmin` | `AdministratorAccess` | 1 giờ | `svp-stg`, `svp-prd` | `anhnv-stg`, `anhnv-prd` |
-| `SvpReadOnly` | `ViewOnlyAccess`, `SecurityAudit`, inline đọc log CloudWatch (`FilterLogEvents`, `GetLogEvents`, `StartQuery`, `StopQuery`, `GetQueryResults`) | 4 giờ | `svp-stg`, `svp-prd`, `svp-security` | `anhnv-stg-ro`, `anhnv-prd-ro`, `anhnv-security-ro` |
+| `SvpReadOnly` | `ViewOnlyAccess`, `SecurityAudit`, inline đọc log CloudWatch (`FilterLogEvents`, `GetLogEvents`, `StartQuery`, `StopQuery`, `GetQueryResults`) | 4 giờ | `svp-stg`, `svp-prd`, `svp-security`, `svp-backup` | `anhnv-stg-ro`, `anhnv-prd-ro`, `anhnv-security-ro`, `anhnv-backup-ro` |
 | `SvpLogReader` | `ViewOnlyAccess`, inline `s3:ListBucket`, `s3:GetObject` trên bảy bucket của `aws/log-archive`, `kms:Decrypt` chỉ qua S3 của hai region và chỉ trên key có alias `alias/svp-log-archive` | 4 giờ | `svp-log-archive` | `anhnv-log-ro` |
 
 - `SvpReadOnly` đọc cấu hình, trạng thái và finding của GuardDuty, Security Hub, Config, Access Analyzer; không đọc object S3, giá trị secret,
-  dữ liệu bảng, không ghi gì (kể cả đổi trạng thái finding).
+  dữ liệu bảng, không ghi gì (kể cả đổi trạng thái finding). Ở `svp-backup` nó đọc đủ vault, lock, vault access policy, recovery point, job,
+  plan và cài đặt của AWS Backup mà không cần inline thêm (bảng action ở
+  [phụ lục ADR-0067](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0067-backup-dr.md#3-account-organizations-opt-in) §3).
 - Phiên `SvpAdmin` 1 giờ không cắt `apply` dài khi profile dùng khối `[sso-session …]`: SDK lấy lại credential role từ token SSO tới hết
   phiên cổng truy cập. Profile kiểu cũ (không `sso-session`) không tự làm mới.
 - Permission set có sẵn của chính management không quản ở đây. Break-glass khi Identity Center hỏng: root của management (MFA phần cứng),
@@ -81,6 +89,23 @@ AWS_PROFILE=anhnv-sso terraform output -raw platform_admin_group_id
 AWS_PROFILE=anhnv-sso terraform output -raw platform_viewer_group_id
 ```
 
+### Backup
+
+Phần cấp tổ chức của backup: account `svp-backup`, trusted access `backup.amazonaws.com`, policy type `BACKUP_POLICY`, cross-account backup và
+opt-in của management. Backup policy (plan, lịch, retention, selection, copy) ở module [`org-policies`](../modules/org-policies/README.md); vault
+copy và key của nó ở `aws/backup`; vault env, role `svp-<env>-backup` và opt-in của từng account env ở
+`aws/accounts/<env>`.
+
+- **Không delegated administrator cho AWS Backup:** management giữ Backup policy như SCP, RCP. `svp-backup` chỉ là đích copy.
+- **Opt-in ghi cả map:** `aws_backup_region_settings` ghi đè mọi loại tài nguyên, nên `backup.tf` liệt kê đủ mọi loại AWS Backup hỗ trợ ở
+  `ap-southeast-1`, khoá viết như `describe-region-settings` trả, tất cả `true` như AWS đặt cho account bắt đầu dùng AWS Backup. Danh sách và
+  nguồn ở [phụ lục ADR-0067](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0067-backup-dr.md#3-account-organizations-opt-in)
+  §3; AWS thêm loại theo thời gian, nên trước khi apply đối chiếu khoá với output `describe-region-settings` của management (mục
+  [Thêm account backup và Backup policy](#thêm-account-backup-và-backup-policy-vào-tổ-chức-đã-áp)).
+- **Thứ tự với các root khác:** Backup policy có hiệu lực ngay khi gắn, nhưng job chỉ chạy được khi account env đã có vault `svp-<env>` và role
+  `svp-<env>-backup`, và copy chỉ tới được khi `svp-backup` đã có vault `svp-<env>-copy`. Thứ tự áp `aws/org`, `aws/baseline`, `aws/security`,
+  `aws/backup`, `aws/accounts/<env>` ở runbook `docs/runbooks/backup-setup.md`.
+
 ## Trail org
 
 Trail `svp-audit` vẫn ở management (owner của trail org); log của nó nằm ở account khác, nơi admin của account workload không xoá được
@@ -99,10 +124,12 @@ Trail `svp-audit` vẫn ở management (owner của trail org); log của nó n�
 
 ## Phí giữ
 
-Organizations, policy, IAM Identity Center, delegated admin, root tập trung, liên hệ: miễn phí. Trail org: bản sao đầu tiên của management event
-miễn phí, data event prd tính theo event. KMS key `alias/svp-cloudtrail` cũ tính tới khi gỡ. Phí của dịch vụ phát hiện mà delegated admin
-bật ở mọi account, giá có nguồn và ước theo tháng: [ADR-0060 §12](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0060-org-detection-logging.md#12-chi-phí-liên-tục)
+Organizations, policy (kể cả Backup policy), IAM Identity Center, delegated admin, root tập trung, liên hệ, cài đặt AWS Backup: miễn phí.
+Trail org: bản sao đầu tiên của management event miễn phí, data event prd tính theo event. KMS key `alias/svp-cloudtrail` cũ tính tới
+khi gỡ. Phí của dịch vụ phát hiện mà delegated admin bật ở mọi account, giá có nguồn và ước theo tháng: [ADR-0060 §12](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0060-org-detection-logging.md#12-chi-phí-liên-tục)
 và [phụ lục](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0060-org-detection-logging.md#12-chi-phí-liên-tục).
+Bản copy, key của vault và baseline của `svp-backup`:
+[ADR-0067 §13](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0067-backup-dr.md#13-chi-phí).
 
 Trail chỉ là bản sao miễn phí khi org không có trail management event nào khác. Kiểm trước apply:
 `AWS_PROFILE=anhnv-sso aws cloudtrail describe-trails --region ap-southeast-1 --query 'trailList[].[Name,IsOrganizationTrail]' --output text`
@@ -132,8 +159,8 @@ AWS_PROFILE=anhnv-sso terraform init -backend-config=../backend.hcl
 Giá trị cá nhân ở `org.auto.tfvars` (git bỏ qua; lần đầu `cp org.auto.tfvars.example org.auto.tfvars`), đủ mọi biến của
 `org.auto.tfvars.example`:
 
-- `account_emails`: bốn khoá `stg`, `prd`, `log-archive`, `security`; mỗi account một email **chưa account AWS nào dùng**, kể cả account đã
-  đóng hay đang `SUSPENDED` (AWS không cho dùng lại email của account đã đóng). Hai khoá `stg`, `prd` giữ đúng email đang có của hai account.
+- `account_emails`: năm khoá `stg`, `prd`, `log-archive`, `security`, `backup`; mỗi account một email **chưa account AWS nào dùng**, kể cả
+  account đã đóng hay đang `SUSPENDED` (AWS không cho dùng lại email của account đã đóng). Hai khoá `stg`, `prd` giữ đúng email đang có của hai account.
 - `security_contact`: tên, chức danh, email, số điện thoại của người nhận thông báo bảo mật từ AWS.
 - `sso_user_name` (tên user ở góc phải trên của AWS access portal), `sso_region` (dòng `sso_region` của profile `anhnv-sso` trong
   `~/.aws/config`, trong khối `[sso-session …]` nếu có).
@@ -237,6 +264,58 @@ Mong đợi `Plan: 3 to add, 1 to change, 0 to destroy`:
 Dừng (không apply, dán plan lại) nếu có `destroy`, `-/+` hay thay đổi nào khác. Sau apply, Inspector tự bật mọi loại quét ở `svp-security`;
 `aws/security` thu về chỉ ECR. Plan lần hai phải là `No changes.`; rồi ghi id nhóm theo mục [Nhóm nền tảng](#nhóm-nền-tảng).
 
+### Thêm account backup và Backup policy vào tổ chức đã áp
+
+Khi tổ chức đã áp trước khi root có account `svp-backup` và Backup policy. Root này đi đầu trong thứ tự của runbook
+`docs/runbooks/backup-setup.md`.
+
+1. **Thêm khoá `backup` vào `org.auto.tfvars`** (git bỏ qua) trước mọi `plan`: một email **chưa account AWS nào dùng**, như mục
+   [Chuẩn bị](#chuẩn-bị). Thiếu khoá thì `plan` dừng ở validation của `account_emails`.
+2. **Đối chiếu opt-in:** đọc opt-in hiện tại của management.
+
+   ```sh
+   AWS_PROFILE=anhnv-sso aws backup describe-region-settings --region ap-southeast-1 --query 'ResourceTypeOptInPreference' --output json
+   ```
+
+   Mỗi khoá API trả phải có trong `resource_type_opt_in_preference` của `backup.tf`, và ngược lại. Lệch thì dừng, dán output lại: danh sách
+   sửa bằng PR trước khi apply.
+3. **Tạo account** (gần như không đảo ngược, như bước (2)): plan riêng account, đọc, rồi apply.
+
+   ```sh
+   AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform plan -out=org.tfplan -target=aws_organizations_account.backup
+   ```
+
+   Mong đợi `Plan: 1 to add, 1 to change, 0 to destroy`: thêm `aws_organizations_account.backup` (`name` `svp-backup`, `parent_id` là OU
+   `Security`); đổi tại chỗ tổ chức, chỉ hai dòng `+ "backup.amazonaws.com"` trong `aws_service_access_principals` và `+ "BACKUP_POLICY"` trong
+   `enabled_policy_types`, không dòng `-` nào. Khác thì dừng, dán plan lại.
+
+   ```sh
+   AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform apply org.tfplan
+   rm org.tfplan
+   export SVP_AWS_BACKUP_ACCOUNT_ID="$(AWS_PROFILE=anhnv-sso terraform output -raw backup_account_id)"
+   printf '%s\n' "$SVP_AWS_BACKUP_ACCOUNT_ID"
+   ```
+
+   Dòng cuối là id 12 số mới, khác bốn account đã có; đặt nó trong terminal của mọi bước sau (không ghi vào file commit).
+4. **Phần còn lại:** cùng lệnh `plan`, `apply` của bước (4).
+
+   Mong đợi `Plan: 8 to add, 1 to change, 0 to destroy`:
+
+   - thêm: `aws_account_alternate_contact.security["backup"]`, `aws_ssoadmin_account_assignment.read_only["backup"]`,
+     `aws_backup_global_settings.this`, `aws_backup_region_settings.this`, `module.org_policies.aws_organizations_policy.this["backup-prd"]`,
+     `["backup-stg"]` và hai `aws_organizations_policy_attachment` của chúng (đích OU `Prod`, `NonProd`);
+   - đổi tại chỗ: `module.org_policies.aws_organizations_policy.this["tags"]` (thêm khoá `Backup`, giá trị `backup` của `Stack`).
+
+   Dừng (không apply, dán plan lại) nếu có `destroy`, `-/+` hay thay đổi nào khác. Sau apply, plan lần hai phải là `No changes.`; một diff ở
+   `global_settings` (AWS trả khoá ngoài ba khoá của `backup.tf`) thì dán lại. Kiểm cài đặt cross-account:
+
+   ```sh
+   AWS_PROFILE=anhnv-sso aws backup describe-global-settings --region ap-southeast-1 --query 'GlobalSettings' --output json
+   ```
+
+   Mong đợi đúng ba khoá: `isCrossAccountBackupEnabled` là `true`, `isDelegatedAdministratorEnabled` và `isMpaEnabled` là `false`.
+   Tiếp theo: tạo profile `anhnv-backup-ro` (mục [Profile](#profile)), rồi các root còn lại theo runbook.
+
 ### Profile
 
 Mỗi profile một lần (AI không sửa `~/.aws/config`); chọn SSO session đang dùng cho `anhnv-sso`, region mặc định `ap-southeast-1`, output
@@ -245,7 +324,7 @@ Mỗi profile một lần (AI không sửa `~/.aws/config`); chọn SSO session 
 | Profile | Account | Role |
 | --- | --- | --- |
 | `anhnv-stg`, `anhnv-prd` | `svp-stg`, `svp-prd` | `SvpAdmin` |
-| `anhnv-stg-ro`, `anhnv-prd-ro`, `anhnv-security-ro` | `svp-stg`, `svp-prd`, `svp-security` | `SvpReadOnly` |
+| `anhnv-stg-ro`, `anhnv-prd-ro`, `anhnv-security-ro`, `anhnv-backup-ro` | `svp-stg`, `svp-prd`, `svp-security`, `svp-backup` | `SvpReadOnly` |
 | `anhnv-log-ro` | `svp-log-archive` | `SvpLogReader` |
 
 ```sh
@@ -335,8 +414,8 @@ Rồi một PR bỏ khỏi `audit-trail.tf` key `aws_kms_key.cloudtrail`, alias,
 
 ## Gỡ có chủ đích
 
-Chỉ khi lab kết thúc, sau khi mọi env và các root `aws/baseline`, `aws/security` đã gỡ theo README của chúng. `aws/log-archive` còn nguyên
-ở bước 1 (bước này đọc alias `alias/svp-log-archive` qua provider `aws.log_archive`); muốn xoá log trước khi đóng account thì gỡ nó giữa bước 1
+Chỉ khi lab kết thúc, sau khi mọi env và các root `aws/backup`, `aws/baseline`, `aws/security` đã gỡ theo README của chúng. `aws/log-archive`
+còn nguyên ở bước 1 (bước này đọc alias `alias/svp-log-archive` qua provider `aws.log_archive`); muốn xoá log trước khi đóng account thì gỡ nó giữa bước 1
 và bước 2 theo [mục gỡ của root đó](../log-archive/README.md#gỡ-có-chủ-đích). Các bước theo thứ tự; lệnh `terraform` chạy trong
 `infra/aws/org` với `TF_VAR_account_id` như trên.
 
@@ -365,17 +444,19 @@ và bước 2 theo [mục gỡ của root đó](../log-archive/README.md#gỡ-c�
      -target=aws_identitystore_group.platform
    ```
 
-2. **Đóng bốn account thành viên theo quy trình AWS, không bằng destroy** (`close_on_deletion = false`, `prevent_destroy`): destroy chỉ gỡ
+2. **Đóng năm account thành viên theo quy trình AWS, không bằng destroy** (`close_on_deletion = false`, `prevent_destroy`): destroy chỉ gỡ
    account khỏi tổ chức. Account đã đóng ở trạng thái đóng 90 ngày, vẫn thuộc tổ chức và OU, vẫn tính vào hạn mức số account; email của nó
    không dùng lại được; mỗi 30 ngày chỉ đóng được một phần số account thành viên, nên có thể phải chia làm nhiều đợt
    ([Organizations: close account](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_accounts_close.html), đọc 2026-11-05).
    Đóng `svp-log-archive` là bỏ log của org: chỉ làm khi không cần lịch sử audit nữa.
 
    ```sh
-   for id in "$SVP_AWS_STG_ACCOUNT_ID" "$SVP_AWS_PRD_ACCOUNT_ID" "$SVP_AWS_SECURITY_ACCOUNT_ID" "$SVP_AWS_LOG_ACCOUNT_ID"; do
+   for id in "$SVP_AWS_STG_ACCOUNT_ID" "$SVP_AWS_PRD_ACCOUNT_ID" "$SVP_AWS_SECURITY_ACCOUNT_ID" "$SVP_AWS_LOG_ACCOUNT_ID" \
+     "$SVP_AWS_BACKUP_ACCOUNT_ID"; do
      AWS_PROFILE=anhnv-sso aws organizations close-account --account-id "$id" --region us-east-1
    done
-   AWS_PROFILE=anhnv-sso terraform state rm aws_organizations_account.member aws_organizations_account.log_archive aws_organizations_account.security
+   AWS_PROFILE=anhnv-sso terraform state rm aws_organizations_account.member aws_organizations_account.log_archive \
+     aws_organizations_account.security aws_organizations_account.backup
    ```
 
 3. **Gỡ bucket trail cũ** nếu còn: như mục [Gỡ bucket trail cũ](#gỡ-bucket-trail-cũ). Object Lock chưa hết hạn thì thêm
@@ -388,7 +469,7 @@ và bước 2 theo [mục gỡ của root đó](../log-archive/README.md#gỡ-c�
      -target=aws_s3_bucket.access_logs -target=aws_kms_alias.cloudtrail -target=aws_kms_key.cloudtrail
    ```
 
-4. **Sau khi AWS gỡ hẳn bốn account đã đóng khỏi tổ chức** (hết 90 ngày;
+4. **Sau khi AWS gỡ hẳn năm account đã đóng khỏi tổ chức** (hết 90 ngày;
    `AWS_PROFILE=anhnv-sso aws organizations list-accounts --region us-east-1 --query 'Accounts[].[Id,Name,Status]' --output text` không còn
    account `svp-*`): xoá policy và OU (OU còn account thì không xoá được).
 
@@ -398,17 +479,18 @@ và bước 2 theo [mục gỡ của root đó](../log-archive/README.md#gỡ-c�
      -target=aws_organizations_organizational_unit.workloads -target=aws_organizations_organizational_unit.security
    ```
 
-5. **Trả tổ chức về như trước root này** (tổ chức có trước, không xoá): bỏ khỏi state, tắt trusted access và policy type mà root này bật, xoá
-   state của root.
+5. **Trả tổ chức về như trước root này** (tổ chức có trước, không xoá): bỏ khỏi state, tắt cross-account backup, trusted access và policy
+   type mà root này bật, xoá state của root. Opt-in của management giữ nguyên: mọi loại `true` là giá trị AWS đặt cho account dùng AWS Backup.
 
    ```sh
    R="$(AWS_PROFILE=anhnv-sso terraform output -raw root_id)"
-   AWS_PROFILE=anhnv-sso terraform state rm aws_organizations_organization.this
-   for p in access-analyzer account cloudtrail config-multiaccountsetup config ec2 guardduty iam inspector2 malware-protection.guardduty \
+   AWS_PROFILE=anhnv-sso terraform state rm aws_organizations_organization.this aws_backup_global_settings.this aws_backup_region_settings.this
+   AWS_PROFILE=anhnv-sso aws backup update-global-settings --global-settings isCrossAccountBackupEnabled=false --region ap-southeast-1
+   for p in access-analyzer account backup cloudtrail config-multiaccountsetup config ec2 guardduty iam inspector2 malware-protection.guardduty \
      securityhub; do
      AWS_PROFILE=anhnv-sso aws organizations disable-aws-service-access --service-principal "$p.amazonaws.com" --region us-east-1
    done
-   for t in DECLARATIVE_POLICY_EC2 TAG_POLICY; do
+   for t in BACKUP_POLICY DECLARATIVE_POLICY_EC2 TAG_POLICY; do
      AWS_PROFILE=anhnv-sso aws organizations disable-policy-type --root-id "$R" --policy-type "$t" --region us-east-1
    done
    AWS_PROFILE=anhnv-sso aws s3 rm "s3://svp-tfstate-$SVP_AWS_MGMT_ACCOUNT_ID-ap-southeast-1/aws/org/terraform.tfstate" --region ap-southeast-1

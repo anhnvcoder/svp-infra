@@ -18,11 +18,18 @@ locals {
 
 data "aws_partition" "current" {}
 
+# Backup = daily puts both buckets in the selection of the organization's backup policy. The keys are written out:
+# trivy expands no for_each whose values it cannot read whole, and the names hold an account id it never knows, so it
+# could not check the encryption of each bucket on its own.
 resource "aws_s3_bucket" "this" {
-  for_each = local.buckets
+  for_each = toset(["uploads", "media"])
 
-  bucket        = each.value
+  bucket        = local.buckets[each.key]
   force_destroy = var.force_destroy
+
+  tags = {
+    Backup = "daily"
+  }
 }
 
 resource "aws_s3_bucket_public_access_block" "this" {
@@ -46,11 +53,27 @@ resource "aws_s3_bucket_ownership_controls" "this" {
   }
 }
 
-# SSE-S3: encrypted at rest at no cost. A customer managed KMS key (what the finding below asks for) adds $1 a month,
-# a key policy, and kms:Decrypt for CloudFront and both services, and draws no line the bucket policy and IAM do not
-# draw already.
+# Originals users send stay private for good, so they get a key of the env: reading one takes kms:Decrypt on that key
+# besides s3:GetObject, and every use shows in CloudTrail. Default key policy: IAM of the account decides who uses it.
+# The Bucket Key makes S3 ask KMS for a bucket-level key instead of once per object (up to 99 % fewer requests).
+resource "aws_kms_key" "uploads" {
+  description              = "S3 ${local.buckets["uploads"]}: default encryption of the uploads"
+  key_usage                = "ENCRYPT_DECRYPT"
+  customer_master_key_spec = "SYMMETRIC_DEFAULT"
+  enable_key_rotation      = true
+  deletion_window_in_days  = 7
+}
+
+resource "aws_kms_alias" "uploads" {
+  name          = "alias/${var.name_prefix}-uploads"
+  target_key_id = aws_kms_key.uploads.key_id
+}
+
+# uploads: the key above with the Bucket Key. media is public through CloudFront once transcoded, so it keeps SSE-S3: a
+# customer managed key (what the finding below asks for) would add $1 a month and kms:Decrypt for CloudFront and both
+# services, and protect nothing secret. Its key is "", not null: trivy reads null as unknown and checks nothing.
 # Scope: every environment.
-#trivy:ignore:AWS-0132
+#trivy:ignore:AWS-0132[each.key=media]
 resource "aws_s3_bucket_server_side_encryption_configuration" "this" {
   for_each = aws_s3_bucket.this
 
@@ -58,8 +81,10 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "this" {
 
   rule {
     apply_server_side_encryption_by_default {
-      sse_algorithm = "AES256"
+      sse_algorithm     = each.key == "uploads" ? "aws:kms" : "AES256"
+      kms_master_key_id = each.key == "uploads" ? aws_kms_key.uploads.arn : ""
     }
+    bucket_key_enabled = each.key == "uploads" ? true : null
   }
 }
 

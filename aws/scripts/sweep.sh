@@ -12,7 +12,7 @@
 # an alias of the lab still on such a key is counted: it keeps its name, so the next session cannot make it again.
 
 # Reads the home region, and us-east-1 for what CloudFront keeps there (web ACLs, pricing plans, certificates, log
-# deliveries), for IAM (OIDC providers, roles of CI and of MediaConvert; global, its endpoint in us-east-1) and for
+# deliveries), for IAM (OIDC providers, roles of CI, MediaConvert, AWS Backup; global, endpoint in us-east-1) and for
 # the kinds a baseline keeps there too (the DNSSEC alarms of prd, its query log group, their SNS topic and KMS keys):
 # each of those kinds reads the Stack tag, so what a baseline keeps is "kept" in either region.
 
@@ -246,15 +246,81 @@ rds_instances() {
   q '.DBInstances[] | select((.DBInstanceIdentifier | startswith("svp-")) or any(.TagList[]?; .Key == "Project" and .Value == "svp"))
     | "\(.DBInstanceIdentifier) \(.DBInstanceStatus)"' rds describe-db-instances
 }
-# The final snapshot a destroy of prd writes is one of them: the runbook reads it, then deletes it.
+# The final snapshot a destroy of prd writes is one of them: the runbook reads it, then deletes it. Snapshots
+# awsbackup:* are recovery points of AWS Backup, listed and deleted as those.
 rds_snapshots() {
   q '.DBSnapshots[] | select((.DBInstanceIdentifier | startswith("svp-")) or any(.TagList[]?; .Key == "Project" and .Value == "svp"))
+    | select((.DBSnapshotIdentifier | startswith("awsbackup:") | not) and .SnapshotType != "automated")
     | "\(.DBSnapshotIdentifier) \(.SnapshotType) \(.Status)"' rds describe-db-snapshots
+}
+# The automated snapshots of an instance: delete-db-snapshot is for manual ones, RDS removes these with the instance's
+# automated backups, some minutes after a delete with --delete-automated-backups.
+rds_automated_snapshots() {
+  q '.DBSnapshots[] | select((.DBInstanceIdentifier | startswith("svp-")) or any(.TagList[]?; .Key == "Project" and .Value == "svp"))
+    | select(.SnapshotType == "automated") | "\(.DBSnapshotIdentifier) \(.SnapshotType) \(.Status)"' rds describe-db-snapshots
 }
 rds_backups() {
   q '.DBInstanceAutomatedBackups[] | select(.DBInstanceIdentifier | startswith("svp-")) | "\(.DBInstanceAutomatedBackupsArn) \(.Status)"' \
     rds describe-db-instance-automated-backups
 }
+
+# The jobs of AWS Backup that have not ended (states as each API names them): a backup job can be stopped, a copy or
+# restore job only waited for.
+backup_jobs() {
+  q '.BackupJobs[] | select(.State | IN("CREATED", "PENDING", "RUNNING", "ABORTING")) | "\(.BackupJobId) \(.State) \(.ResourceArn)"' \
+    backup list-backup-jobs
+}
+copy_jobs() { q '.CopyJobs[] | select(.State | IN("CREATED", "RUNNING")) | "\(.CopyJobId) \(.State) \(.ResourceArn)"' backup list-copy-jobs; }
+restore_jobs() {
+  q '.RestoreJobs[] | select(.Status | IN("PENDING", "RUNNING")) | "\(.RestoreJobId) \(.Status) \(.CreatedResourceArn // "-")"' \
+    backup list-restore-jobs
+}
+
+# The vaults of the lab ("name Stack Locked"): svp-<env> of aws/accounts/<env> is kept between sessions, the probe's
+# vaults of the sandbox are not.
+vault_stacks() {
+  local lines name arn locked tags
+  lines=$(q '.BackupVaultList[] | select(.BackupVaultName | startswith("svp-")) | "\(.BackupVaultName) \(.BackupVaultArn) \(.Locked // false)"' \
+    backup list-backup-vaults) || return 1
+  printing && lines='<each-vault-svp-*-above> <its-ARN> false'
+  while read -r name arn locked; do
+    [ -n "$name" ] || continue
+    tags=$(aws_ backup list-tags --resource-arn "$arn" --output json) || return 1
+    printing && continue
+    echo "$name $(jq -r '.Tags.Stack // "-"' <<<"$tags") $locked"
+  done <<<"$lines"
+}
+backup_vaults() {
+  local lines name stack locked
+  lines=$(vault_stacks) || return 1
+  while read -r name stack locked; do
+    [ -n "$name" ] || continue
+    if is_kept "$stack"; then keep "kept  backup vault $name (Stack=$stack)"; else echo "$name Locked=$locked"; fi
+  done <<<"$lines"
+}
+# A vault lock of a vault left (governance mode: removable), a kind listed before the vaults.
+vault_locks() {
+  local lines name stack locked
+  lines=$(vault_stacks) || return 1
+  while read -r name stack locked; do
+    if [ -n "$name" ] && [ "$locked" = true ] && ! is_kept "$stack"; then echo "$name"; fi
+  done <<<"$lines"
+}
+# Every recovery point of every vault svp-*, kept vault or not: restore-drill.sh <env> cleanup deletes those of the
+# session; a snapshot awsbackup:* of RDS is one of them.
+recovery_points() {
+  local lines name stack locked
+  lines=$(vault_stacks) || return 1
+  printing && lines='<each-vault-above>'
+  while read -r name stack locked; do
+    [ -n "$name" ] || continue
+    q '.RecoveryPoints[] | "\(.RecoveryPointArn) \(.BackupVaultName)"' backup list-recovery-points-by-backup-vault \
+      --backup-vault-name "$name" || return 1
+  done <<<"$lines"
+}
+# Local backup plans of the sandbox probe (svp-probe*). The plans of the organization's backup policy (svp-stg,
+# svp-prd) carry no field that marks them; they go by their name and are not the account's to delete.
+backup_plans() { q '.BackupPlansList[] | select(.BackupPlanName | startswith("svp-probe")) | "\(.BackupPlanId) \(.BackupPlanName)"' backup list-backup-plans; }
 
 # MSK refuses to delete a configuration while a cluster uses it: the clusters are listed, and deleted, first.
 msk_clusters() { q '.ClusterInfoList[] | select(.ClusterName | startswith("svp-")) | "\(.ClusterArn) \(.State)"' kafka list-clusters-v2; }
@@ -627,6 +693,47 @@ mediaconvert_role_policies() {
   done
 }
 
+# The service roles of AWS Backup ("name Stack"): svp-<env>-backup of aws/accounts/<env> is kept, svp-probe-backup of
+# the sandbox probe is not.
+backup_role_stacks() {
+  local names n tags
+  names=$(q '.Roles[] | select(.RoleName | test("^svp-[a-z]+-backup$")) | .RoleName' iam list-roles) || return 1
+  printing && names='<each-role-above>'
+  for n in $names; do
+    tags=$(aws_ iam list-role-tags --role-name "$n" --output json) || return 1
+    printing && continue
+    echo "$n $(stack_tag <<<"$tags")"
+  done
+}
+backup_roles() {
+  local lines n stack
+  lines=$(backup_role_stacks) || return 1
+  while read -r n stack; do
+    [ -n "$n" ] || continue
+    if is_kept "$stack"; then keep "kept  IAM role $n (Stack=$stack)"; else echo "$n${stack:+ Stack=$stack}"; fi
+  done <<<"$lines"
+}
+# The inline and the managed policies of the roles left ("<role> <policy>"), kinds listed before the roles: IAM
+# refuses to delete a role with either.
+backup_role_policies() {
+  local lines n stack
+  lines=$(backup_role_stacks) || return 1
+  printing && lines='<each-role-above-not-kept>'
+  while read -r n stack; do
+    if [ -z "$n" ] || is_kept "$stack"; then continue; fi
+    q ".PolicyNames[] | \"$n \\(.)\"" iam list-role-policies --role-name "$n" || return 1
+  done <<<"$lines"
+}
+backup_role_attached() {
+  local lines n stack
+  lines=$(backup_role_stacks) || return 1
+  printing && lines='<each-role-above-not-kept>'
+  while read -r n stack; do
+    if [ -z "$n" ] || is_kept "$stack"; then continue; fi
+    q ".AttachedPolicies[] | \"$n \\(.PolicyArn)\"" iam list-attached-role-policies --role-name "$n" || return 1
+  done <<<"$lines"
+}
+
 # The roles GitHub Actions assumes to push to ECR (svp-ci-*).
 ci_roles() {
   local names n tags stack
@@ -674,7 +781,16 @@ sweep_kind "ACM certificates" certificates "aws acm delete-certificate --certifi
 sweep_kind "RDS instances" rds_instances \
   "aws rds delete-db-instance --db-instance-identifier {} --skip-final-snapshot --delete-automated-backups"
 sweep_kind "RDS snapshots" rds_snapshots "aws rds delete-db-snapshot --db-snapshot-identifier {}"
+sweep_kind "RDS automated snapshots" rds_automated_snapshots \
+  "RDS removes it with the automated backups of its deleted instance: run the sweep again in a few minutes; if it stays, delete those automated backups (kind RDS automated backups)"
 sweep_kind "RDS automated backups" rds_backups "aws rds delete-db-instance-automated-backup --db-instance-automated-backups-arn {}"
+sweep_kind "AWS Backup backup jobs not ended" backup_jobs "aws backup stop-backup-job --backup-job-id {}"
+sweep_kind "AWS Backup copy jobs not ended" copy_jobs "a copy job cannot be stopped: wait until it ends, then run the sweep again"
+sweep_kind "AWS Backup restore jobs not ended" restore_jobs "a restore job cannot be stopped: wait until it ends, then run the sweep again"
+sweep_kind "AWS Backup recovery points" recovery_points "aws backup delete-recovery-point --recovery-point-arn {} --backup-vault-name {rest}"
+sweep_kind "AWS Backup vault locks" vault_locks "aws backup delete-backup-vault-lock-configuration --backup-vault-name {}"
+sweep_kind "AWS Backup vaults" backup_vaults "aws backup delete-backup-vault --backup-vault-name {}"
+sweep_kind "AWS Backup plans" backup_plans "$runbook (delete-backup-selection of each selection, then delete-backup-plan)"
 sweep_kind "MSK clusters" msk_clusters "aws kafka delete-cluster --cluster-arn {}"
 sweep_kind "MSK configurations" msk_configurations "aws kafka delete-configuration --arn {}"
 sweep_kind "ElastiCache replication groups" replication_groups "aws elasticache delete-replication-group --replication-group-id {}"
@@ -714,6 +830,11 @@ global sweep_kind "IAM OIDC providers" oidc_providers "aws iam delete-open-id-co
 global sweep_kind "IAM inline policies of MediaConvert roles" mediaconvert_role_policies \
   "aws iam delete-role-policy --role-name {} --policy-name {rest}"
 global sweep_kind "IAM roles of MediaConvert" mediaconvert_roles "aws iam delete-role --role-name {}"
+global sweep_kind "IAM inline policies of AWS Backup roles" backup_role_policies \
+  "aws iam delete-role-policy --role-name {} --policy-name {rest}"
+global sweep_kind "IAM managed policies attached to AWS Backup roles" backup_role_attached \
+  "aws iam detach-role-policy --role-name {} --policy-arn {rest}"
+global sweep_kind "IAM roles of AWS Backup" backup_roles "aws iam delete-role --role-name {}"
 global sweep_kind "IAM roles of CI" ci_roles "$runbook (delete-role-policy for each inline policy, then delete-role)"
 sweep_kind "Secrets Manager secrets (scheduled for deletion included)" secrets \
   "aws secretsmanager delete-secret --secret-id {} --force-delete-without-recovery"

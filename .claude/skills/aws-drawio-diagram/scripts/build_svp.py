@@ -2,7 +2,8 @@
 """Generate `docs/diagrams/svp-aws.drawio` (+ PDF, PNG) from a Python spec — the drawio file is GENERATED, edit it here.
 
 Four pages: stg, prd (one function, sizes read from the Terraform of this repository), org (organization, accounts, OUs,
-policies, log and detection flows) and flows (release path to ECR, upload to playback, request, telemetry, transcode). Layout as in SKILL.md: rows = AZs, each holding its public, private and database subnet; columns = tiers (outside
+policies, log, detection and backup copy flows) and flows (release path to ECR, upload to playback, request, telemetry,
+transcode, backup and restore). Layout as in SKILL.md: rows = AZs, each holding its public, private and database subnet; columns = tiers (outside
 → global services of the account → public → private → database), the regional band below the VPC. Every coordinate is a multiple of 40 (major cell), icons 80px.
 
     python3 .claude/skills/aws-drawio-diagram/scripts/build_svp.py [--pdf] [--png DIR] [--docs]
@@ -22,6 +23,9 @@ from drawio_lib import ACCOUNT, ANA, AZ, BAND, CLOUD, COMP, DB, INTEG, K8S, MUTE
 
 ROOT = Path(__file__).resolve().parents[4]
 OUT = ROOT / "docs/diagrams/svp-aws.drawio"
+# The draw.io CLI cuts a PNG taller than 8192 px without a blank tail, so export_png() of drawio_lib cannot see it: the
+# docs export stays under this height whatever the page's.
+PNG_MAX_HEIGHT = 8000
 
 
 # ---------------------------------------------------------------- sizes, read from the Terraform (never typed here)
@@ -71,6 +75,20 @@ def cache_prefixes() -> list[str]:
     if not block:
         raise SystemExit("aws/modules/registry/main.tf: no cache_rules map")
     return re.findall(r'^\s*"?([a-z0-9-]+)"?\s*=\s*\{', block.group(1), re.M)
+
+
+def backup_settings(env: str) -> dict:
+    """Schedule and retention of the backup of `env`: the cron and the retention in days of the vault and of the copy from
+    `locals` of modules/org-policies/main.tf, the governance lock range of the copy vault from aws/backup/main.tf."""
+    policies = (ROOT / "aws/modules/org-policies/main.tf").read_text(encoding="utf8")
+    cron = re.search(r'schedule_expression\s*=\s*\{ "@@assign" = "cron\(([^)]*)\)"', policies)
+    days = re.search(rf"^\s*{env}\s*=\s*\{{ vault = (\d+), copy = (\d+) \}}", policies, re.M)
+    vault = (ROOT / "aws/backup/main.tf").read_text(encoding="utf8")
+    lock = re.search(rf"svp-{env}-copy = \{{\s*lock\s*=\s*\{{ min_retention_days = (\d+), max_retention_days = (\d+) \}}", vault)
+    if not (cron and days and lock):
+        raise SystemExit(f"aws/modules/org-policies/main.tf, aws/backup/main.tf: no cron, retention or lock of {env}")
+    return {"cron": cron.group(1), "vault_days": int(days.group(1)), "copy_days": int(days.group(2)),
+            "lock_min": int(lock.group(1)), "lock_max": int(lock.group(2))}
 
 
 @dataclass(frozen=True)
@@ -160,14 +178,15 @@ def expected(env: Env) -> dict[str, int]:
             "nat_gateway": len(env.nat_rows), "ec2": 2 * n, "instance2": 1, "rds": 2 if env.multi_az else 1, "managed_streaming_for_kafka": n,
             # endpoints: S3 gateway, guardduty-data interface, one icon per AZ holding the interface endpoints' ENIs;
             # s3: media, uploads and the three log archive buckets it writes (VPC flow, WAF, CloudFront access logs)
-            "elasticache": env.cache_nodes, "endpoints": 2 + env.endpoint_azs, "s3": 5, "secrets_manager": 1, "key_management_service": 1,
+            "elasticache": env.cache_nodes, "endpoints": 2 + env.endpoint_azs, "s3": 5, "secrets_manager": 1, "key_management_service": 4,
             # transcode (modules/transcode): MediaConvert queue, its role, the job-state rule, two queues, the DLQ alarm
             "elastic_block_store": n, "sns": 1, "sqs": 3, "eventbridge": 2, "systems_manager": 1,
-            "elemental_mediaconvert": 1, "role": 1, "alarm": 1,
+            "elemental_mediaconvert": 1, "role": 2, "alarm": 3,
+            # backup: the vault of the env and its copy in svp-backup; keys of uploads, of the vault and of the copy
             # account-level services that outlive the session: ECR, Inspector (scans the cache repositories), AMP, AMG,
             # the application log group (cloudwatch_2 below counts the alarm icon too), X-Ray
             "ecr": 1, "inspector": 1, "managed_service_for_prometheus": 1, "managed_service_for_grafana": 1, "xray": 1,
-            "account": 2, "region": 1, "az": n, "subnet": 4 * n,
+            "backup": 2, "account": 3, "region": 1, "az": n, "subnet": 4 * n,
             # Kubernetes: a ns icon per frame; a workload icon per svp service, per svp-data workload, and Envoy's
             # proxy Deployment and its ClusterIP Service
             "k8s_ns": FRAMES, "k8s_deploy": len(SVP) + 1 + sum(k == "deploy" for k, _ in SVP_DATA),
@@ -177,9 +196,10 @@ def expected(env: Env) -> dict[str, int]:
 
 
 def org_expected() -> dict[str, int]:
-    """What the org page must hold, by check_diagram.kind_counts() kind: the five accounts, one icon per service the
-    organization, the log archive and the security account run (see org_page)."""
-    return {"account": 5, "organizations": 1, "single_sign_on": 1, "cloudtrail": 1, "eventbridge": 4, "s3": 6, "key_management_service": 1,
+    """What the org page must hold, by check_diagram.kind_counts() kind: the six accounts, one icon per service the
+    organization, the log archive, the security and the backup account run (see org_page)."""
+    return {"account": 6, "organizations": 1, "single_sign_on": 1, "cloudtrail": 1, "eventbridge": 4, "s3": 6, "key_management_service": 2,
+            "backup": 4,
             "flow_logs": 2, "waf": 2, "cloudfront": 2, "config": 1, "guardduty": 1, "security_hub": 1, "access_analyzer": 1, "sns": 1, "users": 1,
             "inspector": 1, "managed_service_for_grafana": 2}
 
@@ -253,13 +273,17 @@ def env_page(env: Env) -> Page:
     row = band_y + 40                                     # icon row of the band
     row_t = row + 240                                     # transcode row of the band, under the buckets it reads and writes
     row2 = row + 440                                      # third icon row of the band: account-level observability, registry
-    lane = band_y + 720                                   # users → uploads, below the band
+    row3 = row + 640                                      # fourth icon row of the band: backup
+    lane = band_y + 920                                   # users → uploads, below the band
     region_b = lane + 40
     acct_b = region_b + 40
     log_y = acct_b + 40                                   # the log archive account, under the env's own account
     log_icon, log_b = log_y + 80, log_y + 240
-    cloud_b = log_b + 40
+    bk_y = log_b + 40                                     # the backup account, under the log archive account
+    bk_icon, bk_b = bk_y + 80, bk_y + 240
+    cloud_b = bk_b + 40
     priv, pub, edge, data = cidrs(env)
+    bk = backup_settings(env.name)
 
     p = Page(env.name, PAGE_W, cloud_b + 40)
     p.text(f"{env.name} — EKS cluster svp-{env.name}", 40, 0, 920, 40, size=17, bold=1)
@@ -295,8 +319,9 @@ def env_page(env: Env) -> Page:
         p.group(f"Database subnet {data[k]}", DB_X, sub[k], DB_R - DB_X, SUB_H, **PRIVATE, cid=f"db{k}")
     eks = p.group(f"EKS cluster svp-{env.name}", EKS_X, a, EKS_R - EKS_X, sub[-1] + SUB_H - a, gr="eks", stroke="#D05C17",
                   font="#D05C17", cid="eks")
-    p.group("Regional services", VPC_X, band_y, VPC_R - VPC_X, 680, **BAND)
+    p.group("Regional services", VPC_X, band_y, VPC_R - VPC_X, 880, **BAND)
     p.group("AWS Account svp-log-archive · buckets written by this env", ACCT_X, log_y, ACCT_R - ACCT_X, log_b - log_y, **ACCOUNT)
+    p.group(f"AWS Account svp-backup · copy of the {env.name} backups", ACCT_X, bk_y, ACCT_R - ACCT_X, bk_b - bk_y, **ACCOUNT)
 
     # namespace frames (boxes, not aws4 containers), every Kubernetes icon wholly inside one private box: first AZ rows
     # +160 and +280, second AZ rows +120 and +240; the fourth column of the second AZ stays free for svp → endpoint
@@ -426,6 +451,27 @@ def env_page(env: Env) -> Page:
         "media-worker calls MediaConvert and SQS through the interface endpoints and S3 through the gateway endpoint; no NAT"),
         2320, row_t, 1160, 160, valign="top")
 
+    # backup: the vault of the env account, its key, the role AWS Backup assumes, the alarms on failed jobs; the copy
+    # goes down to the vault of svp-backup under the log archive account (x 1960, clear of that account's texts)
+    p.icon(f"KMS alias/svp-{env.name}-uploads<br>SSE-KMS and Bucket Key<br>of S3 uploads", "key_management_service", 600, row3, SEC, cid="kms_up")
+    p.icon(f"KMS alias/svp-{env.name}-backup<br>key of the vault svp-{env.name}", "key_management_service", 1000, row3, SEC, cid="kms_bk")
+    bk_role = p.flat(f"Role svp-{env.name}-backup<br>managed policies of AWS Backup", "role", 1560, row3, SEC[0], cid="bkrole")
+    bk_vault = p.icon(f"AWS Backup vault svp-{env.name}<br>no lock", "backup", 1920, row3, STO, cid="bkvault", label_top=True)
+    p.flat(f"CloudWatch alarm<br>svp-{env.name}-backup-job-failed", "alarm", 2240, row3, SEC[0], cid="bkalarm_job")
+    p.flat(f"CloudWatch alarm<br>svp-{env.name}-backup-copy-failed", "alarm", 2520, row3, SEC[0], cid="bkalarm_copy")
+    p.text(bullets(
+        f"Backup policy svp-backup-{env.name} of the organization puts the plan svp-{env.name} here: rule daily, cron({bk['cron']}) UTC, "
+        "the RDS instance and the media and uploads buckets tagged Backup=daily are its selection, run as the role",
+        f"Recovery points live {bk['vault_days']} days here (emptied at the end of each session) and {bk['copy_days']} days in the copy",
+        f"Both alarms notify SNS svp-{env.name}-alarms (ticket)"),
+        2800, row3, 680, 160, valign="top")
+    bk_copy = p.icon(f"AWS Backup vault svp-{env.name}-copy<br>governance lock {bk['lock_min']}–{bk['lock_max']} days", "backup", 1920, bk_icon,
+                     STO, cid="copyvault")
+    p.icon("KMS alias/svp-backup-copy<br>key of both copy vaults", "key_management_service", 1560, bk_icon, SEC, cid="kms_copy")
+    p.text(f"Only the management account writes to svp-backup (the learner has read-only SSO) · the vault access policy lets svp-{env.name} "
+           "copy into the vault and nothing else, so an administrator of the env cannot delete the copies", GLOBAL_X, bk_icon, 1160, 80,
+           color=MUTED)
+
     # request path: DNS, CloudFront, VPC origin, ALB, Envoy, services, databases. The origin edges and ALB → Envoy run
     # 20 above and 20 below the shared AZ border (bottom margin of the first AZ, top margin of the second), never on
     # the dashed line itself (the controllers' edge runs 20 below it, left of the cluster).
@@ -505,6 +551,10 @@ def env_page(env: Env) -> Page:
            points=[(lane_x, out_y), (lane_x, log_icon + 40)], label_pos=0.5)
     p.edge(cf, media, STROKE["sto"], label="OAC")
 
+    p.edge(bk_role, bk_vault, STROKE["sto"], label="backup, restore jobs", exit_=(1, 0.5), entry=(0, 0.5))
+    p.edge(bk_vault, bk_copy, STROKE["sto"], label="copy job", exit_=(0.5, 1), entry=(0.5, 0),
+           label_pos=along([(1960, row3 + 80), (1960, bk_icon)], (1960, row3 + 160)))
+
     # alarms and interruptions, inside the band
     if cw:
         p.edge(cw, sns, STROKE["integ"], label="alarm, OK")
@@ -542,12 +592,12 @@ ORG = dict(gr="group_security_group", stroke="#232F3E", grstroke=True)       # t
 # OU: solid, since a dashed box without fill reads as an AZ
 OU = dict(gr="group_security_group", stroke="#5A6C86", grstroke=True)
 POLICY_TYPE = {"SERVICE_CONTROL_POLICY": "SCP", "RESOURCE_CONTROL_POLICY": "RCP", "DECLARATIVE_POLICY_EC2": "Declarative policy",
-               "TAG_POLICY": "Tag policy"}
+               "TAG_POLICY": "Tag policy", "BACKUP_POLICY": "Backup policy"}
 
 
 def org_policies() -> list[tuple[str, str, str]]:
     """(name, type, target) of each policy of modules/org-policies/main.tf, read from the `policies` map: the name is the
-    key with the `svp-` prefix the module adds, the target `root_id` or `prod_ou_id`."""
+    key with the `svp-` prefix the module adds, the target `root_id`, `prod_ou_id` or `nonprod_ou_id`."""
     text = (ROOT / "aws/modules/org-policies/main.tf").read_text(encoding="utf8")
     out = []
     for m in re.finditer(r'^    "([a-z0-9-]+)" = \{\n(.*?)^    \}$', text, re.S | re.M):
@@ -563,39 +613,43 @@ def org_policies() -> list[tuple[str, str, str]]:
 def org_page() -> Page:
     pol = org_policies()
     at = lambda target: [f"{POLICY_TYPE[t]} <b>{n}</b>" for n, t, tg in pol if tg == target]   # noqa: E731
-    on_root, on_prod = at("root_id"), at("prod_ou_id")
+    on_root, on_prod, on_nonprod = at("root_id"), at("prod_ou_id"), at("nonprod_ou_id")
     scp = [x for x in on_root if x.startswith("SCP")]
     rest = [x for x in on_root if not x.startswith("SCP")]
 
-    p = Page("org", 2840, 2600)
+    p = Page("org", 2840, 2760)
     p.text("org — organization, accounts and security flows", 40, 0, 920, 40, size=17, bold=1)
     p.text("The management account holds the organization, IAM Identity Center and the organization trail · accounts in OUs as in the "
-           "AWS Security Reference Architecture: Security (log archive, security tooling) and Workloads (Prod, NonProd) · every "
+           "AWS Security Reference Architecture: Security (log archive, security tooling, backup) and Workloads (Prod, NonProd) · every "
            "account also runs the baseline (S3 Block Public Access, EBS default encryption, Config recorder to svp-config)",
            40, 40, 2760, 40, color=MUTED)
-    p.text("Green: logs to the log archive account · red: detection and events to the security account, then SNS and email · "
+    p.text("Green: logs to the log archive account and backup copies to the backup account · red: detection and events to the "
+           "security account, then SNS and email · "
            "policies on the root reach every member account (SCP, RCP) or every account (declarative, tag)", 40, 80, 2760, 40, color=MUTED)
 
-    p.group("AWS Organization · root", 40, 160, 2760, 2360, **ORG)
+    p.group("AWS Organization · root", 40, 160, 2760, 2520, **ORG)
     p.box("<b>On the root: service control policies</b>" + bullets(*scp), 80, 240, 840, 200, "#F7F7F7", MUTED, valign="top")
     p.box("<b>On the root: resource control, declarative, tag</b>" + bullets(*rest), 960, 240, 840, 200, "#F7F7F7", MUTED, valign="top")
     p.box("<b>Organization features</b>" + bullets(
         "Centralized root access: member accounts hold no root credentials",
         "Delegated administrator svp-security: GuardDuty, Security Hub, Config, IAM Access Analyzer, Inspector (ECR scanning of every member account)",
-        "Baseline roots apply from the management account through OrganizationAccountAccessRole"),
+        "Baseline roots apply from the management account through OrganizationAccountAccessRole",
+        "AWS Backup: cross-account backup and the RDS, S3 opt-in set here; backup policies by OU, no delegated administrator"),
         1840, 240, 880, 200, "#F7F7F7", MUTED, valign="top")
 
     # management account (left), Security OU (middle), Workloads OU (right); rows of the log archive buckets at BUCKET
     p.group("Management account", 80, 560, 600, 1040, **ACCOUNT)
-    p.group("OU Security", 760, 560, 880, 1560, **OU)
+    p.group("OU Security", 760, 560, 880, 2080, **OU)
     p.group("svp-log-archive", 800, 640, 800, 880, **ACCOUNT)
     p.group("svp-security · delegated administrator", 800, 1560, 800, 520, **ACCOUNT)
-    p.group("OU Workloads", 2000, 560, 720, 1920, **OU)
+    p.group("svp-backup", 800, 2160, 800, 440, **ACCOUNT)
+    p.group("OU Workloads", 2000, 560, 720, 2080, **OU)
     p.group("OU Prod", 2040, 600, 640, 880, **OU)
     p.group("svp-prd", 2080, 680, 560, 720, **ACCOUNT)
-    p.group("OU NonProd", 2040, 1520, 640, 920, **OU)
+    p.group("OU NonProd", 2040, 1520, 640, 1080, **OU)
     p.group("svp-stg", 2080, 1600, 560, 720, **ACCOUNT)
     p.text("<b>On OU Prod:</b> " + ", ".join(on_prod), 2080, 1400, 560, 40)
+    p.text("<b>On OU NonProd:</b> " + ", ".join(on_nonprod), 2080, 2320, 560, 40)
 
     # management account
     p.icon("AWS Organizations<br>root, OUs, member accounts", "organizations", 320, 720, SEC, cid="orgs")
@@ -626,8 +680,19 @@ def org_page() -> Page:
     sns = p.icon("SNS svp-security-alarms", "sns", 1480, 1880, INTEG, cid="sns")
     learner = p.flat("Learner<br>email", "users", 1680, 1880, cid="learner")
 
+    # backup account: the copy vaults of stg and prd and their key. Reached only from the management account through
+    # OrganizationAccountAccessRole; the vaults accept copies from the one env account each
+    copy_lock = {env: backup_settings(env) for env in ("stg", "prd")}
+    p.text("Copies of the recovery points of stg and prd, in vaults with a governance lock, encrypted with their own key · each vault "
+           "accepts copies from its env account only", 840, 2200, 720, 80, color=MUTED)
+    p.icon("KMS alias/svp-backup-copy<br>key of both copy vaults", "key_management_service", 880, 2360, SEC, cid="b_key")
+    copy_stg = p.icon(f"AWS Backup vault svp-stg-copy<br>governance lock {copy_lock['stg']['lock_min']}–{copy_lock['stg']['lock_max']} days",
+                      "backup", 1160, 2360, STO, cid="copy_stg", label_top=True)
+    copy_prd = p.icon(f"AWS Backup vault svp-prd-copy<br>governance lock {copy_lock['prd']['lock_min']}–{copy_lock['prd']['lock_max']} days",
+                      "backup", 1400, 2360, STO, cid="copy_prd")
+
     # workload accounts: the log sources of an env and its event forwarder
-    sources = {}
+    sources, vaults = {}, {}
     for env, top in (("prd", 760), ("stg", 1680)):
         sources[env] = (
             p.flat("VPC flow logs", "flow_logs", 2160, top, VPC_PURPLE, cid=f"{env}_flow"),
@@ -636,6 +701,8 @@ def org_page() -> Page:
             p.icon("EventBridge svp-security-* rules<br>forwarder role", "eventbridge", 2160, top + 480, INTEG, cid=f"{env}_fwd", label_top=True))
         p.icon(f"AMG svp-{env}<br>ADMIN svp-platform-admins<br>VIEWER svp-platform-viewers", "managed_service_for_grafana", 2440, top, SEC,
                cid=f"{env}_amg")
+        vaults[env] = p.icon(f"AWS Backup vault svp-{env}<br>key alias/svp-{env}-backup<br>role svp-{env}-backup", "backup", 2440, top + 160, STO,
+                             cid=f"{env}_vault")
 
     green, integ, sec = STROKE["sto"], STROKE["integ"], STROKE["sec"]
     # logs: left lane x=720 from the management account, lanes right of the Security OU from the workload accounts
@@ -651,6 +718,14 @@ def org_page() -> Page:
             bucket = {"flow": "flowlogs", "waf": "waf", "cf": "cloudfront"}[kind]
             p.edge(src, buckets[bucket], green, exit_=(0, 0.5), entry=(1, 0.5),
                    points=[(lane, ys[env] + dy + 40), (lane, b[bucket] + 40)])
+    # backup copies: out of the env vault to the right, down the corridors between the Workloads OU and the border of
+    # the organization, then left under the env account into the copy vault (prd: its right side, stg: its bottom)
+    route = [(2520, 960), (2740, 960), (2740, 2400), (1480, 2400)]
+    p.edge(vaults["prd"], copy_prd, green, label="copy job", exit_=(1, 0.5), entry=(1, 0.5), points=route[1:3],
+           label_pos=along(route, (1800, 2400)))
+    route = [(2520, 1880), (2780, 1880), (2780, 2540), (1200, 2540), (1200, 2440)]
+    p.edge(vaults["stg"], copy_stg, green, label="copy job", exit_=(1, 0.5), entry=(0.5, 1), points=route[1:4],
+           label_pos=along(route, (1800, 2540)))
     # detection: GuardDuty and Access Analyzer findings into Security Hub, Security Hub and every account's rules
     # to the bus
     p.edge(gd, hub, sec, label="findings")
@@ -670,8 +745,11 @@ def org_page() -> Page:
 
 def flows(region: str) -> Page:
     u, r, t = 880, 1240, 1840              # tops of the upload, request and telemetry blocks
-    p = Page("flows", 1880, t + 2000)
-    p.text("Flows — image release, upload to playback, request to the web and API, telemetry, transcode", 40, 0, 1400, 40, size=17, bold=1)
+    yb = t + 2040                          # tops of the backup and restore blocks, under the transcode block
+    yr = yb + 1000
+    p = Page("flows", 1880, yr + 960)
+    p.text("Flows — image release, upload to playback, request to the web and API, telemetry, transcode, backup, restore", 40, 0, 1400, 40,
+           size=17, bold=1)
     p.text("Release: commit → signed image → ECR (same digest) → svp-gitops → Argo CD", 40, 120, 880, 40, size=13, bold=1)
     p.text("Upload to playback", 40, u, 880, 40, size=13, bold=1)
     # Release: GHCR stays the build target; CI copies the same digest and its signatures to the ECR of each account
@@ -832,6 +910,73 @@ def flows(region: str) -> Page:
         "transcode-jobs/&lt;video_id&gt;/&lt;version&gt;.json of the media bucket (first write wins) decides the result",
         "media-worker reaches MediaConvert and SQS through their interface endpoints, S3 through the gateway endpoint"),
         80, y0 + 720, 1720, 80, valign="top")
+
+    # Backup: the organization's Backup policy puts the plan in the env account, whose selection (tag Backup=daily)
+    # picks the RDS instance and the two buckets; the jobs write into the vault of the env, the copy job into the
+    # vault of svp-backup.
+    stg, prd = backup_settings("stg"), backup_settings("prd")
+    p.text("Backup: Backup policy of the organization, plan and jobs in the env account, copy to the vault of svp-backup", 40, yb, 1400, 40,
+           size=13, bold=1)
+    p.group(f"AWS Cloud · {region}", 480, yb + 80, 1360, 840, **CLOUD)
+    p.group("AWS Account svp-&lt;env&gt;", 520, yb + 120, 840, 640, **ACCOUNT)
+    p.group("AWS Account svp-backup", 1400, yb + 120, 400, 640, **ACCOUNT)
+    policy = p.box("<b>Organizations · management account</b><br>BACKUP_POLICY svp-backup-prd on OU Prod, svp-backup-stg on OU NonProd", 40,
+                   yb + 200, 400, 80, "#F7F7F7", MUTED, align="center")
+    plan = p.icon(f"Backup plan svp-&lt;env&gt;<br>rule daily, cron({stg['cron']}) UTC", "backup", 760, yb + 200, STO, cid="bplan", label_top=True)
+    vault = p.icon("AWS Backup vault svp-&lt;env&gt;<br>key alias/svp-&lt;env&gt;-backup", "backup", 1160, yb + 200, STO, cid="bvault", label_top=True)
+    src = [p.icon("RDS svp-&lt;env&gt;<br>tag Backup=daily", "rds", 560, yb + 440, DB, cid="brds"),
+           p.icon("S3 media<br>tag Backup=daily", "s3", 760, yb + 440, STO, cid="bmedia"),
+           p.icon("S3 uploads<br>tag Backup=daily", "s3", 960, yb + 440, STO, cid="bup")]
+    key = p.icon("KMS alias/svp-&lt;env&gt;-backup", "key_management_service", 1160, yb + 440, SEC, cid="bkey")
+    copy = p.icon("AWS Backup vault svp-&lt;env&gt;-copy<br>governance lock", "backup", 1560, yb + 200, STO, cid="bcopy", label_top=True)
+    ckey = p.icon("KMS alias/svp-backup-copy", "key_management_service", 1560, yb + 440, SEC, cid="bckey")
+    route = [(440, yb + 240), (760, yb + 240)]
+    p.edge(policy, plan, STROKE["sto"], label="creates the plan", exit_=(1, 0.5), entry=(0, 0.5), label_pos=along(route, (660, yb + 240)))
+    for s_ in src:
+        p.edge(plan, s_, STROKE["sto"], dashed=True, label="selects by tag" if s_ == src[1] else "", exit_=(0.5, 1), entry=(0.5, 0))
+    p.edge(plan, vault, STROKE["sto"], label="backup jobs, role svp-&lt;env&gt;-backup", exit_=(1, 0.5), entry=(0, 0.5))
+    p.edge(key, vault, STROKE["sec"], dashed=True, label="encrypts", exit_=(0.5, 0), entry=(0.5, 1))
+    p.edge(vault, copy, STROKE["sto"], label="copy job", exit_=(1, 0.5), entry=(0, 0.5),
+           label_pos=along([(1240, yb + 240), (1560, yb + 240)], (1480, yb + 240)))
+    p.edge(ckey, copy, STROKE["sec"], dashed=True, label="encrypts", exit_=(0.5, 0), entry=(0.5, 1))
+    p.text(bullets(
+        "The plan comes from the Backup policy, so an administrator of the env account can read it, not change it",
+        f"Recovery points live {stg['vault_days']} days (stg) or {prd['vault_days']} days (prd) in the vault of the env and are emptied at "
+        "the end of each session; the copy is kept by the lock of the copy vault, which accepts copies from the env account only",
+        "A job that fails raises the alarms svp-&lt;env&gt;-backup-job-failed, -copy-failed on the SNS topic svp-&lt;env&gt;-alarms"),
+        560, yb + 800, 1240, 120, valign="top")
+
+    # Restore drills (restore-drill.sh): a point-in-time restore of RDS next to its source, compared by table digests
+    # through svp-pg; one object of the media bucket deleted, then restored from the recovery point of the session.
+    p.text("Restore drills: PITR of RDS, one object of S3 media from a recovery point", 40, yr, 1400, 40, size=13, bold=1)
+    p.group(f"AWS Cloud · {region}", 160, yr + 80, 1680, 840, **CLOUD)
+    p.group("AWS Account svp-&lt;env&gt;", 200, yr + 120, 1600, 760, **ACCOUNT)
+    p.group("EKS cluster svp-&lt;env&gt;", 1280, yr + 160, 360, 160, gr="eks", stroke="#D05C17", font="#D05C17")
+    learner = p.flat("Learner<br>restore-drill.sh rds", "users", 40, yr + 200, cid="rlearner")
+    source = p.icon("RDS svp-&lt;env&gt;<br>LatestRestorableTime", "rds", 480, yr + 200, DB, cid="rsrc")
+    pitr = p.icon("RDS svp-&lt;env&gt;-pitr<br>restored at T_r, one AZ", "rds", 880, yr + 200, DB, cid="rpitr")
+    ops = p.k8s("svp-ops<br>svp-pg, read-only", "deploy", 1480, yr + 200, size=80, cid="rops")
+    p.edge(learner, source, STROKE["db"], label="S1, wait for T_r", exit_=(1, 0.5), entry=(0, 0.5), label_pos=0.3)
+    p.edge(source, pitr, STROKE["db"], label="restore-db-instance-to-point-in-time", exit_=(1, 0.5), entry=(0, 0.5))
+    p.edge(ops, pitr, STROKE["db"], dashed=True, label="R: count, md5 per table", exit_=(0, 0.5), entry=(1, 0.5))
+    route = [(1520, yr + 200), (1520, yr + 140), (520, yr + 140), (520, yr + 200)]
+    p.edge(ops, source, STROKE["db"], dashed=True, label="S1: count, md5 per table", exit_=(0.5, 0), entry=(0.5, 0), points=route[1:3],
+           label_pos=along(route, (1000, yr + 140)))
+
+    learner2 = p.flat("Learner<br>restore-drill.sh s3", "users", 40, yr + 520, cid="rlearner2")
+    media = p.icon("S3 media<br>versioned", "s3", 480, yr + 520, STO, cid="rmedia")
+    rvault = p.icon("AWS Backup vault svp-&lt;env&gt;<br>recovery point of S3 media", "backup", 880, yr + 520, STO, cid="rvault")
+    p.edge(learner2, media, STROKE["sto"], label="SHA-256, delete-object", exit_=(1, 0.5), entry=(0, 0.5), label_pos=0.3)
+    route = [(80, yr + 520), (80, yr + 460), (920, yr + 460), (920, yr + 520)]
+    p.edge(learner2, rvault, STROKE["sto"], label="start-restore-job", exit_=(0.5, 0), entry=(0.5, 0), points=route[1:3],
+           label_pos=along(route, (700, yr + 460)))
+    p.edge(rvault, media, STROKE["sto"], label="item-level restore of the key, role svp-&lt;env&gt;-backup", exit_=(0, 0.5), entry=(1, 0.5))
+    p.text(bullets(
+        "S1 and R are digests of every table of video, engagement, feed: the row contents and xmin, so a restore at T_r matches S1 only "
+        "if nothing was written between S1 and T_r",
+        "The instance svp-&lt;env&gt;-pitr is deleted when the drill ends; the application is not cut over to it in the drill",
+        "The restored object has a new ETag (AWS Backup does not keep it): the drill compares length and SHA-256 of the content"),
+        240, yr + 680, 1520, 160, valign="top")
     return p
 
 
@@ -858,7 +1003,8 @@ def main() -> int:
             print(f"  {export(out, 'png', a.png / f'{out.stem}-{x.name}.png', page=i)}")
     if a.docs:
         for i, x in enumerate(pg, 1):
-            print(f"  {export(out, 'png', out.with_name(f'{out.stem}-{x.name}.png'), page=i, scale=2).name}")
+            print(f"  {export(out, 'png', out.with_name(f'{out.stem}-{x.name}.png'), page=i,
+                          scale=min(2, PNG_MAX_HEIGHT / x.h)).name}")
     return 0
 
 

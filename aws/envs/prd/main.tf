@@ -88,6 +88,8 @@ module "rds" {
   cloudwatch_logs_exports               = var.rds_cloudwatch_logs_exports
   cloudwatch_logs_retention_days        = var.rds_cloudwatch_logs_retention_days
 
+  backup_copy_account_id = var.backup_account_id
+
   alarm_topic_arn = module.alarms.topic_arn
 }
 
@@ -180,10 +182,11 @@ module "media" {
 module "transcode" {
   source = "../../modules/transcode"
 
-  env                = local.env
-  uploads_bucket_arn = "arn:aws:s3:::${module.media.uploads_bucket}"
-  media_bucket_arn   = "arn:aws:s3:::${module.media.media_bucket}"
-  alarm_topic_arn    = module.alarms.topic_arn
+  env                 = local.env
+  uploads_bucket_arn  = "arn:aws:s3:::${module.media.uploads_bucket}"
+  uploads_kms_key_arn = module.media.uploads_kms_key_arn
+  media_bucket_arn    = "arn:aws:s3:::${module.media.media_bucket}"
+  alarm_topic_arn     = module.alarms.topic_arn
 }
 
 # The public way in to the web and the API: CloudFront, through a VPC origin, to an internal ALB in the edge subnets

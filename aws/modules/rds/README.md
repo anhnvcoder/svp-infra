@@ -4,7 +4,8 @@ Một instance RDS PostgreSQL cho mọi service của một env (mỗi service v
 tạo; module không tạo database nào). Thiết kế: [ADR-0034](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0034-aws-stage7.md)
 mục 9 và 11; major, CMK, storage autoscaling, tham số ghi log, CA:
 [ADR-0057](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0057-postgres17-verify-full.md); alarm:
-[ADR-0058](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0058-managed-data-operations.md).
+[ADR-0058](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0058-managed-data-operations.md); key chia sẻ cho copy backup, tag backup:
+[ADR-0067](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0067-backup-dr.md) §6.
 
 Tạo: DB subnet group (subnet database của VPC, không route ra Internet), security group chỉ nhận TCP 5432 từ các security group
 truyền vào (không rule egress), parameter group `postgres<major>` với `rds.force_ssl = 1` (kết nối không TLS bị từ chối) và các tham số
@@ -12,8 +13,20 @@ ghi log của ADR-0057 §6, instance gp3 không public, master username cố đ�
 Manager (`manage_master_user_password`: không đi qua Terraform, không có trong plan hay state). Minor tự nâng trong cửa sổ bảo trì, major
 không bao giờ tự nâng.
 
-- **KMS key customer managed của module** (alias `alias/<name>-rds`, rotation bật, deletion window 7 ngày, key policy mặc định của
-  account): mã hoá storage, dữ liệu Performance Insights (khi bật) và secret mật khẩu master.
+- **KMS key customer managed của module** (alias `alias/<name>-rds`, rotation bật, deletion window 7 ngày): mã hoá storage, dữ liệu
+  Performance Insights (khi bật) và secret mật khẩu master. Key policy có ba statement:
+
+  | Sid | Principal | Action | Điều kiện |
+  | --- | --- | --- | --- |
+  | `EnableIamUserPermissions` | account của key (`:root`) | `kms:*` (như key policy mặc định: account quyết ai dùng key qua IAM) | — |
+  | `BackupAccountUseForCopy` | account `backup_copy_account_id` (`:root`) | `kms:Decrypt`, `kms:DescribeKey`, `kms:GenerateDataKey` | — |
+  | `BackupAccountGrantForCopy` | account `backup_copy_account_id` (`:root`) | `kms:CreateGrant` | `kms:GrantIsForAWSResource` = `true` |
+
+  Snapshot mã hoá bằng CMK chỉ copy sang account khác được khi account đích dùng được key nguồn; RDS của account backup giải mã snapshot
+  và mã hoá bản copy bằng key của vault đích, nên bản copy dùng được sau khi key này đã xoá. Không điều kiện `kms:ViaService`
+  `backup.*`: snapshot RDS do RDS sao chép, grant không đi qua AWS Backup (ADR-0067 phụ lục §6).
+- **Tag `Backup = "daily"`** trên instance: Backup policy của Organizations chọn instance theo tag này (chỉ mẫu ARN instance, không
+  snapshot, dù `copy_tags_to_snapshot` chép tag sang snapshot).
 - **CA của cert server** ghi rõ `rds-ca-rsa2048-g1`: client nối `sslmode=verify-full` với bundle CA của RDS, nên đổi CA hiện ra ở plan.
 - **Storage autoscaling:** `max_allocated_storage` là trần RDS tự tăng volume tới khi dung lượng trống thấp; trần phải cao hơn
   `allocated_storage` ít nhất 26 %. Volume không bao giờ tự giảm.
@@ -72,6 +85,7 @@ Giám sát ngoài Prometheus của cluster, mỗi thứ tắt mặc định (t�
 | [aws_vpc_security_group_ingress_rule.postgres](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/vpc_security_group_ingress_rule) | resource |
 | [random_id.final_snapshot](https://registry.terraform.io/providers/hashicorp/random/latest/docs/resources/id) | resource |
 | [aws_caller_identity.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/caller_identity) | data source |
+| [aws_iam_policy_document.key](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
 | [aws_partition.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/partition) | data source |
 | [aws_region.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/region) | data source |
 
@@ -82,6 +96,7 @@ Giám sát ngoài Prometheus của cluster, mỗi thứ tắt mặc định (t�
 | alarm\_topic\_arn | ARN of the SNS topic every CloudWatch alarm of the instance notifies, when it fires and when it clears. | `string` | n/a | yes |
 | allocated\_storage | Size of the gp3 volume, in GiB (20 is the gp3 minimum of RDS PostgreSQL). | `number` | `20` | no |
 | allowed\_security\_groups | Security groups whose members may connect on 5432 (the EKS node and cluster security groups), keyed by a fixed label such as node or cluster: the keys name the rules, so they are known at plan time even when the ids are not. | `map(string)` | n/a | yes |
+| backup\_copy\_account\_id | AWS account (12 digits) that receives the cross-account copies of the instance's backups. The key policy of the instance's KMS key lets this account decrypt the snapshots and create grants for AWS resources, which a copy across accounts needs. | `string` | n/a | yes |
 | backup\_retention\_period | Days of automated backups and point-in-time recovery. At least 1: 0 turns backups off. | `number` | `1` | no |
 | cloudwatch\_logs\_exports | PostgreSQL logs RDS exports to CloudWatch Logs (postgresql, upgrade, iam-db-auth-error), each into a log group /aws/rds/instance/<name>/<type> this module creates. Empty (the default) exports nothing: ingestion is billed per GB. | `list(string)` | `[]` | no |
 | cloudwatch\_logs\_retention\_days | Days CloudWatch keeps the exported logs when cloudwatch\_logs\_exports is not empty, and the OS metrics of enhanced monitoring when monitoring\_interval is not 0. | `number` | `1` | no |
@@ -137,6 +152,7 @@ Ba ngưỡng tính theo lớp instance (25 % bộ nhớ, 90 % `max_connections` 
 | `delete_automated_backups` | `true` | `false` |
 | `deletion_protection` | `false` | `true` |
 | `skip_final_snapshot` | `true` | `false` |
+| `backup_copy_account_id` | `var.backup_account_id` của root (account `svp-backup`) | như stg |
 
 Hai biến bảo vệ dữ liệu không có mặc định: quên đặt thì hoặc mất dữ liệu prd, hoặc buổi stg không destroy được, nên mỗi env phải ghi rõ.
 Snapshot cuối (khi `skip_final_snapshot = false`) tên `<name>-final-<8 hex>`, hậu tố ngẫu nhiên sống cùng instance, nên dựng lại rồi destroy
@@ -166,7 +182,8 @@ stg ~$0,058/giờ. Snapshot cuối của prd tính theo giá lưu trữ backup t
 ## Có thể sót sau destroy
 
 - **KMS key của module:** destroy đặt lịch xoá key sau 7 ngày (deletion window), alias xoá ngay. Snapshot cuối và backup tự động mà
-  prd giữ lại được mã hoá bằng key này: khi key bị xoá thì chúng không restore được nữa. Muốn giữ chúng dùng được thì huỷ lịch xoá key
+  prd giữ lại, cùng recovery point AWS Backup trong vault của account env, được mã hoá bằng key này: khi key bị xoá thì chúng không restore
+  được nữa (bản copy ở vault của account backup thì vẫn được). Muốn giữ chúng dùng được thì huỷ lịch xoá key
   (`aws kms cancel-key-deletion`) trong 7 ngày đó.
 
 - **Secret master của RDS** (Secrets Manager, tên bắt đầu `rds!db-`): đi theo instance, chưa kiểm trên account; destroy dở (instance chưa

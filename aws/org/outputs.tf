@@ -23,6 +23,11 @@ output "security_account_id" {
   value       = aws_organizations_account.security.id
 }
 
+output "backup_account_id" {
+  description = "Id of the member account svp-backup, the value of SVP_AWS_BACKUP_ACCOUNT_ID."
+  value       = aws_organizations_account.backup.id
+}
+
 output "root_id" {
   description = "Id of the root of the organization (r-...), where every policy but the production guardrails is attached."
   value       = local.root_id

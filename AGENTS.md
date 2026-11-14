@@ -28,21 +28,25 @@ quyết định chung của lab nằm ở `docs/` của repo code (bản clone `
 
   | Account | Profile ghi | Profile chỉ đọc | Biến account | Root |
   | --- | --- | --- | --- | --- |
-  | management | `anhnv-sso` | — | `SVP_AWS_MGMT_ACCOUNT_ID` | `aws/bootstrap`, `aws/org`, `github/`; `aws/log-archive`, `aws/security`, `aws/baseline` qua role |
+  | management | `anhnv-sso` | — | `SVP_AWS_MGMT_ACCOUNT_ID` | `aws/bootstrap`, `aws/org`, `github/`; `aws/log-archive`, `aws/security`, `aws/baseline`, `aws/backup` qua role |
   | `svp-log-archive` | — | `anhnv-log-ro` | `SVP_AWS_LOG_ACCOUNT_ID` | — |
   | `svp-security` | — | `anhnv-security-ro` | `SVP_AWS_SECURITY_ACCOUNT_ID` | — |
+  | `svp-backup` | — | `anhnv-backup-ro` | `SVP_AWS_BACKUP_ACCOUNT_ID` | — |
   | `svp-stg`, `svp-prd` | `anhnv-<env>` | `anhnv-<env>-ro` | `SVP_AWS_STG_ACCOUNT_ID`, `SVP_AWS_PRD_ACCOUNT_ID` | `aws/accounts/<env>` (sống giữa các buổi: baseline, registry ECR và role CI, observability AMP, CloudWatch Logs, X-Ray, AMG), `aws/envs/<env>`, `aws/gitops/<env>` |
 
   Lệnh viết sẵn ghi profile của đúng account đó ngay trong lệnh, `TF_VAR_account_id` từ biến của account đó, và `--region` (`ap-southeast-1`
   cho dịch vụ theo region và STS, `us-east-1` cho Organizations, IAM, Cost Explorer, WAF, cert ACM và log chuẩn của CloudFront (delivery
   destination ở `aws/log-archive`, delivery source và delivery ở account env), KMS key, alarm và query log của DNSSEC Route 53, Pricing Plan
   Manager và API Free Tier, region của Identity Center cho `sso-admin`, `identitystore`); không dựa vào region của profile, không một
-  `AWS_PROFILE` chung cho cả repo. Root qua role (`aws/log-archive`, `aws/security`, `aws/baseline`) chạy bằng `anhnv-sso` với `TF_VAR_account_id` của management; provider
-  của account đích assume `OrganizationAccountAccessRole`, id đích từ `TF_VAR_<log_archive|security|stg|prd>_account_id` đặt trong lệnh từ
-  biến tương ứng. Root `aws/envs/<env>` cần thêm `SVP_AWS_LOG_ACCOUNT_ID` (`tf.sh` đặt `TF_VAR_log_archive_account_id`). Hai account bảo
-  mật không có profile ghi, bucket state hay root riêng; không thêm. Trước mọi lệnh ghi: `aws sts get-caller-identity` với **cùng profile** (`aws/scripts/check-account.sh
-  mgmt|stg|prd`), hai bên cùng đọc account. Script buổi lấy profile và biến từ bảng env của `aws/scripts/lib.sh`. Buổi tạo tài nguyên kết
-  thúc bằng lệnh destroy và lệnh quét sót (`sweep.sh <env>` rồi `sweep.sh mgmt`); AI nhắc tới khi người học xác nhận đã chạy cả hai.
+  `AWS_PROFILE` chung cho cả repo. Root qua role (`aws/log-archive`, `aws/security`, `aws/baseline`, `aws/backup`) chạy bằng `anhnv-sso` với
+  `TF_VAR_account_id` của management; provider của account đích assume `OrganizationAccountAccessRole`, id đích từ
+  `TF_VAR_<log_archive|security|backup|stg|prd>_account_id` đặt trong lệnh từ biến tương ứng. Root `aws/envs/<env>` cần thêm
+  `SVP_AWS_LOG_ACCOUNT_ID` và `SVP_AWS_BACKUP_ACCOUNT_ID` (`tf.sh` đặt `TF_VAR_log_archive_account_id`, `TF_VAR_backup_account_id`); root
+  `aws/accounts/<env>` cần `TF_VAR_backup_account_id` trong lệnh. Account của OU `Security` (`svp-log-archive`, `svp-security`, `svp-backup`)
+  không có profile ghi hay bucket state riêng, root của chúng chạy từ management qua role; không thêm. Trước mọi lệnh ghi: `aws sts
+  get-caller-identity` với **cùng profile** (`aws/scripts/check-account.sh mgmt|stg|prd`), hai bên cùng đọc account. Script buổi lấy
+  profile và biến từ bảng env của `aws/scripts/lib.sh`. Buổi tạo tài nguyên kết thúc bằng lệnh destroy và lệnh quét sót (`sweep.sh <env>`
+  rồi `sweep.sh mgmt`); AI nhắc tới khi người học xác nhận đã chạy cả hai.
 - CI (`check.yml`) không có credential AWS, secret, OIDC hay environment nào; thêm thì phải có ADR trước. Ngoại lệ có ADR duy nhất nằm
   ngoài repo này ([ADR-0062](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0062-ecr-registry-ci-oidc.md) §5): workflow của hai
   repo code `svp-backend`, `svp-frontend` nhận role OIDC chỉ có quyền đẩy ECR (role rescan thêm quyền xoá để gỡ `vuln` cũ) trên các repo

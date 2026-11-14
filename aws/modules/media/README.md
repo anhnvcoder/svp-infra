@@ -1,11 +1,14 @@
 # Module `media`
 
-Hai bucket S3 `uploads`, `media` và CloudFront trước `media` ở tên `media.<domain>` (gói flat-rate Free hay pay-as-you-go theo
-`flat_rate_free`), plan GuardDuty Malware Protection for S3 trên `uploads`, cộng hai policy IAM (JSON) cho video-service và media-worker.
+Hai bucket S3 `uploads`, `media`, KMS key mã hoá `uploads` và CloudFront trước `media` ở tên `media.<domain>` (gói flat-rate Free hay
+pay-as-you-go theo `flat_rate_free`), plan GuardDuty Malware Protection for S3 trên `uploads`, cộng hai policy IAM (JSON) cho video-service và
+media-worker.
 Thiết kế: [ADR-0034](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0034-aws-stage7.md) mục 9 và 11,
 [ADR-0052](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0052-cloudfront-flat-rate-free.md) (gói Free, WAF, CORS của
 CloudFront), [ADR-0061](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0061-edge-cloudfront-waf-acm.md) (§1 gói theo env,
-§2 distribution, §5 cert và TLS, §6 header, §8 log edge); ngưỡng an toàn theo threat model UP-4…UP-6, WEB-10 của repo code.
+§2 distribution, §5 cert và TLS, §6 header, §8 log edge),
+[ADR-0067](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0067-backup-dr.md) (§8 mã hoá `uploads`, tag backup); ngưỡng an toàn
+theo threat model UP-4…UP-6, WEB-10 của repo code.
 
 ## Bucket
 
@@ -14,7 +17,8 @@ CloudFront), [ADR-0061](https://github.com/anhnvcoder/svp-backend/blob/main/docs
   mật theo AWS; tên bucket `uploads` nằm trong mọi URL form upload presigned trình duyệt thấy. Root truyền `account_id`, `region` của nó, nên
   file commit không chứa account thật. Bucket sót của một `destroy` dở trùng tên với lần `apply` sau: script quét sót (`aws/scripts/sweep.sh`) liệt kê
   nó theo tiền tố tên `svp-`, người học xoá trước khi `apply` theo runbook của buổi.
-- Chặn public (cả bốn cờ), `BucketOwnerEnforced` (không ACL), SSE-S3. Versioning tắt mặc định (object `media` ghi một lần dưới đường
+- Chặn public (cả bốn cờ), `BucketOwnerEnforced` (không ACL), mã hoá mặc định theo mục [Mã hoá](#mã-hoá). Tag `Backup = "daily"` trên
+  cả hai bucket: Backup policy của Organizations chọn bucket theo tag này (ADR-0067). Versioning tắt mặc định (object `media` ghi một lần dưới đường
   version mới, `uploads` bị xoá khi hết cần; giữ version chỉ giữ byte đã xoá); `versioning_enabled = true` (mức prd) bật ở cả hai bucket
   và thêm rule lifecycle xoá bản cũ 30 ngày sau khi bị thay hay xoá, cùng delete marker không còn bản nào phía sau: xoá nhầm còn khôi phục
   được trong 30 ngày. Policy của cả hai bucket từ chối request không TLS bằng statement `Deny`
@@ -38,6 +42,30 @@ CloudFront), [ADR-0061](https://github.com/anhnvcoder/svp-backend/blob/main/docs
 - **`force_destroy`:** `true` làm `terraform destroy` xoá **mọi object** của cả hai bucket rồi xoá bucket. `true` ở stg (dữ liệu
   buổi lab bỏ đi được); prd `false`, destroy dừng ở bucket còn object, trừ khi teardown của buổi đặt `true` qua `teardown.tfvars`. Biến
   không có mặc định để mỗi env phải ghi rõ.
+
+## Mã hoá
+
+- **`uploads`: SSE-KMS** bằng CMK của module, alias `alias/<name_prefix>-uploads` (đối xứng, rotation bật, deletion window 7 ngày như key
+  RDS: sống cùng buổi), S3 Bucket Key bật (`bucket_key_enabled`): S3 xin KMS một key cấp bucket thay vì gọi KMS cho từng object, request
+  KMS giảm tới 99 %. Key policy mặc định của KMS: account quyết ai dùng key qua IAM. Bản gốc người dùng tải lên là dữ liệu riêng mãi mãi,
+  nên đọc một object cần thêm `kms:Decrypt` trên đúng key này, và mọi lần dùng key nằm trong CloudTrail. Output `uploads_kms_key_arn`.
+- **`media`: SSE-S3** (ngoại lệ trivy AWS-0132 `[each.key=media]` trên resource mã hoá chung của hai bucket): nội dung công khai qua
+  CloudFront sau transcode, CMK không thêm ranh giới nào, chỉ thêm phí key và quyền `kms:Decrypt` cho CloudFront và hai service. trivy kiểm
+  từng bucket: khoá `for_each` của `aws_s3_bucket.this` viết thẳng (trivy không mở rộng `for_each` có giá trị chưa biết, mà tên bucket chứa
+  `account_id` chỉ biết lúc chạy), và `kms_master_key_id` của `media` là `""` chứ không `null` (trivy coi `null` là chưa biết, bỏ qua kiểm).
+  Nhờ vậy `uploads` mất CMK thì `make trivy` đỏ; test mock kiểm thêm `aws:kms`, Bucket Key ở `uploads`, `AES256` ở `media`.
+- **Quyền KMS trên key `uploads`** (`Resource` là đúng ARN key, `Action` theo ADR-0067 §8, không wildcard):
+
+  | Principal | Action | Nơi viết |
+  | --- | --- | --- |
+  | video-service | `kms:GenerateDataKey` (S3 tạo data key bằng quyền của người ký form upload; `HEAD`, `DELETE` không dùng key) | `iam.tf` |
+  | media-worker | `kms:Decrypt` (đọc bản gốc, kể cả `Probe` của MediaConvert bằng quyền người gọi) | `iam.tf` |
+  | Role Malware Protection | `kms:GenerateDataKey`, `kms:Decrypt` với `kms:ViaService` = `s3.<region>.amazonaws.com` | `malware-protection.tf` |
+  | Role MediaConvert | `kms:Decrypt` | module `transcode` (biến `uploads_kms_key_arn`) |
+  | Role `svp-<env>-backup` | managed policy của AWS Backup (ADR-0067 §7) | root `aws/accounts/<env>` |
+
+  ARN key chỉ biết sau `apply`, nên test mock kiểm mỗi statement KMS có đúng action, điều kiện và đúng một resource; resource đó là key
+  `uploads` thì đọc trong code.
 
 ## CloudFront
 
@@ -118,7 +146,7 @@ release `media-worker` chạy lệnh con `mediaconvert`, không chạy ffmpeg
 ([ADR-0066](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0066-mediaconvert-transcode.md) §9, bảng "Quyền bridge" ở phụ lục,
 mỗi dòng một nguồn); quyền MediaConvert, SQS, `iam:PassRole` của bridge ở module `transcode`. `s3:PutObject` đã gồm các bước multipart và
 ghi có điều kiện `If-None-Match: *`; không service nào được abort multipart. ARN bucket trong hai policy media-worker và CloudFront dựng từ
-tên bucket, nên biết lúc `plan`.
+tên bucket, nên biết lúc `plan`. Quyền KMS trên key `uploads` của hai service ở mục [Mã hoá](#mã-hoá).
 
 | Service | Quyền |
 | --- | --- |
@@ -168,8 +196,7 @@ Role `<name_prefix>-uploads-malware-protection` theo đúng mẫu của
 | `AllowPutValidationObject` | `s3:PutObject` | `<uploads>/malware-protection-resource-validation-object` |
 | `AllowCheckBucketOwnership` | `s3:ListBucket` | `<uploads>` |
 | `AllowMalwareScan` | `s3:GetObject`, `GetObjectVersion` | `<uploads>/*` |
-
-Bucket `uploads` mã hoá SSE-S3, nên không có statement KMS của mẫu (chỉ cần khi bucket SSE-KMS).
+| `AllowDecryptForMalwareScan` | `kms:GenerateDataKey`, `Decrypt` (điều kiện `kms:ViaService` = `s3.<region>.amazonaws.com`, hẹp hơn `s3.*.amazonaws.com` của mẫu) | ARN key `uploads` |
 
 - **Thứ tự:** plan tham chiếu bucket và role, và phụ thuộc inline policy: `apply` tạo bucket, role, policy rồi mới tạo plan (GuardDuty kiểm
   quyền của role lúc tạo); `destroy` xoá plan trước, rồi mới xoá policy, role, bucket, nên plan không lúc nào thiếu quyền nó được tạo
@@ -209,6 +236,8 @@ Bucket `uploads` mã hoá SSE-S3, nên không có statement KMS của mẫu (ch�
 | [aws_guardduty_malware_protection_plan.uploads](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/guardduty_malware_protection_plan) | resource |
 | [aws_iam_role.malware_protection](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role) | resource |
 | [aws_iam_role_policy.malware_protection](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy) | resource |
+| [aws_kms_alias.uploads](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/kms_alias) | resource |
+| [aws_kms_key.uploads](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/kms_key) | resource |
 | [aws_pricingplanmanager_subscription.media](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/pricingplanmanager_subscription) | resource |
 | [aws_route53_record.media](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/route53_record) | resource |
 | [aws_route53_record.validation](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/route53_record) | resource |
@@ -264,8 +293,9 @@ Bucket `uploads` mã hoá SSE-S3, nên không có statement KMS của mẫu (ch�
 | media\_bucket | Name of the media bucket. |
 | media\_distribution\_arn | ARN of the CloudFront distribution in front of the media bucket. |
 | media\_domain | Public name of the media, `media.<domain>`: MEDIA\_PUBLIC\_BASE\_URL of the gateway and MEDIA\_ORIGIN of the web are https://<media\_domain>. |
-| media\_worker\_policy\_json | S3 part of the IAM policy of media-worker, the MediaConvert bridge on AWS (JSON), for the role of its Pod Identity association. |
+| media\_worker\_policy\_json | S3 and uploads key part of the IAM policy of media-worker, the MediaConvert bridge on AWS (JSON), for the role of its Pod Identity association. |
 | uploads\_bucket | Name of the uploads bucket (the web posts upload forms to https://<name>.s3.<region>.amazonaws.com). |
+| uploads\_kms\_key\_arn | ARN of the KMS key alias/<name\_prefix>-uploads, the default encryption of the uploads bucket: every role that reads or writes uploads needs it (MediaConvert through the transcode module). |
 | video\_service\_policy\_json | IAM policy of video-service (JSON) for the role of its Pod Identity association. |
 <!-- END_TF_DOCS -->
 <!-- markdownlint-enable MD033 -->
@@ -296,6 +326,7 @@ Bucket `uploads` mã hoá SSE-S3, nên không có statement KMS của mẫu (ch�
 | CloudFront pay-as-you-go, WAF ngoài gói, giao standard log (`flat_rate_free = false`, prd) | bảng chi phí edge ở phụ lục ADR-0061 §13 | (không áp ở stg) |
 | Cert ACM công khai, record Route 53 alias | Không tính tiền (cert công khai không exportable; truy vấn alias tới CloudFront) | $0 |
 | OAC, cache policy, response headers policy, CORS, lifecycle | Không tính tiền | $0 |
+| KMS key `uploads` | $1/key-tháng tính theo giờ (key chờ xoá không tính); request $0,03/10 000, 20 000 đầu mỗi tháng miễn phí ([trang giá KMS](https://aws.amazon.com/kms/pricing/)); Bucket Key giữ số request gần như không đổi theo số object | ~$0,0014 |
 | GuardDuty Malware Protection for S3 | free tier 1 000 request và 1 GB quét mỗi tháng mỗi region; vượt thì theo GB quét và request (bảng giá ở phụ lục ADR-0060) | ~$0 (vài file mỗi buổi) |
 
 S3 tới từ cluster đi qua gateway endpoint của VPC (module `network`), không qua NAT. Tạo và xoá distribution mỗi lần mất vài phút
@@ -313,4 +344,10 @@ S3 tới từ cluster đi qua gateway endpoint của VPC (module `network`), kh�
   OAC, web ACL (runbook buổi stg, mục xoá tay).
 - **Plan Malware Protection của một `destroy` dở:** plan còn thì rule EventBridge `DO-NOT-DELETE-AmazonGuardDutyMalwareProtectionS3*` do
   GuardDuty quản còn theo; xoá plan (GuardDuty tự gỡ rule), rồi role `<name_prefix>-uploads-malware-protection`.
+- **KMS key `uploads`:** destroy đặt lịch xoá key sau 7 ngày (deletion window), alias xoá ngay; key chờ xoá không tính phí. Object còn lại
+  trong bucket `uploads` sót không đọc được nữa khi key đã xoá; muốn giữ chúng đọc được thì huỷ lịch xoá (`aws kms cancel-key-deletion`)
+  trong 7 ngày đó. Recovery point S3 của AWS Backup (vault env và bản copy) mã hoá bằng key của vault chứa nó, không bằng key này
+  ([AWS Backup encryption](https://docs.aws.amazon.com/aws-backup/latest/devguide/encryption.html)), nên vẫn restore được sau khi key
+  `uploads` đã xoá, với key khác cho object khôi phục
+  ([restore S3](https://docs.aws.amazon.com/aws-backup/latest/devguide/restoring-s3.html)).
 - Distribution đã tắt mà chưa xoá không tính tiền request nhưng vẫn là tài nguyên sót; xoá sau khi trạng thái `Deployed`.

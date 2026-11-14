@@ -116,6 +116,7 @@ resource "aws_ssoadmin_account_assignment" "read_only" {
     stg      = aws_organizations_account.member["stg"].id
     prd      = aws_organizations_account.member["prd"].id
     security = aws_organizations_account.security.id
+    backup   = aws_organizations_account.backup.id
   }
 
   instance_arn       = local.sso_instance_arn

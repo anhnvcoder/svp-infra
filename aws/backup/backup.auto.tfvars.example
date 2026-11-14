@@ -1,0 +1,6 @@
+# Copy to backup.auto.tfvars (ignored by git) only to change a default. Account ids are not here: TF_VAR_account_id,
+# TF_VAR_backup_account_id, TF_VAR_stg_account_id and TF_VAR_prd_account_id are set in each command from the
+# SVP_AWS_*_ACCOUNT_ID variables of the terminal (README.md).
+
+# Home region of the organization; the copy actions of the backup policies name the copy vaults in it.
+region = "ap-southeast-1"

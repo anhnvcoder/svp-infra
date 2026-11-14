@@ -8,7 +8,8 @@ locals {
   }
 }
 
-# One provider per account, all in the home region: Terraform cannot loop over providers, so the five are written out.
+# One provider per account of local.accounts, all in the home region: Terraform cannot loop over providers, so each is
+# written out.
 # The management account itself, no role (AWS_PROFILE=anhnv-sso).
 provider "aws" {
   alias  = "mgmt"
@@ -32,6 +33,22 @@ provider "aws" {
 
   assume_role {
     role_arn     = "arn:aws:iam::${var.log_archive_account_id}:role/OrganizationAccountAccessRole"
+    session_name = "svp-terraform"
+  }
+
+  default_tags {
+    tags = local.default_tags
+  }
+}
+
+provider "aws" {
+  alias  = "backup"
+  region = var.region
+
+  allowed_account_ids = [var.backup_account_id]
+
+  assume_role {
+    role_arn     = "arn:aws:iam::${var.backup_account_id}:role/OrganizationAccountAccessRole"
     session_name = "svp-terraform"
   }
 

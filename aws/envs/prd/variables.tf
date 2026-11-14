@@ -22,6 +22,16 @@ variable "log_archive_account_id" {
   }
 }
 
+variable "backup_account_id" {
+  description = "The account svp-backup (12 digits), whose vault svp-<env>-copy receives the copies of this env's backups: the key policy of the RDS key lets it use the key for those copies. Set it with TF_VAR_backup_account_id from SVP_AWS_BACKUP_ACCOUNT_ID, as account_id; it never goes into a committed file."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[0-9]{12}$", var.backup_account_id))
+    error_message = "backup_account_id must be the 12 digits of an AWS account id."
+  }
+}
+
 variable "region" {
   description = "Region of every resource of this env."
   type        = string

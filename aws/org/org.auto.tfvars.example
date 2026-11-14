@@ -7,6 +7,7 @@ account_emails = {
   prd         = "prd@svp.example"
   log-archive = "log-archive@svp.example"
   security    = "security@svp.example"
+  backup      = "backup@svp.example"
 }
 
 # User name in IAM Identity Center (top right of the AWS access portal).

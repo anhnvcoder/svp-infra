@@ -1,14 +1,16 @@
-# `aws/baseline`: baseline bảo mật của năm account và CMK EBS
+# `aws/baseline`: baseline bảo mật của mọi account và CMK EBS
 
-Root này áp baseline bảo mật (module [`security-baseline`](../modules/security-baseline/README.md)) cho cả năm account của org: management,
-`svp-log-archive`, `svp-security`, `svp-stg`, `svp-prd`; và tạo CMK EBS cho `svp-stg`, `svp-prd`. Thiết kế và lý do ở
+Root này áp baseline bảo mật (module [`security-baseline`](../modules/security-baseline/README.md)) cho mọi account của org (bảng ở mục
+"Áp gì ở account nào"), và tạo CMK EBS cho `svp-stg`, `svp-prd`. Thiết kế và lý do ở
 [ADR-0059](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0059-org-structure-guardrails.md) §2, §9 và
 [ADR-0060](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0060-org-detection-logging.md) §4, §10; rule theo account và region ở
-[phụ lục ADR-0060](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0060-org-detection-logging.md).
+[phụ lục ADR-0060](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0060-org-detection-logging.md). Account `svp-backup`
+(đích bản copy của AWS Backup) nhận baseline như mọi account:
+[ADR-0067](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0067-backup-dr.md) §3.
 
 ## Vì sao chạy từ management
 
-Root chạy bằng `AWS_PROFILE=anhnv-sso`. Provider của management không assume role; bốn provider của account thành viên assume
+Root chạy bằng `AWS_PROFILE=anhnv-sso`. Provider của management không assume role; provider của mỗi account thành viên assume
 `OrganizationAccountAccessRole` của account đó, mỗi provider có `allowed_account_ids` đúng một account. State nằm ở bucket của `aws/bootstrap`,
 key `aws/baseline/terraform.tfstate`. Đây là khuôn execution role của Control Tower (`AWSControlTowerExecution`): baseline áp từ một chỗ, admin
 của workload không đụng được.
@@ -18,8 +20,8 @@ SCP `svp-protect-baseline` (gắn ở root của org, module `org-policies`) ch�
 `svp-security-*`, CMK EBS (theo tag `Stack=security-baseline` và alias `alias/svp-ebs`). Chỉ `OrganizationAccountAccessRole` được miễn, nên chỉ
 root này đổi được baseline. Management không chịu SCP: baseline của nó chỉ được giữ bằng quyền của Identity Center.
 
-Terraform không lặp được qua provider, nên năm provider và năm lời gọi module viết tường minh. Tài nguyên ở `us-east-1` (và `us-east-2`,
-`us-west-2` của management) đặt đối số `region` trong module, không thêm provider.
+Terraform không lặp được qua provider, nên mỗi account một provider và một lời gọi module, viết tường minh. Tài nguyên ở `us-east-1` (và
+`us-east-2`, `us-west-2` của management) đặt đối số `region` trong module, không thêm provider.
 
 ## Áp gì ở account nào
 
@@ -30,6 +32,7 @@ Khác biệt giữa account là dữ liệu của bảng `local.accounts` trong 
 | management | `aws/ebs` | có | `svp-security-org`, `svp-security-root-session`, `svp-security-admin-sso`; `svp-security-root-signin` thêm ở `us-east-2`, `us-west-2` |
 | `svp-log-archive` | `aws/ebs` | có | — |
 | `svp-security` | `aws/ebs` | có | — |
+| `svp-backup` | `aws/ebs` | có | — |
 | `svp-stg` | CMK EBS của account | không | — |
 | `svp-prd` | CMK EBS của account | không | — |
 
@@ -45,7 +48,7 @@ Khác biệt giữa account là dữ liệu của bảng `local.accounts` trong 
 
 ```mermaid
 flowchart LR
-  subgraph acc["Mỗi account: management, log-archive, security, stg, prd"]
+  subgraph acc["Mỗi account của local.accounts"]
     rules["Rule svp-security-* trên bus mặc định"] --> role["Role svp-security-forwarder"]
     rec["Config recorder default, hai region"]
   end
@@ -71,6 +74,8 @@ role của AutoScaling), Karpenter và bastion dùng key mà không thêm IAM. S
 Hai CMK EBS tính theo key mỗi tháng; Config tính theo config item ghi được, tăng trong buổi khi env tạo tài nguyên; rule EventBridge và chuyển sự
 kiện giữa account tính theo sự kiện. Giá và ước theo tháng ở
 [phụ lục ADR-0060 §12](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0060-org-detection-logging.md#12-chi-phí-liên-tục).
+Account `svp-backup` thêm phần của một account không chạy workload (check Security Hub, item Config, GuardDuty), ước ở
+[phụ lục ADR-0067, Chi phí](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0067-backup-dr.md#sống-giữa-buổi).
 
 ## Apply lần đầu
 
@@ -78,24 +83,29 @@ Bước (6) của thứ tự áp nền bảo mật org: sau `aws/log-archive` (b
 `aws/security` (bus `svp-security-events`, topic đã xác nhận email). **Người học chạy mọi lệnh dưới đây** (AI không chạy lệnh nào chạm account).
 Cần Terraform 1.15, AWS CLI v2, `aws sso login --profile anhnv-sso`.
 
+Account thêm vào org khi root đã áp (như `svp-backup`): sau khi `aws/org` tạo account đó, chạy bước 1, 3, 4 và bỏ bước 2. Role, recorder của các
+account cũ đã nằm trong state của root này, nên bước 2 không còn mong đợi role hay recorder trống; account mới chỉ có cái `aws/org` tạo. Bucket
+Config và bus nhận account mới theo id của org, không đổi policy.
+
 ### 1. Kiểm account và biến
 
 ```sh
 cd infra/aws/baseline
 AWS_PROFILE=anhnv-sso aws sts get-caller-identity --region ap-southeast-1 --query '[Account,Arn]' --output text
-printf '%s\n' "$SVP_AWS_MGMT_ACCOUNT_ID" "$SVP_AWS_LOG_ACCOUNT_ID" "$SVP_AWS_SECURITY_ACCOUNT_ID" "$SVP_AWS_STG_ACCOUNT_ID" \
-  "$SVP_AWS_PRD_ACCOUNT_ID"
+printf '%s\n' "$SVP_AWS_MGMT_ACCOUNT_ID" "$SVP_AWS_LOG_ACCOUNT_ID" "$SVP_AWS_SECURITY_ACCOUNT_ID" "$SVP_AWS_BACKUP_ACCOUNT_ID" \
+  "$SVP_AWS_STG_ACCOUNT_ID" "$SVP_AWS_PRD_ACCOUNT_ID"
 cp -n baseline.auto.tfvars.example baseline.auto.tfvars
 ```
 
-`Account` phải bằng `SVP_AWS_MGMT_ACCOUNT_ID`, `Arn` là role SSO của người học. Năm dòng sau đều là 12 số. Sửa `sso_region` trong
+`Account` phải bằng `SVP_AWS_MGMT_ACCOUNT_ID`, `Arn` là role SSO của người học. Mỗi dòng sau đều là 12 số. Sửa `sso_region` trong
 `baseline.auto.tfvars` (không commit) cho bằng `sso_region` của `aws/org/org.auto.tfvars`. Khác hay thiếu thì dừng.
 
 ### 2. Kiểm cái đã có
 
 Lần đọc hiện trạng trước khi thiết kế không thấy gì cần nhập vào state: management, stg, prd không có `AWSServiceRoleForConfig`, recorder hay
 delivery channel; S3 BPA cấp account chưa đặt, EBS mã hoá mặc định tắt (đặt hai thứ này không cần import). Đọc lại ngay trước apply, vì root khác
-hay dịch vụ khác có thể đã tạo service-linked role của Config (`svp-log-archive` không đọc: chỉ `aws/log-archive` ghi vào đó):
+hay dịch vụ khác có thể đã tạo service-linked role của Config (`svp-log-archive`, `svp-backup` không đọc: chỉ `aws/log-archive`, `aws/backup` ghi
+vào chúng):
 
 ```sh
 for p in anhnv-sso anhnv-security-ro anhnv-stg-ro anhnv-prd-ro; do echo "== $p"
@@ -115,22 +125,23 @@ Mong đợi mỗi account một dòng `NoSuchEntity` và hai dòng rỗng. Có r
 ```sh
 AWS_PROFILE=anhnv-sso terraform init -backend-config=../backend.hcl
 AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
-  TF_VAR_security_account_id="$SVP_AWS_SECURITY_ACCOUNT_ID" TF_VAR_stg_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
-  TF_VAR_prd_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform plan -out=baseline.tfplan
+  TF_VAR_security_account_id="$SVP_AWS_SECURITY_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" \
+  TF_VAR_stg_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_prd_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform plan -out=baseline.tfplan
 ```
 
-Mong đợi `Plan: 216 to add, 0 to change, 0 to destroy`: 54 ở `module.mgmt`, 42 ở mỗi `module.log_archive`, `module.security`, 37 ở mỗi
-`module.stg`, `module.prd` (thêm `aws_ebs_default_kms_key`), 4 key và alias EBS. Đọc: `aws_ebs_default_kms_key` chỉ ở stg, prd, `key_arn` là
-key `svp-ebs` của chính account đó; `svp-security-root-signin` của management ở ba region; `s3_kms_key_arn` của mọi delivery channel dạng
-`key/<id>`. Lỗi `AccessDenied` khi assume role là account hay profile sai; lỗi đọc alias `alias/svp-log-archive` là `aws/log-archive` chưa áp.
-Dừng và dán output nếu có dòng `change` hay `destroy`.
+Mong đợi `Plan: 258 to add, 0 to change, 0 to destroy`: 54 ở `module.mgmt`, 42 ở mỗi `module.log_archive`, `module.security`, `module.backup`, 37
+ở mỗi `module.stg`, `module.prd` (thêm `aws_ebs_default_kms_key`), 4 key và alias EBS. Root đã áp trước khi có account mới thì plan chỉ thêm
+module của account đó: `Plan: 42 to add, 0 to change, 0 to destroy`, toàn bộ ở `module.backup`. Đọc: `aws_ebs_default_kms_key` chỉ ở stg, prd,
+`key_arn` là key `svp-ebs` của chính account đó; `svp-security-root-signin` của management ở ba region; `s3_kms_key_arn` của mọi delivery channel
+dạng `key/<id>`. Lỗi `AccessDenied` khi assume role là account hay profile sai; lỗi đọc alias `alias/svp-log-archive` là `aws/log-archive` chưa
+áp. Dừng và dán output nếu có dòng `change` hay `destroy`.
 
 ### 4. Apply
 
 ```sh
 AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
-  TF_VAR_security_account_id="$SVP_AWS_SECURITY_ACCOUNT_ID" TF_VAR_stg_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
-  TF_VAR_prd_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform apply baseline.tfplan
+  TF_VAR_security_account_id="$SVP_AWS_SECURITY_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" \
+  TF_VAR_stg_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_prd_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform apply baseline.tfplan
 rm baseline.tfplan
 AWS_PROFILE=anhnv-sso terraform output ebs_kms_key_arns
 ```

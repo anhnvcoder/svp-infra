@@ -1,13 +1,15 @@
 # Content, type and target of every policy of the organization, read back from the JSON the module sends to
-# Organizations, and the validation of the three ids. The AWS provider is a mock: nothing reaches an account; the module
+# Organizations, and the validation of the ids. The AWS provider is a mock: nothing reaches an account; the module
 # reads no data source.
 
 mock_provider "aws" {}
 
 variables {
-  root_id         = "r-ab12"
-  prod_ou_id      = "ou-ab12-cd34ef56"
-  organization_id = "o-ab12cd34ef"
+  root_id           = "r-ab12"
+  prod_ou_id        = "ou-ab12-cd34ef56"
+  nonprod_ou_id     = "ou-ab12-gh78ij90"
+  organization_id   = "o-ab12cd34ef"
+  backup_account_id = "222222222222"
 }
 
 run "policies" {
@@ -24,8 +26,10 @@ run "policies" {
       "data-perimeter"          = "RESOURCE_CONTROL_POLICY"
       "ec2-baseline"            = "DECLARATIVE_POLICY_EC2"
       "tags"                    = "TAG_POLICY"
+      "backup-prd"              = "BACKUP_POLICY"
+      "backup-stg"              = "BACKUP_POLICY"
     }
-    error_message = "The module must create exactly six service control policies, one resource control policy, one EC2 declarative policy and one tag policy, under their keys."
+    error_message = "The module must create exactly six service control policies, one resource control policy, one EC2 declarative policy, one tag policy and two backup policies, under their keys."
   }
 
   assert {
@@ -41,9 +45,10 @@ run "policies" {
         RESOURCE_CONTROL_POLICY = 5120
         DECLARATIVE_POLICY_EC2  = 10000
         TAG_POLICY              = 10000
+        BACKUP_POLICY           = 10000
       }[p.type]
     ])
-    error_message = "A policy must fit its type: 10,240 characters for a service control policy, 5,120 for a resource control policy, 10,000 for a declarative or tag policy."
+    error_message = "A policy must fit its type: 10,240 characters for a service control policy, 5,120 for a resource control policy, 10,000 for a declarative, tag or backup policy."
   }
 
   # Deny-only: an Allow here would add nothing to FullAWSAccess or RCPFullAWSAccess and could only widen what a reader
@@ -184,15 +189,17 @@ run "attachments" {
       "data-perimeter"          = "r-ab12"
       "ec2-baseline"            = "r-ab12"
       "tags"                    = "r-ab12"
+      "backup-prd"              = "ou-ab12-cd34ef56"
+      "backup-stg"              = "ou-ab12-gh78ij90"
     }
-    error_message = "Every policy must be attached once: prod-guardrails to prod_ou_id, every other policy to root_id."
+    error_message = "Every policy must be attached once: prod-guardrails and backup-prd to prod_ou_id, backup-stg to nonprod_ou_id, every other policy to root_id."
   }
 
   # Per target at most 10 service control policies and 5 resource control policies, FullAWSAccess and
   # RCPFullAWSAccess included (AWS Organizations quotas).
   assert {
     condition = alltrue([
-      for t in [var.root_id, var.prod_ou_id] :
+      for t in [var.root_id, var.prod_ou_id, var.nonprod_ou_id] :
       length([for k, p in aws_organizations_policy.this : k if p.type == "SERVICE_CONTROL_POLICY" && aws_organizations_policy_attachment.this[k].target_id == t]) <= 9
       && length([for k, p in aws_organizations_policy.this : k if p.type == "RESOURCE_CONTROL_POLICY" && aws_organizations_policy_attachment.this[k].target_id == t]) <= 4
     ])
@@ -516,9 +523,10 @@ run "tag_policy" {
       Project   = ["svp"]
       Env       = ["stg", "prd"]
       ManagedBy = ["terraform"]
-      Stack     = ["bootstrap", "org", "baseline", "log-archive", "security", "security-baseline", "stg", "prd"]
+      Stack     = ["bootstrap", "org", "baseline", "log-archive", "security", "security-baseline", "backup", "stg", "prd"]
+      Backup    = ["daily"]
     }
-    error_message = "The tag policy must cover exactly Project, Env, ManagedBy and Stack, with the values every root and Karpenter use."
+    error_message = "The tag policy must cover exactly Project, Env, ManagedBy, Stack and Backup, with the values every root, Karpenter and the backup selection use."
   }
 
   assert {
@@ -532,6 +540,105 @@ run "tag_policy" {
       toset(t.enforced_for["@@assign"]) == toset(["ec2:ALL_SUPPORTED", "eks:ALL_SUPPORTED", "kms:ALL_SUPPORTED"])
     ])
     error_message = "Every tag key must be enforced for EC2, EKS and KMS alone."
+  }
+}
+
+run "backup_policy" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      for env in ["prd", "stg"] : keys(jsondecode(aws_organizations_policy.this["backup-${env}"].content).plans) == ["svp-${env}"]
+      && jsondecode(aws_organizations_policy.this["backup-${env}"].content).plans["svp-${env}"].regions["@@assign"] == ["ap-southeast-1"]
+      && keys(jsondecode(aws_organizations_policy.this["backup-${env}"].content).plans["svp-${env}"].rules) == ["daily"]
+    ])
+    error_message = "Each backup policy must hold one plan svp-<env> in ap-southeast-1 with one rule, daily."
+  }
+
+  # No continuous backup: the point-in-time recovery of RDS is its own automated backup.
+  assert {
+    condition = alltrue([
+      for env in ["prd", "stg"] :
+      toset(keys(jsondecode(aws_organizations_policy.this["backup-${env}"].content).plans["svp-${env}"].rules.daily)) == toset([
+        "schedule_expression",
+        "start_backup_window_minutes",
+        "complete_backup_window_minutes",
+        "target_backup_vault_name",
+        "lifecycle",
+        "copy_actions",
+      ])
+    ])
+    error_message = "The daily rule must set exactly the schedule, both windows, the vault, the lifecycle and the copy action, and no continuous backup."
+  }
+
+  assert {
+    condition = alltrue([
+      for env in ["prd", "stg"] :
+      jsondecode(aws_organizations_policy.this["backup-${env}"].content).plans["svp-${env}"].rules.daily.schedule_expression["@@assign"] == "cron(0 18 * * ? *)"
+      && jsondecode(aws_organizations_policy.this["backup-${env}"].content).plans["svp-${env}"].rules.daily.start_backup_window_minutes["@@assign"] == "60"
+      && jsondecode(aws_organizations_policy.this["backup-${env}"].content).plans["svp-${env}"].rules.daily.complete_backup_window_minutes["@@assign"] == "180"
+      && jsondecode(aws_organizations_policy.this["backup-${env}"].content).plans["svp-${env}"].rules.daily.target_backup_vault_name["@@assign"] == "svp-${env}"
+    ])
+    error_message = "The daily rule must run at 18:00 UTC with a 60-minute start window and a 180-minute completion window, into the vault svp-<env>."
+  }
+
+  # The copy goes to the vault of the backup account, by its real id.
+  assert {
+    condition = alltrue([
+      for env in ["prd", "stg"] :
+      keys(jsondecode(aws_organizations_policy.this["backup-${env}"].content).plans["svp-${env}"].rules.daily.copy_actions) == ["arn:aws:backup:ap-southeast-1:222222222222:backup-vault:svp-${env}-copy"]
+      && jsondecode(aws_organizations_policy.this["backup-${env}"].content).plans["svp-${env}"].rules.daily.copy_actions["arn:aws:backup:ap-southeast-1:222222222222:backup-vault:svp-${env}-copy"].target_backup_vault_arn["@@assign"] == "arn:aws:backup:ap-southeast-1:222222222222:backup-vault:svp-${env}-copy"
+    ])
+    error_message = "Each daily rule must copy to the vault svp-<env>-copy of backup_account_id, and nowhere else."
+  }
+
+  assert {
+    condition = alltrue([
+      for env, days in { prd = { vault = "35", copy = "35" }, stg = { vault = "2", copy = "2" } } :
+      jsondecode(aws_organizations_policy.this["backup-${env}"].content).plans["svp-${env}"].rules.daily.lifecycle == { delete_after_days = { "@@assign" = days.vault } }
+      && jsondecode(aws_organizations_policy.this["backup-${env}"].content).plans["svp-${env}"].rules.daily.copy_actions["arn:aws:backup:ap-southeast-1:222222222222:backup-vault:svp-${env}-copy"].lifecycle == { delete_after_days = { "@@assign" = days.copy } }
+    ])
+    error_message = "Recovery points must be kept 35 days in prd and 2 days in stg, in the env vault and in the copy alike."
+  }
+
+  # A retention of d days keeps the previous point until the next one has finished at the latest: 24 hours plus both
+  # windows. Checked for the env vault and the copy of both envs, from the policy as sent.
+  assert {
+    condition = alltrue(flatten([
+      for env in ["prd", "stg"] : [
+        for d in [
+          jsondecode(aws_organizations_policy.this["backup-${env}"].content).plans["svp-${env}"].rules.daily.lifecycle.delete_after_days["@@assign"],
+          jsondecode(aws_organizations_policy.this["backup-${env}"].content).plans["svp-${env}"].rules.daily.copy_actions["arn:aws:backup:ap-southeast-1:222222222222:backup-vault:svp-${env}-copy"].lifecycle.delete_after_days["@@assign"],
+        ] :
+        tonumber(d) * 24 >= 24 + (
+          tonumber(jsondecode(aws_organizations_policy.this["backup-${env}"].content).plans["svp-${env}"].rules.daily.start_backup_window_minutes["@@assign"])
+          + tonumber(jsondecode(aws_organizations_policy.this["backup-${env}"].content).plans["svp-${env}"].rules.daily.complete_backup_window_minutes["@@assign"])
+        ) / 60
+      ]
+    ]))
+    error_message = "Every retention, in hours, must cover a day plus the start and completion windows, so a completed recovery point always exists."
+  }
+
+  assert {
+    condition = alltrue([
+      for env in ["prd", "stg"] : jsondecode(aws_organizations_policy.this["backup-${env}"].content).plans["svp-${env}"].selections == {
+        resources = {
+          "svp-${env}-tagged" = {
+            iam_role_arn   = { "@@assign" = "arn:aws:iam::$account:role/svp-${env}-backup" }
+            resource_types = { "@@assign" = ["arn:aws:rds:*:*:db:*", "arn:aws:s3:::*"] }
+            conditions = {
+              string_equals = {
+                backup-daily = {
+                  condition_key   = { "@@assign" = "aws:ResourceTag/Backup" }
+                  condition_value = { "@@assign" = "daily" }
+                }
+              }
+            }
+          }
+        }
+      }
+    ])
+    error_message = "Each plan must select, with the role svp-<env>-backup of the member account, exactly the RDS DB instances and S3 buckets tagged Backup=daily."
   }
 }
 
@@ -563,6 +670,26 @@ run "prod_ou_id_root" {
   }
 
   expect_failures = [var.prod_ou_id]
+}
+
+run "nonprod_ou_id_root" {
+  command = plan
+
+  variables {
+    nonprod_ou_id = "r-ab12"
+  }
+
+  expect_failures = [var.nonprod_ou_id]
+}
+
+run "backup_account_id_short" {
+  command = plan
+
+  variables {
+    backup_account_id = "22222222222"
+  }
+
+  expect_failures = [var.backup_account_id]
 }
 
 run "organization_id_account" {
