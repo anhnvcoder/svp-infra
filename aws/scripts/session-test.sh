@@ -1617,11 +1617,11 @@ expect "restore-drill.sh stg rds: restore at T_r ($tr_time) to svp-stg-pitr, wit
     grep -qx "aws rds restore-db-instance-to-point-in-time --source-db-instance-identifier svp-stg --target-db-instance-identifier svp-stg-pitr --restore-time $2 --db-subnet-group-name svp-stg-db-x --vpc-security-group-ids sg-0rds sg-0two --db-parameter-group-name svp-stg-pg18-x --db-instance-class db.t4g.micro --no-multi-az --no-publicly-accessible --no-deletion-protection --tags Key=Project,Value=svp Key=Stack,Value=stg --output json --region ap-southeast-1" "$1" &&
     ! grep -q "use-latest-restorable-time" "$1"' _ "$log" "$tr_time"
 expect "restore-drill.sh stg rds: the SQL of the data check on each table, twice on the source, once on the restored instance" \
-  sh -c 'while read -r svc t; do
+  sh -c 'printf "%s\n" "$3" | while read -r svc t; do
       q="exec deploy/svp-ops -c postgres -- /opt/svp/bin/svp-pg $svc -c SELECT count(*), md5(coalesce(string_agg(r, '"'"'|'"'"' ORDER BY r), '"'"''"'"')) FROM (SELECT t.xmin::text || '"'"':'"'"' || t::text AS r FROM $t t) s"
       [ "$(grep -cxF "kubectl --context svp-stg -n svp-data $q" "$1")" = 2 ] || exit 1
       grep -qF "/opt/svp/bin/svp-pg $svc --host $2 -c SELECT count(*), md5(coalesce(string_agg(r, '"'"'|'"'"' ORDER BY r), '"'"''"'"')) FROM (SELECT t.xmin::text || '"'"':'"'"' || t::text AS r FROM $t t) s" "$1" || exit 1
-    done <<<"$3"' _ "$log" "$pitr_host" "$drill_tables"
+    done' _ "$log" "$pitr_host" "$drill_tables"
 expect "restore-drill.sh stg rds: a PASS row with RTO and RPO, svp-stg-pitr deleted after the sample R, backup-undrained recorded" \
   sh -c 'awk -F "\t" "\$1 == \"rds\" && \$6 == \"PASS\" && \$4 ~ /^[0-9]+$/ && \$5 ~ /^-?[0-9]+$/" "$1/restore-drill.tsv" | grep -q . &&
     d=$(grep -n "rds delete-db-instance --db-instance-identifier svp-stg-pitr --skip-final-snapshot --delete-automated-backups" "$2" | head -n 1 | cut -d: -f1) &&
