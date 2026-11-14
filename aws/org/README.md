@@ -49,7 +49,7 @@ quét malware EC2 ở account thành viên
 | `cloudtrail.amazonaws.com` | trail org |
 | `guardduty.amazonaws.com`, `malware-protection.guardduty.amazonaws.com` | GuardDuty và Malware Protection for EC2 |
 | `securityhub.amazonaws.com` | Security Hub CSPM |
-| `inspector2.amazonaws.com` | Amazon Inspector quét image ECR của mọi account |
+| `inspector2.amazonaws.com` | Amazon Inspector quét image ECR của các account có cờ `inspector_ecr` khác `off` trong `aws/paid-features.json` |
 | `config.amazonaws.com`, `config-multiaccountsetup.amazonaws.com` | aggregator và rule tổ chức của AWS Config |
 | `access-analyzer.amazonaws.com` | analyzer `ORGANIZATION` |
 | `account.amazonaws.com` | liên hệ `SECURITY` của account thành viên |

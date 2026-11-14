@@ -16,6 +16,8 @@ locals {
 }
 
 data "aws_iam_policy_document" "grafana_trust" {
+  count = var.grafana_enabled ? 1 : 0
+
   statement {
     sid     = "GrafanaAssumesRole"
     effect  = "Allow"
@@ -37,6 +39,8 @@ data "aws_iam_policy_document" "grafana_trust" {
 # Read only, and only the env's telemetry: what AmazonGrafanaCloudWatchAccess and the Prometheus policy of a
 # SERVICE_MANAGED workspace grant, narrowed to this account's workspace and log groups.
 data "aws_iam_policy_document" "grafana" {
+  count = var.grafana_enabled ? 1 : 0
+
   statement {
     sid = "QueryPrometheus"
     actions = [
@@ -96,37 +100,47 @@ data "aws_iam_policy_document" "grafana" {
 }
 
 resource "aws_iam_role" "grafana" {
+  count = var.grafana_enabled ? 1 : 0
+
   name               = "${local.name}-grafana"
   description        = "Assumed by the Amazon Managed Grafana workspace ${local.name} to read its data sources"
-  assume_role_policy = data.aws_iam_policy_document.grafana_trust.json
+  assume_role_policy = data.aws_iam_policy_document.grafana_trust[0].json
 }
 
 resource "aws_iam_role_policy" "grafana" {
+  count = var.grafana_enabled ? 1 : 0
+
   name   = "read-telemetry"
-  role   = aws_iam_role.grafana.id
-  policy = data.aws_iam_policy_document.grafana.json
+  role   = aws_iam_role.grafana[0].id
+  policy = data.aws_iam_policy_document.grafana[0].json
 }
 
 # CUSTOMER_MANAGED is the only permission type the API can create. No VPC configuration: the workspace reaches AMP and
 # CloudWatch at their public endpoints. grafana_version is left to the newest version AMG offers at creation.
 resource "aws_grafana_workspace" "this" {
+  count = var.grafana_enabled ? 1 : 0
+
   name                     = local.name
   description              = "Dashboards of ${local.name}"
   account_access_type      = "CURRENT_ACCOUNT"
   authentication_providers = ["AWS_SSO"]
   permission_type          = "CUSTOMER_MANAGED"
-  role_arn                 = aws_iam_role.grafana.arn
+  role_arn                 = aws_iam_role.grafana[0].arn
   data_sources             = ["PROMETHEUS", "CLOUDWATCH"]
 }
 
 resource "aws_grafana_role_association" "admin" {
-  workspace_id = aws_grafana_workspace.this.id
+  count = var.grafana_enabled ? 1 : 0
+
+  workspace_id = aws_grafana_workspace.this[0].id
   role         = "ADMIN"
   group_ids    = [var.platform_admin_group_id]
 }
 
 resource "aws_grafana_role_association" "viewer" {
-  workspace_id = aws_grafana_workspace.this.id
+  count = var.grafana_enabled ? 1 : 0
+
+  workspace_id = aws_grafana_workspace.this[0].id
   role         = "VIEWER"
   group_ids    = [var.platform_viewer_group_id]
 }
@@ -135,7 +149,20 @@ resource "aws_grafana_role_association" "viewer" {
 # token sits in the state. ADMIN because the Operator creates the data sources, which an Editor may not add or edit
 # (https://docs.aws.amazon.com/grafana/latest/userguide/Grafana-user-roles.html).
 resource "aws_grafana_workspace_service_account" "operator" {
-  workspace_id = aws_grafana_workspace.this.id
+  count = var.grafana_enabled ? 1 : 0
+
+  workspace_id = aws_grafana_workspace.this[0].id
   name         = "svp-grafana-operator"
   grafana_role = "ADMIN"
+}
+
+# The env root reads the workspace id here, so a workspace made anew in each session needs no edit of its tfvars.
+resource "aws_ssm_parameter" "grafana_workspace_id" {
+  count = var.grafana_enabled ? 1 : 0
+
+  name        = "/svp/${var.env}/grafana-workspace-id"
+  description = "Id of the Amazon Managed Grafana workspace ${local.name}"
+  type        = "String"
+  tier        = "Standard"
+  value       = aws_grafana_workspace.this[0].id
 }

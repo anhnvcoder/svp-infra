@@ -16,6 +16,9 @@ env_arg "$1"
 # The steps, one per line: the script and its arguments, in the order of the runbook's table of steps.
 steps="check-account.sh $env_name
 check-dns.sh $env_name
+tf.sh $env_name account init
+tf.sh $env_name account plan --open
+tf.sh $env_name account apply
 tf.sh $env_name env init
 tf.sh $env_name env plan
 tf.sh $env_name env apply
@@ -36,6 +39,8 @@ tf.sh $env_name env apply --teardown
 restore-drill.sh $env_name cleanup
 tf.sh $env_name env plan --destroy
 tf.sh $env_name env destroy
+tf.sh $env_name account plan --close
+tf.sh $env_name account apply
 sweep.sh $env_name
 sweep.sh mgmt"
 

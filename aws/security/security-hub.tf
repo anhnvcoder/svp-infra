@@ -45,3 +45,24 @@ resource "aws_securityhub_configuration_policy_association" "root" {
   target_id = data.aws_organizations_organization.this.roots[0].id
   policy_id = aws_securityhub_configuration_policy.this.id
 }
+
+# An account's own association wins over the root's, so the accounts whose security_hub flag is off get this one.
+resource "aws_securityhub_configuration_policy" "off" {
+  count = length(local.security_hub_off_ids) > 0 ? 1 : 0
+
+  name        = "svp-security-off"
+  description = "Security Hub off: the accounts whose security_hub flag is off in aws/paid-features.json"
+
+  configuration_policy {
+    service_enabled = false
+  }
+
+  depends_on = [aws_securityhub_organization_configuration.this]
+}
+
+resource "aws_securityhub_configuration_policy_association" "off" {
+  for_each = toset(local.security_hub_off_ids)
+
+  target_id = each.key
+  policy_id = aws_securityhub_configuration_policy.off[0].id
+}

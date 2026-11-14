@@ -110,3 +110,106 @@ resource "aws_cloudwatch_event_target" "findings" {
     input_template = "\"svp-security finding <severity> <product>: <title>, account <account> region <region>. Runbook: ${local.runbook_url}\""
   }
 }
+
+################################################################################
+# GuardDuty findings of accounts without Security Hub
+################################################################################
+
+# svp-security-guardduty-findings: GuardDuty imports its findings into the Security Hub of the same account, so an
+# account whose security_hub flag is off never reaches the rule above. The delegated administrator gets the findings
+# of its members in each region.
+locals {
+  guardduty_finding_regions = length(local.security_hub_off_ids) > 0 ? local.regions : toset([])
+  guardduty_forward_regions = [for r in local.guardduty_finding_regions : r if r != var.region]
+}
+
+resource "aws_cloudwatch_event_rule" "guardduty_findings" {
+  for_each = local.guardduty_finding_regions
+
+  region      = each.key
+  name        = "svp-security-guardduty-findings"
+  description = "High or critical GuardDuty findings of the accounts whose Security Hub is off, to the alert topic"
+  event_pattern = jsonencode({
+    source        = ["aws.guardduty"]
+    "detail-type" = ["GuardDuty Finding"]
+    detail = {
+      accountId = local.security_hub_off_ids
+      # Severity is a number here: high is 7.0 to 8.9, critical 9.0 and above.
+      severity = [{ numeric = [">=", 7] }]
+    }
+  })
+}
+
+resource "aws_cloudwatch_event_target" "guardduty_findings" {
+  for_each = { for r in local.guardduty_finding_regions : r => r if r == var.region }
+
+  region    = each.key
+  rule      = aws_cloudwatch_event_rule.guardduty_findings[each.key].name
+  target_id = "svp-security-alarms"
+  arn       = module.alarms.topic_arn
+
+  input_transformer {
+    input_paths = {
+      title    = "$.detail.title"
+      severity = "$.detail.severity"
+      account  = "$.detail.accountId"
+      region   = "$.detail.region"
+    }
+    input_template = "\"svp-security finding <severity> GuardDuty: <title>, account <account> region <region>. Runbook: ${local.runbook_url}\""
+  }
+}
+
+# A rule cannot target a topic of another region, so findings of the other region go to the security bus, whose rule
+# svp-security-notify sends them on. The forwarder role of aws/baseline already holds the name svp-security-forwarder.
+data "aws_iam_policy_document" "guardduty_forwarder_trust" {
+  statement {
+    actions = ["sts:AssumeRole"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["events.amazonaws.com"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [var.security_account_id]
+    }
+  }
+}
+
+resource "aws_iam_role" "guardduty_forwarder" {
+  count = length(local.guardduty_forward_regions) > 0 ? 1 : 0
+
+  name               = "svp-security-guardduty-forwarder"
+  description        = "EventBridge: forwards GuardDuty findings of other regions to the security event bus"
+  assume_role_policy = data.aws_iam_policy_document.guardduty_forwarder_trust.json
+}
+
+data "aws_iam_policy_document" "guardduty_forwarder" {
+  statement {
+    actions   = ["events:PutEvents"]
+    resources = [aws_cloudwatch_event_bus.security.arn]
+  }
+}
+
+resource "aws_iam_role_policy" "guardduty_forwarder" {
+  count = length(aws_iam_role.guardduty_forwarder)
+
+  name   = "put-security-events"
+  role   = aws_iam_role.guardduty_forwarder[0].id
+  policy = data.aws_iam_policy_document.guardduty_forwarder.json
+}
+
+resource "aws_cloudwatch_event_target" "guardduty_findings_forward" {
+  for_each = toset(local.guardduty_forward_regions)
+
+  region    = each.key
+  rule      = aws_cloudwatch_event_rule.guardduty_findings[each.key].name
+  target_id = "svp-security-events"
+  arn       = aws_cloudwatch_event_bus.security.arn
+  role_arn  = aws_iam_role.guardduty_forwarder[0].arn
+
+  # The role must be able to put events before the first event arrives.
+  depends_on = [aws_iam_role_policy.guardduty_forwarder]
+}

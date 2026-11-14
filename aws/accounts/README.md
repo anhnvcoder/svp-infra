@@ -3,11 +3,11 @@
 Mỗi account thành viên của org (`svp-stg`, `svp-prd`) có một root ở đây, gọi module
 [`account-baseline`](../modules/account-baseline/README.md): bucket state và KMS key của nó, zone DNS của env với bản
 ghi `CAA` ở đỉnh, budget tháng; cùng module [`registry`](../modules/registry/README.md) và
-[`observability`](../modules/observability/README.md) (mục [Registry và observability](#registry-và-observability)), và vault
-AWS Backup `svp-<env>` cùng key, opt-in, role của nó (mục [Backup](#backup)).
-Root prd bật thêm DNSSEC (key KMS, KSK, hai alarm `page`) và query log cho zone prd, cùng topic SNS `svp-prd-dns-alarms`
-ở `us-east-1` (module [`alarms`](../modules/alarms/README.md)) nhận hai alarm đó. Mọi thứ sống giữa các buổi AWS, mang
-tag `Stack=baseline` (script quét sót của buổi giữ lại tag này).
+[`observability`](../modules/observability/README.md) (mục [Registry và observability](#registry-và-observability)) với
+phần tốn tiền theo cờ (mục [Cờ chi phí](#cờ-chi-phí)), và vault AWS Backup `svp-<env>` cùng key, opt-in, role của nó
+(mục [Backup](#backup)). Root prd bật thêm DNSSEC (key KMS, KSK, hai alarm `page`) và query log cho zone prd, cùng topic
+SNS `svp-prd-dns-alarms` ở `us-east-1` (module [`alarms`](../modules/alarms/README.md)) nhận hai alarm đó. Mọi thứ sống
+giữa các buổi AWS, mang tag `Stack=baseline` (script quét sót của buổi giữ lại tag này).
 
 Zone của prd là zone gốc của lab, `aws.<domain>` (web prd ở đỉnh zone, API `api.aws.<domain>`), được DNS của domain cha (Cloudflare) uỷ
 quyền bằng bốn bản ghi `NS` tên `aws`. Zone của stg là `stg.aws.<domain>`, zone con mà zone prd uỷ quyền bằng bản ghi `NS` của biến
@@ -44,9 +44,11 @@ Tổng R mỗi account khoảng $1,51/tháng năm đầu ($3,02 cho hai account)
 `CAA` nằm trong phí zone.
 
 Registry và observability của mỗi account (key KMS, secret của cache, lưu trữ ECR tăng theo số bản phát hành, workspace
-Grafana tính cả tháng không buổi): bảng chi phí lúc không buổi của
+Grafana tính cả tháng không buổi khi cờ `managed_grafana` là `always`): bảng chi phí lúc không buổi của
 [ADR-0062](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0062-ecr-registry-ci-oidc.md) §11 và
-[ADR-0063](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0063-managed-observability.md) §12.
+[ADR-0063](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0063-managed-observability.md) §12; phần đổi
+theo cờ ở bảng tháng không buổi của
+[ADR-0071](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0071-paid-features.md).
 
 Key `alias/svp-<env>-backup` của vault (mục [Backup](#backup)) tính như key state: $1/tháng, cộng $1 ở mỗi lần xoay thứ nhất
 và thứ hai ([AWS KMS pricing](https://aws.amazon.com/kms/pricing/)); request của nó chỉ có khi job backup, copy chạy trong buổi.
@@ -100,14 +102,16 @@ AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform init
 AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform plan -out=stg.tfplan
 ```
 
-Đọc plan: ở stg `Plan: 68 to add, 0 to change, 0 to destroy`: 11 của `module.baseline` (KMS key và alias, bucket cùng 5
-cấu hình của nó, hosted zone, bản ghi `caa`, budget; không bản ghi `delegation` nào), 48 của `module.registry`,
-`module.observability` (danh sách ở [Thêm vào account đã có baseline](#thêm-vào-account-đã-có-baseline)) và 9 của `backup.tf`
-(danh sách ở [Backup](#backup)). Ở prd `Plan: 80 to add, 0 to change, 0 to destroy`: 46 của hai module đó, 11 của
-`module.baseline` và 9 của `backup.tf` như stg, thêm 6 của DNSSEC (`aws_kms_key.dnssec`
-và alias ở `us-east-1`, `aws_route53_key_signing_key.this`, `aws_route53_hosted_zone_dnssec.this`, hai
-`aws_cloudwatch_metric_alarm.dnssec`), 3 của query log (log group, resource policy, `aws_route53_query_log.this`) và 5
-của `module.alarms` (key KMS, alias, topic, topic policy, subscription email). Rồi:
+Đọc plan (số ứng với cờ `managed_grafana` của stg là `session`, của prd là `always`, không buổi nào mở; mục [Cờ chi
+phí](#cờ-chi-phí)): ở stg `Plan: 62 to add, 0 to change, 0 to destroy`: 11 của `module.baseline` (KMS key và alias,
+bucket cùng 5 cấu hình của nó, hosted zone, bản ghi `caa`, budget; không bản ghi `delegation` nào), 42 của
+`module.registry`, `module.observability` (danh sách ở [Thêm vào account đã có
+baseline](#thêm-vào-account-đã-có-baseline); không phần AMG vì không buổi nào mở) và 9 của `backup.tf` (danh sách ở
+[Backup](#backup)). Ở prd `Plan: 81 to add, 0 to change, 0 to destroy`: 47 của hai module đó, 11 của `module.baseline`
+và 9 của `backup.tf` như stg, thêm 6 của DNSSEC (`aws_kms_key.dnssec` và alias ở `us-east-1`,
+`aws_route53_key_signing_key.this`, `aws_route53_hosted_zone_dnssec.this`, hai `aws_cloudwatch_metric_alarm.dnssec`), 3
+của query log (log group, resource policy, `aws_route53_query_log.this`) và 5 của `module.alarms` (key KMS, alias,
+topic, topic policy, subscription email). Rồi:
 
 ```sh
 AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform apply stg.tfplan
@@ -238,10 +242,11 @@ backup) thì áp phần còn thiếu theo mục [Thêm vào account đã có bas
 Dữ liệu và cấu hình phải sống qua `destroy` của buổi nằm ở root này, không ở `aws/envs/<env>`:
 
 - [`registry`](../modules/registry/README.md): registry ECR private của account (repo phát hành, pull-through cache,
-  quét Inspector, key `alias/svp-<env>-ecr`), IAM OIDC provider của GitHub Actions và các role CI chép bản phát hành vào
-  registry.
+  quét Inspector hay quét cơ bản theo cờ `inspector_ecr`, key `alias/svp-<env>-ecr`), IAM OIDC provider của GitHub
+  Actions và các role CI chép bản phát hành vào registry.
 - [`observability`](../modules/observability/README.md): workspace AMP `svp-<env>`, log group `/svp/<env>/otel`,
-  Transaction Search của X-Ray, workspace Amazon Managed Grafana `svp-<env>`, key `alias/svp-<env>-observability`.
+  Transaction Search của X-Ray, key `alias/svp-<env>-observability`; workspace Amazon Managed Grafana `svp-<env>` và
+  tham số SSM `/svp/<env>/grafana-workspace-id` theo cờ `managed_grafana`.
 
 Root `aws/envs/<env>` tìm chúng bằng data source theo tên, alias. Giá trị theo env nằm trong `locals` của `main.tf`,
 cạnh `env`:
@@ -264,7 +269,8 @@ Biến `platform_admin_group_id`, `platform_viewer_group_id` là id nhóm `svp-p
 | `registry_host` | khoá `ecrRegistry` của cluster values; host registry trong lệnh kiểm |
 | `ci_role_arns` | đối chiếu tên role mà workflow của `svp-backend`, `svp-frontend` dựng từ secret `SVP_AWS_<ENV>_ACCOUNT_ID` |
 | `amp_workspace_id` | khoá `ampWorkspaceId` của cluster values; lệnh kiểm metric còn sau `destroy` |
-| `grafana_url` | khoá `grafanaUrl` của cluster values; địa chỉ đăng nhập Grafana bằng IAM Identity Center |
+| `grafana_url` | khoá `grafanaUrl` của cluster values; địa chỉ đăng nhập Grafana bằng IAM Identity Center; `null` khi workspace không có |
+| `session_features` | danh sách cờ có giá trị `session` của env; rỗng thì mọi tài nguyên của root sống giữa các buổi |
 | `spans_retention_command` | lệnh đặt retention của log group `aws/spans`, chạy một lần mỗi account |
 
 ### Thứ tự apply
@@ -278,8 +284,31 @@ flowchart LR
 ```
 
 `aws/org` tạo delegated admin của Inspector và hai nhóm nền tảng (id nhóm là biến của root này); `aws/security` bật
-Inspector cho ECR của mọi account thành viên, nên registry quét `ENHANCED` ngay khi tạo. Root `aws/envs/<env>` cần tài
-nguyên của root này có sẵn.
+Inspector cho ECR của mọi account thành viên có cờ `inspector_ecr` là `always`, nên registry của account đó quét
+`ENHANCED` ngay khi tạo. Root `aws/envs/<env>` cần tài nguyên của root này có sẵn.
+
+## Cờ chi phí
+
+Root gọi module [`paid-features`](../modules/paid-features/README.md) với file commit `aws/paid-features.json` và đọc
+hai cờ của env mình; thiết kế, giá trị của từng env và chi phí:
+[ADR-0071](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0071-paid-features.md).
+
+| Cờ | Truyền vào | `always` | Giá trị kia |
+| --- | --- | --- | --- |
+| `inspector_ecr` | `enhanced_scanning` của `module.registry` | `ENHANCED`, `CONTINUOUS_SCAN` | `off`: `BASIC`, `SCAN_ON_PUSH`, cùng filter repo cache |
+| `managed_grafana` | `grafana_enabled` của `module.observability`: cờ là `always` hay `session_open` là `true` | workspace AMG và tham số sống giữa các buổi | `session`: chỉ có khi `session_open = true` |
+
+Biến `session_open` (bool, mặc định `false`) không nằm trong file nào: chỉ lệnh `account` của
+[`aws/scripts/tf.sh`](../scripts/tf.sh) đặt nó (`plan --open` là `true`, `plan --close` là `false`), nên
+`terraform plan` trần không có `-var` luôn tính trạng thái giữa buổi. Với cờ `always`, `session_open` không đổi gì: điều
+kiện của `grafana_enabled` đã đúng, plan với `true` và `false` như nhau. Output `session_features` liệt kê cờ `session`
+của env; lệnh `account` của `tf.sh` đọc cùng danh sách từ file JSON.
+
+Đổi cờ thì `plan` đổi đúng phần tài nguyên ở bảng trên: `inspector_ecr` sửa tại chỗ
+`module.registry.aws_ecr_registry_scanning_configuration.this`; `managed_grafana` từ `always` sang `session` (giữa buổi)
+xoá workspace, role `svp-<env>-grafana` và policy, hai `aws_grafana_role_association`, service account
+`svp-grafana-operator` và tham số SSM, mất dashboard trong workspace (Grafana Operator dựng lại trong buổi), không chạm
+key, workspace AMP, log group. Thứ tự apply giữa các root khi đổi cờ: ADR-0071.
 
 ## Backup
 
@@ -325,7 +354,7 @@ Các phần của root và số tài nguyên `plan` thêm cho phần account ch�
 | --- | --- | --- | --- |
 | `CAA` | `module.baseline.aws_route53_record.caa` | 1 | 1 |
 | DNSSEC, query log của zone prd | 6 của DNSSEC, 3 của query log, 5 của `module.alarms` ([bước 3](#3-apply-lần-đầu-state-local)) | — | 14 |
-| Registry, observability | `module.registry`, `module.observability` (danh sách dưới bảng) | 48 | 46 |
+| Registry, observability | `module.registry`, `module.observability` (danh sách dưới bảng) | 42 | 47 |
 | Backup | 9 của `backup.tf` (danh sách ở mục [Backup](#backup)) | 9 | 9 |
 
 - `module.registry` (stg 33, prd 31): key KMS và alias, 7 `aws_ecr_repository.release`,
@@ -333,10 +362,11 @@ Các phần của root và số tài nguyên `plan` thêm cho phần account ch�
   `aws_secretsmanager_secret.cache`, 5 `aws_ecr_repository_creation_template.cache`, role `svp-<env>-ecr-template` và
   policy của nó, `aws_iam_openid_connect_provider.github`, mỗi role của `ci_roles` một `aws_iam_role.ci` và một
   `aws_iam_role_policy.ci` (stg 4, prd 3);
-- `module.observability` (15): key KMS và alias, workspace AMP và `aws_prometheus_workspace_configuration`, log group
-  `/svp/<env>/otel` và stream `otel-collector`, `aws_cloudwatch_log_resource_policy.xray_spans`,
-  `aws_xray_trace_segment_destination.this`, `aws_xray_indexing_rule.default`, role `svp-<env>-grafana` và policy,
-  workspace Grafana, hai `aws_grafana_role_association`, service account `svp-grafana-operator`.
+- `module.observability` (stg 9, prd 16): key KMS và alias, workspace AMP và `aws_prometheus_workspace_configuration`,
+  log group `/svp/<env>/otel` và stream `otel-collector`, `aws_cloudwatch_log_resource_policy.xray_spans`,
+  `aws_xray_trace_segment_destination.this`, `aws_xray_indexing_rule.default`; khi cờ `managed_grafana` là `always`
+  (prd) thêm 7 của AMG: role `svp-<env>-grafana` và policy, workspace Grafana, hai `aws_grafana_role_association`,
+  service account `svp-grafana-operator`, tham số SSM `/svp/<env>/grafana-workspace-id`.
 
 Mọi biến của root không có `default` đều bắt buộc, kể cả biến của phần account đã có, nên trước `plan` luôn cần:
 
@@ -355,12 +385,15 @@ AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform init
 AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform plan -out=stg.tfplan
 ```
 
-`Account` phải bằng `$SVP_AWS_STG_ACCOUNT_ID`, `Arn` chứa `assumed-role/AWSReservedSSO_SvpAdmin_`; dòng `echo` in hai số 12 chữ số
-khác nhau. Plan chỉ thêm (`0 to change, 0 to destroy`); mọi tài nguyên của plan thuộc một phần của bảng; phần nào có trong plan thì có đủ
-số tài nguyên ở cột của env; số `to add` bằng tổng các phần đó. Ví dụ: account chỉ có baseline (cùng `CAA` và, ở prd, DNSSEC, query log)
-thì stg `Plan: 57 to add, 0 to change, 0 to destroy`, prd `Plan: 55 to add, 0 to change, 0 to destroy`; account đã có registry,
-observability thì `Plan: 9 to add, 0 to change, 0 to destroy` ở cả hai env, đúng phần backup. Dừng (không apply, dán plan lại) nếu có
-`change`, `destroy`, tài nguyên ngoài bảng hay phần thiếu tài nguyên. Rồi:
+`Account` phải bằng `$SVP_AWS_STG_ACCOUNT_ID`, `Arn` chứa `assumed-role/AWSReservedSSO_SvpAdmin_`; dòng `echo` in hai số
+12 chữ số khác nhau. Plan chỉ thêm (`0 to change, 0 to destroy`); mọi tài nguyên của plan thuộc một phần của bảng; phần
+nào có trong plan thì có đủ số tài nguyên ở cột của env; số `to add` bằng tổng các phần đó. Ví dụ: account chỉ có
+baseline (cùng `CAA` và, ở prd, DNSSEC, query log) thì stg `Plan: 51 to add, 0 to change, 0 to destroy`, prd
+`Plan: 56 to add, 0 to change, 0 to destroy`; account đã có registry, observability thì
+`Plan: 9 to add, 0 to change, 0 to destroy` ở cả hai env, đúng phần backup. Dừng (không apply, dán plan lại) nếu có
+`change`, `destroy`, tài nguyên ngoài bảng hay phần thiếu tài nguyên; trừ khi account đã có observability với AMG từ
+trước mà cờ `managed_grafana` của env là `session`, hay đã quét `ENHANCED` mà cờ `inspector_ecr` là `off`: plan còn xoá,
+sửa đúng phần đổi cờ của mục [Cờ chi phí](#cờ-chi-phí), và áp theo thứ tự của ADR-0071. Rồi:
 
 ```sh
 AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform apply stg.tfplan && rm stg.tfplan

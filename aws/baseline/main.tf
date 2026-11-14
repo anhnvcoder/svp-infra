@@ -1,6 +1,6 @@
 # The security baseline of every account of the organization, applied from the management account. The accounts and
-# what differs between them are data in local.accounts; each account gets one call of the security-baseline module.
-# Design notes: aws/baseline/README.md.
+# what differs between them are data in local.accounts and aws/paid-features.json; each account gets one call of the
+# security-baseline module. Design notes: aws/baseline/README.md.
 
 data "aws_partition" "current" {
   provider = aws.mgmt
@@ -12,8 +12,15 @@ data "aws_kms_alias" "log_archive" {
   name     = "alias/svp-log-archive"
 }
 
+module "paid_features" {
+  source = "../modules/paid-features"
+
+  features = jsondecode(file("${path.root}/../paid-features.json"))
+}
+
 locals {
   partition = data.aws_partition.current.partition
+  flags     = module.paid_features.flags
 
   # Derived from the account ids, as aws/log-archive and aws/security name them, without reading their state.
   config_bucket_name     = "svp-config-${var.log_archive_account_id}-${var.region}"
@@ -80,6 +87,7 @@ module "mgmt" {
   organization_events    = local.accounts.mgmt.organization_events
   root_signin_regions    = local.accounts.mgmt.root_signin_regions
   identity_center_region = local.accounts.mgmt.identity_center_region
+  config_recording       = local.flags["mgmt"].config_recording == "always"
 }
 
 module "log_archive" {
@@ -94,6 +102,7 @@ module "log_archive" {
   organization_events    = local.accounts.log-archive.organization_events
   root_signin_regions    = local.accounts.log-archive.root_signin_regions
   identity_center_region = local.accounts.log-archive.identity_center_region
+  config_recording       = local.flags["log-archive"].config_recording == "always"
 }
 
 module "backup" {
@@ -108,6 +117,7 @@ module "backup" {
   organization_events    = local.accounts.backup.organization_events
   root_signin_regions    = local.accounts.backup.root_signin_regions
   identity_center_region = local.accounts.backup.identity_center_region
+  config_recording       = local.flags["backup"].config_recording == "always"
 }
 
 module "security" {
@@ -122,6 +132,7 @@ module "security" {
   organization_events    = local.accounts.security.organization_events
   root_signin_regions    = local.accounts.security.root_signin_regions
   identity_center_region = local.accounts.security.identity_center_region
+  config_recording       = local.flags["security"].config_recording == "always"
 }
 
 module "stg" {
@@ -136,6 +147,7 @@ module "stg" {
   organization_events    = local.accounts.stg.organization_events
   root_signin_regions    = local.accounts.stg.root_signin_regions
   identity_center_region = local.accounts.stg.identity_center_region
+  config_recording       = local.flags["stg"].config_recording == "always"
 }
 
 module "prd" {
@@ -150,4 +162,5 @@ module "prd" {
   organization_events    = local.accounts.prd.organization_events
   root_signin_regions    = local.accounts.prd.root_signin_regions
   identity_center_region = local.accounts.prd.identity_center_region
+  config_recording       = local.flags["prd"].config_recording == "always"
 }

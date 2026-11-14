@@ -57,6 +57,16 @@ luật AMP) và xoay PAT của cache theo runbook [`docs/runbooks/platform-setup
 [`docs/runbooks/backup-setup.md`](docs/runbooks/backup-setup.md); diễn tập khôi phục và xoá backup cuối buổi nằm ở runbook buổi.
 Cài đặt GitHub của các repo (Terraform `github/`, GitHub App từ manifest, phần provider không quản) theo runbook
 [`docs/runbooks/github-setup.md`](docs/runbooks/github-setup.md); `make github-check` đọc lại phần ngoài Terraform.
+Đổi cờ chi phí của một account (dịch vụ tốn tiền mà hệ thống không cần để chạy) theo runbook
+[`docs/runbooks/paid-features.md`](docs/runbooks/paid-features.md).
+
+**Cờ chi phí.** Khác biệt về dịch vụ tốn tiền giữa các account là dữ liệu của một file commit,
+[`aws/paid-features.json`](aws/paid-features.json): mỗi account một object cờ, chỉ ghi giá trị khác `always`, nên prd và các account dùng
+chung giữ chuẩn production khi file không nhắc tới chúng. Module [`paid-features`](aws/modules/paid-features/README.md) kiểm giá trị; root
+`aws/security` (Security Hub CSPM, Inspector ECR), `aws/baseline` (AWS Config recorder) và `aws/accounts/<env>` (Amazon Managed Grafana, kiểu
+quét ECR) đọc cờ qua nó, script buổi đọc cùng file. Cờ `managed_grafana` là `session` thì workspace AMG của env chỉ có trong buổi, mở và đóng
+bằng `aws/scripts/tf.sh <env> account`. Thiết kế, giá trị mỗi account và chi phí:
+[ADR-0071](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0071-paid-features.md).
 
 ## Bố cục
 
@@ -77,10 +87,11 @@ aws/
   bootstrap/                  management account, một lần, giữ giữa các buổi: bucket state (KMS key), budget, Cost Anomaly Detection, tag phân bổ chi phí của org; không hosted zone nào
   org/                        management account: Organizations, OU Security và Workloads/Prod, Workloads/NonProd, các account thành viên svp-*, policy của tổ chức (cả Backup policy), cross-account backup và opt-in AWS Backup, delegated admin, root tập trung, liên hệ SECURITY, IAM Identity Center (SvpAdmin, SvpReadOnly, SvpLogReader), organization trail
   log-archive/                account svp-log-archive (chạy từ management qua OrganizationAccountAccessRole): bucket log của org (cả log CloudFront), hai KMS key, delivery destination svp-cloudfront-<env> của log CloudFront
-  security/                   account svp-security (như trên): GuardDuty, Security Hub CSPM, aggregator Config, Access Analyzer của org; bus và SNS cảnh báo bảo mật
-  baseline/                   mọi account của tổ chức (như trên): baseline bảo mật của mỗi account, CMK EBS của stg, prd
+  paid-features.json          cờ chi phí của mỗi account (chỉ giá trị khác always), đọc qua modules/paid-features và lib.sh
+  security/                   account svp-security (như trên): GuardDuty, Security Hub CSPM, aggregator Config, Access Analyzer của org, Inspector ECR theo cờ; bus và SNS cảnh báo bảo mật
+  baseline/                   mọi account của tổ chức (như trên): baseline bảo mật của mỗi account (Config recorder theo cờ), CMK EBS của stg, prd
   backup/                     account svp-backup (như trên): KMS key, vault svp-stg-copy, svp-prd-copy có vault lock governance nhận bản copy của AWS Backup
-  accounts/<env>/             baseline của mỗi account thành viên (stg, prd), giữ giữa các buổi: bucket state, KMS key của nó, zone của env với CAA (prd aws.<domain>, giữ cả bản ghi NS uỷ quyền stg.aws.<domain>, DNSSEC, query log, topic alarm DNSSEC; stg stg.aws.<domain>), budget; registry ECR, pull-through cache, role CI và observability (AMP, log group ứng dụng, X-Ray, AMG) của env; vault AWS Backup svp-<env>, key, role svp-<env>-backup, opt-in
+  accounts/<env>/             baseline của mỗi account thành viên (stg, prd), giữ giữa các buổi: bucket state, KMS key của nó, zone của env với CAA (prd aws.<domain>, giữ cả bản ghi NS uỷ quyền stg.aws.<domain>, DNSSEC, query log, topic alarm DNSSEC; stg stg.aws.<domain>), budget; registry ECR, pull-through cache, role CI và observability (AMP, log group ứng dụng, X-Ray, AMG theo cờ: giữa các buổi hay chỉ trong buổi) của env; vault AWS Backup svp-<env>, key, role svp-<env>-backup, opt-in
   envs/<env>/                 cấu hình gốc của mỗi env (stg, prd: cùng *.tf kể cả bastion SSM, khác ở <env>.tfvars; prd thêm teardown.tfvars)
   gitops/<env>/               bootstrap GitOps của cluster EKS của env (GitOps Bridge): namespace, Argo CD, AppProject, cluster Secret, ApplicationSet svp-bootstrap
   modules/                    module nội bộ; lock file không commit
@@ -97,13 +108,14 @@ aws/
     org-policies              mọi policy của tổ chức: SCP, RCP data perimeter, declarative policy EC2, tag policy, Backup policy svp-backup-<env>
     backup-vault              vault AWS Backup từ một KMS key có sẵn, vault lock và vault access policy tuỳ chọn (root backup, accounts/<env>)
     backup-alarms             alarm svp-<env>-backup-job-failed, svp-<env>-backup-copy-failed của AWS Backup (root envs/<env>)
-    security-baseline         baseline bảo mật của một account: S3 BPA cấp account, EBS mã hoá mặc định, Config recorder, rule svp-security-*
+    paid-features             cờ chi phí của mọi account (không resource): kiểm aws/paid-features.json, trả cờ đủ của mỗi account cho các root
+    security-baseline         baseline bảo mật của một account: S3 BPA cấp account, EBS mã hoá mặc định, Config recorder (bật, tắt theo biến), rule svp-security-*
     account-baseline          bucket state, KMS key, zone (cùng bản ghi NS uỷ quyền zone con, chỉ prd dùng), CAA, DNSSEC và query log (prd bật), budget của một account thành viên
-    registry                  ECR private của một account env (root accounts/<env>): repo phát hành bất biến, pull-through cache, quét Inspector, KMS, OIDC provider GitHub, role CI svp-ci-*
-    observability             nơi nhận telemetry của một account env (root accounts/<env>): workspace AMP, log group /svp/<env>/otel, Transaction Search của X-Ray, Amazon Managed Grafana, KMS
+    registry                  ECR private của một account env (root accounts/<env>): repo phát hành bất biến, pull-through cache, quét Inspector hay quét cơ bản, KMS, OIDC provider GitHub, role CI svp-ci-*
+    observability             nơi nhận telemetry của một account env (root accounts/<env>): workspace AMP, log group /svp/<env>/otel, Transaction Search của X-Ray, Amazon Managed Grafana và tham số SSM id của nó (bật, tắt theo biến), KMS
   backend.hcl                 backend của management (bucket của aws/bootstrap; không commit, sinh từ output backend_hcl)
   backend-<env>.hcl           backend của account stg, prd (bucket, region, KMS; không key, mỗi root truyền key riêng; không commit, sinh từ output của accounts/<env>)
-  scripts/                    script buổi AWS theo bảng env (mgmt, stg, prd) của lib.sh: kiểm account, DNS, Terraform hai root, secret và token Grafana, làm nóng pull-through cache, chờ Argo CD, đo, diễn tập khôi phục và xoá backup cuối buổi (restore-drill.sh), pre-destroy, sweep
+  scripts/                    script buổi AWS theo bảng env (mgmt, stg, prd) của lib.sh: kiểm account, DNS, Terraform ba root (account, env, gitops), cờ chi phí, secret và token Grafana, làm nóng pull-through cache, chờ Argo CD, đo, diễn tập khôi phục và xoá backup cuối buổi (restore-drill.sh), pre-destroy, sweep
 github/                       cài đặt GitHub của các repo trong `local.repositories` (repo, quyền Actions, ruleset, environment promote, promote-prd, ecr-rescan); state trong bucket của aws/bootstrap
 docs/diagrams/                sơ đồ AWS svp-aws.drawio (trang stg, prd, flows), PDF, PNG nhúng ở docs của repo code; sinh từ spec
 .claude/skills/aws-drawio-diagram/   spec và checker của sơ đồ (luật vẽ ở SKILL.md)
@@ -256,6 +268,8 @@ Hai đường vào:
   4 giờ: mục "Giới hạn" của `session-stg.md`, "Chi phí và giới hạn" của `session-prd.md`; phần edge mỗi buổi và lúc không buổi:
   [phụ lục ADR-0061 §13](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0061-edge-cloudfront-waf-acm.md#13-chi-phí-edge).
 - **Nâng minor EKS:** runbook [`docs/runbooks/eks-upgrade.md`](docs/runbooks/eks-upgrade.md).
+- **Đổi cờ chi phí** (giữa hai buổi): runbook [`docs/runbooks/paid-features.md`](docs/runbooks/paid-features.md) (`aws/security`,
+  `aws/baseline`, `aws/accounts/<env>` theo thứ tự của hướng đổi).
 
 Chỉ người học chạy, từ máy, bằng SSO, theo script và runbook của repo. Mỗi account một biến chứa 12 số của account (export trong terminal
 của buổi, không ghi vào file nào); mọi lệnh viết sẵn ghi profile ngay trong lệnh, `TF_VAR_account_id` từ biến của account mà profile vào, và
@@ -326,6 +340,11 @@ tên, bản khôi phục mang tên cũ, state vẫn trỏ instance cũ); mỗi t
 | --- | --- | --- |
 | `tf.sh <env> env state-rm <địa chỉ>` | `terraform state rm <địa chỉ>` | `env-state-rm` |
 | `tf.sh <env> env import <địa chỉ> <id>` | `terraform import -input=false -var-file=<env>.tfvars <địa chỉ> <id>` | `env-import` |
+
+`tf.sh <env> account init|plan --open|plan --close|apply` chạy root `aws/accounts/<env>` trong buổi: `plan --open` plan với
+`-var session_open=true` (phần của cờ `session` của env trong `aws/paid-features.json`, như workspace AMG), `plan --close` với `false`,
+`apply` áp plan đã lưu và ghi mốc `account-open-applied` hay `account-close-applied`. `env plan` từ chối tới khi phần đó mở, `plan --close` tới
+khi root env đã destroy; env không có cờ `session` thì mọi lệnh `account` in `ok no session feature …` và không chạy gì.
 
 Địa chỉ đi nguyên một đối số (giữ `[` và `"` của khoá `for_each`). Root gitops từ chối cả hai; không có thao tác state nào khác (`mv`, `pull`,
 `push`, `list`). Sau `import`, `tf.sh <env> env plan` không được thay (replace) hay xoá instance vừa nhập; nó vẫn sửa tại chỗ các thiết lập
@@ -451,7 +470,8 @@ Gateway (target của Envoy trong target group edge),
 PVC (volume EBS), rồi NodePool và EC2NodeClass (Karpenter drain và tắt node của nó, trần `terminationGracePeriod`), rồi controller nền
 tảng; root gitops gỡ qua tunnel; `restore-drill.sh <env> cleanup` gỡ tag `Backup`, chờ job AWS Backup và xoá recovery point của vault env
 đã có bản copy (`tf.sh` từ chối destroy root env tới khi nó xong sau apply cuối); root env gỡ edge (bản ghi DNS, ba distribution, VPC
-origin, ALB, web ACL), cluster, node group hệ thống, dịch vụ dữ liệu, endpoint interface, rồi VPC; `sweep.sh` tìm phần còn sót (instance,
+origin, ALB, web ACL), cluster, node group hệ thống, dịch vụ dữ liệu, endpoint interface, rồi VPC; `tf.sh <env> account` đóng phần của cờ
+`session` (workspace AMG và tham số SSM của nó); `sweep.sh` tìm phần còn sót (instance,
 launch template, instance profile của Karpenter, ENI và security group mà CloudFront tạo cho VPC origin cả, rule groups namespace của AMP,
 queue MediaConvert, role MediaConvert, recovery point, job và vault của AWS Backup).
 
@@ -463,7 +483,8 @@ flowchart TD
     D --> X["restore-drill.sh ENV cleanup: gỡ tag Backup, chờ job, xoá recovery point đã có bản copy; mốc backup-drained"]
     X --> E["tf.sh ENV env destroy: DNS, distribution, VPC origin, ALB edge, web ACL; cluster EKS, node group system, Karpenter"]
     E --> F["cùng destroy: RDS, MSK, ElastiCache, transcode, bastion, endpoint interface, VPC, NAT"]
-    F --> G["sweep.sh ENV, sweep.sh mgmt: exit 0"]
+    F --> H["tf.sh ENV account plan --close, apply: workspace AMG khi managed_grafana là session"]
+    H --> G["sweep.sh ENV, sweep.sh mgmt: exit 0"]
 ```
 
 ## Luật an toàn

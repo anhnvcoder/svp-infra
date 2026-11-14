@@ -1,7 +1,7 @@
 # Module `registry`
 
 Registry ECR private của một account env (`svp-stg`, `svp-prd`), gọi từ root `aws/accounts/<env>` ([README](../../accounts/README.md)) nên sống
-qua `destroy` của buổi: repo phát hành, pull-through cache cho image bên thứ ba, quét Inspector, IAM OIDC provider của GitHub Actions và các role
+qua `destroy` của buổi: repo phát hành, pull-through cache cho image bên thứ ba, quét image cache (Inspector hay quét cơ bản theo cờ `inspector_ecr`, mục [Quét](#quét)), IAM OIDC provider của GitHub Actions và các role
 CI chép bản phát hành vào registry. Thiết kế và lý do từng giá trị:
 [ADR-0062](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0062-ecr-registry-ci-oidc.md) và phụ lục của nó (số § dưới đây là § của
 ADR). Host registry (output `registry_host`) là khoá `ecrRegistry` của cluster values.
@@ -30,8 +30,9 @@ Kyverno của chart `svp-policy` đổi tham chiếu sang `<registry_host>/<pref
 - Tag `IMMUTABLE` (đạt ECR.2); mã hoá KMS bằng key `alias/svp-<env>-ecr` (§2).
 - **Không lifecycle policy:** bản phát hành chép theo digest, không tag, nên rule `untagged` hay `any` nào cũng chọn được image đang chạy hay
   đích rollback. ECR.3 FAILED ở repo này là chấp nhận có lý do; GC theo tập digest đang dùng là việc sau (§2).
-- Không vào filter Inspector: CI quét trước khi đẩy, rescan hằng ngày, admission đòi `vuln` mới; ECR.1 FAILED ở repo này là chấp nhận (§10).
-  trivy AWS-0030 được bỏ qua ngay trên resource với cùng lý do: khi registry quét `ENHANCED`, thiết lập quét của từng repo không có tác dụng.
+- Không vào filter quét của registry (Inspector hay quét cơ bản): CI quét trước khi đẩy, rescan hằng ngày, admission đòi `vuln` mới; ECR.1 FAILED ở repo này là chấp nhận (§10).
+  trivy AWS-0030 được bỏ qua ngay trên resource với cùng lý do: cấu hình quét của registry, `ENHANCED` hay `BASIC`, chọn repo được quét thay
+  cho thiết lập quét của từng repo (API cũ AWS đang bỏ).
 
 ## Key KMS
 
@@ -53,8 +54,14 @@ key qua grant nó tạo cho mỗi repo, nên role đẩy, kéo không cần quy�
 
 ## Quét
 
-`aws_ecr_registry_scanning_configuration`: `ENHANCED` (Amazon Inspector), `CONTINUOUS_SCAN` với filter `<tiền tố>/*` cho năm tiền tố cache.
-Inspector bật cho account qua delegated admin ở `aws/security/inspector.tf`; finding vào Security Hub (§10).
+`aws_ecr_registry_scanning_configuration` có một rule với filter `<tiền tố>/*` cho năm tiền tố cache; biến `enhanced_scanning` chọn kiểu quét:
+
+- `true` (mặc định, prd): `ENHANCED` (Amazon Inspector), `CONTINUOUS_SCAN`. Inspector bật cho account qua delegated admin ở
+  `aws/security/inspector.tf`; finding vào Security Hub (§10).
+- `false`: quét cơ bản của ECR, `BASIC` với `SCAN_ON_PUSH`, miễn phí, cho account tắt quét ECR của Inspector. Root `aws/accounts/<env>`
+  truyền `false` khi cờ `inspector_ecr` của env là `off` trong `aws/paid-features.json`. Thứ tự áp khi đổi cờ và cái giá (finding Inspector
+  của account mất khi tắt, image mới chỉ có quét cơ bản):
+  [ADR-0071](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0071-paid-features.md) §4.
 
 ## Role CI
 
@@ -74,7 +81,8 @@ Inspector bật cho account qua delegated admin ở `aws/security/inspector.tf`;
 mã hoá KMS; key xoay, key policy chỉ account; module không khai báo lifecycle policy nào và template chỉ áp cho repo cache; năm rule cache,
 secret, template, cấu hình quét; trust mỗi role đúng `aud` và một `sub`, prd không có role nhận `ref:refs/heads/main`; mỗi role đúng bộ quyền
 đẩy, `BatchDeleteImage` chỉ khi `delete`, không action `*`, resource `*` chỉ với `ecr:GetAuthorizationToken`, role của một repo nguồn không chạm
-repo của repo kia (trừ `svp-ci-ecr-promote`, được mọi repo phát hành); rồi một run mỗi luật validation. ARN của key và secret chưa biết lúc
+repo của repo kia (trừ `svp-ci-ecr-promote`, được mọi repo phát hành); một run mỗi giá trị của `enhanced_scanning` (chỉ kiểu và tần suất quét
+đổi; filter, repo, key, rule cache giữ); rồi một run mỗi luật validation. ARN của key và secret chưa biết lúc
 `plan`, nên test kiểm loại mã hoá và tên secret thay vì ARN.
 
 <!-- markdownlint-disable MD033 -->
@@ -122,6 +130,7 @@ repo của repo kia (trừ `svp-ci-ecr-promote`, được mọi repo phát hành
 | Name | Description | Type | Default | Required |
 | ---- | ----------- | ---- | ------- | :------: |
 | ci\_roles | IAM roles GitHub Actions assumes through OIDC to copy releases into this registry, by role name. subject is the one sub claim the trust accepts (repo:<owner>@<owner-id>/<repo>@<repo-id>:ref:refs/heads/<branch> or :environment:<name>); repositories are release repositories (svp-backend/gateway) or a whole group of them (svp-backend/*); delete adds ecr:BatchDeleteImage on them. | <pre>map(object({<br/>    subject      = string<br/>    repositories = list(string)<br/>    delete       = bool<br/>  }))</pre> | n/a | yes |
+| enhanced\_scanning | Whether Amazon Inspector scans the cached repositories (ENHANCED, CONTINUOUS\_SCAN). false scans them with free ECR basic scanning (BASIC, SCAN\_ON\_PUSH), for an account whose Inspector ECR scanning is off; the filter is the same. | `bool` | `true` | no |
 | env | Environment of the account (stg, prd): names the KMS key alias/svp-<env>-ecr and the role svp-<env>-ecr-template. | `string` | n/a | yes |
 
 ## Outputs

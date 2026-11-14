@@ -87,7 +87,7 @@ Hai PR, bản số từ bước 1:
 
 ## 4. Nâng stg trong một buổi
 
-Buổi stg dựng env ở minor cũ (`main` của `svp-infra` trước PR 1, `main` của `svp-gitops` trước PR 2), tới bước 10 của `session-stg.md` xanh.
+Buổi stg dựng env ở minor cũ (`main` của `svp-infra` trước PR 1, `main` của `svp-gitops` trước PR 2), tới bước 13 của `session-stg.md` xanh.
 Rồi, cùng terminal của buổi, tunnel mở:
 
 1. Merge PR 2 ở `svp-gitops`. Argo CD sync `svp-cluster`; EC2NodeClass đổi alias, Karpenter đánh dấu node cũ `Drifted` và thay từng node theo
@@ -129,7 +129,7 @@ Rồi, cùng terminal của buổi, tunnel mở:
 
    Mong `1.N+1 ACTIVE`; mọi node, `nodegroup=system` lẫn Karpenter, có cột `VERSION` `v1.N+1.*`; AMI của EC2NodeClass tên
    `amazon-eks-node-al2023-arm64-standard-1.N+1-v<ngày mới>`; không NodeClaim nào `Drifted`.
-4. `make eks-smoke` như bước 11 của `session-stg.md`, rồi gỡ buổi như thường (bước 12–20). Kết quả (phút của mỗi phần, insight, smoke) vào PR 1.
+4. `make eks-smoke` như bước 14 của `session-stg.md`, rồi gỡ buổi như thường (bước 18–29). Kết quả (phút của mỗi phần, insight, smoke) vào PR 1.
    Merge PR 1 sau buổi xanh: từ đó mỗi buổi stg dựng thẳng ở minor mới.
 
 ## 5. prd

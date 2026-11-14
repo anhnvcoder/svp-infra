@@ -38,9 +38,15 @@ tài nguyên thiếu; apply `aws/accounts/stg` trước rồi plan lại.
 | Khoá KMS `alias/svp-stg-observability`, `alias/svp-stg-ecr` | alias | `module.eks` (Collector ghi log mã hoá; node giải mã image qua ECR) |
 | Repo phát hành `svp-backend/*`, `svp-frontend/*` | mọi repo của registry có tên bắt đầu bằng hai tiền tố đó | `module.eks` (role admission controller Kyverno) |
 | Rule pull-through cache `ghcr`, `docker-hub`, `quay`, `k8s`, `ecr-public` | tiền tố, một data source mỗi rule | `module.eks` (quyền cache của role node) |
-| Workspace AMG `svp-stg` | id từ `grafana_workspace_id` (AMG không tìm được theo tên); postcondition kiểm tên là `svp-stg` | `grafanaUrl` |
+| Workspace AMG `svp-stg` | id đọc từ tham số SSM `/svp/stg/grafana-workspace-id` mà `aws/accounts/stg` ghi cùng workspace (AMG không tìm được theo tên); postcondition kiểm tên là `svp-stg` | `grafanaUrl` |
 
 Host registry (`ecrRegistry`) dựng từ `account_id` và `region`, không đọc API.
+
+Workspace AMG và tham số của nó theo cờ `managed_grafana` của env trong `aws/paid-features.json` (mục [Cờ chi
+phí](../../accounts/README.md#cờ-chi-phí) của `aws/accounts`): với `session`, cả hai chỉ có trong buổi, sau bước mở của
+lệnh `account` của `aws/scripts/tf.sh`. Thiếu tham số thì `plan` dừng ở `data.aws_ssm_parameter.grafana_workspace`
+(`ParameterNotFound`): chạy bước mở đó rồi plan lại. Root đọc tham số bằng profile ghi của account env, cùng account với
+tham số.
 
 ## Cái gì khác giữa các env
 
@@ -94,7 +100,6 @@ Giá trị cá nhân (`stg.auto.tfvars` hay `TF_VAR_*`):
 | `hosted_zone_id` | output `zone_id` của `aws/accounts/stg`, dán tay (root này không đọc state của root khác); module `edge`, `media` ghi bản ghi alias và bản ghi validation ACM vào zone này |
 | `domain` | tên zone stg (`stg.aws.<domain>`, web ở apex) hay một tên trong zone đó; API là `api.<tên này>`, media là `media.<tên này>`; plan dừng ở precondition của `cluster_values` nếu tên khác |
 | `alarm_email` | hộp thư nhận CloudWatch alarm và cảnh báo của luật trên AMP (subscription email của topic `svp-stg-alarms`, biến `sensitive`); người học mở link xác nhận SNS gửi sau apply |
-| `grafana_workspace_id` | id `g-<id>` của workspace AMG `svp-stg` do `aws/accounts/stg` tạo, đọc bằng `aws grafana list-workspaces` (lệnh trong `example.auto.tfvars.example`); id không đổi giữa các buổi vì workspace sống lâu |
 
 Không có IP của máy người học: endpoint công khai của API tắt.
 

@@ -57,3 +57,9 @@ variable "platform_viewer_group_id" {
     error_message = "platform_viewer_group_id must be an Identity Store group id: a UUID, optionally preceded by 10 hex digits and a dash."
   }
 }
+
+variable "grafana_enabled" {
+  description = "Whether the Amazon Managed Grafana workspace `svp-<env>` exists, with its role `svp-<env>-grafana`, group role associations, service account svp-grafana-operator and SSM parameter `/svp/<env>/grafana-workspace-id`. The Prometheus workspace, the key, the log groups and X-Ray stay at either value."
+  type        = bool
+  default     = true
+}

@@ -68,3 +68,9 @@ variable "backup_account_id" {
     error_message = "backup_account_id must be the 12 digits of an AWS account id."
   }
 }
+
+variable "session_open" {
+  description = "Whether a session of the env is open: with the flag managed_grafana at session in aws/paid-features.json, the Grafana workspace svp-<env> and its parameter /svp/<env>/grafana-workspace-id exist only while it is true. No file sets it: only the account commands of aws/scripts/tf.sh do (plan --open, plan --close). With managed_grafana at always it changes nothing."
+  type        = bool
+  default     = false
+}

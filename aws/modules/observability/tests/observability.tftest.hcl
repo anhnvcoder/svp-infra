@@ -163,41 +163,41 @@ run "stg" {
 
   # Grafana: outside any VPC, IAM Identity Center sign-in, a role of the module, two groups, the operator account.
   assert {
-    condition     = length(aws_grafana_workspace.this.vpc_configuration) == 0 && length(aws_grafana_workspace.this.network_access_control) == 0
+    condition     = length(aws_grafana_workspace.this[0].vpc_configuration) == 0 && length(aws_grafana_workspace.this[0].network_access_control) == 0
     error_message = "The Grafana workspace must have no VPC configuration and no network access control."
   }
 
   assert {
     condition = (
-      aws_grafana_workspace.this.name == "svp-stg" &&
-      aws_grafana_workspace.this.account_access_type == "CURRENT_ACCOUNT" &&
-      toset(aws_grafana_workspace.this.authentication_providers) == toset(["AWS_SSO"]) &&
-      aws_grafana_workspace.this.permission_type == "CUSTOMER_MANAGED" &&
-      toset(aws_grafana_workspace.this.data_sources) == toset(["PROMETHEUS", "CLOUDWATCH"])
+      aws_grafana_workspace.this[0].name == "svp-stg" &&
+      aws_grafana_workspace.this[0].account_access_type == "CURRENT_ACCOUNT" &&
+      toset(aws_grafana_workspace.this[0].authentication_providers) == toset(["AWS_SSO"]) &&
+      aws_grafana_workspace.this[0].permission_type == "CUSTOMER_MANAGED" &&
+      toset(aws_grafana_workspace.this[0].data_sources) == toset(["PROMETHEUS", "CLOUDWATCH"])
     )
     error_message = "The Grafana workspace must be svp-<env>, IAM Identity Center sign-in, CUSTOMER_MANAGED, with the PROMETHEUS and CLOUDWATCH data sources."
   }
 
   assert {
     condition = (
-      aws_iam_role.grafana.name == "svp-stg-grafana" &&
-      toset(one(data.aws_iam_policy_document.grafana_trust.statement).actions) == toset(["sts:AssumeRole"]) &&
-      one(one(data.aws_iam_policy_document.grafana_trust.statement).principals).type == "Service" &&
-      toset(one(one(data.aws_iam_policy_document.grafana_trust.statement).principals).identifiers) == toset(["grafana.amazonaws.com"]) &&
-      toset([for c in one(data.aws_iam_policy_document.grafana_trust.statement).condition : "${c.test} ${c.variable}=${join(",", c.values)}"]) == toset(["StringEquals aws:SourceAccount=111111111111"])
+      aws_iam_role.grafana[0].name == "svp-stg-grafana" &&
+      toset(one(data.aws_iam_policy_document.grafana_trust[0].statement).actions) == toset(["sts:AssumeRole"]) &&
+      one(one(data.aws_iam_policy_document.grafana_trust[0].statement).principals).type == "Service" &&
+      toset(one(one(data.aws_iam_policy_document.grafana_trust[0].statement).principals).identifiers) == toset(["grafana.amazonaws.com"]) &&
+      toset([for c in one(data.aws_iam_policy_document.grafana_trust[0].statement).condition : "${c.test} ${c.variable}=${join(",", c.values)}"]) == toset(["StringEquals aws:SourceAccount=111111111111"])
     )
     error_message = "Only Amazon Managed Grafana of this account may assume the role svp-<env>-grafana."
   }
 
   assert {
-    condition = alltrue(flatten([for s in data.aws_iam_policy_document.grafana.statement : [
+    condition = alltrue(flatten([for s in data.aws_iam_policy_document.grafana[0].statement : [
       for a in s.actions : contains(var.grafana_read_actions, a)
-    ]])) && alltrue([for s in data.aws_iam_policy_document.grafana.statement : s.effect == null || s.effect == "Allow"])
+    ]])) && alltrue([for s in data.aws_iam_policy_document.grafana[0].statement : s.effect == null || s.effect == "Allow"])
     error_message = "The Grafana role may hold only read actions: no remote write, rule, log write or key administration."
   }
 
   assert {
-    condition = alltrue([for s in data.aws_iam_policy_document.grafana.statement :
+    condition = alltrue([for s in data.aws_iam_policy_document.grafana[0].statement :
       !contains(s.resources, "*") || toset(s.actions) == toset(["logs:StopQuery", "logs:DescribeLogGroups", "cloudwatch:GetMetricData", "cloudwatch:ListMetrics"])
     ])
     error_message = "Only actions without a resource type may name the resource \"*\"."
@@ -205,17 +205,17 @@ run "stg" {
 
   assert {
     condition = (
-      try(startswith(one(data.aws_iam_policy_document.grafana.statement[0].resources), var.workspace_arn_prefix), false) &&
-      contains(data.aws_iam_policy_document.grafana.statement[1].resources, var.log_group_arn) &&
-      contains(data.aws_iam_policy_document.grafana.statement[1].resources, "arn:aws:logs:ap-southeast-1:111111111111:log-group:aws/spans") &&
-      alltrue([for r in data.aws_iam_policy_document.grafana.statement[1].resources : startswith(r, "arn:aws:logs:ap-southeast-1:111111111111:log-group:")])
+      try(startswith(one(data.aws_iam_policy_document.grafana[0].statement[0].resources), var.workspace_arn_prefix), false) &&
+      contains(data.aws_iam_policy_document.grafana[0].statement[1].resources, var.log_group_arn) &&
+      contains(data.aws_iam_policy_document.grafana[0].statement[1].resources, "arn:aws:logs:ap-southeast-1:111111111111:log-group:aws/spans") &&
+      alltrue([for r in data.aws_iam_policy_document.grafana[0].statement[1].resources : startswith(r, "arn:aws:logs:ap-southeast-1:111111111111:log-group:")])
     )
     error_message = "The Grafana role must read this env's workspace and this account's log groups."
   }
 
   # The role uses the key only through CloudWatch Logs (the log groups) and AMP (the workspace).
   assert {
-    condition = [for s in data.aws_iam_policy_document.grafana.statement : [
+    condition = [for s in data.aws_iam_policy_document.grafana[0].statement : [
       s.sid, toset(s.actions), alltrue([for r in s.resources : startswith(r, var.key_arn_prefix)]),
       toset([for c in s.condition : "${c.test} ${c.variable}=${join(",", c.values)}"])
       ] if anytrue([for a in s.actions : startswith(a, "kms:")])] == [
@@ -227,15 +227,15 @@ run "stg" {
 
   assert {
     condition = (
-      aws_grafana_role_association.admin.role == "ADMIN" && aws_grafana_role_association.admin.group_ids == toset(["00000000-0000-0000-0000-000000000001"]) &&
-      aws_grafana_role_association.viewer.role == "VIEWER" && aws_grafana_role_association.viewer.group_ids == toset(["00000000-0000-0000-0000-000000000002"]) &&
-      aws_grafana_role_association.admin.user_ids == null && aws_grafana_role_association.viewer.user_ids == null
+      aws_grafana_role_association.admin[0].role == "ADMIN" && aws_grafana_role_association.admin[0].group_ids == toset(["00000000-0000-0000-0000-000000000001"]) &&
+      aws_grafana_role_association.viewer[0].role == "VIEWER" && aws_grafana_role_association.viewer[0].group_ids == toset(["00000000-0000-0000-0000-000000000002"]) &&
+      aws_grafana_role_association.admin[0].user_ids == null && aws_grafana_role_association.viewer[0].user_ids == null
     )
     error_message = "The admin group must get ADMIN, the viewer group VIEWER, and no user a role of their own."
   }
 
   assert {
-    condition     = aws_grafana_workspace_service_account.operator.name == "svp-grafana-operator" && aws_grafana_workspace_service_account.operator.grafana_role == "ADMIN"
+    condition     = aws_grafana_workspace_service_account.operator[0].name == "svp-grafana-operator" && aws_grafana_workspace_service_account.operator[0].grafana_role == "ADMIN"
     error_message = "Grafana Operator must sign in as the service account svp-grafana-operator with the ADMIN role, the only one that may add data sources."
   }
 
@@ -267,20 +267,112 @@ run "prd" {
       aws_prometheus_workspace_configuration.this.retention_period_in_days == 150 &&
       aws_cloudwatch_log_group.otel.name == "/svp/prd/otel" &&
       aws_cloudwatch_log_group.otel.retention_in_days == 30 &&
-      aws_grafana_workspace.this.name == "svp-prd" &&
-      aws_iam_role.grafana.name == "svp-prd-grafana"
+      aws_grafana_workspace.this[0].name == "svp-prd" &&
+      aws_iam_role.grafana[0].name == "svp-prd-grafana"
     )
     error_message = "prd must name every resource svp-prd and keep its own retention."
   }
 
   assert {
-    condition     = aws_grafana_role_association.admin.group_ids == toset(["0123456789-00000000-0000-0000-0000-000000000003"])
+    condition     = aws_grafana_role_association.admin[0].group_ids == toset(["0123456789-00000000-0000-0000-0000-000000000003"])
     error_message = "A group id with the 10-digit prefix of an Identity Store must be accepted as it is."
   }
 
   assert {
     condition     = output.spans_retention_command == "AWS_PROFILE=anhnv-prd aws logs put-retention-policy --log-group-name aws/spans --retention-in-days 30 --region ap-southeast-1"
     error_message = "The spans_retention_command output must use the prd profile and retention."
+  }
+}
+
+# Both values of grafana_enabled: the flag adds or removes every part of the Grafana workspace and nothing else.
+run "grafana_enabled" {
+  command = plan
+
+  variables {
+    grafana_enabled = true
+  }
+
+  assert {
+    condition = (
+      length(aws_grafana_workspace.this) == 1 && length(aws_iam_role.grafana) == 1 && length(aws_iam_role_policy.grafana) == 1 &&
+      length(aws_grafana_role_association.admin) == 1 && length(aws_grafana_role_association.viewer) == 1 &&
+      length(aws_grafana_workspace_service_account.operator) == 1 && length(aws_ssm_parameter.grafana_workspace_id) == 1
+    )
+    error_message = "With grafana_enabled the module must create one workspace, its role and policy, two group roles, the operator account and the parameter."
+  }
+
+  # The value, the workspace id, is unknown in a plan and make test refuses override_during: grafana.tf sets it.
+  assert {
+    condition = (
+      aws_ssm_parameter.grafana_workspace_id[0].name == "/svp/stg/grafana-workspace-id" &&
+      aws_ssm_parameter.grafana_workspace_id[0].type == "String" &&
+      aws_ssm_parameter.grafana_workspace_id[0].tier == "Standard"
+    )
+    error_message = "The workspace id must sit in the String parameter /svp/<env>/grafana-workspace-id of the Standard tier."
+  }
+
+  assert {
+    condition     = output.grafana_url != null
+    error_message = "With grafana_enabled the grafana_url output must be the URL of the workspace."
+  }
+
+  assert {
+    condition = (
+      aws_kms_key.observability.enable_key_rotation &&
+      lookup(aws_prometheus_workspace.this, join("", ["al", "ias"])) == "svp-stg" &&
+      aws_cloudwatch_log_group.otel.name == "/svp/stg/otel"
+    )
+    error_message = "The key, the Prometheus workspace and the log group must exist with grafana_enabled."
+  }
+}
+
+run "grafana_disabled" {
+  command = plan
+
+  variables {
+    grafana_enabled = false
+  }
+
+  assert {
+    condition = (
+      length(aws_grafana_workspace.this) == 0 && length(aws_iam_role.grafana) == 0 && length(aws_iam_role_policy.grafana) == 0 &&
+      length(aws_grafana_role_association.admin) == 0 && length(aws_grafana_role_association.viewer) == 0 &&
+      length(aws_grafana_workspace_service_account.operator) == 0 && length(aws_ssm_parameter.grafana_workspace_id) == 0 &&
+      length(data.aws_iam_policy_document.grafana) == 0 && length(data.aws_iam_policy_document.grafana_trust) == 0
+    )
+    error_message = "Without grafana_enabled the module must create no part of the Grafana workspace."
+  }
+
+  assert {
+    condition     = output.grafana_url == null
+    error_message = "Without grafana_enabled the grafana_url output must be null."
+  }
+
+  assert {
+    condition = (
+      aws_kms_key.observability.enable_key_rotation &&
+      lookup(aws_prometheus_workspace.this, join("", ["al", "ias"])) == "svp-stg" &&
+      aws_prometheus_workspace_configuration.this.retention_period_in_days == 31 &&
+      aws_cloudwatch_log_group.otel.name == "/svp/stg/otel" && aws_cloudwatch_log_stream.otel_collector.name == "otel-collector" &&
+      aws_xray_trace_segment_destination.this.destination == "CloudWatchLogs"
+    )
+    error_message = "The key, the Prometheus workspace, the log group and X-Ray must stay without grafana_enabled."
+  }
+
+  # The key policy names no Grafana resource, so it must be the same four statements at either value.
+  assert {
+    condition = [for s in data.aws_iam_policy_document.observability_key.statement : s.sid] == [
+      "AccountAdministersKey", "AccountUsesKeyThroughPrometheus", "AccountUsesKeyThroughLogs", "LogsEncryptsApplicationLogGroup",
+    ]
+    error_message = "The key policy must keep its four statements without grafana_enabled."
+  }
+
+  assert {
+    condition = (
+      output.log_group_name == "/svp/stg/otel" &&
+      output.spans_retention_command == "AWS_PROFILE=anhnv-stg aws logs put-retention-policy --log-group-name aws/spans --retention-in-days 7 --region ap-southeast-1"
+    )
+    error_message = "The outputs other than grafana_url must not depend on grafana_enabled."
   }
 }
 

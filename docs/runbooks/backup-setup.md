@@ -55,7 +55,7 @@ env không có tài nguyên nào mang tag `Backup`, nên lịch không tạo job
    phải đủ cho khoản đó cộng các buổi: lệnh đọc ở mục **Mở terminal** của
    [`org-security-setup.md`](org-security-setup.md#mở-terminal).
 4. **Phụ thuộc buổi**: từ khi code này ở `main`, `tf.sh <env> env …` cần `SVP_AWS_BACKUP_ACCOUNT_ID` (key RDS của root env chia sẻ cho
-   `svp-backup`) và bước 12 của buổi cần plan, vault, role của runbook này. Buổi stg, prd chỉ chạy được sau bước (6).
+   `svp-backup`) và bước 15 của buổi cần plan, vault, role của runbook này. Buổi stg, prd chỉ chạy được sau bước (6).
 
 ## Mở terminal
 
@@ -261,7 +261,7 @@ Mong `Prod svp-backup-prd`, `NonProd svp-backup-stg`; với mỗi env: `["svp-<e
 retention (vault env, bản copy) đúng
 [ADR-0067 §4](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0067-backup-dr.md#4-backup-policy-lịch-retention), và
 `svp-<env>-tagged`. Lỗi `get-backup-plan` vì `id` rỗng: AWS chưa sinh plan trong account (policy mới gắn); đọc lại sau, vẫn chưa có thì dán
-output. Bước 12 của buổi (`restore-drill.sh <env> backup`) kiểm lại plan, selection và opt-in đủ chi tiết trước job đầu tiên.
+output. Bước 15 của buổi (`restore-drill.sh <env> backup`) kiểm lại plan, selection và opt-in đủ chi tiết trước job đầu tiên.
 
 Vault env và role của nó (mỗi env, profile chỉ đọc của account đó):
 
@@ -293,8 +293,8 @@ Mong mỗi vault `True`, min và max của vault lock như bảng Tài nguyên c
 một statement `{"Effect":"Allow","Action":"backup:CopyIntoBackupVault","env_root":true}`. `env_root` `false`: vault nhận copy từ account
 khác account env của nó, dừng và dán output.
 
-Copy chéo account chỉ thử được khi env có tài nguyên: bước 12 của buổi stg đầu tiên chạy job on-demand và copy job thật; lệnh **Đọc bản copy**
-của [`session-stg.md`](session-stg.md#1214-diễn-tập-khôi-phục) là phép kiểm cuối của runbook này.
+Copy chéo account chỉ thử được khi env có tài nguyên: bước 15 của buổi stg đầu tiên chạy job on-demand và copy job thật; lệnh **Đọc bản copy**
+của [`session-stg.md`](session-stg.md#1517-diễn-tập-khôi-phục) là phép kiểm cuối của runbook này.
 
 ### 7e. Chi phí sau 1 và 7 ngày
 

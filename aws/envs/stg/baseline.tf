@@ -31,15 +31,19 @@ data "aws_kms_alias" "observability" {
   name = "alias/${local.name}-observability"
 }
 
-# AMG has no lookup by name: the id comes from the learner (README.md), and the name check stops a workspace of
-# another env or account from reaching the cluster values.
+# AMG has no lookup by name, so aws/accounts/<env> writes the id of the workspace it makes into a parameter; the name
+# check stops a workspace of another env or account from reaching the cluster values.
+data "aws_ssm_parameter" "grafana_workspace" {
+  name = "/svp/${local.env}/grafana-workspace-id"
+}
+
 data "aws_grafana_workspace" "env" {
-  workspace_id = var.grafana_workspace_id
+  workspace_id = data.aws_ssm_parameter.grafana_workspace.insecure_value
 
   lifecycle {
     postcondition {
       condition     = self.name == local.name
-      error_message = "grafana_workspace_id must be the id of the Grafana workspace ${local.name} of this account."
+      error_message = "The parameter /svp/${local.env}/grafana-workspace-id must hold the id of the Grafana workspace ${local.name} of this account."
     }
   }
 }

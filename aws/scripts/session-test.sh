@@ -45,6 +45,11 @@ for e in stg prd; do
 done
 printf 'rds_deletion_protection = false\n' >"$infra_root/aws/envs/prd/teardown.tfvars"
 cp "$src"/*.sh "$here"/
+# The checks run on a fixed sample of the paid features, not on aws/paid-features.json: a flag changed there must not
+# fail them. The real file is checked for validity alone, in the section on lib.sh.
+stg_session='{"stg": {"managed_grafana": "session", "inspector_ecr": "off", "security_hub": "off", "config_recording": "off"}}'
+set_flags() { printf '%s\n' "$1" >"$infra_root/aws/paid-features.json"; }
+set_flags "$stg_session"
 password=fake-Rds-Master-9f3c27e1
 failures=0
 
@@ -584,11 +589,19 @@ case "$1 $2" in
     else
       echo '{"ruleGroupsNamespaces":[]}'
     fi ;;
+  # The workspace of aws/accounts/<env> and its parameter: prd keeps them (managed_grafana always), stg makes them for a
+  # session alone (session), so they are there only when a session left them (FAKE_LEFTOVER=grafana).
   "grafana list-workspaces")
-    if [ "$stack" = baseline ]; then
+    if [ "$stack" = baseline ] && { [ "$envname" = prd ] || [ "$left" = grafana ]; }; then
       jq -n --arg e "svp-$envname" '{workspaces: [{id: "g-0fake", name: $e, tags: {Project: "svp", Stack: "baseline"}}]}'
     else
       echo '{"workspaces":[]}'
+    fi ;;
+  "ssm describe-parameters")
+    if [ "$stack" = baseline ] && { [ "$envname" = prd ] || [ "$left" = grafana ]; }; then
+      jq -n --arg n "/svp/$envname/grafana-workspace-id" '{Parameters: [{Name: $n, Type: "String"}]}'
+    else
+      echo '{"Parameters":[]}'
     fi ;;
   "iam list-open-id-connect-providers")
     {
@@ -1136,16 +1149,20 @@ for e in stg prd; do
   sed -n 's/^### step [0-9]*: aws\/scripts\///p' "$out" >"$work/order.print"
   sed -n 's/^| [0-9]* | `aws\/scripts\/\([^`]*\)`.*/\1/p' "$runbooks/session-$e.md" >"$work/order.runbook"
   expect "--print $e: the steps are the table of session-$e.md, in order" diff "$work/order.runbook" "$work/order.print"
-  expect "--print $e: twenty-four steps" test "$(grep -c . "$work/order.runbook")" = 24
-  sed -n '/^### step 24:/q;p' "$out" >"$work/print-env.out"
-  expect "--print $e: every aws and terraform command of steps 1 to 23 names profile anhnv-$e, every aws command a region" \
+  expect "--print $e: twenty-nine steps" test "$(grep -c . "$work/order.runbook")" = 29
+  sed -n '/^### step 29:/q;p' "$out" >"$work/print-env.out"
+  expect "--print $e: every aws and terraform command of steps 1 to 28 names profile anhnv-$e, every aws command a region" \
     sh -c '[ -z "$(grep -E "^\+ ([^ ]+ )*(aws|terraform) " "$1" | grep -vE "^\+ ([^ ]+ )?AWS_PROFILE=anhnv-$2 (aws .*--region (ap-southeast-1|us-east-1)|terraform )")" ]' _ "$work/print-env.out" "$e"
-  expect "--print $e: step 24 is sweep.sh mgmt, with profile anhnv-sso alone" \
-    sh -c 'sed -n "/^### step 24:/,\$p" "$1" >"$1.20" && grep -q "^### step 24: aws/scripts/sweep.sh mgmt$" "$1.20" &&
+  expect "--print $e: step 29 is sweep.sh mgmt, with profile anhnv-sso alone" \
+    sh -c 'sed -n "/^### step 29:/,\$p" "$1" >"$1.20" && grep -q "^### step 29: aws/scripts/sweep.sh mgmt$" "$1.20" &&
       [ -z "$(grep -E "^\+ .* aws " "$1.20" | grep -vE "^\+ AWS_PROFILE=anhnv-sso aws .*--region (ap-southeast-1|us-east-1)")" ]' _ "$out"
   expect "--print $e: init of both roots with the account's backend, each its own key, -reconfigure" \
     sh -c 'grep -q "aws/envs/$2 init -input=false -reconfigure -backend-config=../../backend-$2.hcl -backend-config=key=aws/$2/terraform.tfstate$" "$1" &&
       grep -q "aws/gitops/$2 init -input=false -reconfigure -backend-config=../../backend-$2.hcl -backend-config=key=aws/gitops/$2/terraform.tfstate$" "$1"' _ "$out" "$e"
+  expect "--print $e: account init, plan --open, apply right after check-dns.sh; plan --close, apply between env destroy and sweep.sh $e" \
+    sh -c 'printf "%s\n" "check-dns.sh $2" "tf.sh $2 account init" "tf.sh $2 account plan --open" "tf.sh $2 account apply" "tf.sh $2 env init" >"$1.want1" &&
+      printf "%s\n" "tf.sh $2 env destroy" "tf.sh $2 account plan --close" "tf.sh $2 account apply" "sweep.sh $2" >"$1.want2" &&
+      grep -A4 -x "check-dns.sh $2" "$1" | diff "$1.want1" - >/dev/null && grep -A3 -x "tf.sh $2 env destroy" "$1" | diff "$1.want2" - >/dev/null' _ "$work/order.print" "$e"
   expect "--print $e: root env applied, then the secrets, then root gitops" \
     sh -c 'b() { a=$(grep -nE -- "$2" "$1" | head -n 1 | cut -d: -f1); c=$(grep -nE -- "$3" "$1" | head -n 1 | cut -d: -f1); [ -n "$a" ] && [ -n "$c" ] && [ "$a" -lt "$c" ]; }
       b "$1" "aws/envs/$2 apply -input=false $2.tfplan" "make .* eks-secrets CONTEXT=svp-$2" &&
@@ -1200,6 +1217,19 @@ expect "--print stg: the tunnel on 6444 checked before the first kubectl to the 
 expect "--print stg: no teardown file" \
   sh -c '! grep -E "^\+ " "$1" | grep -q "teardown" && grep -q "aws/envs/stg plan -destroy -input=false -var-file=stg.tfvars -out=stg.destroy.tfplan$" "$1"' _ "$work/print-stg.out"
 expect "--print stg: an eks-rl-reset before each of the four k6 levels" test "$(grep -c 'make .* eks-rl-reset CONTEXT=svp-stg' "$work/print-stg.out")" = 4
+expect "--print stg: aws/accounts/stg planned with session_open=true and applied before the plan of root env" \
+  sh -c 'b() { a=$(grep -nE -- "$2" "$1" | head -n 1 | cut -d: -f1); c=$(grep -nE -- "$3" "$1" | head -n 1 | cut -d: -f1); [ -n "$a" ] && [ -n "$c" ] && [ "$a" -lt "$c" ]; }
+    grep -q "^+ AWS_PROFILE=anhnv-stg terraform -chdir=.*/aws/accounts/stg init -input=false -reconfigure -backend-config=../../backend-stg.hcl -backend-config=key=aws/accounts/stg/terraform.tfstate$" "$1" &&
+    b "$1" "aws/accounts/stg plan -input=false -var session_open=true -out=stg.account-open.tfplan$" "aws/accounts/stg apply -input=false stg.account-open.tfplan$" &&
+    b "$1" "aws/accounts/stg apply -input=false stg.account-open.tfplan$" "aws/envs/stg plan -input=false"' _ "$work/print-stg.out"
+expect "--print stg: aws/accounts/stg planned with session_open=false after the destroy of root env, before sweep.sh stg" \
+  sh -c 'b() { a=$(grep -nE -- "$2" "$1" | tail -n 1 | cut -d: -f1); c=$(grep -nE -- "$3" "$1" | head -n 1 | cut -d: -f1); [ -n "$a" ] && [ -n "$c" ] && [ "$a" -lt "$c" ]; }
+    b "$1" "aws/envs/stg apply -input=false stg.destroy.tfplan$" "aws/accounts/stg plan -input=false -var session_open=false -out=stg.account-close.tfplan$" &&
+    b "$1" "aws/accounts/stg apply -input=false stg.account-close.tfplan$" "^### step [0-9]*: aws/scripts/sweep.sh stg$" &&
+    ! grep -q "aws/accounts/stg .*-var-file" "$1"' _ "$work/print-stg.out"
+expect "--print prd: the account steps say prd has no session feature and run nothing in aws/accounts/prd" \
+  sh -c '[ "$(grep -c "^  (ok no session feature of prd in aws/paid-features.json: nothing to run)$" "$1")" = 5 ] &&
+    ! grep -qE "terraform -chdir=[^ ]*/aws/accounts/prd (init|plan|apply) " "$1"' _ "$work/print-prd.out"
 
 # --- check-account.sh -------------------------------------------------------------------------------------------
 for e in mgmt stg prd; do
@@ -1282,6 +1312,8 @@ expect "tf.sh refuses mgmt" sh -c '! bash "$1/tf.sh" mgmt env init >/dev/null 2>
 
 # --- tf.sh: plan, show, apply ------------------------------------------------------------------------------------
 new_session
+# The paid feature of stg at session (managed_grafana of the sample) is open: its own tests are in the section below.
+add_mark account-open-applied
 envs=$infra_root/aws/envs
 expect "tf.sh apply refuses without a plan file" sh -c '! bash "$1/tf.sh" stg env apply >/dev/null 2>&1' _ "$here"
 expect "tf.sh show refuses without a plan file" sh -c '! bash "$1/tf.sh" stg env show >/dev/null 2>&1' _ "$here"
@@ -1342,6 +1374,147 @@ expect "tf.sh prd gitops plan refuses while the tunnel is closed, before any ter
 expect "tf.sh prd gitops init needs no tunnel" sh -c 'FAKE_TUNNEL=closed bash "$1/tf.sh" prd gitops init >/dev/null 2>&1' _ "$here"
 rm -f "$infra_root"/aws/*/*/*.tfplan
 
+# --- lib.sh: paid features --------------------------------------------------------------------------------------
+# flag FILE ACCOUNT FLAG / sessions FILE ENV: paid_feature and session_features of lib.sh, on FILE instead of the
+# sample in the tree of the test when FILE is not empty.
+flag() { bash -c '. "$1/lib.sh"; [ -z "$2" ] || paid_features_file=$2; paid_feature "$3" "$4"' _ "$here" "$@"; }
+sessions() { bash -c '. "$1/lib.sh"; [ -z "$2" ] || paid_features_file=$2; session_features "$3"' _ "$here" "$@"; }
+expect "paid_feature: a key absent from the file is always (prd, log-archive)" \
+  sh -c '[ "$1" = always ] && [ "$2" = always ]' _ "$(flag '' prd managed_grafana)" "$(flag '' log-archive security_hub)"
+expect "paid_feature: the values of stg in the sample" \
+  sh -c '[ "$1 $2 $3 $4" = "session off off off" ]' _ "$(flag '' stg managed_grafana)" "$(flag '' stg inspector_ecr)" \
+  "$(flag '' stg security_hub)" "$(flag '' stg config_recording)"
+printf '{"stg": {"managed_grafana": "off", "security_hub": "always"}}\n' >"$work/flags.json"
+bad_value() {
+  local out
+  ! out=$(flag "$work/flags.json" stg managed_grafana 2>"$work/out") && [ -z "$out" ] &&
+    grep -q "^FAIL  stg.managed_grafana of $work/flags.json is .off., not one of always,session$" "$work/out"
+}
+expect "paid_feature fails on a value outside the flag's set, naming the file and the values" bad_value
+expect "paid_feature: a valid value beside a bad one in the same account" test "$(flag "$work/flags.json" stg security_hub)" = always
+unknown_flag() {
+  ! flag '' stg nat_gateway >/dev/null 2>"$work/out" &&
+    grep -q "^FAIL  paid feature .nat_gateway. is not one of managed_grafana inspector_ecr security_hub config_recording$" "$work/out"
+}
+expect "paid_feature fails on a flag it does not know" unknown_flag
+expect "session_features stg: managed_grafana, from the sample" test "$(sessions '' stg)" = managed_grafana
+no_sessions() {
+  local out
+  out=$(sessions '' prd) && [ -z "$out" ]
+}
+expect "session_features prd: none" no_sessions
+bad_sessions() { ! sessions "$work/flags.json" stg >/dev/null 2>&1; }
+expect "session_features fails on a bad value of the env" bad_sessions
+# The real file: valid, whatever its values. Keys are the accounts and flags the validation of modules/paid-features
+# allows; every value is in the set of its flag (paid_feature fails otherwise).
+real_flags=$src/../paid-features.json
+real_flags_valid() {
+  local a f
+  jq -e 'type == "object" and all(to_entries[]; (.key | IN("mgmt", "log-archive", "security", "backup", "stg", "prd")) and
+    (.value | type == "object" and all(keys[]; IN("managed_grafana", "inspector_ecr", "security_hub", "config_recording"))))' \
+    "$real_flags" >/dev/null || return 1
+  for a in mgmt log-archive security backup stg prd; do
+    for f in managed_grafana inspector_ecr security_hub config_recording; do
+      flag "$real_flags" "$a" "$f" >/dev/null 2>&1 || return 1
+    done
+  done
+}
+expect "aws/paid-features.json: only known accounts and flags, every value in the set of its flag" real_flags_valid
+
+# --- tf.sh: root account (the session's paid features) -----------------------------------------------------------
+accounts=$infra_root/aws/accounts
+new_session
+expect "tf.sh stg account init: aws/accounts/stg with backend-stg.hcl, key aws/accounts/stg/terraform.tfstate, -reconfigure" \
+  sh -c 'bash "$1/tf.sh" stg account init >/dev/null 2>&1 &&
+    grep -q "^terraform -chdir=.*/aws/accounts/stg init -input=false -reconfigure -backend-config=../../backend-stg.hcl -backend-config=key=aws/accounts/stg/terraform.tfstate$" "$2"' _ "$here" "$log"
+expect "tf.sh stg account apply refuses without a plan file, before any terraform apply" \
+  sh -c '! bash "$1/tf.sh" stg account apply >"$2" 2>&1 && grep -q "account plan --open or --close and read it first" "$2" && ! grep -q "^terraform .* apply" "$3"' _ "$here" "$work/out" "$log"
+clear_log
+expect "tf.sh stg env plan refuses before account-open-applied, before any terraform plan, and says how to open" \
+  sh -c '! bash "$1/tf.sh" stg env plan >"$2" 2>&1 &&
+    grep -q "the session features of stg (managed_grafana) are not open (no account mark last in .*): tf.sh stg account plan --open, read it, tf.sh stg account apply" "$2" &&
+    ! grep -q "^terraform .* plan" "$3"' _ "$here" "$work/out" "$log"
+clear_log
+expect "tf.sh stg account plan --open: -var session_open=true alone, into stg.account-open.tfplan" \
+  sh -c 'bash "$1/tf.sh" stg account plan --open >"$2" 2>&1 &&
+    [ "$(grep "^terraform .* plan " "$3")" = "terraform -chdir=$4/stg plan -input=false -var session_open=true -out=stg.account-open.tfplan" ] &&
+    grep -q "^Plan: 1 to add" "$5/stg-account-open-plan.txt" && grep -qF "read $5/stg-account-open-plan.txt, then tf.sh stg account apply" "$2"' \
+  _ "$here" "$work/out" "$log" "$accounts" "$SVP_SESSION_DIR"
+expect "tf.sh stg account plan: profile anhnv-stg, TF_VAR_account_id of stg, TF_VAR_backup_account_id SVP_AWS_BACKUP_ACCOUNT_ID" \
+  sh -c '[ "$(sort -u "$1.profiles")" = anhnv-stg ] && grep -q "^account=111111111111 " "$1.tfenv" &&
+    [ "$(sed -n "s/^backup_account=//p" "$1.tfenv" | sort -u)" = 444444444444 ]' _ "$log"
+clear_log
+expect "tf.sh stg account apply: the open plan applied and removed, account-open-applied marked" \
+  sh -c 'bash "$1/tf.sh" stg account apply >/dev/null 2>&1 && grep -q "^terraform -chdir=.*/aws/accounts/stg apply -input=false stg.account-open.tfplan$" "$2" &&
+    [ ! -e "$3/stg/stg.account-open.tfplan" ]' _ "$here" "$log" "$accounts"
+expect "tf.sh stg account apply marked account-open-applied" has_mark account-open-applied
+clear_log
+expect "tf.sh stg env plan runs once account-open-applied" \
+  sh -c 'bash "$1/tf.sh" stg env plan >/dev/null 2>&1 && grep -q "^terraform -chdir=.*/aws/envs/stg plan -input=false -var-file=stg.tfvars -out=stg.tfplan$" "$2"' _ "$here" "$log"
+expect "tf.sh stg env apply runs" bash "$here/tf.sh" stg env apply >/dev/null 2>&1
+clear_log
+expect "tf.sh stg account plan --close refuses while root env stands in the session, before any terraform plan" \
+  sh -c '! bash "$1/tf.sh" stg account plan --close >"$2" 2>&1 && grep -q "root env of stg is not destroyed in this session (env-apply-start last" "$2" &&
+    ! grep -q "^terraform .* plan" "$3"' _ "$here" "$work/out" "$log"
+add_mark env-destroy-start
+expect "tf.sh stg account plan --close refuses after a destroy that did not end" \
+  sh -c '! bash "$1/tf.sh" stg account plan --close >"$2" 2>&1 && grep -q "(env-destroy-start last" "$2"' _ "$here" "$work/out"
+add_mark env-destroy-end
+clear_log
+expect "tf.sh stg account plan --close runs once root env is destroyed: -var session_open=false into stg.account-close.tfplan" \
+  sh -c 'bash "$1/tf.sh" stg account plan --close >/dev/null 2>&1 &&
+    [ "$(grep "^terraform .* plan " "$2")" = "terraform -chdir=$3/stg plan -input=false -var session_open=false -out=stg.account-close.tfplan" ]' _ "$here" "$log" "$accounts"
+expect "tf.sh stg account apply: the close plan applied and removed, account-close-applied marked" \
+  sh -c 'bash "$1/tf.sh" stg account apply >/dev/null 2>&1 && grep -q "^terraform -chdir=.*/aws/accounts/stg apply -input=false stg.account-close.tfplan$" "$2" &&
+    [ ! -e "$3/stg/stg.account-close.tfplan" ]' _ "$here" "$log" "$accounts"
+expect "tf.sh stg account apply marked account-close-applied" has_mark account-close-applied
+expect "tf.sh stg env plan refuses again once the features are closed" \
+  sh -c '! bash "$1/tf.sh" stg env plan >"$2" 2>&1 && grep -q "are not open (account-close-applied last" "$2"' _ "$here" "$work/out"
+rm -f "$envs/stg/stg.tfplan"
+new_session
+expect "tf.sh stg account plan --close runs in a session that never applied root env" \
+  bash "$here/tf.sh" stg account plan --close >/dev/null 2>&1
+expect "tf.sh stg account plan --open replaces a close plan: one plan file left, the open one" \
+  sh -c 'bash "$1/tf.sh" stg account plan --open >/dev/null 2>&1 && [ -e "$2/stg/stg.account-open.tfplan" ] && [ ! -e "$2/stg/stg.account-close.tfplan" ]' _ "$here" "$accounts"
+rm -f "$accounts"/stg/*.tfplan
+clear_log
+expect "tf.sh stg account plan refuses without SVP_AWS_BACKUP_ACCOUNT_ID, before any aws or terraform" \
+  sh -c '! env -u SVP_AWS_BACKUP_ACCOUNT_ID bash "$1/tf.sh" stg account plan --open >"$2" 2>&1 &&
+    grep -q "set SVP_AWS_BACKUP_ACCOUNT_ID to the 12 digits of the svp-backup account" "$2" && [ ! -s "$3" ]' _ "$here" "$work/out" "$log"
+expect "tf.sh stg account plan needs no SVP_AWS_LOG_ACCOUNT_ID" \
+  sh -c 'env -u SVP_AWS_LOG_ACCOUNT_ID bash "$1/tf.sh" stg account plan --open >/dev/null 2>&1' _ "$here"
+rm -f "$accounts"/stg/*.tfplan
+mv "$accounts/stg/stg.auto.tfvars" "$work/tfvars.aside"
+expect "tf.sh stg account plan refuses without aws/accounts/stg/stg.auto.tfvars" \
+  sh -c '! bash "$1/tf.sh" stg account plan --open >"$2" 2>&1 && grep -q "no aws/accounts/stg/stg.auto.tfvars" "$2"' _ "$here" "$work/out"
+mv "$work/tfvars.aside" "$accounts/stg/stg.auto.tfvars"
+for c in show destroy 'plan' 'plan --destroy' 'apply --teardown' 'state-rm x'; do
+  expect "tf.sh stg account refuses $c" sh -c '! bash "$1/tf.sh" stg account $2 >/dev/null 2>&1' _ "$here" "$c"
+done
+# managed_grafana of stg always: nothing to open or close, as for prd.
+set_flags '{"stg": {"managed_grafana": "always"}}'
+new_session
+for c in init 'plan --open' 'plan --close' apply; do
+  clear_log
+  expect "tf.sh stg account $c (managed_grafana always): no session feature, says so, exits 0, calls nothing" \
+    sh -c 'bash "$1/tf.sh" stg account $2 >"$3" 2>&1 && grep -qx "ok    no session feature of stg in aws/paid-features.json: root account has nothing to open or close" "$3" &&
+      [ ! -s "$4" ]' _ "$here" "$c" "$work/out" "$log"
+done
+expect "tf.sh stg env plan (managed_grafana always) needs no account step" \
+  sh -c 'bash "$1/tf.sh" stg env plan >/dev/null 2>&1 && grep -q "^terraform -chdir=.*/aws/envs/stg plan -input=false -var-file=stg.tfvars -out=stg.tfplan$" "$2"' _ "$here" "$log"
+rm -f "$envs/stg/stg.tfplan"
+set_flags "$stg_session"
+new_session
+for c in init 'plan --open' 'plan --close' apply; do
+  clear_log
+  expect "tf.sh prd account $c: no session feature, says so, exits 0, calls nothing" \
+    sh -c 'bash "$1/tf.sh" prd account $2 >"$3" 2>&1 && grep -qx "ok    no session feature of prd in aws/paid-features.json: root account has nothing to open or close" "$3" &&
+      [ ! -s "$4" ]' _ "$here" "$c" "$work/out" "$log"
+done
+expect "tf.sh prd env plan needs no account step" \
+  sh -c 'bash "$1/tf.sh" prd env plan >/dev/null 2>&1 && grep -q "^terraform -chdir=.*/aws/envs/prd plan -input=false -var-file=prd.tfvars -out=prd.tfplan$" "$2"' _ "$here" "$log"
+rm -f "$envs/prd/prd.tfplan"
+
 # --- tf.sh: teardown and destroy order ---------------------------------------------------------------------------
 new_session
 bash "$here/check-account.sh" stg >/dev/null
@@ -1373,7 +1546,8 @@ add_mark backup-drained
 expect "tf.sh stg env plan --destroy runs once root gitops is destroyed and the backups drained" bash "$here/tf.sh" stg env plan --destroy >/dev/null 2>&1
 expect "tf.sh stg env plan --destroy: stg.tfvars alone" grep -q '^terraform -chdir=.*/aws/envs/stg plan -destroy -input=false -var-file=stg.tfvars -out=stg.destroy.tfplan$' "$log"
 clear_log
-expect "tf.sh stg env destroy runs and says to sweep next" sh -c 'bash "$1/tf.sh" stg env destroy >"$2" 2>&1 && grep -q "now aws/scripts/sweep.sh stg" "$2"' _ "$here" "$work/out"
+expect "tf.sh stg env destroy runs and says to close the account features, then sweep" \
+  sh -c 'bash "$1/tf.sh" stg env destroy >"$2" 2>&1 && grep -q "next: tf.sh stg account plan --close, read it, tf.sh stg account apply, then aws/scripts/sweep.sh stg" "$2"' _ "$here" "$work/out"
 expect "tf.sh stg env destroy marks env-destroy-start and env-destroy-end" sh -c 'has() { awk -F "\t" -v e="$2" "\$3 == e { f = 1 } END { exit !f }" "$1"; }; has "$1" env-destroy-start && has "$1" env-destroy-end' _ "$SVP_SESSION_DIR/timeline.tsv"
 
 new_session
@@ -1785,6 +1959,7 @@ expect "stg (no teardown file): cleanup, then plan --destroy runs" \
 rm -f "$envs/stg/stg.destroy.tfplan"
 new_session
 reset_drill
+add_mark account-open-applied
 add_mark gitops-destroy-end
 expect "stg: cleanup, then an apply that fails half-way, then plan --destroy is refused" \
   sh -c 'bash "$1/restore-drill.sh" stg cleanup >/dev/null 2>&1 && bash "$1/tf.sh" stg env plan >/dev/null 2>&1 &&
@@ -1796,6 +1971,7 @@ add_mark gitops-destroy-end
 expect "stg: cleanup, then restore-drill.sh backup failing half-way, then plan --destroy is refused" \
   sh -c 'bash "$1/restore-drill.sh" stg cleanup >/dev/null 2>&1 && ! FAKE_BACKUP=job-failed bash "$1/restore-drill.sh" stg backup >/dev/null 2>&1 &&
     ! bash "$1/tf.sh" stg env plan --destroy >"$2" 2>&1 && grep -q "backups of stg are not drained" "$2"' _ "$here" "$work/out"
+add_mark account-open-applied
 for e in stg prd; do
   clear_log
   expect "tf.sh $e env plan: TF_VAR_backup_account_id is SVP_AWS_BACKUP_ACCOUNT_ID" \
@@ -2265,8 +2441,8 @@ for e in stg prd mgmt; do
   expect "sweep.sh $e keeps the stacks that live between sessions, aws/baseline's in every account: $k" \
     grep -q "^ok    nothing left in account $e but what it keeps (Stack=$k) and keys pending deletion$" "$work/sweep.out"
   if [ "$s" = baseline ]; then
-    expect "sweep.sh $e prints what aws/accounts/$e keeps as kept: AMP and Grafana workspaces, cache rules, ECR repositories, OIDC provider, roles of CI" \
-      sh -c 'grep -q "^kept  AMP workspace ws-0fake svp-$2 (Stack=baseline)$" "$1" && grep -q "^kept  Grafana workspace g-0fake svp-$2 (Stack=baseline)$" "$1" &&
+    expect "sweep.sh $e prints what aws/accounts/$e keeps as kept: AMP workspace, cache rules, ECR repositories, OIDC provider, roles of CI" \
+      sh -c 'grep -q "^kept  AMP workspace ws-0fake svp-$2 (Stack=baseline)$" "$1" &&
         [ "$(grep -c "^kept  ECR pull-through cache rule " "$1")" = 5 ] && grep -q "^kept  ECR pull-through cache rule k8s (upstream.example)$" "$1" &&
         grep -q "^kept  ECR repository svp-backend/gateway (Stack=baseline)$" "$1" &&
         grep -q "^kept  ECR repository docker-hub/library/alpine (made by the pull-through cache)$" "$1" &&
@@ -2317,6 +2493,29 @@ for e in stg prd mgmt; do
 done
 expect "sweep.sh mgmt: no hosted zone, no call to Route 53" \
   sh -c '! grep -q "hosted zone" "$1" && ! grep -q "^aws route53 " "$2"' _ "$work/sweep.out" "$log"
+expect "sweep.sh prd (managed_grafana always) keeps the Grafana workspace svp-prd and its parameter" \
+  sh -c 'bash "$1/sweep.sh" prd >"$2" 2>&1 && grep -q "^kept  Grafana workspace g-0fake svp-prd (Stack=baseline)$" "$2" &&
+    grep -q "^kept  SSM parameter /svp/prd/grafana-workspace-id (managed_grafana is always)$" "$2" &&
+    grep -q "^ok    Managed Grafana workspaces: none$" "$2" && grep -q "^ok    SSM parameters of the Grafana workspace: none$" "$2"' _ "$here" "$work/sweep.out"
+expect "sweep.sh stg (managed_grafana session) passes with no Grafana workspace or parameter left" \
+  sh -c 'bash "$1/sweep.sh" stg >"$2" 2>&1 && grep -q "^ok    Managed Grafana workspaces: none$" "$2" &&
+    grep -q "^ok    SSM parameters of the Grafana workspace: none$" "$2" && ! grep -q "Grafana workspace g-0fake\|grafana-workspace-id" "$2"' _ "$here" "$work/sweep.out"
+clear_log
+expect "sweep.sh stg (managed_grafana session) fails on the workspace svp-stg and its parameter left by a session, with their delete commands" \
+  sh -c '! FAKE_LEFTOVER=grafana bash "$1/sweep.sh" stg >"$2" 2>&1 && grep -q "^FAIL  Managed Grafana workspaces: 1 left$" "$2" &&
+    grep -q "^        g-0fake svp-stg (managed_grafana is session: made for a session alone)$" "$2" &&
+    grep -q "delete: AWS_PROFILE=anhnv-stg aws grafana delete-workspace --workspace-id g-0fake --region ap-southeast-1$" "$2" &&
+    grep -q "^FAIL  SSM parameters of the Grafana workspace: 1 left$" "$2" && grep -q "^        /svp/stg/grafana-workspace-id$" "$2" &&
+    grep -q "delete: AWS_PROFILE=anhnv-stg aws ssm delete-parameter --name /svp/stg/grafana-workspace-id --region ap-southeast-1$" "$2" &&
+    ! grep -q "^kept  .*Grafana\|^kept  SSM" "$2"' _ "$here" "$work/sweep.out"
+expect "sweep.sh stg reads the parameter of its own workspace alone" \
+  grep -qF 'aws ssm describe-parameters --parameter-filters Key=Name,Values=/svp/stg/grafana-workspace-id --output json --region ap-southeast-1' "$log"
+set_flags '{"stg": {"managed_grafana": "always"}}'
+expect "sweep.sh stg (managed_grafana always) keeps the Grafana workspace svp-stg and its parameter" \
+  sh -c 'FAKE_LEFTOVER=grafana bash "$1/sweep.sh" stg >"$2" 2>&1 && grep -q "^kept  Grafana workspace g-0fake svp-stg (Stack=baseline)$" "$2" &&
+    grep -q "^kept  SSM parameter /svp/stg/grafana-workspace-id (managed_grafana is always)$" "$2" &&
+    grep -q "^ok    Managed Grafana workspaces: none$" "$2" && grep -q "^ok    SSM parameters of the Grafana workspace: none$" "$2"' _ "$here" "$work/sweep.out"
+set_flags "$stg_session"
 clear_log
 expect "sweep.sh prd keeps the NS records delegating stg.aws.svp.example and the CAA at the apex, fails on the records of root env and a CAA below" \
   sh -c '! FAKE_LEFTOVER=record bash "$1/sweep.sh" prd >"$2" 2>&1 && grep -q "^FAIL  records of aws.svp.example: 4 left$" "$2" &&

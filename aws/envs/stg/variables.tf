@@ -62,16 +62,6 @@ variable "domain" {
   }
 }
 
-variable "grafana_workspace_id" {
-  description = "Id of the Grafana workspace svp-<env> of the env's account (g-<id>), made by aws/accounts/<env>: its URL is grafanaUrl of the cluster values. Personal value, in <env>.auto.tfvars."
-  type        = string
-
-  validation {
-    condition     = can(regex("^g-[0-9a-z]+$", var.grafana_workspace_id))
-    error_message = "grafana_workspace_id must be the id of a Grafana workspace, g-<id>."
-  }
-}
-
 variable "alarm_email" {
   description = "Email subscribed to the SNS topic of the CloudWatch alarms of RDS, MSK and ElastiCache and of the alerts of the Prometheus workspace; nothing is delivered until the confirmation link SNS sends is opened."
   type        = string

@@ -1,11 +1,14 @@
-# AWS Config records every supported resource type continuously in both regions. Design notes:
-# aws/modules/security-baseline/README.md.
+# AWS Config records every supported resource type continuously in both regions, unless config_recording is off.
+# Design notes: aws/modules/security-baseline/README.md.
 
 locals {
   # Built from its parts rather than read from the role, so the recorders are known at plan time.
   config_role_arn = "arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:role/aws-service-role/config.amazonaws.com/AWSServiceRoleForConfig"
+
+  config_regions = var.config_recording ? local.regions : toset([])
 }
 
+# Kept when config_recording is off, so turning recording back on only adds the per-region resources.
 resource "aws_iam_service_linked_role" "config" {
   aws_service_name = "config.amazonaws.com"
 }
@@ -13,7 +16,7 @@ resource "aws_iam_service_linked_role" "config" {
 # AWS allows one recorder per region and account. Put with an existing name updates it, so a second module call for
 # the same account would silently overwrite this one: call the module once per account.
 resource "aws_config_configuration_recorder" "this" {
-  for_each = local.regions
+  for_each = local.config_regions
 
   region   = each.key
   name     = "default"
@@ -33,7 +36,7 @@ resource "aws_config_configuration_recorder" "this" {
 }
 
 resource "aws_config_delivery_channel" "this" {
-  for_each = local.regions
+  for_each = local.config_regions
 
   region         = each.key
   name           = "default"
@@ -49,7 +52,7 @@ resource "aws_config_delivery_channel" "this" {
 
 # A recorder can only start once its region has a delivery channel.
 resource "aws_config_configuration_recorder_status" "this" {
-  for_each = local.regions
+  for_each = local.config_regions
 
   region     = each.key
   name       = aws_config_configuration_recorder.this[each.key].name

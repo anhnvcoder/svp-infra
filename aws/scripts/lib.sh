@@ -235,3 +235,34 @@ env_zone() {
   [[ $zone =~ ^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$ ]] ||
     fail "zone_name '$zone' of $f is not a DNS name such as aws.svp.example"
 }
+
+# The paid features of each account, the file the Terraform roots read through modules/paid-features; each flag with
+# the values its validation allows, the first being the one of an absent key.
+paid_features_file=$infra_root/aws/paid-features.json
+paid_flags='managed_grafana always,session
+inspector_ecr always,off
+security_hub always,off
+config_recording always,off'
+
+# paid_feature ACCOUNT FLAG: the value of FLAG for ACCOUNT (a key of the file: mgmt, log-archive, ..., stg, prd).
+paid_feature() {
+  local values value
+  values=$(awk -v f="$2" '$1 == f { print $2 }' <<<"$paid_flags")
+  [ -n "$values" ] || fail "paid feature '$2' is not one of $(awk '{ print $1 }' <<<"$paid_flags" | oneline)"
+  value=$(jq -r --arg a "$1" --arg f "$2" '.[$a][$f] // empty' "$paid_features_file") ||
+    fail "read $paid_features_file"
+  value=${value:-${values%%,*}}
+  case ",$values," in
+    *",$value,"*) printf '%s\n' "$value" ;;
+    *) fail "$1.$2 of $paid_features_file is '$value', not one of $values" ;;
+  esac
+}
+
+# session_features ENV: the flags of ENV whose value is session, one per line; nothing when it has none.
+session_features() {
+  local flag value
+  while read -r flag _; do
+    value=$(paid_feature "$1" "$flag") || return 1
+    [ "$value" != session ] || printf '%s\n' "$flag"
+  done <<<"$paid_flags"
+}

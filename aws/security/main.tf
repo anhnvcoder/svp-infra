@@ -14,6 +14,27 @@ data "aws_organizations_organization" "this" {
   provider = aws.management
 }
 
+module "paid_features" {
+  source = "../modules/paid-features"
+
+  features = jsondecode(file("${path.root}/../paid-features.json"))
+}
+
+locals {
+  # Account key of aws/paid-features.json to account id: the member svp-<key>, and mgmt, which is not a member.
+  # A closed account (SUSPENDED) has no key, so a flag set for it switches nothing.
+  account_ids = merge(
+    {
+      for account in data.aws_organizations_organization.this.non_master_accounts : trimprefix(account.name, "svp-") => account.id
+      if account.state == "ACTIVE" && startswith(account.name, "svp-")
+    },
+    { mgmt = var.account_id },
+  )
+
+  inspector_off_ids    = [for k in module.paid_features.off_accounts.inspector_ecr : local.account_ids[k] if contains(keys(local.account_ids), k)]
+  security_hub_off_ids = sort([for k in module.paid_features.off_accounts.security_hub : local.account_ids[k] if contains(keys(local.account_ids), k)])
+}
+
 # The key/<id> form: GuardDuty stores the key ARN it is given, so an alias ARN would never match what the API returns.
 data "aws_kms_alias" "log_archive" {
   provider = aws.log_archive
