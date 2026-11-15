@@ -43,7 +43,8 @@ API = "https://api.github.com"
 REPOSITORIES = ["svp-backend", "svp-frontend", "svp-gitops", "svp-infra", "svp-labs", ".github"]
 # Images the stg and prd overlays of svp-gitops pull anonymously: their GHCR packages must be public.
 PUBLIC_PACKAGES = [f"svp-backend/{s}" for s in
-                   ("gateway", "user-service", "video-service", "engagement-service", "feed-service", "media-worker")] + ["svp-frontend/web"]
+                   ("gateway", "user-service", "video-service", "engagement-service", "feed-service", "media-worker",
+                    "dlq-replay")] + ["svp-frontend/web"]
 CODEQL_DEFAULT_SETUP = ["svp-backend", "svp-frontend"]
 MANIFEST_KEYS = {"name", "url", "hook_attributes", "redirect_url", "callback_urls", "setup_url", "description", "public",
                  "default_events", "default_permissions", "request_oauth_on_install", "setup_on_update"}

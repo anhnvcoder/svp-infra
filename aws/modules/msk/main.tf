@@ -12,6 +12,7 @@ locals {
     "svp-engagement-service",
     "svp-feed-service",
     "svp-media-worker",
+    "svp-dlq-replay",
     "svp-keda",
     "svp-otelcol",
   ])

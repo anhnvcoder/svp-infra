@@ -18,6 +18,7 @@ locals {
     "svp-backend/engagement-service",
     "svp-backend/feed-service",
     "svp-backend/media-worker",
+    "svp-backend/dlq-replay",
     "svp-frontend/web",
   ]
   release_groups        = distinct([for r in local.release_repositories : split("/", r)[0]])
