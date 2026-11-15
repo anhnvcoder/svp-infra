@@ -175,10 +175,13 @@ module "media" {
   flat_rate_free               = var.media_flat_rate_free
   web_acl_arn                  = module.waf["media"].web_acl_arn
   log_delivery_destination_arn = local.cloudfront_log_destination_arn
+
+  signing_public_keys = var.media_signing_public_keys
 }
 
-# MediaConvert transcoding of the env: its jobs read uploads/ and write media/ of the buckets above, and their final
-# states reach media-worker through an SQS queue whose dead-letter alarm pages on the alarms topic.
+# MediaConvert transcoding of the env: its jobs read uploads/ and write media/ (premium/ for a premium video) of the
+# buckets above, and their final states reach media-worker through an SQS queue whose dead-letter alarm pages on the
+# alarms topic.
 module "transcode" {
   source = "../../modules/transcode"
 

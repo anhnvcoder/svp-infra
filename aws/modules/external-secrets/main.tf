@@ -7,13 +7,13 @@ data "aws_caller_identity" "current" {}
 # Design notes: aws/modules/external-secrets/README.md.
 locals {
   # The remoteRef keys of the ExternalSecrets chart svp-cluster of the backend repository renders on eks: store aws,
-  # managed object store, Kafka and Valkey outside the cluster, Argo CD notifications and Grafana Operator on. Entries
-  # of in-cluster ones (s3-root, s3-users, pg-backup-s3, local-ca, local-tls) are not rendered then. A Secret added to
-  # files/external-secrets.yaml of the chart needs its entry here too, or its ExternalSecret is denied.
+  # managed object store, Kafka and Valkey outside the cluster, Argo CD notifications, Grafana Operator and media
+  # signing on. Entries of in-cluster ones (s3-root, s3-users, pg-backup-s3, local-ca, local-tls) are not rendered then.
+  # A Secret added to files/external-secrets.yaml of the chart needs an entry here too, or its ExternalSecret is denied.
   namespace_entries = {
     argocd   = ["argocd-notifications"]
     keda     = ["kafka-users"]
-    svp      = ["glitchtip-runtime", "jwt-signing", "jwt-verify", "kafka-users", "pg-roles", "valkey-users", "web"]
+    svp      = ["glitchtip-runtime", "jwt-signing", "jwt-verify", "kafka-users", "media-signing", "pg-roles", "valkey-users", "web"]
     svp-data = ["kafka-admin", "pg-roles", "pg-superuser", "valkey-users"]
     svp-obs  = ["glitchtip-runtime", "grafana-operator", "kafka-users", "obs", "pg-roles"]
   }

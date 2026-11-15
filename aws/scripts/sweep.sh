@@ -50,6 +50,8 @@ q_global() {
 }
 KEPT=$(printf '%s' "$kept_stacks" | jq -Rc 'split(",")')
 export KEPT
+SVP_MEDIA_KEYS=svp-$env_name-media
+export SVP_MEDIA_KEYS
 
 # global FUNCTION ARGS...: FUNCTION with $region set to us-east-1, so that its aws calls, and the delete commands
 # found prints for it, name that region.
@@ -468,6 +470,17 @@ distributions() {
     | "\(.Id) \(.Status) enabled=\(.Enabled) \(.DomainName) \(.Comment // "")"' cloudfront list-distributions
 }
 vpc_origins() { q '.VpcOriginList.Items[]? | select(.Name | startswith("svp-")) | "\(.Id) \(.Name) \(.Status)"' cloudfront list-vpc-origins; }
+# The key group svp-<env>-media of the media distribution and its public keys svp-<env>-media-<slot>-<hash>.
+key_groups() {
+  # shellcheck disable=SC2016 # $ENV is jq's, not the shell's
+  q '.KeyGroupList.Items[]?.KeyGroup | select(.KeyGroupConfig.Name == $ENV.SVP_MEDIA_KEYS)
+    | "\(.Id) key group \(.KeyGroupConfig.Name)"' cloudfront list-key-groups
+}
+public_keys() {
+  # shellcheck disable=SC2016 # $ENV is jq's, not the shell's
+  q '.PublicKeyList.Items[]? | select(.Name | startswith($ENV.SVP_MEDIA_KEYS + "-")) | "\(.Id) public key \(.Name)"' \
+    cloudfront list-public-keys
+}
 cloudfront_policies() {
   q '.OriginAccessControlList.Items[]? | select(.Name | startswith("svp-")) | "\(.Id) origin access control \(.Name)"' \
     cloudfront list-origin-access-controls || return 1
@@ -827,6 +840,10 @@ sweep_kind "CloudFront pricing plan subscriptions" subscriptions \
 sweep_kind "CloudFront distributions" distributions "$runbook (disable, wait, then delete)"
 sweep_kind "CloudFront VPC origins" vpc_origins \
   "$runbook (after the distributions that use it: delete-vpc-origin takes the ETag of get-vpc-origin)"
+sweep_kind "CloudFront key groups" key_groups \
+  "$runbook (after the distributions that trust it: delete-key-group takes the ETag of get-key-group)"
+sweep_kind "CloudFront public keys" public_keys \
+  "$runbook (after the key group: delete-public-key takes the ETag of get-public-key)"
 sweep_kind "CloudFront origin access controls and response headers policies" cloudfront_policies "$runbook"
 sweep_kind "WAF web ACLs of CloudFront" web_acls "$runbook (delete-web-acl takes the lock token of get-web-acl)"
 global sweep_kind "ACM certificates in us-east-1" certificates "aws acm delete-certificate --certificate-arn {}"
