@@ -1,5 +1,6 @@
-# The role MediaConvert assumes to run the jobs of the queue: it reads the uploaded file and writes the HLS output,
-# nothing else. The trust names this account and this queue, so no job of another account or queue can use it.
+# The role MediaConvert assumes to run the jobs of the queue: it reads the uploaded file and writes the HLS output under
+# media/ or, for a premium video, premium/, nothing else. The trust names this account and this queue, so no job of
+# another account or queue can use it.
 data "aws_iam_policy_document" "mediaconvert_trust" {
   statement {
     sid     = "MediaConvertJobsOfQueue"
@@ -27,7 +28,7 @@ data "aws_iam_policy_document" "mediaconvert_trust" {
 
 resource "aws_iam_role" "mediaconvert" {
   name               = local.role_name
-  description        = "MediaConvert: jobs of queue ${local.name} read uploads/ and write media/"
+  description        = "MediaConvert: jobs of queue ${local.name} read uploads/ and write media/, premium/"
   assume_role_policy = data.aws_iam_policy_document.mediaconvert_trust.json
 }
 
@@ -52,7 +53,7 @@ data "aws_iam_policy_document" "mediaconvert" {
     sid       = "WriteOutput"
     effect    = "Allow"
     actions   = ["s3:PutObject"]
-    resources = ["${var.media_bucket_arn}/media/*"]
+    resources = ["${var.media_bucket_arn}/media/*", "${var.media_bucket_arn}/premium/*"]
   }
 }
 

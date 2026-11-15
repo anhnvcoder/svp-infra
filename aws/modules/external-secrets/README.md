@@ -8,8 +8,10 @@ Nguồn Secret của cluster EKS một env trong AWS Secrets Manager và quyền
 
 - Module chỉ tạo vỏ entry (`aws_secretsmanager_secret`), không có `aws_secretsmanager_secret_version`. Giá trị của `kafka-admin`,
   `kafka-users` do module [`msk`](../msk/README.md), của `valkey-users` do module [`elasticache`](../elasticache/README.md) ghi trong cùng
-  apply với mật khẩu chúng đặt cho user, qua đối số write-only (root truyền ARN entry từ output `secret_arns`); giá trị của entry khác do
-  người học ghi bằng script `make eks-secrets` của repo code sau khi apply root env. Không giá trị nào nằm trong plan hay state.
+  apply với mật khẩu chúng đặt cho user, qua đối số write-only (root truyền ARN entry từ output `secret_arns`); giá trị của
+  `media-signing` (khoá ký URL premium của video-service: `MEDIA_SIGNING_KEY_ID`, `MEDIA_SIGNING_KEY`) chỉ do
+  `aws/scripts/media-signing-key.sh <env> activate <ô>` ghi; giá trị của entry khác do người học ghi bằng script `make eks-secrets` của repo
+  code sau khi apply root env. Không giá trị nào nằm trong plan hay state.
 - Mã hoá bằng key AWS quản lý của Secrets Manager: mọi người đọc đều là role của module này, key do khách hàng quản lý không vạch thêm ranh
   giới nào mà thêm key policy và phí hằng tháng.
 - `recovery_window_in_days = 0`: `destroy` xoá entry ngay. Ngoại lệ của lab: env dựng lại mỗi buổi với cùng tên entry, entry còn chờ hết hạn
@@ -19,15 +21,16 @@ Nguồn Secret của cluster EKS một env trong AWS Secrets Manager và quyền
 
 - Map namespace → entry (`local.namespace_entries` ở `main.tf`) là các `remoteRef` key của ExternalSecret mà chart `svp-cluster` của repo
   code render với store `aws`, object store managed (`s3.mode: external`), Kafka và Valkey ngoài cluster
-  (`externalSecrets.localKafkaValkey: false`), Argo CD notifications và Grafana Operator bật. Khi đó chart không render entry của object
-  store trong cluster (`s3-root`, `s3-users`, `pg-backup-s3`) hay của CA local (`local-ca`, `local-tls`), nên map không có chúng. Map chép
-  từ render của `origin/main`, chart giải nén bằng `git archive` vào một thư mục trống:
+  (`externalSecrets.localKafkaValkey: false`), Argo CD notifications, Grafana Operator và khoá ký media (`externalSecrets.mediaSigning`)
+  bật. Khi đó chart không render entry của object store trong cluster (`s3-root`, `s3-users`, `pg-backup-s3`) hay của CA local
+  (`local-ca`, `local-tls`), nên map không có chúng. Map chép từ render của `origin/main`, chart giải nén bằng `git archive` vào một thư
+  mục trống:
 
   ```sh
   helm template svp-cluster deploy/helm/svp-cluster --namespace svp --show-only templates/external-secrets.yaml \
     --set externalSecrets.enabled=true --set externalSecrets.store=aws --set externalSecrets.prefix=svp/stg/ \
     --set s3.mode=external --set externalSecrets.argocdNotifications=true --set externalSecrets.localKafkaValkey=false \
-    --set externalSecrets.grafanaOperator=true \
+    --set externalSecrets.grafanaOperator=true --set externalSecrets.mediaSigning=true \
     --set externalSecrets.aws.region=ap-southeast-1 --set externalSecrets.aws.roles.<namespace>=<arn>   # mỗi namespace
   ```
 
@@ -49,7 +52,8 @@ Nguồn Secret của cluster EKS một env trong AWS Secrets Manager và quyền
 
 `tests/policies.tftest.hcl` (mock provider, chỉ `plan`) chép lại map namespace → entry và kiểm: tên entry, `recovery_window_in_days`, mỗi
 role namespace chỉ `GetSecretValue` đúng entry của mình (không `*`), trust của role namespace chỉ có role controller, trust của role
-controller chỉ Pod Identity với ba session tag, association và quyền assume của controller; một run cho prd và một run mỗi luật validation.
+controller chỉ Pod Identity với ba session tag, association và quyền assume của controller, chỉ role namespace `svp` đọc được
+`svp/<env>/media-signing-??????`; một run cho prd và một run mỗi luật validation.
 Map được chép lại ở file test có chủ đích: đổi ai đọc entry nào thì phải đổi cả hai nơi.
 
 <!-- markdownlint-disable MD033 -->

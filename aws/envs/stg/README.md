@@ -62,6 +62,7 @@ Cỡ, mức bảo vệ, log, mã hoá và gói CloudFront của media nằm ở 
 | --- | --- | --- |
 | `stg.tfvars` | có | cỡ, dự phòng, retention, log, mã hoá và mức bảo vệ của stg; không giá trị cá nhân nào |
 | `stg.auto.tfvars` | **không** (git bỏ qua) | giá trị cá nhân, chép từ `example.auto.tfvars.example` |
+| `media-signing.auto.tfvars.json` | **không** (git bỏ qua) | khoá công khai của key group media, `aws/scripts/media-signing-key.sh stg new <ô>` ghi (mục [Khoá ký media](#khoá-ký-media)) |
 | `../../backend-stg.hcl` | **không** | phần chung của backend trong account stg |
 | `TF_VAR_account_id` | biến môi trường, đặt ngay trong lệnh | account được phép đổi (`allowed_account_ids`) |
 | `TF_VAR_log_archive_account_id` | biến môi trường, đặt ngay trong lệnh | account `svp-log-archive`, chủ bucket flow log, log WAF, log CloudFront |
@@ -122,6 +123,7 @@ Dựng:
 ```sh
 cp example.auto.tfvars.example stg.auto.tfvars          # rồi sửa bốn giá trị
 AWS_PROFILE=anhnv-stg terraform init -reconfigure -backend-config=../../backend-stg.hcl -backend-config=key=aws/stg/terraform.tfstate
+../../scripts/media-signing-key.sh stg new a     # plan reads slot a's public key from media-signing.auto.tfvars.json
 AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
   TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform plan -var-file=stg.tfvars -out=stg.tfplan
 AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
@@ -131,8 +133,10 @@ AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_log_arc
 `-reconfigure` bỏ cấu hình backend cũ trong `.terraform` (kể cả của bucket management trước đây) và không migrate state.
 
 Sau `apply`: xác nhận email của topic `svp-stg-alarms` (link trong thư SNS gửi tới `alarm_email`), rồi mở tunnel và kubeconfig (mục dưới);
-`AWS_PROFILE=anhnv-stg terraform output -raw rds_master_user_secret_arn` cho script buổi. Tiếp theo: ghi giá trị secret
-(`AWS_PROFILE=anhnv-stg make eks-secrets CONTEXT=svp-stg` ở repo code), rồi apply root `aws/gitops/stg` khi tunnel đang mở.
+`AWS_PROFILE=anhnv-stg terraform output -raw rds_master_user_secret_arn` cho script buổi. Tiếp theo: ghi khoá ký của
+ô `a` vào entry `svp/stg/media-signing` (`aws/scripts/media-signing-key.sh stg activate a`, mục [Khoá ký
+media](#khoá-ký-media)), giá trị các secret khác (`AWS_PROFILE=anhnv-stg make eks-secrets CONTEXT=svp-stg` ở repo
+code), rồi apply root `aws/gitops/stg` khi tunnel đang mở.
 
 ### Tới API: tunnel SSM
 
@@ -218,11 +222,29 @@ GuardDuty bật ở mức tổ chức (root `aws/security`). Root này thêm ph�
 
 Module [`transcode`](../../modules/transcode/README.md) dựng phần MediaConvert của env: queue on-demand `svp-stg`, role
 `svp-stg-mediaconvert` mà job chạy với (đọc `uploads/*` của bucket uploads và giải mã bằng key `uploads`, ghi `media/*`
-của bucket media), rule EventBridge `svp-stg-mediaconvert-job-state`, SQS `svp-stg-transcode-events` và dead-letter
-queue `svp-stg-transcode-events-dlq`, alarm `page` `svp-stg-transcode-events-dlq` gửi topic `svp-stg-alarms`. Root
-truyền ARN hai bucket và ARN key `uploads` của module `media`, topic của module `alarms`. Không tài nguyên nào giữ dữ
-liệu cần sống qua buổi, nên tất cả nằm ở root này và bị gỡ cùng `destroy`. Thiết kế:
+của bucket media, `premium/*` với video premium), rule EventBridge `svp-stg-mediaconvert-job-state`, SQS
+`svp-stg-transcode-events` và dead-letter queue `svp-stg-transcode-events-dlq`, alarm `page`
+`svp-stg-transcode-events-dlq` gửi topic `svp-stg-alarms`. Root truyền ARN hai bucket và ARN key `uploads` của module
+`media`, topic của module `alarms`. Không tài nguyên nào giữ dữ liệu cần sống qua buổi, nên tất cả nằm ở root này và bị
+gỡ cùng `destroy`. Thiết kế:
 [ADR-0066](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0066-mediaconvert-transcode.md).
+
+## Khoá ký media
+
+Người xem chỉ đọc được object `premium/*` của bucket media qua distribution media bằng URL đã ký (video-service,
+media-worker đọc thẳng bằng role của mình, mục [Quyền AWS trong cluster](#quyền-aws-trong-cluster)); distribution đòi
+chữ ký ở mọi path ngoài hai tiền tố công khai `media/`, `preview/` và kiểm nó bằng key group `svp-stg-media` của module
+[`media`](../../modules/media/README.md), mỗi ô (`a`, `b`) một CloudFront public key. Root truyền khoá công khai vào module, video-service ký bằng khoá riêng của ô đang dùng, đọc từ
+entry Secrets Manager `svp/stg/media-signing` (module [`external-secrets`](../../modules/external-secrets/README.md),
+chỉ role SecretStore của namespace `svp` đọc được).
+
+| Biến, output | Nội dung |
+| --- | --- |
+| `media_signing_public_keys` | map ô → PEM khoá công khai RSA 2048, một hay hai ô; không mặc định, không ở `stg.tfvars`: Terraform tự đọc `media-signing.auto.tfvars.json` (git bỏ qua) cạnh `main.tf`, file do `aws/scripts/media-signing-key.sh stg new <ô>` ghi trước `plan`; khoá riêng nằm ngoài repo |
+| `media_signing_key_ids` | map ô → ID CloudFront public key (`Key-Pair-Id` của URL ký bằng ô đó); `aws/scripts/media-signing-key.sh stg activate <ô>` đọc nó sau `apply` rồi ghi `MEDIA_SIGNING_KEY_ID`, `MEDIA_SIGNING_KEY` vào entry `svp/stg/media-signing` |
+
+Khoá ID không đi qua `cluster_values`: ExternalSecret `video-service-env` lấy cả ID và khoá riêng từ entry. Thứ tự
+trong buổi, xoay ô và xử lý khi lộ khoá ở runbook [`media-signing-keys.md`](../../../docs/runbooks/media-signing-keys.md).
 
 ## Backup và mã hoá
 
@@ -253,6 +275,7 @@ xoá recovery point đã có bản copy `COMPLETED` (mục "Xoá cuối buổi" 
 | `cluster_values` | map hợp đồng `cluster.*` (ADR-0034 §7), đọc bằng `terraform output -json cluster_values` |
 | `cluster_name`, `cluster_endpoint`, `cluster_certificate_authority_data` | tên cluster, URL API server, CA (base64 PEM) |
 | `rds_master_user_secret_arn` | ARN secret Secrets Manager giữ mật khẩu master của RDS (ARN không phải bí mật) |
+| `media_signing_key_ids` | ô → ID CloudFront public key của key group media (mục [Khoá ký media](#khoá-ký-media)) |
 | `api_tunnel_command` | `AWS_PROFILE=anhnv-stg aws ssm start-session --region ap-southeast-1 --target <bastion> --document-name AWS-StartPortForwardingSessionToRemoteHost --parameters '…'` |
 | `kubeconfig_command` | `aws eks update-kubeconfig … --alias svp-stg && kubectl config set-cluster <ARN cluster> --server=https://127.0.0.1:6444 --tls-server-name=<host endpoint>` |
 
@@ -321,7 +344,8 @@ publisher `aps.amazonaws.com`, giới hạn ở đúng workspace của env (modu
 
 Secret của cluster: module `external-secrets` tạo vỏ entry `svp/stg/<entry>` (giá trị của `kafka-admin`, `kafka-users`,
 `valkey-users` do module `msk`, `elasticache` ghi, mục dưới; `grafana-operator`, token của service account AMG, do
-script buổi ghi mỗi buổi; entry khác người học ghi bằng `make eks-secrets`), role `svp-stg-external-secrets` của
+script buổi ghi mỗi buổi; `media-signing` do `aws/scripts/media-signing-key.sh stg activate <ô>` ghi, mục [Khoá ký
+media](#khoá-ký-media); entry khác người học ghi bằng `make eks-secrets`), role `svp-stg-external-secrets` của
 controller External Secrets (Pod Identity, ServiceAccount `external-secrets/external-secrets`) chỉ được assume năm role
 `svp-stg-external-secrets-<namespace>`, mỗi role chỉ đọc entry mà namespace đó dùng (README của module).
 

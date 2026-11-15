@@ -8,14 +8,20 @@
 # already knows, and that object. s3:PutObject also covers multipart calls and conditional If-None-Match writes; neither
 # service may abort a multipart upload (the lifecycle rules do).
 
-# video-service signs upload forms for uploads/<id>, checks and deletes the uploaded file, and deletes the media of a
-# video it removes (which needs a listing of that video's prefix).
+locals {
+  # Every object of a video lives under one of these (normal, premium, public preview of a premium video).
+  media_prefixes = ["media/", "premium/", "preview/"]
+}
+
+# video-service signs upload forms for uploads/<id>, checks and deletes the uploaded file, deletes the media of a
+# video it removes under each of the three media prefixes (which needs a listing of that video's prefix), and reads
+# the playlists of premium/ that it filters and signs.
 data "aws_iam_policy_document" "video_service" {
   statement {
     sid       = "Uploads"
     effect    = "Allow"
     actions   = ["s3:PutObject", "s3:GetObject", "s3:DeleteObject"]
-    resources = ["${aws_s3_bucket.this["uploads"].arn}/uploads/*"]
+    resources = ["${local.bucket_arns["uploads"]}/uploads/*"]
   }
 
   # S3 makes the data key of an upload with the rights of the form's signer. The service only heads and deletes
@@ -31,19 +37,19 @@ data "aws_iam_policy_document" "video_service" {
     sid       = "ListUploads"
     effect    = "Allow"
     actions   = ["s3:ListBucket"]
-    resources = [aws_s3_bucket.this["uploads"].arn]
+    resources = [local.bucket_arns["uploads"]]
   }
 
   statement {
     sid       = "ListMedia"
     effect    = "Allow"
     actions   = ["s3:ListBucket"]
-    resources = [aws_s3_bucket.this["media"].arn]
+    resources = [local.bucket_arns["media"]]
 
     condition {
       test     = "StringLike"
       variable = "s3:prefix"
-      values   = ["media/*"]
+      values   = [for p in local.media_prefixes : "${p}*"]
     }
   }
 
@@ -51,14 +57,21 @@ data "aws_iam_policy_document" "video_service" {
     sid       = "DeleteMedia"
     effect    = "Allow"
     actions   = ["s3:DeleteObject"]
-    resources = ["${aws_s3_bucket.this["media"].arn}/media/*"]
+    resources = [for p in local.media_prefixes : "${local.bucket_arns["media"]}/${p}*"]
+  }
+
+  statement {
+    sid       = "ReadPremium"
+    effect    = "Allow"
+    actions   = ["s3:GetObject"]
+    resources = ["${local.bucket_arns["media"]}/premium/*"]
   }
 }
 
 # On AWS media-worker runs as the MediaConvert bridge. MediaConvert's Probe reads the upload with the caller's rights;
-# the bridge copies the job's output onto itself, writes the master and the job records under transcode-jobs/, and
-# lists both prefixes to learn whether a key exists. Its MediaConvert, SQS and PassRole rights come from elsewhere.
-# Design notes: aws/modules/media/README.md.
+# the bridge copies the job's output onto itself and a premium video's preview to preview/, writes the masters and the
+# job records under transcode-jobs/, and lists its prefixes to learn whether a key exists. Its MediaConvert, SQS and
+# PassRole rights come from elsewhere. Design notes: aws/modules/media/README.md.
 data "aws_iam_policy_document" "media_worker" {
   statement {
     sid       = "ReadUploads"
@@ -75,13 +88,10 @@ data "aws_iam_policy_document" "media_worker" {
   }
 
   statement {
-    sid     = "WriteMedia"
-    effect  = "Allow"
-    actions = ["s3:PutObject", "s3:GetObject"]
-    resources = [
-      "${local.bucket_arns["media"]}/media/*",
-      "${local.bucket_arns["media"]}/transcode-jobs/*",
-    ]
+    sid       = "WriteMedia"
+    effect    = "Allow"
+    actions   = ["s3:PutObject", "s3:GetObject"]
+    resources = [for p in concat(local.media_prefixes, ["transcode-jobs/"]) : "${local.bucket_arns["media"]}/${p}*"]
   }
 
   statement {
@@ -93,7 +103,7 @@ data "aws_iam_policy_document" "media_worker" {
     condition {
       test     = "StringLike"
       variable = "s3:prefix"
-      values   = ["media/*", "transcode-jobs/*"]
+      values   = [for p in concat(local.media_prefixes, ["transcode-jobs/"]) : "${p}*"]
     }
   }
 }

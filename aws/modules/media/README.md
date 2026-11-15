@@ -1,14 +1,15 @@
 # Module `media`
 
 Hai bucket S3 `uploads`, `media`, KMS key mã hoá `uploads` và CloudFront trước `media` ở tên `media.<domain>` (gói flat-rate Free hay
-pay-as-you-go theo `flat_rate_free`), plan GuardDuty Malware Protection for S3 trên `uploads`, cộng hai policy IAM (JSON) cho video-service và
-media-worker.
+pay-as-you-go theo `flat_rate_free`) đòi URL ký bằng key group ở mọi path ngoài `media/`, `preview/`, plan GuardDuty Malware Protection for S3 trên `uploads`, cộng hai
+policy IAM (JSON) cho video-service và media-worker.
 Thiết kế: [ADR-0034](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0034-aws-stage7.md) mục 9 và 11,
 [ADR-0052](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0052-cloudfront-flat-rate-free.md) (gói Free, WAF, CORS của
 CloudFront), [ADR-0061](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0061-edge-cloudfront-waf-acm.md) (§1 gói theo env,
-§2 distribution, §5 cert và TLS, §6 header, §8 log edge),
+§2 distribution, §5 cert và TLS, §6 header, §8 log edge), [ADR-0073](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0073-premium-playback.md) (§7 behavior premium và quyền theo tiền tố, §8 khoá
+ký),
 [ADR-0067](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0067-backup-dr.md) (§8 mã hoá `uploads`, tag backup); ngưỡng an toàn
-theo threat model UP-4…UP-6, WEB-10 của repo code.
+theo threat model UP-4…UP-6, WEB-10, PRM-* của repo code.
 
 ## Bucket
 
@@ -24,8 +25,10 @@ theo threat model UP-4…UP-6, WEB-10 của repo code.
   được trong 30 ngày. Policy của cả hai bucket từ chối request không TLS bằng statement `Deny`
   `s3:*` như mẫu của AWS: action S3 thêm sau này cũng bị từ chối qua HTTP. Wildcard ở `Deny` chỉ mở rộng thứ bị cấm, không cấp quyền nào (các
   statement `Allow` của module không dùng wildcard dịch vụ).
-- **Key giữ tiền tố:** bucket `uploads` chứa `uploads/<video_id>`, bucket `media` chứa `media/<video_id>/<version>/…` (như object store local,
-  `internal/objstore` chọn bucket theo tiền tố), nên key, policy và URL giống nhau ở mọi nền tảng.
+- **Key giữ tiền tố:** bucket `uploads` chứa `uploads/<video_id>`, bucket `media` chứa `<tiền tố><video_id>/<version>/…` với tiền tố
+  `media/` (video thường, công khai), `premium/` (video premium, chỉ qua URL đã ký) hay `preview/` (bản xem thử và thumbnail của video
+  premium, công khai), như object store local (`internal/objstore` chọn bucket theo tiền tố), nên key, policy và URL giống nhau ở mọi nền
+  tảng.
 - **CORS theo bucket như local:** `uploads` chỉ `POST` (form presigned của web, expose `Retry-After`), `media` chỉ `GET`, `HEAD`; origin là
   `cors_allowed_origins` (origin trơn, không `*`, không path). Rule của bucket `media` chỉ trả lời request gửi thẳng tới bucket; viewer đi qua
   CloudFront nhận CORS của distribution (mục dưới).
@@ -83,7 +86,8 @@ response headers policy và access log; mọi thứ khác giống nhau:
 flowchart LR
   viewer[Player] -->|"media.#60;domain#62; A/AAAA"| r53[Route 53 zone env]
   viewer -->|"HTTPS, TLSv1.2_2025, cert ACM us-east-1"| cf["CloudFront #60;name_prefix#62;-media + web ACL"]
-  cf -->|OAC SigV4| s3[(S3 media)]
+  cf -->|"OAC SigV4: media/, preview/, premium/"| s3[(S3 media)]
+  kg["Key group #60;name_prefix#62;-media"] -.->|"kiểm chữ ký ở behavior mặc định, mọi path ngoài media/*, preview/*"| cf
   cf -.->|"chỉ khi flat_rate_free = false"| dest["Delivery destination svp-cloudfront-#60;env#62; (Log Archive)"]
 ```
 
@@ -93,7 +97,23 @@ flowchart LR
   alias `media.<domain>` tới distribution nằm trong module; output `media_domain` lấy tên từ record A, nên thứ đọc nó (cluster values) chờ
   record có trước. Gói Free nhận tên riêng và cert ACM (ADR-0052 §1).
 - Origin là bucket `media` qua **OAC** (ký SigV4 mọi request); policy bucket chỉ cho `cloudfront.amazonaws.com` `s3:GetObject` trên
-  `media/*` với điều kiện `AWS:SourceArn` là ARN của distribution này; không `ListBucket`, nên key không có trả 403 thay vì 404.
+  `media/*`, `preview/*`, `premium/*` với điều kiện `AWS:SourceArn` là ARN của distribution này; không principal ẩn danh, không `ListBucket`,
+  nên key không có trả 403 thay vì 404. OAC đọc cả `premium/*` vì chính distribution, không phải bucket, đòi chữ ký; `transcode-jobs/`
+  nằm ngoài ba tiền tố nên CloudFront không đọc được.
+- **Behavior premium (chặn mặc định):** behavior mặc định có `trusted_key_groups` là key group của module, nên mọi path không khớp tiền tố
+  công khai cần chữ ký: request không có chữ ký hợp lệ của một khoá trong group, hay quá hạn của policy, nhận 403. Hai
+  `ordered_cache_behavior` `media/*`, `preview/*` công khai (không key group). CloudFront chọn behavior trên path đã chuẩn hoá nhưng gửi path
+  thô tới origin; chặn mặc định nên một cách viết `premium/` mà hai bên đọc khác nhau (`premium%2F…`) rơi vào behavior cần chữ ký, không
+  tới S3 khi chưa ký. Không có behavior `premium/*` riêng: nó giống hệt behavior mặc định. Ba behavior cùng `GET`, `HEAD`, `https-only`,
+  `compress`, cache policy `Managed-CachingOptimized`, cùng response headers policy theo `flat_rate_free`. CloudFront kiểm chữ ký trước khi
+  tìm trong cache, còn query (gồm `Policy`, `Signature`, `Key-Pair-Id`) không vào cache key, nên mọi người xem một segment dùng chung một bản
+  cache. Ba behavior nằm trong hạn 5 của gói Free và chỉ dùng policy managed, nên cả hai gói giống nhau ở đây.
+- **Khoá ký:** `signing_public_keys` là map ô → PEM khoá công khai (RSA 2048), ô chỉ `a`, `b`, 1–2 mục (validation nêu tên biến). Mỗi ô
+  thành `aws_cloudfront_public_key.media[<ô>]` tên `<name_prefix>-media-<ô>-<8 hex đầu của sha256(PEM)>`, `create_before_destroy`:
+  CloudFront không đổi khoá tại chỗ, nên PEM mới của một ô là khoá mới, tên mới, tạo và vào key group trước khi khoá cũ bị xoá; group không
+  lúc nào rỗng. `aws_cloudfront_key_group.media` tên `<name_prefix>-media` chứa mọi khoá của biến. Output `signing_key_ids` (ô → ID) là
+  `Key-Pair-Id` mà video-service ghi vào URL ký bằng khoá riêng của ô đó. Hai ô cho phép xoay: thêm khoá ô kia, apply, chuyển bộ ký sang ô
+  mới; URL ký bằng ô cũ dùng được tới hạn của chúng. Khoá riêng không bao giờ vào Terraform: chỉ khoá công khai đi qua biến.
 - Viewer chỉ HTTPS (`https-only`), HTTP/2 và HTTP/3, IPv6, price class cố định `PriceClass_All` ở cả hai gói: khi đăng ký gói, AWS tự chuyển
   distribution sang mọi edge location (quan sát ở một dự án khác: Terraform phải đặt `PriceClass_All` thì `plan` sau apply mới
   `No changes`), và pay-as-you-go giữ cùng giá trị để hai env phục vụ từ cùng edge.
@@ -133,7 +153,8 @@ flowchart LR
   `record_fields` là danh sách tường minh, giống module `edge`: các trường của ví dụ standard logging v2 trừ `cs(Cookie)` (ADR-0061 phụ lục §8).
   Log có IP (`c-ip`), User-Agent của người xem; retention và người đọc theo bucket log CloudFront của Log Archive. Gói Free không có access log,
   nên media của stg không có log (FSBP CloudFront.5 chấp nhận ở stg).
-- **Đường của một object:** gateway ghép `MEDIA_PUBLIC_BASE_URL` = `https://<media_domain>` với key, key đã có `media/`. Ví dụ playlist
+- **Đường của một object:** gateway ghép `MEDIA_PUBLIC_BASE_URL` = `https://<media_domain>` với key, key đã có tiền tố (`media/`,
+  `preview/`); segment của `premium/` chỉ ra ngoài dưới dạng URL đã ký do video-service viết vào playlist. Ví dụ playlist
   rendition: `https://media.svp.example/media/<video_id>/<version>/<attempt>/index_720p.m3u8` là object
   `media/<video_id>/<version>/<attempt>/index_720p.m3u8` của bucket `media` (segment nằm phẳng cùng thư mục); master là `…/media/<video_id>/<version>/master.m3u8`.
   Không có đoạn `/media` thêm như đường path-style của k3d.
@@ -155,13 +176,17 @@ không cần: `ListBucket` trên bucket `uploads` (sid `ListUploads`). Policy c�
 release `media-worker` chạy lệnh con `mediaconvert`, không chạy ffmpeg
 ([ADR-0066](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0066-mediaconvert-transcode.md) §9, bảng "Quyền bridge" ở phụ lục,
 mỗi dòng một nguồn); quyền MediaConvert, SQS, `iam:PassRole` của bridge ở module `transcode`. `s3:PutObject` đã gồm các bước multipart và
-ghi có điều kiện `If-None-Match: *`; không service nào được abort multipart. ARN bucket trong hai policy media-worker và CloudFront dựng từ
-tên bucket, nên biết lúc `plan`. Quyền KMS trên key `uploads` của hai service ở mục [Mã hoá](#mã-hoá).
+ghi có điều kiện `If-None-Match: *`; không service nào được abort multipart. ARN bucket trong hai policy của service và policy
+CloudFront dựng từ tên bucket, nên biết lúc `plan`. Quyền KMS trên key `uploads` của hai service ở mục [Mã hoá](#mã-hoá).
 
 | Service | Quyền |
 | --- | --- |
-| video-service | `PutObject`, `GetObject`, `DeleteObject` trên `<uploads>/uploads/*`; `ListBucket` trên `<uploads>` (không điều kiện, khác local); `ListBucket` trên `<media>` với `s3:prefix` `media/*`; `DeleteObject` trên `<media>/media/*` |
-| media-worker (bridge) | `GetObject` trên `<uploads>/uploads/*`; `PutObject`, `GetObject` trên `<media>/media/*` và `<media>/transcode-jobs/*`; `ListBucket` trên `<media>` với `s3:prefix` `media/*`, `transcode-jobs/*` |
+| video-service | `PutObject`, `GetObject`, `DeleteObject` trên `<uploads>/uploads/*`; `ListBucket` trên `<uploads>` (không điều kiện, khác local); `ListBucket` trên `<media>` với `s3:prefix` `media/*`, `premium/*`, `preview/*`; `DeleteObject` trên `<media>/media/*`, `<media>/premium/*`, `<media>/preview/*`; `GetObject` trên `<media>/premium/*` |
+| media-worker (bridge) | `GetObject` trên `<uploads>/uploads/*`; `PutObject`, `GetObject` trên `<media>/media/*`, `<media>/premium/*`, `<media>/preview/*` và `<media>/transcode-jobs/*`; `ListBucket` trên `<media>` với `s3:prefix` `media/*`, `premium/*`, `preview/*`, `transcode-jobs/*` |
+
+Ba tiền tố media (`local.media_prefixes` của `iam.tf`) dùng chung cho hai policy và policy bucket. video-service xoá media của video ở mọi
+tiền tố (video premium có cả `premium/`, `preview/`), đọc playlist dưới `premium/` để lọc master và ký playlist rendition; không đọc
+`media/`, `preview/` (người xem đọc qua CloudFront).
 
 **Vì sao thêm `ListBucket` trên `uploads` cho video-service:** caller không có `s3:ListBucket` trên bucket thì S3 trả `HEAD`/`GET` của key
 không có bằng **403**, không phải 404 (RustFS của local trả 404). video-service đổi 404 của `HEAD uploads/<id>` thành 400
@@ -174,13 +199,14 @@ lộ id video, thứ service đã biết.
 
 - `GetObject` trên `uploads/*`: bridge không tự mở file gốc, nhưng `Probe` của MediaConvert đọc S3 bằng quyền của người gọi. Bridge không
   có `ListBucket` trên `uploads` (bảng của ADR không có): Probe trên file gốc đã xoá trả gì thì thử ở account sandbox (phụ lục §3 của ADR).
-- `GetObject`, `PutObject` trên `media/*`: đọc playlist, chép tại chỗ từng object của job để đặt `Cache-Control` (`CopyObject` cần đọc
-  nguồn, ghi đích), tạo master.
+- `GetObject`, `PutObject` trên `media/*`, `premium/*`: đọc playlist, chép tại chỗ từng object của job để đặt `Cache-Control`
+  (`CopyObject` cần đọc nguồn, ghi đích), tạo master. `preview/*`: chép segment đầu và thumbnail của video premium từ `premium/` sang
+  `preview/`, ghi playlist và master xem thử.
 - `GetObject`, `PutObject` trên `transcode-jobs/*`: bản ghi job `transcode-jobs/<video_id>/<version>.json`, chỉ tạo bằng
   `If-None-Match: *`, quyết kết quả mỗi version. Tiền tố nằm ngoài `media/`, nên CloudFront không đọc được nó và việc xoá
   `media/<video_id>/` của video-service không chạm nó.
-- `ListBucket` theo hai tiền tố: liệt kê thư mục một lần thử, hỏi một key có chưa bằng `ListObjectsV2` theo tiền tố (`Exists`) thay vì
-  dựa vào 404 của `HEAD`.
+- `ListBucket` theo bốn tiền tố trên: liệt kê thư mục một lần thử, hỏi một key có chưa bằng `ListObjectsV2` theo tiền tố (`Exists`) thay
+  vì dựa vào 404 của `HEAD`.
 - Không `DeleteObject`, không `ListBucket` trên `uploads`.
 
 Root của env gắn mỗi JSON vào role của Pod Identity association `svp/video-service`, `svp/media-worker`.
@@ -239,7 +265,9 @@ Role `<name_prefix>-uploads-malware-protection` theo đúng mẫu của
 | [aws_acm_certificate.viewer](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/acm_certificate) | resource |
 | [aws_acm_certificate_validation.viewer](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/acm_certificate_validation) | resource |
 | [aws_cloudfront_distribution.media](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudfront_distribution) | resource |
+| [aws_cloudfront_key_group.media](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudfront_key_group) | resource |
 | [aws_cloudfront_origin_access_control.media](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudfront_origin_access_control) | resource |
+| [aws_cloudfront_public_key.media](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudfront_public_key) | resource |
 | [aws_cloudfront_response_headers_policy.media](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudfront_response_headers_policy) | resource |
 | [aws_cloudwatch_log_delivery.media](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_log_delivery) | resource |
 | [aws_cloudwatch_log_delivery_source.media](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_log_delivery_source) | resource |
@@ -294,6 +322,7 @@ Role `<name_prefix>-uploads-malware-protection` theo đúng mẫu của
 | log\_delivery\_destination\_arn | ARN of the CloudWatch Logs delivery destination (us-east-1, in the Log Archive account) that receives the standard logs of the distribution, `arn:aws:logs:us-east-1:<account>:delivery-destination:svp-cloudfront-<env>`. Required when flat\_rate\_free is false; unused when it is true (the Free plan has no access log). | `string` | `null` | no |
 | name\_prefix | Fixed start of every name (svp-stg, svp-prd): buckets are <name\_prefix>-uploads-<account\_id>-<region> and <name\_prefix>-media-<account\_id>-<region>. | `string` | n/a | yes |
 | region | Region of the buckets, part of their names; the root passes the region of its provider. | `string` | n/a | yes |
+| signing\_public\_keys | Public keys (PEM, `-----BEGIN PUBLIC KEY-----`, RSA 2048) that sign URLs of the distribution outside the public `media/*` and `preview/*` (`premium/`), by slot: `a`, `b`, one or two of them. Two slots let a new key enter the key group before the old one leaves. Each slot becomes a CloudFront public key named `<name_prefix>-media-<slot>-<first 8 hex of sha256(PEM)>`, so a new PEM is a new key, created before the old one is deleted; the key group `<name_prefix>-media` holds every key. | `map(string)` | n/a | yes |
 | versioning\_enabled | Keep earlier versions of overwritten and deleted objects in both buckets, each for 30 days after it was replaced (a lifecycle rule then deletes it). Off by default: objects are written once, and kept versions keep deleted bytes billed. | `bool` | `false` | no |
 | web\_acl\_arn | ARN of the AWS WAF web ACL of scope CLOUDFRONT (in us-east-1, output web\_acl\_arn of the waf module) in front of the distribution. With flat\_rate\_free the plan requires one and covers it, and AWS refuses to detach or replace it while the plan lasts. | `string` | n/a | yes |
 
@@ -305,6 +334,7 @@ Role `<name_prefix>-uploads-malware-protection` theo đúng mẫu của
 | media\_distribution\_arn | ARN of the CloudFront distribution in front of the media bucket. |
 | media\_domain | Public name of the media, `media.<domain>`: MEDIA\_PUBLIC\_BASE\_URL of the gateway and MEDIA\_ORIGIN of the web are https://<media\_domain>. |
 | media\_worker\_policy\_json | S3 and uploads key part of the IAM policy of media-worker, the MediaConvert bridge on AWS (JSON), for the role of its Pod Identity association. |
+| signing\_key\_ids | ID of the CloudFront public key of each slot of signing\_public\_keys (`a`, `b`): the Key-Pair-Id that a URL signed with the private key of that slot carries (MEDIA\_SIGNING\_KEY\_ID of video-service). |
 | uploads\_bucket | Name of the uploads bucket (the web posts upload forms to https://<name>.s3.<region>.amazonaws.com). |
 | uploads\_kms\_key\_arn | ARN of the KMS key alias/<name\_prefix>-uploads, the default encryption of the uploads bucket: every role that reads or writes uploads needs it (MediaConvert through the transcode module). |
 | video\_service\_policy\_json | IAM policy of video-service (JSON) for the role of its Pod Identity association. |
@@ -337,6 +367,7 @@ Role `<name_prefix>-uploads-malware-protection` theo đúng mẫu của
 | CloudFront pay-as-you-go, WAF ngoài gói, giao standard log (`flat_rate_free = false`, prd) | bảng chi phí edge ở phụ lục ADR-0061 §13 | (không áp ở stg) |
 | Cert ACM công khai, record Route 53 alias | Không tính tiền (cert công khai không exportable; truy vấn alias tới CloudFront) | $0 |
 | OAC, cache policy, response headers policy, CORS, lifecycle | Không tính tiền | $0 |
+| CloudFront public key, key group, signed URL | Không có dòng giá riêng; request đã ký tính như request khác (ADR-0073 [N6], [N9]) | $0 |
 | KMS key `uploads` | $1/key-tháng tính theo giờ (key chờ xoá không tính); request $0,03/10 000, 20 000 đầu mỗi tháng miễn phí ([trang giá KMS](https://aws.amazon.com/kms/pricing/)); Bucket Key giữ số request gần như không đổi theo số object | ~$0,0014 |
 | GuardDuty Malware Protection for S3 | free tier 1 000 request và 1 GB quét mỗi tháng mỗi region; vượt thì theo GB quét và request (bảng giá ở phụ lục ADR-0060) | ~$0 (vài file mỗi buổi) |
 
@@ -348,8 +379,9 @@ S3 tới từ cluster đi qua gateway endpoint của VPC (module `network`), kh�
 - **Bucket còn object khi `force_destroy = false`** (prd ngoài teardown): destroy dừng ở bucket, cố ý. stg và teardown của prd đặt `true`
   nên không sót.
 - **Bucket, distribution của một `apply` hay `destroy` dở:** bucket mang tag `Project=svp` của root (quét theo tag); distribution, OAC tìm
-  theo tên, comment `<name_prefix>-media` hay origin là bucket `svp-*` (OAC không có tag). Cert ACM `us-east-1` mang tag `Project=svp`;
-  record validation và record alias `media.<domain>` nằm trong zone sống lâu của env, destroy dở để lại thì xoá tay.
+  theo tên, comment `<name_prefix>-media` hay origin là bucket `svp-*` (OAC không có tag). Key group `<name_prefix>-media` và public key
+  `<name_prefix>-media-*` không có tag, tìm theo tên; xoá distribution trước, rồi key group, rồi public key. Cert ACM `us-east-1` mang
+  tag `Project=svp`; record validation và record alias `media.<domain>` nằm trong zone sống lâu của env, destroy dở để lại thì xoá tay.
 - **Subscription của gói:** destroy dừng giữa chừng có thể để lại gói còn hiệu lực (`sweep.sh` liệt kê ở loại `CloudFront pricing plan
   subscriptions`, `us-east-1`), mà AWS không cho xoá distribution hay gỡ web ACL còn trong gói: huỷ gói trước, rồi mới xoá distribution,
   OAC, web ACL (runbook buổi stg, mục xoá tay).

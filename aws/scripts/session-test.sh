@@ -6,7 +6,8 @@
 
 # Covers --print of the whole session and each script of the directory: the account and DNS guards, the order rules of
 # tf.sh and pre-destroy.sh, the secret handling and the edge's wait of bootstrap.sh, the ladder of measure.sh, the
-# pinned digests of ecr-warm.sh and the leftovers of sweep.sh in both regions.
+# pinned digests of ecr-warm.sh, the key files and the entry of media-signing-key.sh and the leftovers of sweep.sh in
+# both regions.
 
 # Usage: aws/scripts/session-test.sh
 #
@@ -469,6 +470,18 @@ case "$1 $2" in
     else echo '{"VpcOriginList":{"Items":[]}}'; fi ;;
   "cloudfront list-origin-access-controls") echo '{"OriginAccessControlList":{"Items":[]}}' ;;
   "cloudfront list-response-headers-policies") echo '{"ResponseHeadersPolicyList":{"Items":[]}}' ;;
+  # FAKE_LEFTOVER=signing-keys: the key group of media and the public key of its slot a, beside another one's.
+  "cloudfront list-key-groups")
+    if [ "$left" = signing-keys ]; then echo '{"KeyGroupList":{"Items":[{"KeyGroup":{"Id":"kg-0fake","KeyGroupConfig":{"Name":"svp-stg-media","Items":["K0FAKEA"]}}},{"KeyGroup":{"Id":"kg-other","KeyGroupConfig":{"Name":"other-media","Items":["K0OTHER"]}}}]}}'
+    else echo '{"KeyGroupList":{"Items":[]}}'; fi ;;
+  "cloudfront list-public-keys")
+    if [ "$left" = signing-keys ]; then echo '{"PublicKeyList":{"Items":[{"Id":"K0FAKEA","Name":"svp-stg-media-a-0123abcd"},{"Id":"K0OTHER","Name":"other-media-a"}]}}'
+    else echo '{"PublicKeyList":{"Items":[]}}'; fi ;;
+  # The encoded key CloudFront holds under an ID: the content of $FAKE_PUBLIC_KEY (the --query'd text, as --output text
+  # prints it).
+  "cloudfront get-public-key")
+    [ -f "${FAKE_PUBLIC_KEY:-}" ] || { echo "fake aws: NoSuchPublicKey: The specified public key does not exist." >&2; exit 254; }
+    cat "$FAKE_PUBLIC_KEY" ;;
   "wafv2 list-web-acls")
     if [ "$left" = waf ]; then echo '{"WebACLs":[{"Name":"svp-prd-web","Id":"waf-web"},{"Name":"svp-prd-api","Id":"waf-api"},{"Name":"svp-prd-media","Id":"waf-fake"}]}'
     else echo '{"WebACLs":[]}'; fi ;;
@@ -529,6 +542,13 @@ case "$1 $2" in
     f= prev=
     for a in "$@"; do [ "$prev" != --secret-string ] || f=${a#file://}; prev=$a; done
     if [ -f "$f" ]; then kind=file; else kind=pipe; fi
+    # A file's value goes to $FAKE_STATE/put-secret-value.json, and the modes of the file and its directory beside it.
+    if [ "$kind" = file ]; then
+      cp "$f" "$FAKE_STATE/put-secret-value.json"
+      { ls -ld "$f" && ls -ld "$(dirname "$f")"; } | cut -c1-10 >"$FAKE_STATE/put-secret-value.modes"
+    fi
+    # FAKE_PUT_FAIL: the entry does not exist (its root not applied).
+    [ -z "${FAKE_PUT_FAIL:-}" ] || { echo "fake aws: ResourceNotFoundException: Secrets Manager can't find the specified secret." >&2; exit 254; }
     v=$(cat "$f")
     if [ "$v" = "$(jq -cn --arg k "$FAKE_GRAFANA_TOKEN" '{SVP_GRAFANA_OPERATOR_TOKEN: $k}')" ]; then r=match; else r=other; fi
     echo "put-secret-value value=$r from=$kind" >>"$FAKE_LOG"
@@ -841,6 +861,11 @@ case "${args#-chdir=* }" in
     else
       echo "{\"name\":\"svp-$env\",\"domain\":\"$domain\",\"edgeTargetGroupArn\":\"arn:aws:elasticloadbalancing:ap-southeast-1:111111111111:targetgroup/svp-$env-envoy/2c3d\",\"edgeCidrs\":[\"10.20.240.0/27\"],\"grafanaUrl\":\"https://g-0fake.grafana-workspace.ap-southeast-1.amazonaws.com\"}"
     fi ;;
+  # FAKE_TF_KEY_IDS: output media_signing_key_ids (none: a root applied before it had the output).
+  "output -json media_signing_key_ids")
+    ids=${FAKE_TF_KEY_IDS:-none}
+    [ "$ids" != none ] || { echo 'fake terraform: Error: Output "media_signing_key_ids" not found' >&2; exit 1; }
+    echo "$ids" ;;
   "output -raw rds_master_user_secret_arn") printf 'arn:aws:secretsmanager:ap-southeast-1:000000000000:secret:rds!db-fake' ;;
   "show -no-color "*.destroy.tfplan) printf '%s\n' 'Terraform will perform the following actions:' '  # aws_vpc.this will be destroyed' \
     'Plan: 0 to add, 0 to change, 3 to destroy.' ;;
@@ -1105,6 +1130,9 @@ export PATH="$bin:$PATH" FAKE_LOG=$log FAKE_STATE=$state FAKE_PASSWORD=$password
 export SVP_BACKEND_DIR=$work/backend SVP_GITOPS_DIR=$work/gitops SVP_SESSION_POLL=0
 export SVP_AWS_MGMT_ACCOUNT_ID=000000000000 SVP_AWS_STG_ACCOUNT_ID=111111111111 SVP_AWS_PRD_ACCOUNT_ID=222222222222
 export SVP_AWS_LOG_ACCOUNT_ID=333333333333 SVP_AWS_BACKUP_ACCOUNT_ID=444444444444
+# The private keys of media-signing-key.sh, under this test's directory alone.
+export XDG_STATE_HOME=$work/xdg
+keys=$XDG_STATE_HOME/svp/media-signing
 unset SVP_SESSION_DIR
 
 # clear_log: an empty log of calls, profiles and Terraform variables.
@@ -1149,12 +1177,12 @@ for e in stg prd; do
   sed -n 's/^### step [0-9]*: aws\/scripts\///p' "$out" >"$work/order.print"
   sed -n 's/^| [0-9]* | `aws\/scripts\/\([^`]*\)`.*/\1/p' "$runbooks/session-$e.md" >"$work/order.runbook"
   expect "--print $e: the steps are the table of session-$e.md, in order" diff "$work/order.runbook" "$work/order.print"
-  expect "--print $e: twenty-nine steps" test "$(grep -c . "$work/order.runbook")" = 29
-  sed -n '/^### step 29:/q;p' "$out" >"$work/print-env.out"
-  expect "--print $e: every aws and terraform command of steps 1 to 28 names profile anhnv-$e, every aws command a region" \
+  expect "--print $e: thirty-one steps" test "$(grep -c . "$work/order.runbook")" = 31
+  sed -n '/^### step 31:/q;p' "$out" >"$work/print-env.out"
+  expect "--print $e: every aws and terraform command of steps 1 to 30 names profile anhnv-$e, every aws command a region" \
     sh -c '[ -z "$(grep -E "^\+ ([^ ]+ )*(aws|terraform) " "$1" | grep -vE "^\+ ([^ ]+ )?AWS_PROFILE=anhnv-$2 (aws .*--region (ap-southeast-1|us-east-1)|terraform )")" ]' _ "$work/print-env.out" "$e"
-  expect "--print $e: step 29 is sweep.sh mgmt, with profile anhnv-sso alone" \
-    sh -c 'sed -n "/^### step 29:/,\$p" "$1" >"$1.20" && grep -q "^### step 29: aws/scripts/sweep.sh mgmt$" "$1.20" &&
+  expect "--print $e: step 31 is sweep.sh mgmt, with profile anhnv-sso alone" \
+    sh -c 'sed -n "/^### step 31:/,\$p" "$1" >"$1.20" && grep -q "^### step 31: aws/scripts/sweep.sh mgmt$" "$1.20" &&
       [ -z "$(grep -E "^\+ .* aws " "$1.20" | grep -vE "^\+ AWS_PROFILE=anhnv-sso aws .*--region (ap-southeast-1|us-east-1)")" ]' _ "$out"
   expect "--print $e: init of both roots with the account's backend, each its own key, -reconfigure" \
     sh -c 'grep -q "aws/envs/$2 init -input=false -reconfigure -backend-config=../../backend-$2.hcl -backend-config=key=aws/$2/terraform.tfstate$" "$1" &&
@@ -1163,6 +1191,21 @@ for e in stg prd; do
     sh -c 'printf "%s\n" "check-dns.sh $2" "tf.sh $2 account init" "tf.sh $2 account plan --open" "tf.sh $2 account apply" "tf.sh $2 env init" >"$1.want1" &&
       printf "%s\n" "tf.sh $2 env destroy" "tf.sh $2 account plan --close" "tf.sh $2 account apply" "sweep.sh $2" >"$1.want2" &&
       grep -A4 -x "check-dns.sh $2" "$1" | diff "$1.want1" - >/dev/null && grep -A3 -x "tf.sh $2 env destroy" "$1" | diff "$1.want2" - >/dev/null' _ "$work/order.print" "$e"
+  expect "--print $e: media-signing-key.sh new a between env init and env plan, activate a between env apply and the secrets" \
+    sh -c 'printf "%s\n" "tf.sh $2 env init" "media-signing-key.sh $2 new a" "tf.sh $2 env plan" "tf.sh $2 env apply" \
+      "media-signing-key.sh $2 activate a" "bootstrap.sh $2 secrets" >"$1.want3" &&
+      grep -A5 -x "tf.sh $2 env init" "$1" | diff "$1.want3" - >/dev/null' _ "$work/order.print" "$e"
+  expect "--print $e: the key pair made into the owner's directory, the public key alone into the tfvars, the entry from a file" \
+    sh -c 'grep -qxF "+ openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out $3/$2-a.pem" "$1" &&
+      grep -qxF "+ chmod 700 $3" "$1" && grep -qxF "+ chmod 600 $3/$2-a.pem" "$1" &&
+      grep -qxF "  (jq sets slot a of aws/envs/$2/media-signing.auto.tfvars.json to that public key)" "$1" &&
+      grep -qxF "+ AWS_PROFILE=anhnv-$2 terraform -chdir=$4/aws/envs/$2 output -json media_signing_key_ids" "$1" &&
+      grep -qxF "+ AWS_PROFILE=anhnv-$2 aws secretsmanager put-secret-value --secret-id svp/$2/media-signing --secret-string '"'"'file://$3/entry.<random>'"'"' --query VersionId --output text --region ap-southeast-1" "$1"' \
+    _ "$out" "$e" "$keys" "$infra_root"
+  expect "--print $e: the private key's file deleted after the entry is written" \
+    before "$out" "aws secretsmanager put-secret-value --secret-id svp/$e/media-signing" "^\+ rm -f $keys/$e-a.pem$"
+  expect "--print $e made no key directory, no tfvars file of the keys" \
+    sh -c '[ ! -e "$1" ] && [ ! -e "$2/aws/envs/$3/media-signing.auto.tfvars.json" ]' _ "$XDG_STATE_HOME" "$infra_root" "$e"
   expect "--print $e: root env applied, then the secrets, then root gitops" \
     sh -c 'b() { a=$(grep -nE -- "$2" "$1" | head -n 1 | cut -d: -f1); c=$(grep -nE -- "$3" "$1" | head -n 1 | cut -d: -f1); [ -n "$a" ] && [ -n "$c" ] && [ "$a" -lt "$c" ]; }
       b "$1" "aws/envs/$2 apply -input=false $2.tfplan" "make .* eks-secrets CONTEXT=svp-$2" &&
@@ -2422,6 +2465,133 @@ start_measure prd
 expect "measure.sh prd refuses while the tunnel is closed, before the smoke" \
   sh -c '! FAKE_TUNNEL=closed bash "$1/measure.sh" prd >/dev/null 2>&1 && ! grep -q "^make " "$2"' _ "$here" "$log"
 
+# --- media-signing-key.sh -----------------------------------------------------------------------------------------
+mskey=$here/media-signing-key.sh
+tfv=$infra_root/aws/envs/stg/media-signing.auto.tfvars.json
+rel_tfv=aws/envs/stg/media-signing.auto.tfvars.json
+# key_lines PEM: the base64 lines of a private key into $work/key.lines, for grep -F -f: none may show up anywhere.
+key_lines() { sed '/^-----/d' "$1" >"$work/key.lines"; }
+
+new_session
+mkdir -p "$keys" && chmod 755 "$keys"
+expect "media-signing-key.sh stg new a: makes the key pair of slot a" bash "$mskey" stg new a >"$work/out" 2>&1
+key_lines "$keys/stg-a.pem"
+expect "media-signing-key.sh stg new a: private key file 600 in a directory 700 (made the owner's alone), outside the repository" \
+  sh -c '[ "$(ls -ld "$1/stg-a.pem" | cut -c1-10)" = -rw------- ] && [ "$(ls -ld "$1" | cut -c1-10)" = drwx------ ] &&
+    grep -q "^-----BEGIN PRIVATE KEY-----$" "$1/stg-a.pem"' _ "$keys"
+expect "media-signing-key.sh stg new a: the tfvars file holds slot a alone, the PEM public key of that file" \
+  sh -c 'jq -e "(.media_signing_public_keys | keys) == [\"a\"] and (.media_signing_public_keys.a
+      | startswith(\"-----BEGIN PUBLIC KEY-----\n\") and endswith(\"-----END PUBLIC KEY-----\n\"))" "$1" >/dev/null &&
+    [ "$(jq -r .media_signing_public_keys.a "$1")" = "$(openssl pkey -in "$2/stg-a.pem" -pubout)" ] && ! grep -q PRIVATE "$1"' \
+  _ "$tfv" "$keys"
+expect "media-signing-key.sh stg new a: the account checked with profile anhnv-stg alone, says what comes next" \
+  sh -c 'grep -q "^aws sts get-caller-identity " "$1" && [ "$(sort -u "$1.profiles")" = anhnv-stg ] &&
+    grep -q "^ok    slot a: private key in .* (owner only, not shown), public key in $3 (slots a); next: aws/scripts/tf.sh stg env plan, apply, then media-signing-key.sh stg activate a$" "$2"' \
+  _ "$log" "$work/out" "$rel_tfv"
+expect "media-signing-key.sh stg new a printed no line of the private key" sh -c '! { grep -qF -f "$1" "$2" || grep -q "PRIVATE KEY" "$2"; }' _ "$work/key.lines" "$work/out"
+cksum "$keys/stg-a.pem" "$tfv" >"$work/sums"
+clear_log
+expect "media-signing-key.sh stg new a again refuses: the key file of slot a exists, nothing overwritten" \
+  sh -c '! bash "$1" stg new a >"$2" 2>&1 && grep -q "stg-a.pem exists: the private key of slot a from an earlier new, not activated yet" "$2" &&
+    cksum "$3/stg-a.pem" "$4" | diff "$5" - >/dev/null' _ "$mskey" "$work/out" "$keys" "$tfv" "$work/sums"
+expect "media-signing-key.sh stg new b on another account stops before any key is made" \
+  sh -c '! FAKE_ACCOUNT=000000000000 bash "$1" stg new b >/dev/null 2>&1 && [ ! -e "$2/stg-b.pem" ]' _ "$mskey" "$keys"
+
+# An earlier session left both slots in the tfvars file; its keys went with its root env.
+new_session
+rm -f "$keys/stg-a.pem"
+jq -n '{media_signing_public_keys: {a: "old-a\n", b: "old-b\n"}}' >"$tfv"
+expect "media-signing-key.sh stg new a in a new session: slot a replaced with a warning, slot b dropped with a note" \
+  sh -c 'bash "$1" stg new a >"$2" 2>&1 && jq -e "(.media_signing_public_keys | keys) == [\"a\"] and .media_signing_public_keys.a != \"old-a\n\"" "$3" >/dev/null &&
+    grep -q "^warn  slot a of $4 is replaced (its key went with the root env of an earlier session)$" "$2" &&
+    grep -q "^note  slot b dropped from $4: root env is not applied in this session" "$2"' _ "$mskey" "$work/out" "$tfv" "$rel_tfv"
+printf '{"media_signing_public_keys": ' >"$tfv.bad"
+expect "media-signing-key.sh refuses a tfvars file that is not the map of slots, before any key is made" \
+  sh -c 'mv "$4" "$4.good" && mv "$4.bad" "$4" && rm -f "$5/stg-b.pem" && ! bash "$1" stg new b >"$2" 2>&1 &&
+    grep -q "$3 is not {\"media_signing_public_keys\"" "$2" && [ ! -e "$5/stg-b.pem" ]; r=$?; mv "$4.good" "$4"; exit $r' \
+  _ "$mskey" "$work/out" "$rel_tfv" "$tfv" "$keys"
+
+# Rotation: root env stands in this session, so new b keeps slot a beside it.
+add_mark env-apply-start
+cp "$tfv" "$work/tfv.before"
+expect "media-signing-key.sh stg new b once root env is applied: slot a kept as it was, slot b added, nothing dropped" \
+  sh -c 'bash "$1" stg new b >"$2" 2>&1 && jq -e "(.media_signing_public_keys | keys) == [\"a\", \"b\"]" "$3" >/dev/null &&
+    [ "$(jq -r .media_signing_public_keys.a "$3")" = "$(jq -r .media_signing_public_keys.a "$4")" ] && ! grep -qE "^(warn|note)  " "$2"' \
+  _ "$mskey" "$work/out" "$tfv" "$work/tfv.before"
+jq -r .media_signing_public_keys.a "$tfv" >"$work/a.pub"
+jq -r .media_signing_public_keys.b "$tfv" >"$work/b.pub"
+cp "$keys/stg-b.pem" "$work/b.pem"
+key_lines "$work/b.pem"
+clear_log
+rm -f "$state/put-secret-value.json" "$state/put-secret-value.modes"
+expect "media-signing-key.sh stg activate b: exits 0" \
+  env FAKE_TF_KEY_IDS='{"a":"K0FAKEA","b":"K0FAKEB"}' FAKE_PUBLIC_KEY="$work/b.pub" bash "$mskey" stg activate b >"$work/out" 2>&1
+expect "media-signing-key.sh stg activate b: the entry from a file of the key directory, by its path alone" \
+  sh -c 'grep -qE "^aws secretsmanager put-secret-value --secret-id svp/stg/media-signing --secret-string file://$2/entry\.[A-Za-z0-9]+ --query VersionId --output text --region ap-southeast-1$" "$1"' \
+  _ "$log" "$keys"
+expect "media-signing-key.sh stg activate b: that file was 600 in a directory 700" \
+  sh -c '[ "$(cat "$1")" = "$(printf "%s\n" -rw------- drwx------)" ]' _ "$state/put-secret-value.modes"
+expect "media-signing-key.sh stg activate b: the entry is the ID of slot b and its private key, nothing else" \
+  sh -c 'jq -e --rawfile k "$2" "keys == [\"MEDIA_SIGNING_KEY\", \"MEDIA_SIGNING_KEY_ID\"] and .MEDIA_SIGNING_KEY_ID == \"K0FAKEB\" and .MEDIA_SIGNING_KEY == \$k" "$1" >/dev/null' \
+  _ "$state/put-secret-value.json" "$work/b.pem"
+expect "media-signing-key.sh stg activate b: output, then CloudFront's key, then the entry, profile anhnv-stg alone" \
+  sh -c 'b() { a=$(grep -nE -- "$2" "$1" | head -n 1 | cut -d: -f1); c=$(grep -nE -- "$3" "$1" | head -n 1 | cut -d: -f1); [ -n "$a" ] && [ -n "$c" ] && [ "$a" -lt "$c" ]; }
+    b "$1" "^aws sts get-caller-identity " "^terraform -chdir=.*/aws/envs/stg output -json media_signing_key_ids$" &&
+    b "$1" "output -json media_signing_key_ids" "^aws cloudfront get-public-key --id K0FAKEB " &&
+    b "$1" "^aws cloudfront get-public-key " "^aws secretsmanager put-secret-value " && [ "$(sort -u "$1.profiles")" = anhnv-stg ]' _ "$log"
+expect "media-signing-key.sh stg activate b: the private key file and the entry file deleted, slot a's key left" \
+  sh -c '[ ! -e "$1/stg-b.pem" ] && [ -e "$1/stg-a.pem" ] && ! ls -A "$1" | grep -qE "^(entry|tfvars)\."' _ "$keys"
+expect "media-signing-key.sh stg activate b: no line of the private key in its output or on any command line" \
+  sh -c '! { grep -qF -f "$1" "$2" "$3" || grep -q "PRIVATE KEY" "$2" "$3"; }' _ "$work/key.lines" "$work/out" "$log"
+expect "media-signing-key.sh stg activate b: says the key ID and the version, not the key" \
+  grep -q '^ok    entry svp/stg/media-signing: key K0FAKEB of slot b (not shown), version v1; .*stg-b.pem deleted' "$work/out"
+
+# A new without the apply after it: CloudFront still holds the old key of the slot.
+clear_log
+expect "media-signing-key.sh stg activate a refuses when CloudFront's key of slot a is not the file's, writes nothing" \
+  sh -c '! FAKE_TF_KEY_IDS="{\"a\":\"K0FAKEA\",\"b\":\"K0FAKEB\"}" FAKE_PUBLIC_KEY="$4" bash "$1" stg activate a >"$2" 2>&1 &&
+    grep -q "is not the public key of .*stg-a.pem: the apply after media-signing-key.sh stg new a has not run" "$2" &&
+    ! grep -q put-secret-value "$3" && [ -e "$5/stg-a.pem" ]' _ "$mskey" "$work/out" "$log" "$work/b.pub" "$keys"
+expect "media-signing-key.sh stg activate a refuses while slot a is not in output media_signing_key_ids, says plan and apply" \
+  sh -c '! FAKE_TF_KEY_IDS="{\"b\":\"K0FAKEB\"}" bash "$1" stg activate a >"$2" 2>&1 &&
+    grep -q "slot a has no key in output media_signing_key_ids of aws/envs/stg: aws/scripts/tf.sh stg env plan, apply" "$2" &&
+    ! grep -q put-secret-value "$3" && [ -e "$4/stg-a.pem" ]' _ "$mskey" "$work/out" "$log" "$keys"
+expect "media-signing-key.sh stg activate a refuses when root env has no such output (not applied), says plan and apply" \
+  sh -c '! FAKE_TF_KEY_IDS=none bash "$1" stg activate a >"$2" 2>&1 &&
+    grep -q "terraform output media_signing_key_ids of aws/envs/stg: is root env applied? aws/scripts/tf.sh stg env plan, apply" "$2" &&
+    ! grep -q put-secret-value "$3"' _ "$mskey" "$work/out" "$log"
+clear_log
+expect "media-signing-key.sh stg activate b refuses without the key file (activated already), before terraform or the entry" \
+  sh -c '! bash "$1" stg activate b >"$2" 2>&1 && grep -q "no .*stg-b.pem: activate deletes it once its key is in entry svp/stg/media-signing" "$2" &&
+    ! grep -qE "^terraform |put-secret-value" "$3"' _ "$mskey" "$work/out" "$log"
+key_lines "$keys/stg-a.pem"
+expect "media-signing-key.sh stg activate a: a failed write of the entry keeps the private key, removes the entry file" \
+  sh -c '! FAKE_PUT_FAIL=1 FAKE_TF_KEY_IDS="{\"a\":\"K0FAKEA\"}" FAKE_PUBLIC_KEY="$4" bash "$1" stg activate a >"$2" 2>&1 &&
+    grep -q "write entry svp/stg/media-signing (the apply of aws/envs/stg makes it); .*stg-a.pem stays: this again" "$2" &&
+    [ -e "$3/stg-a.pem" ] && ! ls -A "$3" | grep -q "^entry\." && ! { grep -qF -f "$5" "$2" || grep -q "PRIVATE KEY" "$2"; }' \
+  _ "$mskey" "$work/out" "$keys" "$work/a.pub" "$work/key.lines"
+expect "media-signing-key.sh stg activate a: run again after that, writes the entry and deletes the key" \
+  sh -c 'FAKE_TF_KEY_IDS="{\"a\":\"K0FAKEA\"}" FAKE_PUBLIC_KEY="$3" bash "$1" stg activate a >/dev/null 2>&1 && [ ! -e "$2/stg-a.pem" ] &&
+    [ "$(jq -r .MEDIA_SIGNING_KEY_ID "$4")" = K0FAKEA ]' _ "$mskey" "$keys" "$work/a.pub" "$state/put-secret-value.json"
+
+clear_log
+for args in "stg new c" "stg new" "stg rotate a" "dev new a" "mgmt new a" "stg new a b"; do
+  expect "media-signing-key.sh $args: refused with its usage, before any aws or terraform" \
+    sh -c '! bash "$1" $2 >"$3" 2>&1 && grep -q "usage: media-signing-key.sh" "$3" && [ ! -s "$4" ]' _ "$mskey" "$args" "$work/out" "$log"
+done
+expect "media-signing-key.sh refuses a key directory inside the repository, before any aws" \
+  sh -c '! XDG_STATE_HOME="$2/.state" bash "$1" stg new a >"$3" 2>&1 && grep -q "is inside .*: a private key never sits in the repository" "$3" &&
+    [ ! -s "$4" ] && [ ! -e "$2/.state" ]' _ "$mskey" "$infra_root" "$work/out" "$log"
+cksum "$tfv" >"$work/sums"
+for form in "stg new a --print" "--print stg new a" "stg activate a --print"; do
+  clear_log
+  expect "media-signing-key.sh $form: prints the commands, runs none, makes no file" \
+    sh -c 'XDG_STATE_HOME="$2" bash "$1" $3 >"$4" 2>&1 && grep -qE "^\+ (openssl genpkey|AWS_PROFILE=anhnv-stg aws secretsmanager put-secret-value) " "$4" &&
+      [ ! -s "$5" ] && [ ! -e "$2" ] && cksum "$6" | diff "$7" - >/dev/null' \
+    _ "$mskey" "$work/xdg-print" "$form" "$work/out" "$log" "$tfv" "$work/sums"
+done
+rm -f "$tfv"
+
 # --- sweep.sh -----------------------------------------------------------------------------------------------------
 unset SVP_SESSION_DIR
 for e in stg prd mgmt; do
@@ -2792,6 +2962,17 @@ expect "sweep.sh stg: the vault and the role of aws/accounts/stg kept, a backup 
     grep -q "delete: AWS_PROFILE=anhnv-stg aws backup stop-backup-job --backup-job-id bj-9 --region ap-southeast-1$" "$2" &&
     grep -q "^FAIL  1 leftover(s) in account stg" "$2"' _ "$here" "$work/sweep.out"
 rm -rf "$state/bk"
+expect "sweep.sh stg fails on the key group of media and its public key, not on another one's, each after what uses it" \
+  sh -c '! FAKE_LEFTOVER=signing-keys bash "$1/sweep.sh" stg >"$2" 2>&1 && grep -q "^FAIL  CloudFront key groups: 1 left$" "$2" &&
+    grep -q "^        kg-0fake key group svp-stg-media$" "$2" && grep -q "^FAIL  CloudFront public keys: 1 left$" "$2" &&
+    grep -q "^        K0FAKEA public key svp-stg-media-a-0123abcd$" "$2" && ! grep -qE "kg-other|K0OTHER" "$2" &&
+    grep -q "delete: docs/runbooks/session-stg.md#lệnh-xoá-tay-theo-loại (after the distributions that trust it: delete-key-group takes the ETag of get-key-group)$" "$2" &&
+    grep -q "delete: docs/runbooks/session-stg.md#lệnh-xoá-tay-theo-loại (after the key group: delete-public-key takes the ETag of get-public-key)$" "$2" &&
+    grep -q "^FAIL  2 leftover(s) in account stg" "$2"' _ "$here" "$work/sweep.out"
+expect "sweep.sh stg passes without the key group or a public key of media, and reads them after the distributions" \
+  sh -c 'bash "$1/sweep.sh" stg >"$2" 2>&1 && grep -q "^ok    CloudFront key groups: none$" "$2" && grep -q "^ok    CloudFront public keys: none$" "$2" &&
+    b() { a=$(grep -nE -- "$2" "$1" | head -n 1 | cut -d: -f1); c=$(grep -nE -- "$3" "$1" | head -n 1 | cut -d: -f1); [ -n "$a" ] && [ -n "$c" ] && [ "$a" -lt "$c" ]; }
+    b "$2" "CloudFront distributions:" "CloudFront key groups:" && b "$2" "CloudFront key groups:" "CloudFront public keys:"' _ "$here" "$work/sweep.out"
 expect "sweep.sh stops on another account before any other command" \
   sh -c '! FAKE_ACCOUNT=000000000000 bash "$1/sweep.sh" stg >/dev/null 2>&1' _ "$here"
 
