@@ -31,6 +31,10 @@ variables {
   domain               = "svp.example"
   hosted_zone_id       = "Z0123456789ABCDEFGHIJ"
   flat_rate_free       = true
+  # Fake public key, not a key of any pair: the plan only reads it as text.
+  signing_public_keys = {
+    a = "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtestkeyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n-----END PUBLIC KEY-----\n"
+  }
 }
 
 run "uptime_probe_object" {
