@@ -1,7 +1,7 @@
 # `github/`: cài đặt GitHub của các repo của account
 
-Cài đặt GitHub mà ADR-0015 §11, ADR-0025, ADR-0033, ADR-0041, ADR-0062 §5 quyết định, viết thành code: ruleset, quyền Actions, environment
-`promote`, `promote-prd`, `ecr-rescan` có lịch sử,
+Cài đặt GitHub mà ADR-0015 §11, ADR-0025, ADR-0033, ADR-0041, ADR-0062 §5, ADR-0076, ADR-0077 quyết định, viết thành code: ruleset, quyền
+Actions, environment, biến Actions có lịch sử,
 review và khôi phục được. Root này
 quản mọi repo trong `local.repositories` của `repositories.tf` (repo của lab và `anhnvcoder/.github`, default community health files của
 account: `CONTRIBUTING.md`, `SECURITY.md`, mẫu PR) bằng provider `integrations/github` ghim `6.13.0` (chính xác,
@@ -19,18 +19,23 @@ Root này không có provider AWS: luật `default_tags`, `allowed_account_ids` 
 | `repositories.tf` | `github_repository`: visibility, mô tả, Issues/Projects/Wiki/Discussions, cách merge (chỉ squash, commit lấy tiêu đề và mô tả của PR; auto-merge, xoá nhánh sau merge), secret scanning và push protection; `archive_on_destroy = true` và `prevent_destroy` | mọi repo trong `local.repositories` |
 | `repositories.tf` | `github_repository_vulnerability_alerts` (Dependabot alerts): bật | repo trong `local.vulnerability_alerts_on` |
 | `repositories.tf` | `github_repository_vulnerability_alerts.off`: tắt (như GitHub để mặc định), ngoại lệ trivy `GIT-0003` riêng resource này | repo trong `local.vulnerability_alerts_off` |
-| `repositories.tf` | `github_actions_repository_permissions`: Actions bật, action được phép (của GitHub + danh sách pattern, `ossf/scorecard-action@*` ở bốn repo có CI, `aws-actions/configure-aws-credentials@*` ở `svp-backend`, `svp-frontend` cho job ECR nhận credential AWS qua OIDC), ghim SHA bắt buộc; `prevent_destroy` (destroy đưa repo về cho mọi action) | mọi repo trong `local.repositories` |
+| `repositories.tf` | `github_actions_repository_permissions`: Actions bật, action được phép (của GitHub + danh sách pattern, `ossf/scorecard-action@*` ở bốn repo có CI, `aws-actions/configure-aws-credentials@*` ở `svp-backend`, `svp-frontend` cho job ECR nhận credential AWS qua OIDC, `googleapis/release-please-action@*` ở `svp-backend` cho `release.yml` phát hành checker của `svp-gitops`), ghim SHA bắt buộc; `prevent_destroy` (destroy đưa repo về cho mọi action) | mọi repo trong `local.repositories` |
 | `repositories.tf` | `github_workflow_repository_permissions`: `GITHUB_TOKEN` mặc định chỉ đọc, không "create and approve pull requests" | mọi repo trong `local.repositories` |
 | `rulesets.tf` | `github_repository_ruleset` `main` (cấm xoá, force push, lịch sử thẳng, PR chỉ squash, 0 approval; check bắt buộc kèm `integration_id` 15368 của app GitHub Actions: `ci-ok`, `images-ok` ở backend, frontend, `gitops-ok`, `infra-ok`, `pr-title` (job của `.github/workflows/pr-title.yml`, tiêu đề PR theo Conventional Commits) ở bốn repo đó, `docs` ở `svp-labs`, `.github`; repo mới có `pr-title` bắt buộc theo [ADR-0047](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0047-pr-title-required-condition.md): một repo nhận check này chỉ khi `pr-title.yml` đã ở `main` của nó và đã chạy xanh trên một PR, vì check bắt buộc chưa chạy lần nào thì mọi PR đứng chờ; PR của bot (Renovate, các App promote) đã tự đặt tiêu đề theo Conventional Commits) | mọi repo trong `local.repositories` |
 | `rulesets.tf` | `github_repository_ruleset` `owners` (đòi duyệt Code Owner, vai admin bypass chỉ trong PR) | `svp-backend`, `svp-frontend`, `svp-gitops`, `svp-infra` |
 | `rulesets.tf` | `github_repository_ruleset.gitops_tags`: chỉ admin tạo, đổi, xoá tag | `svp-gitops` |
+| `rulesets.tf` | `github_repository_ruleset.backend_checker_tags` `gitops-check-tags`: tag `gitops-check-v*` tạo tự do (App `svp-release-please` tạo khi phát hành), không ai trừ admin đổi hay xoá, vì `svp-gitops` ghim checker theo tag và commit của nó ([ADR-0077](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0077-versioned-gitops-checker.md) §4) | `svp-backend` |
 | `environments.tf` | `github_repository_environment` `promote` (luật nhánh tuỳ chọn; `prevent_destroy`: xoá environment là xoá luôn secret khoá App), `github_repository_environment_deployment_policy` (chỉ `main`), biến `SVP_GITOPS_APP_CLIENT_ID` / `SVP_WEB_APP_CLIENT_ID` | `svp-backend`, `svp-frontend` |
 | `environments.tf` | `github_repository_environment.promote_prd` (người duyệt là người học, id lấy qua data source `github_user`; admin không bypass; tự duyệt được: người dispatch là người duyệt duy nhất; `prevent_destroy`), luật nhánh chỉ `main`, biến `SVP_GITOPS_APP_CLIENT_ID` | `svp-backend` |
+| `environments.tf` | `github_repository_environment.release` `release` (luật nhánh tuỳ chọn; `prevent_destroy`: xoá environment là xoá luôn khoá của App `svp-release-please`), `github_repository_environment_deployment_policy.release_main` (chỉ `main`), `github_actions_environment_variable.release_app_client_id` (biến `SVP_RELEASE_APP_CLIENT_ID`) | `svp-backend` |
+| `environments.tf` | `github_repository_environment.terraform_plan` `terraform-plan` (trust của role plan chỉ đọc ở stg, prd ghi tên environment này; người duyệt là người học, admin không bypass, tự duyệt được; không luật nhánh vì job chạy ở ref merge của PR; `prevent_destroy`: xoá environment là xoá luôn secret của nó) ([ADR-0076](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0076-terraform-plan-infracost-pr.md) §9) | `svp-infra` |
+| `environments.tf` | `github_actions_variable.terraform_plan_envs`: biến repo `SVP_TF_PLAN_ENVS`, mảng JSON env mà `plan.yml` plan (`jsonencode` của biến `terraform_plan_envs`, mặc định `[]`: job `plan` không chạy) | `svp-infra` |
 | `environments.tf` | `github_repository_environment.ecr_rescan` `ecr-rescan` (trust của role rescan ECR ở stg, prd ghi tên environment này; không người duyệt vì rescan chạy theo lịch; không secret, không biến, nên không `prevent_destroy`), `github_repository_environment_deployment_policy` (chỉ `main`) | `svp-backend`, `svp-frontend` |
 
-Giá trị của hai biến (client ID của hai GitHub App) vào qua `github.auto.tfvars` (git bỏ qua; dạng file ở `github.auto.tfvars.example`,
-cách ghi ở bước 1 dưới đây) hay `TF_VAR_svp_gitops_app_client_id`, `TF_VAR_svp_web_app_client_id`; hai biến `sensitive`, `plan` không in
-giá trị.
+Giá trị của các biến (client ID của các GitHub App, `terraform_plan_envs`) vào qua `github.auto.tfvars` (git bỏ qua; dạng file ở
+`github.auto.tfvars.example`, cách ghi ở bước 1 dưới đây) hay `TF_VAR_<tên biến>`; biến client ID `sensitive`, `plan` không in giá trị.
+`terraform_plan_envs` chỉ nhận `stg`, `prd`; thêm một env sau khi role plan của env đó đã apply và secret của nó đã đặt
+([`github-setup.md`](../docs/runbooks/github-setup.md#environment-terraform-plan)).
 
 ## Không quản, và vì sao
 
@@ -41,7 +46,10 @@ bằng `make github-app`); `make github-check` đọc lại mọi hàng có API 
 | --- | --- | --- |
 | Secret `SVP_GITOPS_APP_PRIVATE_KEY`, `SVP_WEB_APP_PRIVATE_KEY` (environment `promote`); `SVP_GITOPS_APP_PRIVATE_KEY` của `promote-prd` (khoá riêng thứ hai của App `svp-gitops-promoter`, thu hồi riêng với khoá của stg) | Giá trị của secret trong resource nằm rõ trong state; khoá App đặt tay một lần, đổi khi xoay khoá | Settings → Environments → `promote`, `promote-prd` |
 | Secret repo `SVP_AWS_STG_ACCOUNT_ID`, `SVP_AWS_PRD_ACCOUNT_ID` (`svp-backend`, `svp-frontend`): id account của role ECR, secret để GitHub che id trong log của repo public | Như khoá App: giá trị trong resource nằm rõ trong state; người học đặt bằng `gh secret set` | Settings → Secrets and variables → Actions, hay `gh secret list -R anhnvcoder/<repo>` |
-| GitHub App `svp-gitops-promoter`, `svp-web-promoter` (quyền, repo cài) và App Renovate (Mend) | Provider không quản App của tài khoản cá nhân hay việc cài App | trang cài đặt App, runbook của từng repo |
+| Secret `SVP_RELEASE_APP_PRIVATE_KEY` (environment `release` của `svp-backend`) | Như khoá App promote | Settings → Environments → `release` |
+| Secret của environment `terraform-plan` (`svp-infra`): `SVP_AWS_<STG\|PRD\|LOG\|BACKUP>_ACCOUNT_ID`, `SVP_TFVARS_ACCOUNT_<ENV>`, `SVP_TFVARS_ENV_<ENV>` (nội dung `*.auto.tfvars` của `aws/accounts/<env>`, `aws/envs/<env>`) | Giá trị trong resource nằm rõ trong state; người học đặt sau khi role plan của env có | `make github-check` cho mỗi env trong `SVP_TF_PLAN_ENVS` |
+| Secret repo `INFRACOST_API_KEY` (`svp-infra`): khoá API Infracost của `cost.yml` | Như trên | `gh secret list -R anhnvcoder/svp-infra` |
+| GitHub App `svp-gitops-promoter`, `svp-web-promoter`, `svp-release-please` (quyền, repo cài) và App Renovate (Mend) | Provider không quản App của tài khoản cá nhân hay việc cài App | trang cài đặt App, runbook của từng repo |
 | Duyệt workflow của PR fork (`fork-pr-contributor-approval`; `svp-labs`, `.github` người học đặt tay `all_external_contributors` theo ADR-0041) | Provider 6.13.0 không có resource | `gh api repos/anhnvcoder/<repo>/actions/permissions/fork-pr-contributor-approval` |
 | CodeQL default setup (`svp-backend`) | Provider không có resource cho default setup | `docs/ci-cd.md` mục 7 của repo code |
 | Package GHCR public | Không có resource cho visibility của package | runbook của repo code |
@@ -73,8 +81,14 @@ cd infra/github
     "$(gh api repos/anhnvcoder/svp-backend/environments/promote/variables/SVP_GITOPS_APP_CLIENT_ID --jq .value)"
   printf 'svp_web_app_client_id = "%s"\n' \
     "$(gh api repos/anhnvcoder/svp-frontend/environments/promote/variables/SVP_WEB_APP_CLIENT_ID --jq .value)"
+  printf 'svp_release_app_client_id = "%s"\n' \
+    "$(gh api repos/anhnvcoder/svp-backend/environments/release/variables/SVP_RELEASE_APP_CLIENT_ID --jq .value)"
+  printf 'terraform_plan_envs = %s\n' "$(gh api repos/anhnvcoder/svp-infra/actions/variables/SVP_TF_PLAN_ENVS --jq .value)"
 } > github.auto.tfvars
 ```
+
+Environment `release` hay biến `SVP_TF_PLAN_ENVS` chưa có (trước `apply` đầu tạo chúng): `make github-app APP=svp-release-please` đã ghi
+`svp_release_app_client_id`, còn `terraform_plan_envs` để mặc định `[]`; bỏ hai dòng đó khỏi khối trên.
 
 `gh api` lỗi thì nó in thân lỗi JSON thay cho giá trị, `github.auto.tfvars` hỏng cú pháp và `plan` dừng ở lỗi đọc file đó: chạy lại khi
 `gh api` trả đúng giá trị.
@@ -122,6 +136,13 @@ chạy `make docs-check`): chỉ `apply` chúng sau khi `docs.yml` đã ở `mai
 `main` của nó ở hai repo; `github_actions_repository_permissions` của `svp-backend`, `svp-frontend` đổi tại chỗ, `patterns_allowed` thêm đúng
 một dòng `+ "aws-actions/configure-aws-credentials@*"`, không dòng `-`. Dòng nào khác: dừng như bước 3.
 
+**Environment `release`, `terraform-plan`, ruleset tag checker và action release-please** (một lần, sau khi PR thêm chúng merge; trước khi
+`release.yml` của `svp-backend` chạy trên `main`, vì job nêu environment chưa có thì GitHub tự tạo nó ngoài Terraform). App `svp-release-please`
+tạo trước (`github-setup.md`, mục "Thứ tự trên một account mới"). Mong đợi `Plan: 6 to add, 1 to change, 0 to destroy`: environment `release`, luật nhánh
+`main` và biến `SVP_RELEASE_APP_CLIENT_ID` của nó; environment `terraform-plan`; biến `SVP_TF_PLAN_ENVS` (`[]`); ruleset `gitops-check-tags`;
+`github_actions_repository_permissions` của `svp-backend` đổi tại chỗ, `patterns_allowed` thêm đúng một dòng
+`+ "googleapis/release-please-action@*"`, không dòng `-`. Dòng nào khác: dừng như bước 3.
+
 **Thêm repo mới tạo bằng Terraform.** Thêm nó vào `local.repositories` (trường `vulnerability_alerts` chọn tài nguyên Dependabot alerts `this` hay `off`);
 `plan` thấy `create` cho repo và các tài nguyên đi kèm; `apply`.
 
@@ -166,7 +187,7 @@ terraform show -json github.tfplan | jq -r '.resource_changes[] | select(.change
 Dòng nào ngoài import và hai trường trên là cài đặt trên GitHub khác với code: dừng, không `apply`, so với `gh api` GET của repo đó. Đúng
 mong đợi thì `apply`, rồi `plan` phải ra `No changes.`. Xoá khối `import {}` tạm trong PR sau.
 
-**Tfvars.** Giá trị hai biến lấy từ biến GitHub như bước 1; không chép tay.
+**Tfvars.** Giá trị các biến lấy từ biến GitHub như bước 1; không chép tay.
 
 Bỏ một repo khỏi `local.repositories` hay một repo
 khỏi `local.promote_environments` thì `plan` dừng ở `prevent_destroy` (repo, quyền Actions, environment `promote`); muốn thôi quản một

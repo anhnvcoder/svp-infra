@@ -3,7 +3,7 @@
 
 Four pages: stg, prd (one function, sizes read from the Terraform of this repository), org (organization, accounts, OUs,
 policies, log, detection and backup copy flows) and flows (release path to ECR, upload to playback, request, telemetry,
-transcode, backup and restore). Layout as in SKILL.md: rows = AZs, each holding its public, private and database subnet; columns = tiers (outside
+transcode, backup and restore, plan on pull request). Layout as in SKILL.md: rows = AZs, each holding its public, private and database subnet; columns = tiers (outside
 → global services of the account → public → private → database), the regional band below the VPC. Every coordinate is a multiple of 40 (major cell), icons 80px.
 
     python3 .claude/skills/aws-drawio-diagram/scripts/build_svp.py [--pdf] [--png DIR] [--docs]
@@ -787,9 +787,10 @@ def flows(region: str) -> Page:
     yr = yb + 1000
     yp = yr + 1000                         # top of the premium playback block, under the restore drills
     yc = yp + 1080                         # top of the cost and uptime block, under the premium block
-    p = Page("flows", 1880, yc + 1080)
+    yq = yc + 1080                         # top of the plan on pull request block, under the cost block
+    p = Page("flows", 1880, yq + 1040)
     p.text("Flows — image release, upload to playback, request to the web and API, telemetry, transcode, backup, restore, premium "
-           "playback, cost and uptime", 40, 0, 1600, 40,
+           "playback, cost and uptime, Terraform plan on pull request", 40, 0, 1600, 40,
            size=17, bold=1)
     p.text("Release: commit → signed image → ECR (same digest) → svp-gitops → Argo CD", 40, 120, 880, 40, size=13, bold=1)
     p.text("Upload to playback", 40, u, 880, 40, size=13, bold=1)
@@ -1107,6 +1108,49 @@ def flows(region: str) -> Page:
         "The AMP ruler, outside the cluster, evaluates UptimeProbesAbsent, TLSCertExpiringSoon, TLSCertExpiryImminent and "
         "PublicUptimeBudgetBurn, so a dead cluster or agent still pages; no AWS service is added"),
         80, yc + 920, 1720, 120, valign="top")
+
+    # Plan on pull request: job plan trades its OIDC token for the read-only role of the env account, which reads the
+    # state (bucket and key of the account) and the APIs a refresh needs. Infracost reads HCL only, outside AWS.
+    ya, ym, yd = yq + 200, yq + 320, yq + 440     # state row, role row, APIs row
+    p.text("Terraform plan on pull request: read-only role per env account, state read from its bucket; cost from the HCL alone", 40, yq,
+           1600, 40, size=13, bold=1)
+    p.group(f"AWS Cloud · {region}", 520, yq + 80, 1320, 560, **CLOUD)
+    p.group("AWS Account svp-&lt;env&gt; · stg and prd, one role in each", 560, yq + 120, 1240, 480, **ACCOUNT)
+    learner = p.flat("", "users", 200, yq + 120, cid="qlearner")
+    p.text("Learner<br>approves each run of environment terraform-plan", 320, yq + 120, 160, 80)
+    gh = p.box("<b>GitHub Actions · svp-infra plan.yml</b><br>job plan per env, environment terraform-plan", 40, ym, 400, 80,
+               "#F7F7F7", MUTED, align="center")
+    role = p.flat("Role plan<br>svp-ci-terraform-plan", "role", 600, ym, SEC[0], cid="qrole")
+    state = p.icon("S3 state bucket<br>svp-tfstate-&lt;account&gt;-<br>ap-southeast-1", "s3", 1040, ya, STO, cid="qstate")
+    kms = p.icon("KMS alias/svp-tfstate", "key_management_service", 1360, ya, SEC, cid="qkms")
+    apis = p.box("<b>AWS service APIs</b><br>Describe, List, Get of the resources the roots manage", 1040, yd, 440, 80, "#F7F7F7", MUTED,
+                 align="center")
+    pr = p.box("<b>Pull request comment</b><br>plan summary (masked), cost difference", 40, yq + 520, 400, 80, "#F7F7F7", MUTED,
+               align="center")
+    ic = p.box("<b>GitHub Actions · svp-infra cost.yml</b><br>Infracost CLI on the HCL of base and PR", 40, yq + 720, 400, 80,
+               "#F7F7F7", MUTED, align="center")
+    price = p.box("<b>Infracost pricing API</b><br>prices only, no call to AWS", 680, yq + 720, 400, 80, "#F7F7F7", MUTED, align="center")
+    p.edge(learner, gh, label="approves", exit_=(0.5, 1), entry=(0.5, 0))
+    p.edge(gh, role, STROKE["sec"], label="OIDC token", exit_=(1, 0.5), entry=(0, 0.5),
+           label_pos=along([(440, ym + 40), (600, ym + 40)], (480, ym + 40)))
+    route = [(680, ym + 40), (860, ym + 40), (860, ya + 40), (1040, ya + 40)]
+    p.edge(role, state, STROKE["sto"], label="read state, no write", exit_=(1, 0.5), entry=(0, 0.5), points=route[1:3],
+           label_pos=along(route, (950, ya + 40)))
+    p.edge(state, kms, STROKE["sec"], dashed=True, label="decrypt, via S3 only", exit_=(1, 0.5), entry=(0, 0.5))
+    route = [(680, ym + 40), (860, ym + 40), (860, yd + 40), (1040, yd + 40)]
+    p.edge(role, apis, STROKE["sec"], label="refresh reads", exit_=(1, 0.5), entry=(0, 0.5), points=route[1:3],
+           label_pos=along(route, (950, yd + 40)))
+    p.edge(gh, pr, label="summary", exit_=(0.5, 1), entry=(0.5, 0))
+    p.edge(ic, pr, label="cost difference", exit_=(0.5, 0), entry=(0.5, 1))
+    p.edge(ic, price, label="resources, usage", exit_=(1, 0.5), entry=(0, 0.5))
+    p.text(bullets(
+        "Only job plan holds id-token: write; the token is the one credential and the role trusts one subject, the environment "
+        "terraform-plan, so a pull request from a fork never reaches it",
+        "Role plan is ReadOnlyAccess minus the data reads a plan does not need; it never writes or locks the state (plan -lock=false)",
+        "No plan text, attribute value or account id reaches a log, artifact or comment: the summary is masked before it is posted",
+        "Infracost needs no state and no credential of AWS; it skips with a notice while its API key is not set, and plan skips while "
+        "SVP_TF_PLAN_ENVS names no env"),
+        80, yq + 840, 1720, 160, valign="top")
     return p
 
 

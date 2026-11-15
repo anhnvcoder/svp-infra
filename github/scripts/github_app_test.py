@@ -229,6 +229,7 @@ class Check(unittest.TestCase):
         answers = {
             ".enabled": "true", ".approval_policy": "all_external_contributors", ".default_branch": "main",
             ".security_and_analysis.dependabot_security_updates.status": "disabled", ".[].id": "1", ".state": "configured",
+            ".value": "[]", "plan secrets": "",
         }
         answers.update(override or {})
 
@@ -236,8 +237,12 @@ class Check(unittest.TestCase):
             jq = args[args.index("--jq") + 1]
             if jq.startswith("[.rules"):
                 return gh_result("true\n")
+            if jq == ".secrets[].name" and "/environments/terraform-plan/" in args[2]:
+                return gh_result(answers["plan secrets"])
             if jq == ".secrets[].name":
-                return gh_result("SVP_GITOPS_APP_PRIVATE_KEY\nSVP_WEB_APP_PRIVATE_KEY\n")
+                return gh_result("SVP_GITOPS_APP_PRIVATE_KEY\nSVP_WEB_APP_PRIVATE_KEY\nSVP_RELEASE_APP_PRIVATE_KEY\n")
+            if answers[jq] is None:
+                return gh_result(code=1)
             return gh_result(answers[jq] + "\n")
 
         public = mock.MagicMock()
@@ -287,6 +292,37 @@ class Check(unittest.TestCase):
         code, out = self.run_check({".enabled": "false"})
         self.assertEqual(code, 1)
         self.assertIn("private vulnerability reporting: false (want true)", out)
+
+
+    def test_plan_secrets_are_skipped_while_no_env_is_planned(self):
+        code, out = self.run_check()
+        self.assertEqual(code, 0, out)
+        self.assertIn("skip  secrets of svp-infra terraform-plan: SVP_TF_PLAN_ENVS is []", out)
+
+    def test_plan_secrets_of_every_listed_env_pass(self):
+        stg = "\n".join(ga.plan_secret_names(["stg"]))
+        code, out = self.run_check({".value": '["stg"]', "plan secrets": stg + "\n"})
+        self.assertEqual(code, 0, out)
+        self.assertIn("svp-infra terraform-plan secret SVP_TFVARS_ENV_STG: True", out)
+
+    def test_a_missing_plan_secret_fails(self):
+        have = "\n".join(n for n in ga.plan_secret_names(["stg"]) if n != "SVP_TFVARS_ENV_STG")
+        code, out = self.run_check({".value": '["stg"]', "plan secrets": have + "\n"})
+        self.assertEqual(code, 1, out)
+        self.assertIn("svp-infra terraform-plan secret SVP_TFVARS_ENV_STG: False (want True)", out)
+
+    def test_a_missing_plan_variable_fails(self):
+        code, out = self.run_check({".value": None})
+        self.assertEqual(code, 1, out)
+        self.assertIn("svp-infra variable SVP_TF_PLAN_ENVS: error:", out)
+
+    def test_plan_secret_names_per_env(self):
+        self.assertEqual(ga.plan_secret_names([]), [])
+        self.assertEqual(ga.plan_secret_names(["stg", "prd"]), [
+            "SVP_AWS_LOG_ACCOUNT_ID", "SVP_AWS_BACKUP_ACCOUNT_ID",
+            "SVP_AWS_STG_ACCOUNT_ID", "SVP_TFVARS_ACCOUNT_STG", "SVP_TFVARS_ENV_STG",
+            "SVP_AWS_PRD_ACCOUNT_ID", "SVP_TFVARS_ACCOUNT_PRD", "SVP_TFVARS_ENV_PRD",
+        ])
 
 
 class Config(unittest.TestCase):

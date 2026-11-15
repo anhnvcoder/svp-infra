@@ -212,6 +212,11 @@ run "stg" {
   }
 
   assert {
+    condition     = output.github_oidc_provider_arn == var.github_oidc_arn
+    error_message = "github_oidc_provider_arn must be the ARN of the account's OIDC provider token.actions.githubusercontent.com."
+  }
+
+  assert {
     condition     = toset(keys(aws_iam_role.ci)) == toset(keys(var.ci_roles)) && alltrue([for r in aws_iam_role.ci : r.max_session_duration == 3600])
     error_message = "There must be one role per entry of ci_roles, each with sessions of one hour."
   }

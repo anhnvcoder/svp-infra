@@ -18,9 +18,11 @@ locals {
       allowed_actions             = "selected"
       sha_pinning_required        = true
       # The release jobs sign and attest images with cosign and copy them to ECR with short-lived AWS credentials from
-      # GitHub OIDC; scorecard.yml runs the OpenSSF Scorecard action.
+      # GitHub OIDC; scorecard.yml runs the OpenSSF Scorecard action; release.yml runs release-please, which opens the
+      # release pull request of the gitops checker and tags it once merged.
       patterns_allowed = [
         "sigstore/cosign-installer@*", "ossf/scorecard-action@*", "aws-actions/configure-aws-credentials@*",
+        "googleapis/release-please-action@*",
       ]
       # No workflow opens or approves a pull request with GITHUB_TOKEN: the promote pull requests use the App's token.
       can_approve_pull_request_reviews = false

@@ -74,6 +74,8 @@ key qua grant nó tạo cho mỗi repo, nên role đẩy, kéo không cần quy�
   `vuln` cũ. Không action có `*`, không quyền KMS. Bộ role của từng env (bảng **Role CI ECR** của §5) nằm trong `locals` của root.
 - ARN repo và ARN provider dựng từ tên, không lấy từ resource, nên policy biết lúc `plan` và test đọc được; role `depends_on` provider vì IAM
   từ chối trust policy có principal chưa tồn tại.
+- Output `github_oidc_provider_arn` (cũng dựng từ tên, `depends_on` provider) là principal cho role OIDC của module khác trong account, như
+  role plan của [`ci-plan-role`](../ci-plan-role/README.md): một account chỉ có một provider cho mỗi URL.
 
 ## Test
 
@@ -139,6 +141,7 @@ repo của repo kia (trừ `svp-ci-ecr-promote`, được mọi repo phát hành
 | ---- | ----------- |
 | cache\_prefixes | Repository prefixes of the pull through cache rules (ghcr, docker-hub, quay, k8s, ecr-public): nodes import and create repositories under <prefix>/*. |
 | ci\_role\_arns | ARN of each role of ci\_roles, by role name. |
+| github\_oidc\_provider\_arn | ARN of the IAM OIDC provider of GitHub Actions in the account: the principal of the trust of every role GitHub Actions assumes here. |
 | kms\_key\_arn | ARN of the KMS key alias/svp-<env>-ecr that encrypts every repository of the registry. |
 | registry\_host | Host of the private registry of the account, <account>.dkr.ecr.<region>.amazonaws.com: key ecrRegistry of the cluster values. |
 | release\_repository\_arns | ARN of each release repository, by repository name (svp-backend/gateway, svp-frontend/web). |

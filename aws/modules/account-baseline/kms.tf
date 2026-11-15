@@ -38,12 +38,16 @@ locals {
     "kms:GenerateDataKey*",
     "kms:DescribeKey",
   ]
+
+  # The read-only role of terraform plan in CI (aws/modules/ci-plan-role), built from its fixed name: the key policy
+  # needs neither the role nor the module to exist first.
+  ci_plan_role_arn = "arn:aws:iam::${var.account_id}:role/svp-ci-terraform-plan"
 }
 
 # Key policy of the state key. State holds outputs and resource attributes that a role allowed only to list or read the
-# bucket should not see, so reading it takes kms:Decrypt, which only the SvpAdmin roles get (aws:PrincipalArn narrows
-# the use; no statement names the principal "*"). The account administers the key without kms:Decrypt, so any admin of
-# the account can still fix the key policy if the permission set is renamed or removed.
+# bucket should not see, so reading it takes kms:Decrypt, which the SvpAdmin roles get, and the CI plan role only via
+# S3 on this bucket (aws:PrincipalArn narrows the use; no statement names "*"). The account administers the key without
+# kms:Decrypt, so any admin of the account can still fix the key policy if the permission set is renamed or removed.
 data "aws_iam_policy_document" "state_key" {
   statement {
     sid       = "AccountAdministersKey"
@@ -72,6 +76,37 @@ data "aws_iam_policy_document" "state_key" {
       test     = "ArnLike"
       variable = "aws:PrincipalArn"
       values   = local.admin_role_arn_patterns
+    }
+  }
+
+  # With the S3 Bucket Key, S3 asks KMS with the bucket ARN as encryption context.
+  statement {
+    sid       = "CiPlanReadsState"
+    effect    = "Allow"
+    actions   = ["kms:Decrypt"]
+    resources = ["*"]
+
+    principals {
+      type        = "AWS"
+      identifiers = ["arn:aws:iam::${var.account_id}:root"]
+    }
+
+    condition {
+      test     = "ArnEquals"
+      variable = "aws:PrincipalArn"
+      values   = [local.ci_plan_role_arn]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = ["s3.${var.region}.amazonaws.com"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "kms:EncryptionContext:aws:s3:arn"
+      values   = ["arn:aws:s3:::${local.state_bucket}"]
     }
   }
 }
