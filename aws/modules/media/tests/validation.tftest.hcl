@@ -450,8 +450,8 @@ run "name_and_tls" {
 }
 
 # Both slots during a rotation: one public key per slot, named after the hash of its PEM, all in the key group. Key
-# IDs are only known after apply, and so is the size of the set of them, so the tests count the public keys; that the
-# group holds all of them is read in the code.
+# IDs are only known after apply, and so is the size of a set of two of them, so this run counts the public keys and
+# premium_behavior, with one key, counts the group; that the group holds both is read in the code.
 run "signing_keys" {
   command = plan
 
@@ -472,8 +472,8 @@ run "signing_keys" {
   }
 
   assert {
-    condition     = aws_cloudfront_key_group.media.name == "svp-stg-media" && aws_cloudfront_key_group.media.items != null
-    error_message = "The key group must be named <name_prefix>-media and hold keys."
+    condition     = aws_cloudfront_key_group.media.name == "svp-stg-media"
+    error_message = "The key group must be named <name_prefix>-media."
   }
 
   assert {
@@ -492,6 +492,12 @@ run "premium_behavior" {
     condition = (length(aws_cloudfront_public_key.media) == 1 &&
     aws_cloudfront_public_key.media["a"].name == "svp-stg-media-a-bab396c9" && toset(keys(output.signing_key_ids)) == toset(["a"]))
     error_message = "One key in signing_public_keys must give one public key."
+  }
+
+  # A set of one unknown key ID still has a known size, unlike a set of two.
+  assert {
+    condition     = length(aws_cloudfront_key_group.media.items) == 1
+    error_message = "With one key in signing_public_keys the key group must hold that one public key."
   }
 
   # The key group ID is only known after apply, so the test counts the groups of each behavior.

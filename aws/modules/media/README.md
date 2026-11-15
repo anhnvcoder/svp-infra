@@ -1,13 +1,15 @@
 # Module `media`
 
-Hai bucket S3 `uploads`, `media`, KMS key mã hoá `uploads` và CloudFront trước `media` ở tên `media.<domain>` (gói flat-rate Free hay
-pay-as-you-go theo `flat_rate_free`) đòi URL ký bằng key group ở mọi path ngoài `media/`, `preview/`, plan GuardDuty Malware Protection for S3 trên `uploads`, cộng hai
-policy IAM (JSON) cho video-service và media-worker.
+Hai bucket S3 `uploads`, `media`, KMS key mã hoá `uploads` và CloudFront trước `media` ở tên `media.<domain>` (gói
+flat-rate Free hay pay-as-you-go theo `flat_rate_free`) đòi URL ký bằng key group ở mọi path ngoài `media/`,
+`preview/`, plan GuardDuty Malware Protection for S3 trên `uploads`, cộng hai policy IAM (JSON) cho video-service và
+media-worker.
 Thiết kế: [ADR-0034](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0034-aws-stage7.md) mục 9 và 11,
 [ADR-0052](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0052-cloudfront-flat-rate-free.md) (gói Free, WAF, CORS của
 CloudFront), [ADR-0061](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0061-edge-cloudfront-waf-acm.md) (§1 gói theo env,
-§2 distribution, §5 cert và TLS, §6 header, §8 log edge), [ADR-0073](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0073-premium-playback.md) (§7 behavior premium và quyền theo tiền tố, §8 khoá
-ký),
+§2 distribution, §5 cert và TLS, §6 header, §8 log edge),
+[ADR-0073](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0073-premium-playback.md)
+(§7 behavior premium và quyền theo tiền tố, §8 khoá ký),
 [ADR-0067](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0067-backup-dr.md) (§8 mã hoá `uploads`, tag backup); ngưỡng an toàn
 theo threat model UP-4…UP-6, WEB-10, PRM-* của repo code.
 
@@ -52,11 +54,14 @@ theo threat model UP-4…UP-6, WEB-10, PRM-* của repo code.
   RDS: sống cùng buổi), S3 Bucket Key bật (`bucket_key_enabled`): S3 xin KMS một key cấp bucket thay vì gọi KMS cho từng object, request
   KMS giảm tới 99 %. Key policy mặc định của KMS: account quyết ai dùng key qua IAM. Bản gốc người dùng tải lên là dữ liệu riêng mãi mãi,
   nên đọc một object cần thêm `kms:Decrypt` trên đúng key này, và mọi lần dùng key nằm trong CloudTrail. Output `uploads_kms_key_arn`.
-- **`media`: SSE-S3** (ngoại lệ trivy AWS-0132 `[each.key=media]` trên resource mã hoá chung của hai bucket): nội dung công khai qua
-  CloudFront sau transcode, CMK không thêm ranh giới nào, chỉ thêm phí key và quyền `kms:Decrypt` cho CloudFront và hai service. trivy kiểm
-  từng bucket: khoá `for_each` của `aws_s3_bucket.this` viết thẳng (trivy không mở rộng `for_each` có giá trị chưa biết, mà tên bucket chứa
-  `account_id` chỉ biết lúc chạy), và `kms_master_key_id` của `media` là `""` chứ không `null` (trivy coi `null` là chưa biết, bỏ qua kiểm).
-  Nhờ vậy `uploads` mất CMK thì `make trivy` đỏ; test mock kiểm thêm `aws:kms`, Bucket Key ở `uploads`, `AES256` ở `media`.
+- **`media`: SSE-S3** (ngoại lệ trivy AWS-0132 `[each.key=media]` trên resource mã hoá chung của hai bucket): khoá KMS
+  do khách quản không vẽ thêm ranh giới nào, vì mọi bên đọc object (CloudFront qua OAC, video-service, media-worker)
+  đều sẽ nhận `kms:Decrypt`; `media/`, `preview/` công khai qua CloudFront, còn `premium/` được giữ bằng chữ ký ở
+  behavior mặc định (key group tin cậy), không bằng mã hoá; khoá riêng còn thêm phí mỗi tháng. trivy kiểm từng
+  bucket: khoá `for_each` của `aws_s3_bucket.this` viết thẳng (trivy không mở rộng `for_each` có giá trị chưa biết, mà
+  tên bucket chứa `account_id` chỉ biết lúc chạy), và `kms_master_key_id` của `media` là `""` chứ không `null` (trivy
+  coi `null` là chưa biết, bỏ qua kiểm). Nhờ vậy `uploads` mất CMK thì `make trivy` đỏ; test mock kiểm thêm `aws:kms`,
+  Bucket Key ở `uploads`, `AES256` ở `media`.
 - **Quyền KMS trên key `uploads`** (`Resource` là đúng ARN key, `Action` theo ADR-0067 §8, không wildcard):
 
   | Principal | Action | Nơi viết |
@@ -140,8 +145,9 @@ flowchart LR
   còn response headers policy thêm header CORS vào câu trả lời. Request của player không mang header nào cần preflight, nên distribution chỉ
   nhận `GET`, `HEAD`.
   - Gói Free chỉ nhận policy managed (policy tự viết chỉ có ở gói Business, Premium): `Managed-SimpleCORS` trả
-    `Access-Control-Allow-Origin: *`, nên trang nào cũng đọc được media cross-origin, kể cả nhúng lại video của nền tảng; chấp nhận vì object
-    media công khai (ai có URL cũng tải được), bất biến, và player không gửi credential nên `*` không lộ gì thêm.
+    `Access-Control-Allow-Origin: *`, nên trang nào cũng đọc được media cross-origin, kể cả nhúng lại video của nền
+    tảng; chấp nhận vì `media/`, `preview/` công khai và bất biến, URL đã ký của `premium/` tự là credential, và
+    player không gửi credential nên `*` không mở thêm gì.
   - Pay-as-you-go: policy `<name_prefix>-media` trả `Access-Control-Allow-Origin` chỉ cho origin có trong `cors_allowed_origins` (cùng danh sách
     với rule CORS của hai bucket), method `GET`, `HEAD`, không credential, `origin_override = true`; `Access-Control-Allow-Headers: *` chỉ dùng
     cho preflight, mà distribution không nhận `OPTIONS`. Cùng policy thêm `Strict-Transport-Security: max-age=63072000; includeSubDomains` (không

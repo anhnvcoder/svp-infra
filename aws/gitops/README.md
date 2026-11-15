@@ -59,12 +59,13 @@ Trình tự cả buổi ở runbook buổi của `docs/runbooks/`.
 3. Mở tunnel ở một terminal riêng (`eval "$(AWS_PROFILE=anhnv-stg terraform -chdir=../../envs/stg output -raw api_tunnel_command)"`)
    và giữ nó chạy tới khi gỡ xong root này. Chỉ prd: PR promote đặt `gitopsRevision` của `envs/prd/charts.yaml` đã merge trước plan.
 4. Giải nén chart `svp-cluster` (mục dưới), rồi init, plan, apply root này (mục "Lệnh").
-5. Chờ Application `svp-observability` Healthy, chạy `make eks-glitchtip-init CONTEXT=svp-stg` ở repo code, rồi chờ `svp-root`:
+5. Ở repo code: chờ Application `svp-observability` Healthy, chạy `make eks-glitchtip-init`, rồi chờ `svp-root` Synced và Healthy
+   (`make eks-wait`, `docs/reference/eks.md` của svp-backend):
 
 ```sh
-AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n argocd wait applications.argoproj.io/svp-observability --for=jsonpath='{.status.health.status}'=Healthy --timeout=30m
-AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n argocd wait applications.argoproj.io/svp-root --for=jsonpath='{.status.sync.status}'=Synced --timeout=30m
-AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n argocd wait applications.argoproj.io/svp-root --for=jsonpath='{.status.health.status}'=Healthy --timeout=30m
+AWS_PROFILE=anhnv-stg make eks-wait CONTEXT=svp-stg APP=svp-observability
+AWS_PROFILE=anhnv-stg make eks-glitchtip-init CONTEXT=svp-stg
+AWS_PROFILE=anhnv-stg make eks-wait CONTEXT=svp-stg APP=svp-root
 ```
 
 Plan đầu tiên của buổi chạy sau apply root env: provider đọc output `cluster_endpoint`, `cluster_values` từ state đó, root env chưa apply thì

@@ -62,7 +62,7 @@ expect "profile_arg changes none of the other variables of lib.sh" \
 
 # --print: the commands are shown, none runs, nothing is checked.
 : >"$log"
-drv 'profile_arg anhnv-security-ro; check_account' --print >"$work/print.out" 2>&1
+env -u SVP_AWS_SECURITY_ACCOUNT_ID bash "$work/drv.sh" 'profile_arg anhnv-security-ro; check_account' --print >"$work/print.out" 2>&1
 expect "--print shows the sts call of the profile" grep -q '^+ AWS_PROFILE=anhnv-security-ro aws sts get-caller-identity' "$work/print.out"
 expect "--print calls no aws" test ! -s "$log"
 expect "--print needs no account variable" sh -c '! grep -q FAIL "$1"' _ "$work/print.out"

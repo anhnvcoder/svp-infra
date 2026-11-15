@@ -69,9 +69,9 @@ resource "aws_kms_alias" "uploads" {
   target_key_id = aws_kms_key.uploads.key_id
 }
 
-# uploads: the key above with the Bucket Key. media is public through CloudFront once transcoded, so it keeps SSE-S3: a
-# customer managed key (what the finding below asks for) would add $1 a month and kms:Decrypt for CloudFront and both
-# services, and protect nothing secret. Its key is "", not null: trivy reads null as unknown and checks nothing.
+# uploads: the key above with the Bucket Key. media keeps SSE-S3: a customer managed key (what the finding below asks
+# for) adds $1 a month and draws no boundary, as every reader (CloudFront via OAC, video-service, media-worker) would
+# get kms:Decrypt; premium/ is held by CloudFront signed URLs, not encryption. Key "", not null: trivy skips a null.
 # Scope: every environment.
 #trivy:ignore:AWS-0132[each.key=media]
 resource "aws_s3_bucket_server_side_encryption_configuration" "this" {

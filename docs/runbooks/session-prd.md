@@ -277,8 +277,11 @@ như `make eks-secrets` đọc). Lệnh `kubectl` tay vào prd ghi profile và c
 AWS_PROFILE=anhnv-prd kubectl --context svp-prd -n argocd get applications.argoproj.io
 ```
 
-Cảnh báo `PublicUptimeBudgetBurn` (SLO `public-uptime`) cháy trong giờ đầu sau khi dựng cluster mới là do probe lỗi
-lúc dựng (Probe chạy từ wave 5, trước service wave 7): chờ, không điều tra.
+Cảnh báo `PublicUptimeBudgetBurn` (SLO `public-uptime`, hai mức cùng tên: `page` và `ticket`) cháy sau khi dựng cluster
+mới là do probe lỗi lúc dựng (probe chạy trước các service, thứ tự ở `argocd/apps/components.json` của svp-gitops):
+chờ, không điều tra. Khi ba đích đã xanh, page hết sau chừng 30 phút, ticket theo cửa sổ 6 giờ; cửa sổ của hai mức ở
+`deploy/observability/prometheus/rules/slo-generated.yaml` của svp-backend, cách đọc ở
+[`public-uptime-budget-burn.md`](https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks/public-uptime-budget-burn.md).
 
 ## Bước 16: smoke, edge, commit status
 

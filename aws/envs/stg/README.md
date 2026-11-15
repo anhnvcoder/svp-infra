@@ -123,6 +123,7 @@ Dựng:
 ```sh
 cp example.auto.tfvars.example stg.auto.tfvars          # rồi sửa bốn giá trị
 AWS_PROFILE=anhnv-stg terraform init -reconfigure -backend-config=../../backend-stg.hcl -backend-config=key=aws/stg/terraform.tfstate
+export SVP_SESSION_DIR="$(git rev-parse --show-toplevel)/.session/$(date -u +%Y%m%dT%H%M%SZ)"  # thư mục buổi đang dở
 ../../scripts/media-signing-key.sh stg new a     # plan reads slot a's public key from media-signing.auto.tfvars.json
 AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
   TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform plan -var-file=stg.tfvars -out=stg.tfplan
@@ -134,9 +135,9 @@ AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_log_arc
 
 Sau `apply`: xác nhận email của topic `svp-stg-alarms` (link trong thư SNS gửi tới `alarm_email`), rồi mở tunnel và kubeconfig (mục dưới);
 `AWS_PROFILE=anhnv-stg terraform output -raw rds_master_user_secret_arn` cho script buổi. Tiếp theo: ghi khoá ký của
-ô `a` vào entry `svp/stg/media-signing` (`aws/scripts/media-signing-key.sh stg activate a`, mục [Khoá ký
-media](#khoá-ký-media)), giá trị các secret khác (`AWS_PROFILE=anhnv-stg make eks-secrets CONTEXT=svp-stg` ở repo
-code), rồi apply root `aws/gitops/stg` khi tunnel đang mở.
+ô `a` vào entry `svp/stg/media-signing` (`aws/scripts/media-signing-key.sh stg activate a` với cùng `SVP_SESSION_DIR`,
+mục [Khoá ký media](#khoá-ký-media)), giá trị các secret khác (`AWS_PROFILE=anhnv-stg make eks-secrets
+CONTEXT=svp-stg` ở repo code), rồi apply root `aws/gitops/stg` khi tunnel đang mở.
 
 ### Tới API: tunnel SSM
 
@@ -233,10 +234,11 @@ gỡ cùng `destroy`. Thiết kế:
 
 Người xem chỉ đọc được object `premium/*` của bucket media qua distribution media bằng URL đã ký (video-service,
 media-worker đọc thẳng bằng role của mình, mục [Quyền AWS trong cluster](#quyền-aws-trong-cluster)); distribution đòi
-chữ ký ở mọi path ngoài hai tiền tố công khai `media/`, `preview/` và kiểm nó bằng key group `svp-stg-media` của module
-[`media`](../../modules/media/README.md), mỗi ô (`a`, `b`) một CloudFront public key. Root truyền khoá công khai vào module, video-service ký bằng khoá riêng của ô đang dùng, đọc từ
-entry Secrets Manager `svp/stg/media-signing` (module [`external-secrets`](../../modules/external-secrets/README.md),
-chỉ role SecretStore của namespace `svp` đọc được).
+chữ ký ở mọi path ngoài hai tiền tố công khai `media/`, `preview/` và kiểm nó bằng key group `svp-stg-media` của
+module [`media`](../../modules/media/README.md), mỗi ô (`a`, `b`) một CloudFront public key. Root truyền khoá công
+khai vào module, video-service ký bằng khoá riêng của ô đang dùng, đọc từ entry Secrets Manager
+`svp/stg/media-signing` (module [`external-secrets`](../../modules/external-secrets/README.md), chỉ role SecretStore
+của namespace `svp` đọc được).
 
 | Biến, output | Nội dung |
 | --- | --- |
@@ -258,7 +260,7 @@ root này không đọc chúng. Phần của root này sống theo buổi:
 | --- | --- | --- |
 | Tag `Backup = "daily"` trên instance RDS, bucket `uploads`, `media` | module `rds`, `media` | selection của plan chọn tài nguyên theo tag này |
 | Key RDS cho account `svp-backup` dùng khi copy snapshot | module `rds` (`backup_copy_account_id = var.backup_account_id`) | bản copy mã hoá lại bằng key của vault đích, dùng được sau khi key RDS bị xoá |
-| Key `alias/svp-stg-uploads`, SSE-KMS với Bucket Key của bucket `uploads` | module `media` (output `uploads_kms_key_arn`, truyền vào `transcode`) | bucket `media` giữ SSE-S3: nội dung công khai qua CloudFront |
+| Key `alias/svp-stg-uploads`, SSE-KMS với Bucket Key của bucket `uploads` | module `media` (output `uploads_kms_key_arn`, truyền vào `transcode`) | bucket `media` giữ SSE-S3: khoá KMS do khách quản không vẽ thêm ranh giới nào (lý do ở [README của module](../../modules/media/README.md)) |
 | Versioning của hai bucket (`media_versioning_enabled = true`) | `stg.tfvars` | AWS Backup chỉ backup bucket có versioning; version cũ giữ 30 ngày như prd |
 | Alarm `svp-stg-backup-job-failed`, `svp-stg-backup-copy-failed` (`Severity=ticket`) | module [`backup-alarms`](../../modules/backup-alarms/README.md) (`backup.tf`) | gửi topic `svp-stg-alarms` |
 
@@ -336,11 +338,12 @@ Trust policy như role của controller trong module `eks`: `pods.eks.amazonaws.
 session tag `eks-cluster-name`, `kubernetes-namespace`, `kubernetes-service-account` đúng cặp ở bảng. ServiceAccount của chart `svp-service`
 mang tên release, nên tên release phải giữ `video-service`, `media-worker`. Chỉ hai service này gọi API AWS.
 
-Controller nền tảng (Collector, Prometheus agent, ACK, admission controller Kyverno, Argo Rollouts, OpenCost) nhận role Pod
-Identity của module [`eks`](../../modules/eks/README.md) trên workspace AMP, log group, khoá và repo phát hành mà
-`baseline.tf` đọc (OpenCost chỉ có bốn quyền đọc của AMP: `aps:QueryMetrics`, `aps:GetSeries`, `aps:GetLabels`,
-`aps:GetMetricMetadata`); role node được kéo qua pull-through cache và giải mã image qua ECR. Topic `svp-stg-alarms` nhận thêm
-publisher `aps.amazonaws.com`, giới hạn ở đúng workspace của env (module [`alarms`](../../modules/alarms/README.md)).
+Controller nền tảng (Collector, Prometheus agent, ACK, admission controller Kyverno, Argo Rollouts, OpenCost) nhận
+role Pod Identity của module [`eks`](../../modules/eks/README.md) trên workspace AMP, log group, khoá và repo phát
+hành mà `baseline.tf` đọc (quyền của role `svp-stg-opencost` ở [README của module
+`eks`](../../modules/eks/README.md)); role node được kéo qua pull-through cache và giải mã image qua ECR. Topic
+`svp-stg-alarms` nhận thêm publisher `aps.amazonaws.com`, giới hạn ở đúng workspace của env (module
+[`alarms`](../../modules/alarms/README.md)).
 
 Secret của cluster: module `external-secrets` tạo vỏ entry `svp/stg/<entry>` (giá trị của `kafka-admin`, `kafka-users`,
 `valkey-users` do module `msk`, `elasticache` ghi, mục dưới; `grafana-operator`, token của service account AMG, do

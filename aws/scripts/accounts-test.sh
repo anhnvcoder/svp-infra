@@ -79,6 +79,12 @@ expect "SVP_AWS_MGMT_ACCOUNT_ID another account: list-accounts never runs" sh -c
 
 answer ", $(acct svp-stg 888888888888 ACTIVE)"
 fails "two accounts named svp-stg" '^FAIL  more than one account named svp-stg' "$work/acc"
+answer ", $(acct svp-stg 888888888888 CLOSED), $(acct svp-stg 999999999999 PENDING_CLOSURE), $(acct svp-stg 666666666666 SUSPENDED)"
+expect "svp-stg rebuilt beside closed, closing and suspended accounts of its name: the ACTIVE one is taken" \
+  sh -c '"$1" && test "$(cat "$2")" = "$3"' _ "$work/acc" "$stdout" "$want"
+printf '{"Accounts": [%s, %s, %s]}\n' "$(acct svp-stg 111111111111 CLOSED)" "$(acct svp-stg 888888888888 CLOSED)" \
+  "$(acct svp-prd 222222222222 ACTIVE)" >"$answers/organizations_list-accounts"
+fails "svp-stg held by closed accounts alone" '^FAIL  account svp-stg is CLOSED, not ACTIVE' "$work/acc"
 printf '{"Accounts": [%s, %s]}\n' "$(acct svp-stg 111111111111 ACTIVE)" "$(acct svp-prd 222222222222 ACTIVE)" >"$answers/organizations_list-accounts"
 fails "svp-log-archive missing" '^FAIL  no account svp-log-archive in the organization: apply aws/org first' "$work/acc"
 answer ", $(acct svp-backup-old 666666666666 ACTIVE)"

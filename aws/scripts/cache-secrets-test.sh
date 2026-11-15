@@ -141,6 +141,48 @@ rm "$answers/put-fails"
 expect "the variables holding the token are unset on every exit (trap EXIT)" \
   grep -qx "trap 'unset user token input json' EXIT" "$here/cache-secrets.sh"
 
+# --- typed on a terminal -----------------------------------------------------------------------------------------
+# on_tty TRANSCRIPT STDOUT ARGS...: cache-secrets.sh ARGS on a pseudo-terminal (stdin, stderr) with stdout in STDOUT;
+# the user and then the token are typed once their prompt shows, everything the terminal shows goes to TRANSCRIPT.
+on_tty() {
+  local t=$1 o=$2
+  shift 2
+  python3 -I -c '
+import os, pty, sys
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvp("bash", ["bash", "-c", "o=$1; shift; exec bash \"$@\" >\"$o\"", "_"] + sys.argv[1:])
+seen = b""
+def more():
+    global seen
+    try:
+        b = os.read(fd, 4096)
+    except OSError:
+        b = b""
+    seen += b
+    return b != b""
+for prompt, typed in ((os.environ["P1"], os.environ["A1"]), (os.environ["P2"], os.environ["A2"])):
+    while prompt.encode() not in seen and more():
+        pass
+    os.write(fd, (typed + "\n").encode())
+while more():
+    pass
+_, st = os.waitpid(pid, 0)
+sys.stdout.write(seen.decode("utf-8", "replace"))
+sys.exit(os.WEXITSTATUS(st) if os.WIFEXITED(st) else 1)
+' "$o" "$here/cache-secrets.sh" "$@" >"$t" 2>&1
+}
+: >"$log"
+export FAKE_WANT="{\"username\":\"learner\",\"accessToken\":\"$ghp\"}" P1='GitHub user: ' A1=learner \
+  P2='PAT read:packages: ' A2=$ghp
+expect "ghcr of stg typed on a terminal exits 0" on_tty "$work/tty.out" "$work/tty.stdout" stg ghcr
+unset P1 A1 P2 A2
+expect "typed on a terminal: put-secret-value reads exactly {username, accessToken} on its stdin" \
+  grep -qx 'stdin is the credential' "$log"
+expect "typed on a terminal: both prompts on the terminal, neither on stdout, which holds the ok line" \
+  sh -c 'grep -q "GitHub user: " "$1" && grep -q "PAT read:packages: " "$1" && ! grep -qE "GitHub user|PAT read" "$2" &&
+    grep -q "^ok    entry ecr-pullthroughcache/ghcr of stg: version 01234567" "$2"' _ "$work/tty.out" "$work/tty.stdout"
+
 # --- --print -----------------------------------------------------------------------------------------------------
 : >"$log"
 expect "--print stg ghcr exits 0 with stdin left unread" \

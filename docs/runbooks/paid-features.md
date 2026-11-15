@@ -64,16 +64,17 @@ theo một hướng: cần cả tắt lẫn bật thì hai PR, áp xong PR trư�
 
 ```sh
 cd infra
-AWS_PROFILE=anhnv-sso aws sso login --region us-east-1
-AWS_PROFILE=anhnv-stg aws sso login --region us-east-1      # skip when both profiles share one sso_session
+AWS_PROFILE=anhnv-sso aws sso login --region us-east-1      # one login for every profile of the same sso_session
 export SVP_AWS_MGMT_ACCOUNT_ID=<12 số> SVP_AWS_LOG_ACCOUNT_ID=<12 số> SVP_AWS_SECURITY_ACCOUNT_ID=<12 số> SVP_AWS_BACKUP_ACCOUNT_ID=<12 số>
 export SVP_AWS_STG_ACCOUNT_ID=<12 số> SVP_AWS_PRD_ACCOUNT_ID=<12 số>
 export SVP_SESSION_DIR="$PWD/.session/$(date -u +%Y%m%dT%H%M%SZ)"      # check-account.sh writes its marks here
 jq -r 'to_entries[] | .key as $a | .value | to_entries[] | "\($a) \(.key) \(.value)"' aws/paid-features.json
 ```
 
-Biến account đọc trên trang SSO, không ghi vào file nào. Lệnh `jq` in mỗi cờ khác `always` một dòng `<account> <cờ> <giá trị>`: phải đúng file
-vừa merge. Mở lại terminal giữa chừng: đặt lại mọi biến của khối trên.
+Một lần đăng nhập cho mọi profile chung `sso_session` của runbook này: `anhnv-sso`, `anhnv-stg`, `anhnv-prd`,
+`anhnv-stg-ro`, `anhnv-prd-ro`, `anhnv-security-ro`. Biến account đọc trên trang SSO, không ghi vào file nào. Lệnh `jq`
+in mỗi cờ khác `always` một dòng `<account> <cờ> <giá trị>`: phải đúng file vừa merge. Mở lại terminal giữa chừng: đặt
+lại mọi biến của khối trên.
 
 ## `aws/security`
 

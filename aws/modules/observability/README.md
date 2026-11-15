@@ -2,7 +2,8 @@
 
 Nơi nhận telemetry của một account env (`svp-stg`, `svp-prd`), gọi từ root `aws/accounts/<env>` ([README](../../accounts/README.md)) nên dữ
 liệu và cấu hình sống qua `destroy` của buổi: workspace Amazon Managed Service for Prometheus (AMP), log group ứng dụng, Transaction Search của
-X-Ray, khoá KMS của chúng và, theo cờ `managed_grafana`, workspace Amazon Managed Grafana (AMG; mục [Biến `grafana_enabled`](#biến-grafana_enabled)). Thiết kế và lý do từng giá trị:
+X-Ray, khoá KMS của chúng và, theo cờ `managed_grafana`, workspace Amazon Managed Grafana (AMG; mục
+[Biến `grafana_enabled`](#biến-grafana_enabled)). Thiết kế và lý do từng giá trị:
 [ADR-0063](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0063-managed-observability.md) và phụ lục của nó (số § dưới đây là §
 của ADR). Output `amp_workspace_id`, `amp_endpoint`, `log_group_name`, `grafana_url` là các khoá `ampWorkspaceId`, `ampEndpoint`, `logGroup`,
 `grafanaUrl` của cluster values; root `aws/envs/<env>` đọc tài nguyên của module bằng data source theo tên, alias, và id workspace AMG

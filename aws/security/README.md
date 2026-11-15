@@ -219,7 +219,8 @@ AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" TF_VAR_securi
   TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" terraform plan -out=security.tfplan
 ```
 
-Mong đợi với `aws/paid-features.json` chỉ tắt Security Hub và Inspector của stg `Plan: 1 to import, 52 to add, 1 to change, 0 to destroy`:
+Mong đợi với `aws/paid-features.json` chỉ tắt Security Hub và Inspector của stg
+`Plan: 1 to import, 53 to add, 1 to change, 0 to destroy`:
 mỗi region của hai region một cấu hình tổ chức, sáu protection plan, một publishing destination, một detector management, một member, một
 analyzer, một rule `svp-security-guardduty-findings`; bốn tài nguyên Security Hub, policy `svp-security-off` và association của `svp-stg`; cấu
 hình tổ chức Inspector, ba liên kết thành viên (`svp-prd`, `svp-log-archive`, `svp-backup`), enabler `members`; role, policy attachment và aggregator
@@ -235,7 +236,7 @@ Inspector](#kiểm-plan-inspector).
   bỏ các loại khác `"ECR"` (`EC2`, `LAMBDA`, `LAMBDA_CODE`…) và giữ `"ECR"`. `account_ids` cũ rỗng là Inspector chưa bật ở `svp-security`:
   `aws/org` chưa chỉ định delegated admin, dừng.
 - `aws_inspector2_member_association.members` và `account_ids` của `aws_inspector2_enabler.members` đúng id của các account thành viên khác
-  `svp-security` có `inspector_ecr` khác `off` (`svp-prd`, `svp-log-archive` khi chỉ stg `off`).
+  `svp-security` có `inspector_ecr` khác `off` (`svp-prd`, `svp-log-archive`, `svp-backup` khi chỉ stg `off`).
 
 ### 4. Apply
 
@@ -283,7 +284,7 @@ Phần của root này:
   `off`.
 - `7a: every source of the Config aggregator svp-org is SUCCEEDED, …`: nguồn aggregator `SUCCEEDED` sau khi
   `aws/baseline` (bước 6) bật recorder; script bỏ qua nguồn của account có `config_recording` `off`: account đó không
-  có recorder nên aggregator không nhận dữ liệu mới của nó, và nguồn ấy không `SUCCEEDED` không phải lỗi.
+  có recorder nên aggregator không nhận dữ liệu mới của nó, và nguồn ấy không `SUCCEEDED` thì không phải lỗi.
 - `7a: Inspector scans only ECR in …`: chỉ ECR bật; thành viên là account có `inspector_ecr` khác `off`.
 
 Lần dựng đầu, lệnh chạy ở đây trước bước (6): các kiểm cần `aws/baseline` báo `FAIL` và đó là mong đợi, không phải lỗi
@@ -304,7 +305,7 @@ Khi root này đã apply trước khi có Inspector: apply [`aws/org`](../org/RE
 Phần Inspector của plan là `1 to import`, `1 to change`: import và đổi `aws_inspector2_enabler.security`; thêm
 `aws_inspector2_organization_configuration.this`, một `aws_inspector2_member_association.members` mỗi thành viên có `inspector_ecr` khác `off`,
 `aws_inspector2_enabler.members`. Plan còn các thay đổi của cờ chi phí (mục [Plan](#3-plan)) nếu root chưa áp chúng. Dừng (không apply, dán
-plan lại) có dòng `destroy`, thay đổi ngoài hai nhóm đó, hay nếu Inspector không đúng như mục
+plan lại) nếu có dòng `destroy`, thay đổi ngoài hai nhóm đó, hay nếu Inspector không đúng như mục
 [Kiểm plan Inspector](#kiểm-plan-inspector). Sau apply: kiểm Inspector ở bước 6, rồi plan lần hai phải là `No changes.`.
 
 ## Gỡ

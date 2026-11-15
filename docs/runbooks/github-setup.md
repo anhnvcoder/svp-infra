@@ -60,13 +60,10 @@ Một khoá lộ: xoá nó trên trang App trước (mọi token đã cấp hế
 
 ### Renovate
 
-App công khai của Mend, không có khoá. Giữ tay: chọn repo cho một bản cài qua API là
-`PUT /user/installations/{installation_id}/repositories/{repository_id}`, chỉ nhận PAT classic (token của `gh` bị 403 ở đường này); tạo
-PAT chỉ cho việc một lần mỗi repo không đáng. Hai cách:
+App công khai của Mend, không có khoá. Giữ tay: chọn repo cho bản cài làm trên trang, không qua API (token của `gh` bị
+403 ở đường API, tạo PAT cho việc một lần mỗi repo không đáng):
 
-- Trang: <https://github.com/apps/renovate> → **Configure** → `anhnvcoder` → **Only select repositories**: sáu repo → **Save**.
-- API, khi đã có sẵn PAT classic scope `repo` trong clipboard (không lưu vào file):
-  `GH_TOKEN="$(pbpaste)" gh api -X PUT /user/installations/<installation id>/repositories/<repository id>`.
+<https://github.com/apps/renovate> → **Configure** → `anhnvcoder` → **Only select repositories**: sáu repo → **Save**.
 
 Bẫy: thêm repo khi `renovate.json` chưa ở `main` của nó thì Renovate mở PR onboarding "Configure Renovate"; repo sẽ có `renovate.json`
 thì thêm sau khi file đó đã ở `main`.
@@ -177,8 +174,9 @@ environment; secret do người học đặt, mỗi env một lần, ở buổi 
    to change, 0 to destroy`: đúng `github_actions_variable.terraform_plan_envs`.
 3. Kiểm: `make github-check`: mỗi secret của env đã bật một dòng `ok    svp-infra terraform-plan secret <tên>: True`.
 
-Mỗi lượt plan dừng chờ người học duyệt **Review deployments** trên trang lượt chạy; đọc diff `.github/`, `ci/`, `Makefile` của PR trước khi
-duyệt; cách duyệt và Reject ở mục "Plan trên PR" của [`README.md`](../../README.md#plan-trên-pr). Tắt plan một env: bỏ nó khỏi
+Mỗi lượt plan dừng chờ người học duyệt **Review deployments** trên trang lượt chạy; đọc toàn bộ diff của PR (workflow,
+`ci/`, `Makefile`, HCL và lock file dưới `aws/`) trước khi duyệt; cách duyệt và Reject ở mục "Plan trên PR" của
+[`README.md`](../../README.md#plan-trên-pr). Tắt plan một env: bỏ nó khỏi
 `terraform_plan_envs`, `make github-plan`, `make github-apply`; secret giữ nguyên. File `*.auto.tfvars` của env đổi thì chạy lại
 `make github-secrets ENV=<env>`.
 

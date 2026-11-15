@@ -185,10 +185,10 @@ cd aws/accounts/stg
 AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform plan -out=stg.tfplan
 ```
 
-Mong chỉ thêm: stg `Plan: 40 to add, 0 to change, 0 to destroy`, prd `Plan: 45 to add, 0 to change, 0 to destroy` (với
-`aws/paid-features.json` của repo: stg không có AMG, prd có): danh sách ở
-[README `aws/accounts`, Thêm vào account đã có baseline](../../aws/accounts/README.md#thêm-vào-account-đã-có-baseline) trừ hai secret đã có. Có
-`change`, `destroy` hay tài nguyên của `module.baseline`, `module.alarms`: dừng, dán plan. Rồi:
+Mong chỉ thêm đúng các dòng của danh sách ở [README `aws/accounts`, Thêm vào account đã có
+baseline](../../aws/accounts/README.md#thêm-vào-account-đã-có-baseline) (cột của env này, theo `aws/paid-features.json`
+của repo: stg không có AMG, prd có) trừ hai secret đã có; dòng cuối của plan có dạng `Plan: <n> to add, 0 to change, 0
+to destroy`. Có `change`, `destroy` hay tài nguyên của `module.baseline`, `module.alarms`: dừng, dán plan. Rồi:
 
 ```sh
 AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform apply stg.tfplan && rm stg.tfplan

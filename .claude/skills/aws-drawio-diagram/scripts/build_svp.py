@@ -78,8 +78,25 @@ def cache_prefixes() -> list[str]:
 
 
 def paid_feature(account: str, flag: str) -> str:
-    """Value of a cost flag in aws/paid-features.json; a missing account or flag is `always`, as in the Terraform module."""
+    """Value of a cost flag in aws/paid-features.json; a missing account or flag is `always`, as in the Terraform module.
+    An account, flag or value outside `accounts` and `values` of modules/paid-features/main.tf stops the build, as it
+    fails the plan and the session scripts."""
+    text = (ROOT / "aws/modules/paid-features/main.tf").read_text(encoding="utf8")
+    accounts = re.search(r"^\s*accounts = \[(.*?)\]", text, re.M)
+    block = re.search(r"^\s*values = \{(.*?)\n  \}", text, re.M | re.S)
+    if not (accounts and block):
+        raise SystemExit("aws/modules/paid-features/main.tf: no accounts list or values map")
+    known = re.findall(r'"([a-z-]+)"', accounts.group(1))
+    values = {f: re.findall(r'"([a-z]+)"', v) for f, v in re.findall(r"^\s*([a-z_]+)\s*=\s*\[(.*?)\]", block.group(1), re.M)}
     given = json.loads((ROOT / "aws/paid-features.json").read_text(encoding="utf8"))
+    for key, flags in given.items():
+        if key not in known or not isinstance(flags, dict):
+            raise SystemExit(f"aws/paid-features.json: {key!r} is not an account key ({', '.join(known)}) holding flags")
+        for name, value in flags.items():
+            if name not in values:
+                raise SystemExit(f"aws/paid-features.json: {key}.{name} is not one of {', '.join(values)}")
+            if value not in values[name]:
+                raise SystemExit(f"aws/paid-features.json: {key}.{name} is {value!r}, not one of {', '.join(values[name])}")
     return given.get(account, {}).get(flag, "always")
 
 
@@ -438,8 +455,8 @@ def env_page(env: Env) -> Page:
     if env.inspector:
         scan = p.icon("Inspector<br>enhanced scan of the cache repositories", "inspector", 920, row2, SEC, cid="inspector")
     else:
-        scan = None
-        p.text("ECR basic scanning<br>on push, cache repositories<br>(inspector_ecr off)", 920, row2, 240, 80, color=MUTED)
+        scan = p.box("ECR basic scanning<br>cache repositories<br>(inspector_ecr off)", 920, row2, 240, 80, "#F7F7F7", MUTED,
+                     color=MUTED, cid="basicscan")
     amp = p.icon(f"AMP workspace svp-{env.name}<br>metrics, rules, alerts", "managed_service_for_prometheus", 1200, row2, SEC, cid="amp")
     amg_note = "only during a session" if env.grafana_session else "IAM Identity Center sign-in"
     amg = p.icon(f"AMG svp-{env.name}<br>{amg_note}", "managed_service_for_grafana", 1480, row2, SEC, cid="amg")
@@ -587,8 +604,8 @@ def env_page(env: Env) -> Page:
     if cw:
         p.edge(cw, sns, STROKE["integ"], label="alarm, OK")
     p.edge(events, queue, STROKE["integ"])
-    if scan:
-        p.edge(scan, ecr, STROKE["sec"], dashed=True, label="scan", exit_=(0, 0.5), entry=(1, 0.5), label_pos=0.5)
+    p.edge(scan, ecr, STROKE["sec"], dashed=True, label="scan" if env.inspector else "scan on push", exit_=(0, 0.5),
+           entry=(1, 0.5), label_pos=0.5)
     p.edge(amg, amp, STROKE["sec"], label="PromQL", exit_=(0, 0.5), entry=(1, 0.5))
     p.edge(amg, app_logs, STROKE["sec"], label="Logs Insights", exit_=(1, 0.5), entry=(0, 0.5))
     p.edge(xray, app_logs, STROKE["sec"], label="spans", exit_=(0, 0.5), entry=(1, 0.5))
