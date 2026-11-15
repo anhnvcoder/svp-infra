@@ -73,18 +73,19 @@ account). Cần Terraform 1.15, AWS CLI v2, `aws sso login --profile anhnv-sso`.
 
 ```sh
 cd infra/aws/log-archive
-AWS_PROFILE=anhnv-sso aws sts get-caller-identity --region ap-southeast-1 --query '[Account,Arn]' --output text
-printf '%s\n' "$SVP_AWS_MGMT_ACCOUNT_ID" "$SVP_AWS_LOG_ACCOUNT_ID" "$SVP_AWS_SECURITY_ACCOUNT_ID" "$SVP_AWS_STG_ACCOUNT_ID" \
-  "$SVP_AWS_PRD_ACCOUNT_ID"
+../scripts/check-account.sh mgmt
 ```
 
-`Account` phải bằng `SVP_AWS_MGMT_ACCOUNT_ID` (management), `Arn` là role SSO của người học. Năm dòng sau đều là 12 số: log archive và
-security từ output `log_archive_account_id`, `security_account_id` của `aws/org`. Khác hay thiếu thì dừng.
+Tìm `ok    account <12 số> of mgmt, arn:aws:sts::<12 số>:assumed-role/AWSReservedSSO_…`; `FAIL  profile anhnv-sso is account …` thì dừng.
+Biến account của năm account (`SVP_AWS_MGMT_ACCOUNT_ID` gõ tay; `SVP_AWS_LOG_ACCOUNT_ID`, `SVP_AWS_SECURITY_ACCOUNT_ID` đã đặt ở
+[`aws/org`, Bước (2)](../org/README.md#bước-2-tổ-chức-ou-account); `SVP_AWS_STG_ACCOUNT_ID`, `SVP_AWS_PRD_ACCOUNT_ID` từ
+`eval "$(aws/scripts/accounts.sh)"` khi đã có `svp-backup`, nếu chưa thì từ trang SSO) đều phải là 12 số: biến thiếu thì `terraform plan`
+dừng ở validation của biến.
 
 ### 2. Init và plan
 
 ```sh
-AWS_PROFILE=anhnv-sso terraform init -backend-config=../backend.hcl
+../scripts/tfvars.sh init
 AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
   TF_VAR_security_account_id="$SVP_AWS_SECURITY_ACCOUNT_ID" TF_VAR_stg_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
   TF_VAR_prd_account_id="$SVP_AWS_PRD_ACCOUNT_ID" \

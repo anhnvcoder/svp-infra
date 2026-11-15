@@ -80,14 +80,23 @@ Hai nhóm của Identity Center mà công cụ nền tảng của stg, prd cấp
 Grafana) và `svp-platform-viewers` (`VIEWER` của Grafana). ADR-0065 dùng lại hai nhóm này cho vai trò `ADMIN`, `VIEWER` của Argo CD chạy bằng EKS
 Capability.
 
-- Code chỉ tạo nhóm, không thành viên: người học gán người vào nhóm trên console IAM Identity Center (Groups → nhóm → Add users).
-- Id nhóm là output `platform_admin_group_id`, `platform_viewer_group_id`. Người học chép vào biến cùng tên trong `<env>.auto.tfvars` của
+- Code chỉ tạo nhóm, không thành viên: ai thuộc nhóm là quyết định về người, không phải cấu hình, nên người học gán lúc
+  chạy bằng script, không bằng Terraform hay console.
+- Id nhóm là output `platform_admin_group_id`, `platform_viewer_group_id`. Chúng nằm trong biến cùng tên của `<env>.auto.tfvars` của
   `aws/accounts/<env>` (git bỏ qua): repo public không giữ id nhóm.
 
 ```sh
-AWS_PROFILE=anhnv-sso terraform output -raw platform_admin_group_id
-AWS_PROFILE=anhnv-sso terraform output -raw platform_viewer_group_id
+../scripts/platform-member.sh add admins <user-name>        # or viewers; remove undoes it
+../scripts/platform-member.sh count admins
+../scripts/tfvars.sh groups stg                             # and prd: the two ids into <env>.auto.tfvars
 ```
+
+`<user-name>` là tên user ở góc phải trên của AWS access portal. `add` in `ok    <user-name> added to
+svp-platform-admins`, hay `skip  … is already a member` khi đã thuộc nhóm (chạy lại an toàn); `FAIL  no user <user-name>
+in Identity Center` là tên sai hoặc user chưa tạo ([Profile gốc](#profile-gốc-anhnv-sso), bước 3). `count` in `ok
+svp-platform-admins has N member(s)`, chỉ số lượng, không id; mong ít nhất `1` ở nhóm admin. `tfvars.sh groups` ghi hai
+biến, không in id: `ok    aws/accounts/stg/stg.auto.tfvars: platform_admin_group_id, platform_viewer_group_id from
+aws/org written (N lines, mode 600)`.
 
 ### Backup
 
@@ -138,7 +147,8 @@ không in dòng nào ngoài `svp-audit`.
 ## Apply
 
 **Người học chạy mọi lệnh dưới đây** (AI không chạy lệnh nào chạm account). Cần: `aws/bootstrap` đã apply (bucket state, file
-`aws/backend.hcl`), Terraform 1.15, AWS CLI v2, `jq`, `aws sso login --profile anhnv-sso`. Mỗi lệnh `terraform` đọc biến của root (`import`,
+`aws/backend.hcl`), Terraform 1.15, AWS CLI v2, `jq`, profile `anhnv-sso` ([Profile gốc](#profile-gốc-anhnv-sso)) và
+`aws sso login --profile anhnv-sso`. Mỗi lệnh `terraform` đọc biến của root (`import`,
 `plan`, `apply`) đặt `TF_VAR_account_id` ngay trong lệnh từ `SVP_AWS_MGMT_ACCOUNT_ID`; mỗi lệnh AWS CLI ghi `--region`: `ap-southeast-1`
 cho STS, S3, CloudTrail; `us-east-1` cho Organizations.
 
@@ -151,13 +161,17 @@ Root này áp hai lần trong thứ tự áp nền bảo mật org (runbook `doc
 cd infra/aws/org
 AWS_PROFILE=anhnv-sso aws sts get-caller-identity --region ap-southeast-1 --query '[Account,Arn]' --output text
 export SVP_AWS_MGMT_ACCOUNT_ID=<12 số của Account vừa đọc>
-AWS_PROFILE=anhnv-sso terraform init -backend-config=../backend.hcl
+../scripts/tfvars.sh init
+../scripts/tfvars.sh example aws/org
 ```
 
-`Account` phải là management account (account sandbox), `Arn` là role SSO của người học. Khác thì dừng.
+`Account` phải là management account (account sandbox), `Arn` là role SSO của người học. Khác thì dừng. `SVP_AWS_MGMT_ACCOUNT_ID` gõ tay vì
+nó là giá trị mà `check_account` của mọi script đối chiếu với account thật của `anhnv-sso`: đọc từ chính profile đó thì phép đối chiếu vô
+nghĩa. `tfvars.sh init` chạy `terraform init -reconfigure` ở mọi root của management ([`aws/bootstrap`, mục
+5](../bootstrap/README.md#5-áp-thay-đổi-khi-state-đã-ở-bucket)); `tfvars.sh example aws/org` chép `org.auto.tfvars.example` thành
+`org.auto.tfvars` (mode 600) khi file chưa có, không ghi đè, và liệt kê mỗi giá trị còn `<…>` một dòng `note`.
 
-Giá trị cá nhân ở `org.auto.tfvars` (git bỏ qua; lần đầu `cp org.auto.tfvars.example org.auto.tfvars`), đủ mọi biến của
-`org.auto.tfvars.example`:
+Giá trị cá nhân ở `org.auto.tfvars` (git bỏ qua; giữ tay, sửa trong editor), đủ mọi biến của `org.auto.tfvars.example`:
 
 - `account_emails`: năm khoá `stg`, `prd`, `log-archive`, `security`, `backup`; mỗi account một email **chưa account AWS nào dùng**, kể cả
   account đã đóng hay đang `SUSPENDED` (AWS không cho dùng lại email của account đã đóng). Hai khoá `stg`, `prd` giữ đúng email đang có của hai account.
@@ -209,9 +223,11 @@ export SVP_AWS_SECURITY_ACCOUNT_ID="$(AWS_PROFILE=anhnv-sso terraform output -ra
 printf '%s\n' "$SVP_AWS_LOG_ACCOUNT_ID" "$SVP_AWS_SECURITY_ACCOUNT_ID"
 ```
 
-Tạo account mất vài phút mỗi account. Hai dòng cuối là hai id 12 số khác nhau; đặt chúng trong terminal của mọi bước sau (không ghi vào file
-commit), như `SVP_AWS_STG_ACCOUNT_ID`, `SVP_AWS_PRD_ACCOUNT_ID` (output `stg_account_id`, `prd_account_id`). Tiếp theo: bước (3), apply
-[`aws/log-archive`](../log-archive/README.md).
+Tạo account mất vài phút mỗi account. Hai dòng cuối là hai id 12 số khác nhau; đặt chúng trong terminal của mọi bước sau
+(không ghi vào file commit), như `SVP_AWS_STG_ACCOUNT_ID`, `SVP_AWS_PRD_ACCOUNT_ID`. Lần dựng đầu dùng `terraform
+output` ở đây vì `aws/scripts/accounts.sh` đòi đủ năm account thành viên, kể cả `svp-backup` mà tổ chức chỉ có sau [Thêm
+account backup](#thêm-account-backup-và-backup-policy-vào-tổ-chức-đã-áp): từ đó trở đi một lệnh `eval
+"$(aws/scripts/accounts.sh)"` đặt cả năm biến. Tiếp theo: bước (3), apply [`aws/log-archive`](../log-archive/README.md).
 
 ### Bước (4): đủ root
 
@@ -292,11 +308,13 @@ Khi tổ chức đã áp trước khi root có account `svp-backup` và Backup p
    ```sh
    AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform apply org.tfplan
    rm org.tfplan
-   export SVP_AWS_BACKUP_ACCOUNT_ID="$(AWS_PROFILE=anhnv-sso terraform output -raw backup_account_id)"
-   printf '%s\n' "$SVP_AWS_BACKUP_ACCOUNT_ID"
+   eval "$(../scripts/accounts.sh)"
    ```
 
-   Dòng cuối là id 12 số mới, khác bốn account đã có; đặt nó trong terminal của mọi bước sau (không ghi vào file commit).
+   `accounts.sh` đọc tổ chức bằng `anhnv-sso` và đặt cả năm biến account của thành viên (không ghi vào file commit), mỗi
+   biến một dòng `ok    SVP_AWS_<…>_ACCOUNT_ID: account svp-<tên>, ACTIVE` trên stderr; `SVP_AWS_BACKUP_ACCOUNT_ID` là
+   id mới, khác bốn account đã có. Account `PENDING_CLOSURE` hay thiếu thì `FAIL  account svp-<tên> is <trạng thái>, not
+   ACTIVE` và `eval` không đặt biến nào.
 4. **Phần còn lại:** cùng lệnh `plan`, `apply` của bước (4).
 
    Mong đợi `Plan: 8 to add, 1 to change, 0 to destroy`:
@@ -318,56 +336,110 @@ Khi tổ chức đã áp trước khi root có account `svp-backup` và Backup p
 
 ### Profile
 
-Mỗi profile một lần (AI không sửa `~/.aws/config`); chọn SSO session đang dùng cho `anhnv-sso`, region mặc định `ap-southeast-1`, output
-`json`:
+Tám profile SSO của lab (bảng dưới) dùng chung một `sso_session`: một lần `aws sso login` cho tất cả. Chỉ `anhnv-sso` làm tay, một lần cho
+mỗi lab; bảy profile còn lại do script ghi.
 
 | Profile | Account | Role |
 | --- | --- | --- |
+| `anhnv-sso` | management | permission set do người học tạo (tên tuỳ ý, ví dụ quyền quản trị) |
 | `anhnv-stg`, `anhnv-prd` | `svp-stg`, `svp-prd` | `SvpAdmin` |
 | `anhnv-stg-ro`, `anhnv-prd-ro`, `anhnv-security-ro`, `anhnv-backup-ro` | `svp-stg`, `svp-prd`, `svp-security`, `svp-backup` | `SvpReadOnly` |
 | `anhnv-log-ro` | `svp-log-archive` | `SvpLogReader` |
 
+#### Profile gốc `anhnv-sso`
+
+Giữ tay vì đây là gốc của tin cậy: Identity Center, user và thiết bị MFA của người học chỉ tồn tại khi người học tự tạo
+và xác nhận bằng chính mình (MFA không có API, và mọi script đều đối chiếu với profile này). Làm một lần, ở management
+account:
+
+1. **Bật IAM Identity Center**
+   ([nguồn](https://docs.aws.amazon.com/singlesignon/latest/userguide/get-set-up-for-idc.html), đọc 2026-11-15): đăng
+   nhập management account, mở console IAM Identity Center, **Enable**, chọn *organization instance* (instance của
+   account thành viên chỉ gán ứng dụng trong account đó, không gán permission set cho cả tổ chức). Region của instance
+   chọn một lần: đổi region phải xoá instance rồi tạo lại, nên chọn region sẽ dùng lâu dài. Region đó là `sso_region` ở
+   `org.auto.tfvars` và ở khối `[sso-session]` dưới.
+2. **Bật MFA** ([nguồn](https://docs.aws.amazon.com/singlesignon/latest/userguide/mfa-configure.html), đọc 2026-11-15):
+   **Settings** → tab **Authentication** → **Multi-factor authentication** → **Configure**; giữ *Require them to
+   register an MFA device at sign in*. Chấp nhận FIDO2 (khoá bảo mật, passkey) và ứng dụng xác thực TOTP. Tránh lựa chọn
+   email one-time password: trang tài liệu nói nó không đạt MFA chuẩn.
+3. **Tạo user của người học** ([nguồn](https://docs.aws.amazon.com/singlesignon/latest/userguide/addusers.html), đọc
+   2026-11-15): **Users** → **Add user**; tên user dài 1–100 ký tự và không đổi được sau này, đó là `sso_user_name` của
+   `org.auto.tfvars`. Mặc định AWS gửi thư mời "Invitation to join AWS IAM Identity Center" hạn 7 ngày; hết hạn thì
+   **Reset password** để gửi lại. Mở thư, đặt mật khẩu, đăng ký MFA ở lần đăng nhập đầu.
+4. **Cấp quyền vào management account**: **AWS accounts** → chọn management account → **Assign users or groups** → user
+   vừa tạo, gán một permission set có quyền quản trị (tạo ở **Permission sets** nếu chưa có). Code không quản permission
+   set này (mục [Permission set](#permission-set)); từ `SvpAdmin` trở đi `aws/org` quản.
+5. **Ghi profile** (một lần, có `sso-session`): `aws configure sso --profile anhnv-sso`, trả lời tên session (ví dụ
+   `anhnv`), *SSO start URL* (trang access portal, dạng `https://d-0000000000.awsapps.com/start`), *SSO region* (bước
+   1), scope mặc định `sso:account:access`; trình duyệt mở để xác nhận; chọn account management, role ở bước 4; *CLI
+   default client Region* `ap-southeast-1`, output `json`
+   ([nguồn](https://docs.aws.amazon.com/cli/latest/userguide/sso-configure-profile-token.html), đọc 2026-11-15). Kết quả
+   trong `~/.aws/config`: `[sso-session <tên>]` (`sso_start_url`, `sso_region`, `sso_registration_scopes`) và `[profile
+   anhnv-sso]` (`sso_session`, `sso_account_id`, `sso_role_name`). Dùng kiểu cũ không có `sso_session` thì
+   `sso-profiles.sh write` từ chối, vì kiểu đó không tự làm mới token.
+6. **Đăng nhập và đối chiếu**: `AWS_PROFILE=anhnv-sso aws sso login --region us-east-1`, rồi `AWS_PROFILE=anhnv-sso aws
+   sts get-caller-identity --region ap-southeast-1 --query '[Account,Arn]' --output text`; `Account` là
+   `SVP_AWS_MGMT_ACCOUNT_ID`, `Arn` có `AWSReservedSSO_`.
+
+Bẫy: phiên SSO hết hạn thì mọi lệnh báo `Token has expired` hay `The SSO session associated with this profile has expired`: chạy lại
+`aws sso login --profile anhnv-sso`, không cần login từng profile cùng `sso_session`.
+
+#### Bảy profile còn lại
+
+Sau khi `aws/org` đã cấp permission set (bước (4)) và `eval "$(aws/scripts/accounts.sh)"` đã đặt các biến account (mục
+[Bước (2)](#bước-2-tổ-chức-ou-account) và [Thêm account backup](#thêm-account-backup-và-backup-policy-vào-tổ-chức-đã-áp)):
+
 ```sh
-aws configure sso --profile anhnv-security-ro
-AWS_PROFILE=anhnv-security-ro aws sts get-caller-identity --region ap-southeast-1 --query '[Account,Arn]' --output text
+../scripts/sso-profiles.sh write
+../scripts/sso-profiles.sh check
 ```
 
-`Account` bằng id của account trong bảng, `Arn` dạng `assumed-role/AWSReservedSSO_<permission set>_…`. Lặp lại cho từng profile.
+`write` thêm hay thay khối `[profile …]` của từng profile trong bảng (lấy `sso_session` của `anhnv-sso`, account từ biến
+của nó, role theo bảng trên, region `ap-southeast-1`, output `json`), không đổi dòng nào khác của `~/.aws/config` và
+không gọi mạng. Mỗi profile một dòng `ok    profile <tên>: added|up to date …`; profile mà biến account chưa đặt thì
+`skip  profile <tên>: SVP_AWS_<…>_ACCOUNT_ID is not exported` (đặt biến rồi chạy lại: chạy lại an toàn). `FAIL  no
+[profile anhnv-sso] in …` hay `has no sso_session` là gốc chưa đúng: làm lại bước 5 ở trên. `check` đăng nhập từng
+profile bằng `sts get-caller-identity` và so account với biến của dòng đó: `ok    account <12 số> of <tên>, arn:…` mỗi
+profile (Arn dạng `assumed-role/AWSReservedSSO_<permission set>_…`); profile lỗi thì `FAIL  profile <tên> is account …`
+hay lỗi của AWS CLI, `check` vẫn đọc profile sau rồi kết thúc `FAIL  N profile(s) failed, each named above`. Dán mọi
+dòng `FAIL`. Danh sách profile, biến và permission set nằm ở `aws/scripts/profiles.sh`; bảng trên là phần thiết kế.
+`--print` in các khối sẽ ghi, không ghi gì.
 
 ### Quota và xác minh CloudFront của account workload
 
-Account mới có quota EC2 mặc định (5 cho mỗi mã dưới đây ở `ap-southeast-1`), chưa đủ cho buổi stg, prd. Đọc:
+Account mới có quota EC2 mặc định (5 cho mỗi mã ở `ap-southeast-1`), chưa đủ cho buổi stg, prd. Đọc (cần `SVP_AWS_STG_ACCOUNT_ID`,
+`SVP_AWS_PRD_ACCOUNT_ID` từ `accounts.sh` và profile `anhnv-<env>`):
 
 ```sh
-for p in anhnv-stg anhnv-prd; do
-  for q in L-1216C47A L-34B43A08 L-0263D0A3; do
-    printf '%s %s ' "$p" "$q"
-    AWS_PROFILE=$p aws service-quotas get-service-quota --service-code ec2 --quota-code $q --region ap-southeast-1 --query Quota.Value --output text
-  done
-done
+../scripts/preflight.sh quotas stg
+../scripts/preflight.sh quotas prd
 ```
 
-| Mã | Quota | stg cần | prd cần |
-| --- | --- | --- | --- |
-| `L-1216C47A` | vCPU on-demand (Standard) | ≥ 4 | ≥ 16 |
-| `L-34B43A08` | vCPU Spot (Standard) | ≥ 10 | — |
-| `L-0263D0A3` | Elastic IP | ≥ 1 | ≥ 3 |
-
-Thiếu thì xin tăng (mỗi mã thiếu một lệnh; `PENDING` rồi `APPROVED`, account mới thường vài giờ tới 1–2 ngày):
+Mỗi quota một dòng: `ok    <mã> <tên>: <giá trị> (min|max <cần>)` khi đủ; `FAIL  <mã> <tên>: <giá trị>, needs min <cần>:
+run preflight.sh quotas
+<env> request` khi thiếu. Các mã quota và mức cần (EC2 vCPU on-demand và Spot, Elastic IP, chu kỳ luật AMP) nằm ở `quota_table` của
+`aws/scripts/preflight.sh`, một nguồn cho mọi runbook; mức vCPU Spot, on-demand của prd còn cộng `limits.cpu` của NodePool đọc từ
+`origin/main` của `svp-gitops`. Thiếu thì xin tăng (chỉ lệnh này ghi):
 
 ```sh
-AWS_PROFILE=<anhnv-stg|anhnv-prd> aws service-quotas request-service-quota-increase --service-code ec2 --quota-code <mã> \
-  --desired-value <số> --region ap-southeast-1 --query 'RequestedQuota.[QuotaCode,DesiredValue,Status]' --output text
+../scripts/preflight.sh quotas stg request
 ```
 
-Mỗi yêu cầu tăng quota thành một case loại "Service limits" trong Support Center của account đó.
+Mỗi quota thiếu gửi một yêu cầu và in `note  <mã> <tên>: <giá trị>, asked for <cần> (<id> <PENDING|CASE_OPENED>): wait for APPROVED`;
+quota đã có yêu cầu mở thì `note  … a request is already open … not sent again`, nên chạy lại không gửi hai lần. Chờ `APPROVED` (account mới
+thường vài giờ tới 1–2 ngày) rồi chạy lại bản không `request` cho tới khi mọi dòng `ok`. Mỗi yêu cầu tăng quota thành một case loại "Service
+limits" trong Support Center của account đó. Lệnh `request` bị Service Quotas từ chối thì làm bằng case trên console (mục "Bước (8)" của
+[`platform-setup.md`](../../docs/runbooks/platform-setup.md#bước-8-quota-chu-kỳ-luật-amp)).
 
-Account mới chưa dùng được CloudFront tới khi AWS xác minh. Trên console của từng account (AWS access portal, permission set `SvpAdmin`),
-Support Center mở bằng ô chat với trợ lý AI: gõ yêu cầu, ví dụ `Please verify this new account so it can create Amazon CloudFront
-distributions. It is a member account of organization <o-…> (management account <id>), used for a <staging|production> environment.`; trợ lý
-không tự giải quyết được thì hiện form tạo case đã điền sẵn. Kiểm Case type "Account and billing", Service "Account Activation", Category
-"Account Verification", Severity "General question", liên lạc qua Web, rồi Submit; dán số case. Buổi stg, prd chỉ bắt đầu khi quota đã duyệt
-và case đã xong.
+Account mới chưa dùng được CloudFront tới khi AWS xác minh. Giữ tay vì xác minh là case ở Support Center, và AWS Support
+API chỉ dùng được với gói Support trả phí (Business Support trở lên;
+[nguồn](https://docs.aws.amazon.com/awssupport/latest/user/about-support-api.html), đọc 2026-11-15) mà lab không mua.
+Trên console của từng account (AWS access portal, permission set `SvpAdmin`), Support Center mở bằng ô chat với trợ lý
+AI: gõ yêu cầu, ví dụ `Please verify this new account so it can create Amazon CloudFront distributions. It is a member
+account of organization <o-…> (management account <id>), used for a <staging|production> environment.`; trợ lý không tự
+giải quyết được thì hiện form tạo case đã điền sẵn. Kiểm Case type "Account and billing", Service "Account Activation",
+Category "Account Verification", Severity "General question", liên lạc qua Web, rồi Submit; dán số case. Buổi stg, prd
+chỉ bắt đầu khi quota đã duyệt và case đã xong.
 
 ## OU ngoài Terraform
 
@@ -413,6 +485,9 @@ Rồi một PR bỏ khỏi `audit-trail.tf` key `aws_kms_key.cloudtrail`, alias,
 đưa key vào trạng thái chờ xoá 30 ngày (huỷ được trong thời gian đó).
 
 ## Gỡ có chủ đích
+
+Giữ tay hoàn toàn (không có script): đóng account chờ 90 ngày và không đảo ngược, `destroy` có `-target` theo thứ tự, và xoá dữ liệu không
+khôi phục được; mỗi bước là quyết định của người học sau khi đọc lệnh.
 
 Chỉ khi lab kết thúc, sau khi mọi env và các root `aws/backup`, `aws/baseline`, `aws/security` đã gỡ theo README của chúng. `aws/log-archive`
 còn nguyên ở bước 1 (bước này đọc alias `alias/svp-log-archive` qua provider `aws.log_archive`); muốn xoá log trước khi đóng account thì gỡ nó giữa bước 1

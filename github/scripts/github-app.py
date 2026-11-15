@@ -11,6 +11,18 @@
                                         Local key files (backend/.env) are left alone unless --with-app-keys: then their
                                         variables are checked and the Apps whose key is local sign in to read their installation.
                                         Secrets of environment terraform-plan: checked for the envs in SVP_TF_PLAN_ENVS.
+  github-app.py settings                Read the three repository settings that have no Terraform resource (fork pull
+                                        request approval, private vulnerability reporting, CodeQL default setup) and write
+                                        only those that differ.
+  github-app.py secrets [stg|prd]       Without an env: repository secrets SVP_AWS_STG_ACCOUNT_ID, SVP_AWS_PRD_ACCOUNT_ID of
+                                        the repositories whose ECR jobs read them, from the exported variables of the same
+                                        names. With an env: the secrets of environment terraform-plan that plan.yml reads for
+                                        it (plan_secret_names), from the exported account variables and its two tfvars files.
+  github-app.py infracost-key           Repository secret INFRACOST_API_KEY of svp-infra, from stdin when it is not a
+                                        terminal, else from the key a signed-in Infracost CLI saved.
+  github-app.py tfvars                  Write github/github.auto.tfvars from the Actions variables on GitHub.
+  github-app.py plan | apply            terraform plan of github/ into github.tfplan; apply exactly that file, delete it
+                                        and plan again (want no change). Profile anhnv-sso, token from gh auth token.
   github-app.py selftest                Offline checks of the manifests, destinations and helpers (make check runs it).
 
 Private keys are never printed. Run by the person who owns the account (gh signed in with scope repo), never by CI.
@@ -24,6 +36,7 @@ import os
 import pathlib
 import re
 import secrets
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -48,6 +61,18 @@ PUBLIC_PACKAGES = [f"svp-backend/{s}" for s in
                     "dlq-replay")] + ["svp-frontend/web"]
 CODEQL_DEFAULT_SETUP = ["svp-backend", "svp-frontend"]
 PLAN_REPO, PLAN_ENVIRONMENT, PLAN_ENVS_VARIABLE = "svp-infra", "terraform-plan", "SVP_TF_PLAN_ENVS"
+ECR_SECRET_REPOS = ["svp-backend", "svp-frontend"]
+ECR_SECRETS = ["SVP_AWS_STG_ACCOUNT_ID", "SVP_AWS_PRD_ACCOUNT_ID"]
+INFRACOST_SECRET = "INFRACOST_API_KEY"
+# (tfvars variable, repository, environment or None for a repository variable, Actions variable)
+TFVARS_SOURCES = [
+    ("svp_gitops_app_client_id", "svp-backend", "promote", "SVP_GITOPS_APP_CLIENT_ID"),
+    ("svp_web_app_client_id", "svp-frontend", "promote", "SVP_WEB_APP_CLIENT_ID"),
+    ("svp_release_app_client_id", "svp-backend", "release", "SVP_RELEASE_APP_CLIENT_ID"),
+    ("terraform_plan_envs", PLAN_REPO, None, PLAN_ENVS_VARIABLE),
+]
+PLAN_FILE, TF_PROFILE, TF_REGION = "github.tfplan", "anhnv-sso", "ap-southeast-1"
+SSO_LOGIN = f"AWS_PROFILE={TF_PROFILE} aws sso login --region us-east-1"
 MANIFEST_KEYS = {"name", "url", "hook_attributes", "redirect_url", "callback_urls", "setup_url", "description", "public",
                  "default_events", "default_permissions", "request_oauth_on_install", "setup_on_update"}
 
@@ -126,8 +151,11 @@ def set_dotenv(path, prefix, values):
     names = {f"{prefix}_{k}" for k in values}
     kept = [line for line in lines if line.split("=", 1)[0] not in names]
     kept += [f"{prefix}_{k}={v}" for k, v in values.items()]
-    path.write_text("\n".join(kept) + "\n")
-    os.chmod(path, 0o600)
+    # mode 600; a failed write leaves the file whole
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    with os.fdopen(fd, "w") as f:
+        f.write("\n".join(kept) + "\n")
+    os.replace(tmp, path)
 
 
 def set_tfvar(name, value):
@@ -346,6 +374,8 @@ def check(with_app_keys):
         names = api(f"repos/{OWNER}/{PLAN_REPO}/environments/{PLAN_ENVIRONMENT}/secrets", ".secrets[].name").split()
         for name in plan_secret_names(plan_envs):
             expect(f"{PLAN_REPO} {PLAN_ENVIRONMENT} secret {name}", name in names, True)
+    names = api(f"repos/{OWNER}/{PLAN_REPO}/actions/secrets", ".secrets[].name").split()
+    expect(f"{PLAN_REPO} secret {INFRACOST_SECRET}", INFRACOST_SECRET in names, True)
     for pkg in PUBLIC_PACKAGES:
         url = f"https://ghcr.io/token?scope=repository:{OWNER}/{pkg}:pull"
         try:
@@ -358,6 +388,177 @@ def check(with_app_keys):
     if bad:
         die(f"{len(bad)} setting(s) differ: {', '.join(bad)}")
     print("ok    every setting matches")
+
+
+# --- settings and secrets without a Terraform resource ----------------------------------------------------------------
+
+def settings():
+    """Read each setting first and write only the ones that differ, so a second run sends nothing but GETs."""
+    wanted = []
+    for repo in REPOSITORIES:
+        r = f"repos/{OWNER}/{repo}"
+        wanted.append((repo, "private vulnerability reporting", [f"{r}/private-vulnerability-reporting", "--jq", ".enabled"],
+                       "true", ["-X", "PUT", f"{r}/private-vulnerability-reporting"]))
+        wanted.append((repo, "fork pull request approval",
+                       [f"{r}/actions/permissions/fork-pr-contributor-approval", "--jq", ".approval_policy"],
+                       "all_external_contributors", ["-X", "PUT", f"{r}/actions/permissions/fork-pr-contributor-approval",
+                                                     "-f", "approval_policy=all_external_contributors"]))
+    for repo in CODEQL_DEFAULT_SETUP:
+        r = f"repos/{OWNER}/{repo}"
+        wanted.append((repo, "CodeQL default setup", [f"{r}/code-scanning/default-setup", "--jq", ".state"], "configured",
+                       ["-X", "PATCH", f"{r}/code-scanning/default-setup", "-f", "state=configured"]))
+    for repo, label, read, want, write in wanted:
+        if gh("api", *read).strip() == want:
+            print(f"ok    {repo} {label}")
+        else:
+            gh("api", *write)
+            print(f"changed {repo} {label}")
+
+
+def account_id(name):
+    value = os.environ.get(name, "")
+    if not re.fullmatch(r"\d{12}", value):
+        die(f"{name} is {'not set' if not value else 'not 12 digits'}: export it in this terminal first")
+    return value
+
+
+def tfvars_file(relative):
+    path = GITHUB.parent / relative
+    if not path.is_file() or not path.read_text().strip():
+        die(f"{relative} is missing or empty: write it first (README of {pathlib.PurePath(relative).parent})")
+    return path.read_text()
+
+
+def plan_secret_value(name, env):
+    if name == f"SVP_TFVARS_ACCOUNT_{env.upper()}":
+        return tfvars_file(f"aws/accounts/{env}/{env}.auto.tfvars")
+    if name == f"SVP_TFVARS_ENV_{env.upper()}":
+        return tfvars_file(f"aws/envs/{env}/{env}.auto.tfvars")
+    return account_id(name)
+
+
+def set_secrets(env):
+    """Every value is read and checked before the first secret is written: a missing one leaves GitHub as it was."""
+    if env and env not in ("stg", "prd"):
+        die(f"ENV={env}: want stg or prd")
+    if env:
+        values = [(n, plan_secret_value(n, env)) for n in plan_secret_names([env])]
+        targets = [(PLAN_REPO, PLAN_ENVIRONMENT)]
+    else:
+        values = [(n, account_id(n)) for n in ECR_SECRETS]
+        targets = [(repo, None) for repo in ECR_SECRET_REPOS]
+    for repo, environment in targets:
+        for name, value in values:
+            gh("secret", "set", name, *(["--env", environment] if environment else []), "--repo", f"{OWNER}/{repo}",
+               stdin=value)
+            print(f"ok    secret {name} of {repo}{f' environment {environment}' if environment else ''}")
+
+
+def infracost_key():
+    if not sys.stdin.isatty():
+        key, source = sys.stdin.read(), "stdin"
+    elif shutil.which("infracost"):
+        proc = subprocess.run(["infracost", "configure", "get", "api_key"], capture_output=True, text=True)
+        if proc.returncode != 0:
+            die(f"infracost configure get api_key exited {proc.returncode}; {infracost_ways()}")
+        key, source = proc.stdout, "infracost configure get api_key"
+    else:
+        die(f"no key on stdin and no infracost CLI on PATH; {infracost_ways()}")
+    key = key.rstrip("\r\n")
+    if not key or re.search(r"\s", key):
+        die(f"the key from {source} is empty or holds whitespace or several lines; {infracost_ways()}")
+    gh("secret", "set", INFRACOST_SECRET, "--repo", f"{OWNER}/{PLAN_REPO}", stdin=key)
+    print(f"ok    secret {INFRACOST_SECRET} of {PLAN_REPO} (from {source})")
+
+
+def infracost_ways():
+    return ("copy the key from Infracost Cloud (Org Settings → API key) and run pbpaste | make infracost-key, "
+            "or sign in with infracost auth login and run make infracost-key")
+
+
+def tfvars():
+    """Values are checked before the file is touched: gh api prints an error body where the value should be."""
+    path = GITHUB / "github.auto.tfvars"
+    values = {}
+    for var, repo, environment, name in TFVARS_SOURCES:
+        where = f"repos/{OWNER}/{repo}/" + (f"environments/{environment}/variables/{name}" if environment
+                                            else f"actions/variables/{name}")
+        proc = subprocess.run(["gh", "api", where, "--jq", ".value"], capture_output=True, text=True)
+        label = f"{name} of {repo}{f' environment {environment}' if environment else ''}"
+        if proc.returncode != 0 and "HTTP 404" in proc.stderr:
+            print(f"note  {label} is not on GitHub yet: {var} left as it is in github/github.auto.tfvars")
+            continue
+        if proc.returncode != 0:
+            die(f"gh api {where}: {proc.stderr.strip()[:200]}")
+        raw = proc.stdout.strip()
+        if var == "terraform_plan_envs":
+            try:
+                envs = json.loads(raw)
+            except json.JSONDecodeError:
+                envs = None
+            if not (isinstance(envs, list) and all(e in ("stg", "prd") for e in envs) and len(set(envs)) == len(envs)):
+                die(f"{label} is not a JSON list of distinct stg, prd: github/github.auto.tfvars left unchanged")
+            values[var] = json.dumps(envs)
+        else:
+            if not re.fullmatch(r"Iv[0-9A-Za-z._]+", raw):
+                die(f"{label} does not look like a client ID: github/github.auto.tfvars left unchanged")
+            values[var] = f'"{raw}"'
+        print(f"ok    {var} ← {label}")
+    lines = path.read_text().splitlines() if path.exists() else []
+    lines = [line for line in lines if line.split("=", 1)[0].strip() not in values]
+    lines += [f"{var} = {value}" for var, value in values.items()]
+    fd, tmp = tempfile.mkstemp(dir=GITHUB, prefix=".github.auto.tfvars.")  # mode 600
+    with os.fdopen(fd, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    os.replace(tmp, path)
+    print("ok    github/github.auto.tfvars written (mode 600)")
+
+
+# --- terraform plan and apply of github/ ------------------------------------------------------------------------------
+
+def terraform_env():
+    """Environment of the terraform process alone: the GitHub token never reaches argv, a file or this process's env."""
+    want = account_id("SVP_AWS_MGMT_ACCOUNT_ID")
+    aws_env = dict(os.environ, AWS_PROFILE=TF_PROFILE)
+    proc = subprocess.run(["aws", "sts", "get-caller-identity", "--query", "Account", "--output", "text",
+                           "--region", TF_REGION], env=aws_env, capture_output=True, text=True)
+    if proc.returncode != 0:
+        die(f"profile {TF_PROFILE} has no session (aws sts get-caller-identity failed): run {SSO_LOGIN}")
+    if proc.stdout.strip() != want:
+        die(f"profile {TF_PROFILE} reaches another account than SVP_AWS_MGMT_ACCOUNT_ID: stopped before terraform")
+    print(f"ok    profile {TF_PROFILE} reaches SVP_AWS_MGMT_ACCOUNT_ID")
+    return dict(aws_env, GITHUB_TOKEN=gh("auth", "token").strip())
+
+
+def terraform(env, *args, codes=(0,)):
+    code = subprocess.run(["terraform", *args], cwd=GITHUB, env=env).returncode
+    if code not in codes:
+        die(f"terraform {args[0]} exited {code}")
+    return code
+
+
+def plan():
+    env = terraform_env()
+    if not (GITHUB.parent / "aws" / "backend.hcl").is_file():
+        die("aws/backend.hcl is missing: write it first (README of aws/bootstrap)")
+    terraform(env, "init", "-input=false", "-backend-config=../aws/backend.hcl")
+    terraform(env, "plan", "-input=false", f"-out={PLAN_FILE}")
+    print("next  read the plan above; only the changes you meant, then make github-apply")
+
+
+def apply():
+    saved = GITHUB / PLAN_FILE
+    if not saved.is_file():
+        die(f"no github/{PLAN_FILE}: run make github-plan and read it first")
+    env = terraform_env()
+    try:
+        terraform(env, "apply", "-input=false", PLAN_FILE)
+    finally:
+        saved.unlink()  # the plan holds the variables' values, and a stale plan cannot be applied again
+    print(f"ok    applied; github/{PLAN_FILE} deleted")
+    if terraform(env, "plan", "-input=false", "-detailed-exitcode", codes=(0, 2)) == 2:
+        die("plan after apply still shows changes: read them before anything else")
+    print("ok    plan after apply: No changes.")
 
 
 # --- selftest ---------------------------------------------------------------------------------------------------------
@@ -404,7 +605,11 @@ def main():
     k.add_argument("pem")
     ch = sub.add_parser("check")
     ch.add_argument("--with-app-keys", action="store_true")
-    sub.add_parser("selftest")
+    sub.add_parser("settings")
+    se = sub.add_parser("secrets")
+    se.add_argument("env", nargs="?", default="")
+    for name in ("infracost-key", "tfvars", "plan", "apply", "selftest"):
+        sub.add_parser(name)
     args = parser.parse_args()
     if args.cmd == "create":
         create(args.app, args.code)
@@ -412,8 +617,11 @@ def main():
         set_key(args.app, args.key, args.pem)
     elif args.cmd == "check":
         check(args.with_app_keys)
+    elif args.cmd == "secrets":
+        set_secrets(args.env)
     else:
-        selftest()
+        {"settings": settings, "infracost-key": infracost_key, "tfvars": tfvars, "plan": plan, "apply": apply,
+         "selftest": selftest}[args.cmd]()
 
 
 if __name__ == "__main__":

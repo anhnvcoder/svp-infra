@@ -80,8 +80,9 @@ aws/scripts/session.sh --print stg
 
 ## Điều kiện trước buổi
 
-1. **Account stg đã có baseline**: root `aws/org` đã tạo account `svp-stg` và gán permission set `SvpAdmin`; profile `anhnv-stg` đã tạo bằng
-   `aws configure sso`; baseline `aws/accounts/stg` đã apply (bucket state, KMS key `alias/svp-tfstate`, zone `stg.aws.<domain>`, budget). Zone đó là zone con của zone
+1. **Account stg đã có baseline**: root `aws/org` đã tạo account `svp-stg` và gán permission set `SvpAdmin`; profile `anhnv-stg` đã ghi bằng
+   `aws/scripts/sso-profiles.sh write` ([`aws/org`, Profile](../../aws/org/README.md#profile)); baseline `aws/accounts/stg`
+   đã apply (bucket state, KMS key `alias/svp-tfstate`, zone `stg.aws.<domain>`, budget). Zone đó là zone con của zone
    `aws.<domain>` của account prd: được uỷ quyền bằng bản ghi `NS` của `delegated_subdomains` ở `aws/accounts/prd`, còn `aws.<domain>` bằng bốn
    bản ghi `NS` `aws` ở DNS cha của domain ([`aws/accounts/README.md`](../../aws/accounts/README.md), mục 5). Bước tay này một lần, không
    nằm trong buổi; `check-dns.sh` đỏ thì quay lại README đó, không bắt đầu buổi. Không gỡ baseline stg giữa các buổi: zone stg dựng lại có
@@ -92,27 +93,24 @@ aws/scripts/session.sh --print stg
    đã chạy và tính tiền. Mở case AWS Support từ account stg (Account and billing, kèm dòng lỗi và RequestID nếu có) và chờ xác nhận trước
    buổi đầu.
    Distribution media đăng ký gói CloudFront flat-rate Free: account đang dùng AWS Free Tier không đăng ký được, và mỗi account tối đa 3 gói
-   Free, không tăng được. Mỗi buổi, trước bước 3, đọc gói của account và loại account (chỉ đọc; phép kiểm (a) của ADR-0052):
+   Free, không tăng được. Mỗi buổi, trước bước 3, đọc gói của account và loại account (chỉ đọc; phép kiểm (a) của ADR-0052), và quota vCPU
+   (chỉ đọc), bằng hai script ở terminal của buổi (mục **Mở terminal của buổi**):
 
    ```sh
-   AWS_PROFILE=anhnv-stg aws pricing-plan-manager list-subscriptions --region us-east-1 --query 'subscriptionSummaries[].[arn,planTier,status]' --output json
-   AWS_PROFILE=anhnv-stg aws freetier get-account-plan-state --region us-east-1 --query accountPlanType --output text
+   aws/scripts/preflight.sh freetier stg
+   aws/scripts/preflight.sh quotas stg
    ```
 
-   Mong `[]` và `PAID`; dán lại cả hai. Còn gói (sót của buổi trước, hay của lần thử ở console): nó giữ một suất và distribution của nó,
-   huỷ theo mục **Lệnh xoá tay theo loại** (CloudFront) rồi đọc lại. `FREE`: account còn ở AWS Free Tier, apply sẽ đỏ ở gói: không bắt đầu
-   buổi, dán output cho AI.
+   `freetier` mong `ok    no CloudFront flat-rate plan in stg` và `ok    account plan of stg is PAID`; dán lại cả hai. `FAIL  N CloudFront
+   plan(s) left in stg …`: gói sót của buổi trước hay của lần thử ở console giữ một suất và distribution của nó, huỷ theo mục **Lệnh xoá
+   tay theo loại** (CloudFront) rồi chạy lại. `FAIL  account plan of stg is FREE`: account còn ở AWS Free Tier, apply sẽ đỏ ở gói: không bắt
+   đầu buổi, dán output cho AI.
 
-   Quota vCPU (chỉ đọc): on-demand chuẩn (`L-1216C47A`) cho nhóm node hệ thống tới `system_node_max_size` (2 × số AZ node `m7g.large`,
-   2 vCPU mỗi node) cộng bastion `t4g.nano` (2 vCPU); Spot chuẩn (`L-34B43A08`) cho `limits.cpu` của NodePool (`envs/stg/svp-cluster.yaml`
-   của `svp-gitops`, số ở ADR-0056 §2):
-
-   ```sh
-   AWS_PROFILE=anhnv-stg aws service-quotas get-service-quota --service-code ec2 --quota-code L-1216C47A --region ap-southeast-1 --query 'Quota.Value'
-   AWS_PROFILE=anhnv-stg aws service-quotas get-service-quota --service-code ec2 --quota-code L-34B43A08 --region ap-southeast-1 --query 'Quota.Value'
-   ```
-
-   Cần quota on-demand ≥ 10 (4 node × 2 cộng 2) và quota Spot ≥ `limits.cpu`; thiếu thì xin tăng và chờ trước buổi.
+   `quotas` đọc mỗi quota một dòng `ok    <mã> <tên>: <giá trị> (min|max <cần>)`: on-demand chuẩn (`L-1216C47A`) cho nhóm node hệ thống tới
+   `system_node_max_size` (2 × số AZ node `m7g.large`, 2 vCPU mỗi node) cộng bastion `t4g.nano` (2 vCPU), Spot chuẩn (`L-34B43A08`) cho
+   `limits.cpu` của NodePool (`envs/stg/svp-cluster.yaml` của `svp-gitops`, số ở ADR-0056 §2), và quota chu kỳ luật AMP. Số cần ở
+   `quota_table` của script. `FAIL  <mã> …: needs min <cần>: run preflight.sh quotas stg request`: xin tăng bằng đúng lệnh đó (lệnh duy
+   nhất của `preflight.sh` ghi) và chờ `APPROVED` trước buổi; chạy `quotas stg` lại tới khi hết `FAIL`.
 2. Code đã merge: repo code ở `main` có `make eks-secrets`, `make eks-glitchtip-init`; `svp-gitops` ở `main` có `argocd/root`,
    `argocd/bootstrap.json`, lớp `platforms/eks`; repo này có `aws/envs/stg`, `aws/gitops/stg` và script buổi. Kiểm:
 
@@ -132,31 +130,27 @@ aws/scripts/session.sh --print stg
 4. File backend của account stg, `aws/backend-stg.hcl` (git bỏ qua; chỉ bucket, region, KMS key, không `key`), ghi từ output của baseline:
 
    ```sh
-   AWS_PROFILE=anhnv-stg terraform -chdir=aws/accounts/stg output -raw backend_hcl > aws/backend-stg.hcl
+   aws/scripts/tfvars.sh backend stg
    ```
 
-5. `aws/envs/stg/stg.auto.tfvars` (git bỏ qua) sinh bằng khối lệnh dưới, chỉ đọc output của baseline; thay `<domain>`, `<email>` (hộp
-   thư nhận alarm). File không có id workspace AMG: root env đọc nó từ tham số SSM `/svp/stg/grafana-workspace-id` mà bước 3–5 của buổi tạo
-   cùng workspace:
+   Mong `ok    aws/backend-stg.hcl: output backend_hcl of aws/accounts/stg written (… lines, mode 600)`; không in giá trị.
+   Baseline chưa apply hay output không có bucket thì `FAIL` và file giữ nguyên.
+
+5. `aws/envs/stg/stg.auto.tfvars` (git bỏ qua) ghi bằng script, chỉ đọc output của baseline. File không có id workspace AMG: root env đọc
+   nó từ tham số SSM `/svp/stg/grafana-workspace-id` mà bước 3–5 của buổi tạo cùng workspace:
 
    ```sh
-   zone=$(AWS_PROFILE=anhnv-stg terraform -chdir=aws/accounts/stg output -raw zone_id)
-   cat > aws/envs/stg/stg.auto.tfvars <<EOF
-   hosted_zone_id = "$zone"
-   domain         = "stg.aws.<domain>"
-   alarm_email    = "<email>"
-   EOF
+   aws/scripts/tfvars.sh env stg
    ```
 
-   `domain` là tên zone của account stg (web ở đỉnh, API ở `api.<domain>`); precondition của root từ chối tên ngoài zone đó ngay lúc plan.
-   Endpoint công khai của API tắt, nên file không có IP của máy. File có sẵn mà còn dòng `eks_public_access_cidrs`, `acme_email` hay
-   `grafana_workspace_id` (root không khai báo ba biến này: Terraform chỉ cảnh báo `Value for undeclared variable`) hay thiếu `alarm_email`
-   (plan dừng ở `No value for required variable`): xoá các dòng đó, thêm dòng thiếu, rồi đếm (không in giá trị nào):
-
-   ```sh
-   sed -i '' -E '/^(eks_public_access_cidrs|acme_email|grafana_workspace_id)[[:space:]]*=/d' aws/envs/stg/stg.auto.tfvars
-   grep -c -E '^(hosted_zone_id|domain|alarm_email) ' aws/envs/stg/stg.auto.tfvars     # 3
-   ```
+   Script ghi `hosted_zone_id` từ output `zone_id` của `aws/accounts/stg`; `domain` (tên zone stg, `stg.aws.<domain>`) và `alarm_email`
+   (hộp thư nhận alarm) giữ nếu file đã có, chưa có thì hỏi ở terminal (giá trị cá nhân, không in lại). Nó cũng xoá các dòng
+   `eks_public_access_cidrs`, `acme_email`, `grafana_workspace_id` (root không khai báo ba biến này: Terraform chỉ cảnh báo
+   `Value for undeclared variable`) và chỉ đổi dòng của biến, không đổi dòng khác. Mong `ok` có
+   `3 of hosted_zone_id, domain, alarm_email`; file có sẵn thiếu `alarm_email` mà chạy ngoài terminal thật thì
+   `FAIL … stdin is not a terminal`: chạy lại trong terminal. `domain` là tên zone của account stg (web ở đỉnh, API ở
+   `api.<domain>`); precondition của root từ chối tên ngoài zone đó ngay lúc plan. Endpoint công khai của API tắt, nên file
+   không có IP của máy.
 
 6. **Nền bảo mật của org đã áp** tới ít nhất bước (3) của [`org-security-setup.md`](org-security-setup.md#thứ-tự-áp-lần-đầu) (`aws/bootstrap`,
    `aws/org` tạo account `svp-log-archive`, `aws/log-archive`): root env ghi flow log VPC vào bucket `svp-flowlogs-<log>-ap-southeast-1` và log
@@ -192,19 +186,30 @@ aws/scripts/session.sh --print stg
 
 ```sh
 cd infra
-AWS_PROFILE=anhnv-stg aws sso login --region us-east-1
-AWS_PROFILE=anhnv-sso aws sso login --region us-east-1                                             # cho lượt sweep.sh mgmt cuối buổi
-export SVP_AWS_STG_ACCOUNT_ID=<12 số của account svp-stg>                       # đọc trên trang SSO; không ghi vào file nào
-export SVP_AWS_MGMT_ACCOUNT_ID=<12 số của account management>
-export SVP_AWS_LOG_ACCOUNT_ID=<12 số của account svp-log-archive>               # bucket flow log, log WAF của root env
-export SVP_AWS_BACKUP_ACCOUNT_ID=<12 số của account svp-backup>                 # copy vaults; root env shares RDS key
+AWS_PROFILE=anhnv-sso aws sso login --region us-east-1                          # one login per sso_session
+export SVP_AWS_MGMT_ACCOUNT_ID=<12 số của account management>                   # typed by hand, check_account compares
+eval "$(aws/scripts/accounts.sh)"                                               # sets five member-account variables
 export SVP_SESSION_DIR="$PWD/.session/$(date -u +%Y%m%dT%H%M%SZ)"               # số đo của buổi; .session/ git bỏ qua
+aws/scripts/sso-profiles.sh check                                               # all eight profiles sign in
 ```
 
-Các profile dùng chung một phiên SSO khi cùng `sso_session` trong `~/.aws/config` (cả `anhnv-backup-ro` của bước 17), khi đó một lần `aws sso
-login` là đủ. Biến account không nằm trong file commit nào, kể cả `.envrc`; script đặt `TF_VAR_account_id` từ biến của env,
+`accounts.sh` đọc tổ chức bằng `anhnv-sso` và đặt `SVP_AWS_STG_ACCOUNT_ID`, `SVP_AWS_PRD_ACCOUNT_ID`, `SVP_AWS_LOG_ACCOUNT_ID`,
+`SVP_AWS_SECURITY_ACCOUNT_ID`, `SVP_AWS_BACKUP_ACCOUNT_ID` (bucket flow log, log WAF, copy vault, key RDS dùng ba biến sau). Mong năm dòng
+`ok    SVP_AWS_<…>_ACCOUNT_ID: account svp-<tên>, ACTIVE` (không in id); `FAIL  no account svp-<tên> in the organization` hay `FAIL
+profile anhnv-sso is account …` (`SVP_AWS_MGMT_ACCOUNT_ID` sai) thì stdout rỗng, `eval` không đặt gì: sửa rồi chạy lại. `sso-profiles.sh
+check` mong tám dòng `ok    account <12 số> of <tên>, arn:…`; dán các dòng `FAIL`.
+
+**Phiên SSO.** Mọi profile của lab dùng chung một `sso_session` (của `anhnv-sso`), nên một lần `aws sso login` là đủ cho cả tám, kể cả
+`anhnv-stg` và `anhnv-backup-ro` của bước 17; không login từng profile. Phiên hết hạn giữa buổi thì lệnh `aws` hay script báo `Token has
+expired` hay `The SSO session associated with this profile has expired`, và `check_account` của script dừng ở `FAIL  aws sts
+get-caller-identity with profile <tên> (expired SSO session? …)`. Login lại bằng lệnh đầu của khối trên: lệnh mở trình duyệt, bạn duyệt
+thiết bị bằng tay (MFA; không có API), rồi chạy lại đúng lệnh đang dở. Một bước đã `FAIL` vì phiên hết hạn không để lại gì dở: các script
+chạy lại an toàn, và `measure.sh` nói rõ cách chạy tiếp (`--from <n>`).
+
+Biến account không nằm trong file commit nào, kể cả `.envrc`; script đặt `TF_VAR_account_id` từ biến của env,
 `TF_VAR_log_archive_account_id` từ `SVP_AWS_LOG_ACCOUNT_ID` và `TF_VAR_backup_account_id` từ `SVP_AWS_BACKUP_ACCOUNT_ID` ngay trong lệnh
-`terraform` của root env; `restore-drill.sh` dựng ARN vault `svp-stg-copy` từ `SVP_AWS_BACKUP_ACCOUNT_ID`.
+`terraform` của root env; `restore-drill.sh` dựng ARN vault `svp-stg-copy` từ `SVP_AWS_BACKUP_ACCOUNT_ID`. `.envrc` của direnv chỉ đặt
+mặc định cá nhân cho lệnh tay ở root management ([README](../../README.md#plan-và-apply)).
 
 Mọi bước sau chạy trong **cùng terminal này** (cùng các biến). Thư mục buổi chứa: `timeline.tsv` (mốc UTC: `session-start`,
 `env-apply-start`, `env-apply-end`, `secrets-written`, `gitops-apply-start`, `gitops-apply-end`, `observability-healthy`, `glitchtip-init`,
@@ -219,8 +224,9 @@ không phải thư mục mới. `measure.sh` đọc `cluster-values.json` của 
 
 ```sh
 cd infra
-AWS_PROFILE=anhnv-stg aws sso login --region us-east-1
-export SVP_AWS_STG_ACCOUNT_ID=<12 số> SVP_AWS_MGMT_ACCOUNT_ID=<12 số> SVP_AWS_LOG_ACCOUNT_ID=<12 số> SVP_AWS_BACKUP_ACCOUNT_ID=<12 số>
+AWS_PROFILE=anhnv-sso aws sso login --region us-east-1
+export SVP_AWS_MGMT_ACCOUNT_ID=<12 số>
+eval "$(aws/scripts/accounts.sh)"
 ls -1d .session/*/ | tail -n 3                                                 # thư mục mới nhất là buổi đang dở
 export SVP_SESSION_DIR="$PWD/.session/<thư mục đó>"
 tail -n 5 "$SVP_SESSION_DIR/timeline.tsv"                                      # mốc cuối: bước nào đã xong
@@ -404,8 +410,9 @@ lượt đỏ đã có `Creation complete` hay `Modifications complete` của m�
 `aws_elasticache_user` dưới `module.msk` (nhóm Kafka) hay `module.elasticache` (nhóm Valkey). Mật khẩu là write-only: phần đã ghi giữ mật
 khẩu của lượt đỏ, `plan` lại không thấy lệch (in `No changes` cho chúng), còn phần chưa ghi nhận mật khẩu mới của lượt sau, nên user và
 entry lệch nhau (`WRONGPASS` ở phép kiểm (d) của ADR-0053 ở bước 16, MSK từ chối đăng nhập). Khi đó tăng version của nhóm đó trước khi
-`plan` lại, đúng cách của mục [Đổi một secret của env đang chạy](#đổi-một-secret-của-env-đang-chạy) (`msk_password_version`,
-`valkey_password_version` trong `stg.auto.tfvars`): apply với version mới ghi lại mọi mật khẩu của nhóm từ cùng một giá trị; rồi đi tiếp
+`plan` lại, đúng cách của mục [Đổi một secret của env đang chạy](#đổi-một-secret-của-env-đang-chạy) (`tfvars.sh bump stg msk|valkey` tăng
+`msk_password_version`, `valkey_password_version` trong `stg.auto.tfvars`): apply với version mới ghi lại mọi mật khẩu của
+nhóm từ cùng một giá trị; rồi đi tiếp
 bước 11 (`bootstrap.sh stg secrets`, lệnh kết thúc lượt xoay đó). Lỗi nằm ở chính access string của user ElastiCache thì không apply lại
 (bảng dưới). Muốn bỏ buổi thì sang bước 20 (`pre-destroy.sh` tự ghi context `svp-stg`, nên chạy được cả khi apply đỏ sau khi cluster EKS
 đã có), hay bước 25 rồi 26 với `--no-cluster` khi apply đỏ trước khi tạo cluster EKS (điều kiện ở mục
@@ -559,8 +566,8 @@ aws/scripts/measure.sh stg
 
 Exit: `0` khi thang đo đã chạy tới cuối (một bậc trượt là kết quả, không phải lỗi script; dòng `FAIL level <n>` nêu lý do), `1` khi smoke,
 seed hay công cụ của một bậc hỏng (cả khi hết hạn chờ mà lần đọc Job cuối cùng lỗi, như phiên SSO hết hạn hay mất mạng: bậc ghi `error`,
-không phải `fail`, Job để nguyên; `AWS_PROFILE=anhnv-stg aws sso login --region us-east-1` rồi `measure.sh stg --from <n>`, script xoá Job đó trước khi
-chạy lại bậc), `3` khi một node của lúc bắt đầu bậc mất hay `NotReady` giữa bậc (**Spot bị thu hồi**, dòng `note
+không phải `fail`, Job để nguyên; `AWS_PROFILE=anhnv-sso aws sso login --region us-east-1` rồi `measure.sh stg --from <n>`,
+script xoá Job đó trước khi chạy lại bậc), `3` khi một node của lúc bắt đầu bậc mất hay `NotReady` giữa bậc (**Spot bị thu hồi**, dòng `note
 node(s) …`): bậc đó ghi `interrupted`, **không tính là hệ thống trượt**. Còn thời gian (dưới mốc 3 giờ) thì chạy lại từ bậc đó, không
 smoke, không seed:
 
@@ -1278,7 +1285,7 @@ Tiêu chí: `same`, tức metric bằng hệt (cùng series, cùng số), log v�
 còn trong retention của workspace AMP, nhưng log ứng dụng và `aws/spans` giữ ngắn hơn (`log_retention_days`, `span_retention_days` ở `locals` của
 `aws/accounts/<env>`, ADR-0063 §10): quá hạn đó thì hai phần log, trace rỗng là đúng retention, ghi "ngoài retention", chỉ so metric.
 Dòng `query failed` là truy vấn hỏng, không phải dữ liệu mất: lỗi nằm trên terminal (stderr không vào file); sửa nguyên nhân (như
-`AWS_PROFILE=anhnv-$E aws sso login --region us-east-1` khi phiên SSO hết hạn) rồi chạy lại `persist`.
+`AWS_PROFILE=anhnv-sso aws sso login --region us-east-1` khi phiên SSO hết hạn) rồi chạy lại `persist`.
 
 (f) Quét sót: `sweep.sh stg` và `sweep.sh mgmt` sạch ở bước 30–31, cùng các loại mới (endpoint interface, rule groups namespace của AMP) và
 dòng `kept` của registry, observability.
@@ -1510,20 +1517,21 @@ AWS_PROFILE=anhnv-stg aws backup describe-copy-job --copy-job-id <id> --region a
 
 **Đọc bản copy** (sau bước 17, chỉ đọc, profile `anhnv-backup-ro` của account `svp-backup`): recovery point của buổi trong `svp-stg-copy`, mã
 hoá bằng key của chính vault đó (dùng được sau khi key RDS bị xoá cuối buổi, và cả khi key vault env, sống giữa các buổi, bị xoá khi gỡ
-lab). Lệnh không in ARN nào (ARN mang id account):
+lab). Script không in ARN nào (ARN mang id account); cùng lệnh đọc finding bảo mật của mục **Finding bảo mật của buổi**, nên chạy được từ
+sau bước 17:
 
 ```sh
-k=$(AWS_PROFILE=anhnv-backup-ro aws backup describe-backup-vault --backup-vault-name svp-stg-copy --region ap-southeast-1 \
-  --query EncryptionKeyArn --output text)
-AWS_PROFILE=anhnv-backup-ro aws backup list-recovery-points-by-backup-vault --backup-vault-name svp-stg-copy --region ap-southeast-1 \
-  --by-created-after "$(head -n 1 "$SVP_SESSION_DIR/timeline.tsv" | cut -f 1)" --output json |
-  jq -r --arg k "$k" '.RecoveryPoints[] | [.ResourceType, .Status, .CreationDate, .CalculatedLifecycle.DeleteAt,
-    (if .EncryptionKeyArn == $k then "vault-key" else "other-key" end)] | @tsv'
+aws/scripts/preflight.sh findings stg
 ```
 
-Mong ba dòng (`RDS` và hai `S3`), mỗi dòng `COMPLETED`, `DeleteAt` cách `CreationDate` đúng retention bản copy của stg (ADR-0067 §4) và
-`vault-key`. Thiếu dòng hay `other-key`: dán output cho AI. Lỗi `AccessDenied` hay profile không có: profile `anhnv-backup-ro` chưa tạo hay
-permission set chưa gán (bước (1), (2) của `backup-setup.md`).
+Dòng của backup đứng đầu: ba `note  svp-stg-copy: RDS|S3 COMPLETED created <giờ>, deleted at <giờ>, vault-key` (một `RDS`, hai `S3`), rồi
+`ok    svp-stg-copy: every recovery point COMPLETED under the key of the vault (DeleteAt - CreationDate: compare with ADR-0067 §4)`.
+`DeleteAt` cách `CreationDate` phải đúng retention bản copy của stg (ADR-0067 §4). `FAIL  no recovery point in svp-stg-copy created after
+…` (bước 17 chưa xong, hay copy job chưa kết thúc), hay `FAIL  N recovery point(s) … not COMPLETED or not under the key of the vault`
+(một dòng `note` ở trên là `other-key` hay chưa `COMPLETED`): dán output cho AI. `FAIL  backup describe-backup-vault … (profile missing?
+…)`: profile `anhnv-backup-ro` chưa ghi hay permission set chưa gán (bước (1), (2) của `backup-setup.md`). Phần security của cùng lệnh
+chạy lại an toàn sau bước 19. Org mới áp tới bước (3) (điều kiện 6, chưa profile `anhnv-security-ro`) thì lệnh kết thúc bằng
+`FAIL  aws sts get-caller-identity with profile anhnv-security-ro …` sau các dòng backup: đúng như mong đợi, chỉ đọc các dòng backup.
 
 **Bước 18, `rds`.** **Diễn tập PITR** của ADR-0067 §9: mẫu S1 (**Kiểm dữ liệu** trên `svp-stg` qua `svp-pg`), T_r là lúc S1 xong làm tròn lên
 giây kế; chờ `LatestRestorableTime` ≥ T_r; mẫu S2 trên nguồn; restore `--restore-time` T_r ra `svp-stg-pitr` (cùng subnet group, security
@@ -1575,56 +1583,36 @@ của `security-alert.md` không bao giờ thấy tài nguyên chỉ sống tron
 (đường `--no-cluster` của mục **23–27**: trước `plan --destroy`).
 
 Mục này cần bước (4), (5) của [`org-security-setup.md`](org-security-setup.md#thứ-tự-áp-lần-đầu): profile `anhnv-security-ro` và Security
-Hub ở `svp-security`. Org mới áp tới bước (3) (đủ cho buổi, điều kiện 6) thì chưa có gì để đọc: bỏ qua mục này. Kiểm:
+Hub ở `svp-security`. Org mới áp tới bước (3) (đủ cho buổi, điều kiện 6) thì chưa có gì để đọc: bỏ qua mục này (script sẽ
+`FAIL` ở profile đó). Kiểm:
 `aws configure list-profiles | grep -x anhnv-security-ro` không in gì là chưa có.
 
 ```sh
-ACC="${SVP_AWS_STG_ACCOUNT_ID:?not set}"    # prd session: ACC="${SVP_AWS_PRD_ACCOUNT_ID:?not set}"
-A="\"AwsAccountId\":[{\"Value\":\"$ACC\",\"Comparison\":\"EQUALS\"}],\"RecordState\":[{\"Value\":\"ACTIVE\",\"Comparison\":\"EQUALS\"}]"
-# FAILED controls of the account (never emailed); the full list with resource ids stays in the session directory
-AWS_PROFILE=anhnv-security-ro aws securityhub get-findings --region ap-southeast-1 --output text \
-  --filters "{$A,\"ComplianceStatus\":[{\"Value\":\"FAILED\",\"Comparison\":\"EQUALS\"}],\"WorkflowStatus\":[{\"Value\":\"NEW\",\"Comparison\":\"EQUALS\"}]}" \
-  --query 'Findings[].[Compliance.SecurityControlId,Severity.Label,Resources[0].Type,Resources[0].Id]' \
-  | sort | tee "$SVP_SESSION_DIR/controls-failed.tsv" | cut -f 1-3 | uniq -c | sort -rn
-# Finding GuardDuty, Access Analyzer mới hay cập nhật từ đầu buổi, mọi mức
-AWS_PROFILE=anhnv-security-ro aws securityhub get-findings --region ap-southeast-1 --output text \
-  --filters "{$A,\"UpdatedAt\":[{\"Start\":\"$(head -n 1 "$SVP_SESSION_DIR/timeline.tsv" | cut -f 1)\",\"End\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}],
-    \"ProductName\":[{\"Value\":\"GuardDuty\",\"Comparison\":\"EQUALS\"},{\"Value\":\"IAM Access Analyzer\",\"Comparison\":\"EQUALS\"}]}" \
-  --query 'Findings[].[ProductName,Severity.Label,Types[0],Title]' | sort | uniq -c | sort -rn
+aws/scripts/preflight.sh findings stg      # prd session: findings prd
 ```
 
-Dán toàn bộ output của cả hai lệnh, cùng `controls-failed.tsv` khi AI hỏi tới tài nguyên. Lệnh đầu gồm cả control FAILED của baseline (đã có
-trong danh sách ban đầu, mục 7a của [`org-security-setup.md`](org-security-setup.md#7a-dịch-vụ-bật)) lẫn của tài nguyên buổi. Mỗi control FAILED,
-của tài nguyên buổi cũng như tài nguyên lâu dài, xử lý theo mục "Đọc bảng Security Hub định kỳ" của runbook
+Script lấy giờ bắt đầu buổi từ dòng đầu của `$SVP_SESSION_DIR/timeline.tsv` và lọc theo account của env (`SVP_AWS_STG_ACCOUNT_ID`), rồi đọc
+theo cờ `security_hub` của env (mục **Cờ chi phí của buổi**):
+
+- cờ `always`: control FAILED của account (kể cả control của baseline đã có trong danh sách ban đầu, mục 7a của
+  [`org-security-setup.md`](org-security-setup.md#7a-dịch-vụ-bật), lẫn của tài nguyên buổi) thành mỗi loại một dòng `note  Security Hub
+  FAILED control x<n>: <control> <mức>
+  <loại>`; id tài nguyên ghi vào `$SVP_SESSION_DIR/controls-failed.tsv` (mode 600), không in. Rồi finding
+  GuardDuty và Access Analyzer cập nhật từ đầu buổi, mọi mức: `note  finding x<n> since the start: …`; không có thì `ok    Security Hub: no
+  GuardDuty or Access Analyzer finding since …`;
+- cờ `off`: account không có control và GuardDuty của account không gửi finding vào Security Hub, nên script in `note  security_hub of stg
+  is off …`, đọc phần Access Analyzer ở Security Hub, và đọc finding GuardDuty thẳng ở delegated admin GuardDuty, mỗi region một lần
+  (`ap-southeast-1` và `us-east-1`, nơi nằm finding toàn cục: IAM, CloudFront, WAF): `ok    GuardDuty <region>: no finding for the account
+  since …` hay mỗi finding một dòng `note  GuardDuty <region> severity <số> (HIGH from 7, CRITICAL from 9): <loại>, <tiêu đề>`.
+
+Dán toàn bộ output, cùng `controls-failed.tsv` khi AI hỏi tới tài nguyên. Mỗi control FAILED, của tài nguyên buổi cũng như
+tài nguyên lâu dài, xử lý theo mục "Đọc bảng Security Hub định kỳ" của runbook
 [`security-alert.md`](https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks/security-alert.md#đọc-bảng-security-hub-định-kỳ):
-buổi sau tạo lại tài nguyên từ cùng code, nên lỗi không sửa trong Terraform sẽ quay lại. Của lệnh thứ hai, chỉ mức HIGH, CRITICAL tới email
-(cả finding phát sinh trong lúc gỡ); mức thấp hơn (ngoài `[SAMPLE]`) đối chiếu thời điểm với `timeline.tsv` (diễn tập, đo) rồi xử lý theo
-cùng runbook.
-
-Cờ `security_hub` của env là `off` (mục **Cờ chi phí của buổi**): account không có control nên lệnh đầu không in gì, và GuardDuty của
-account không gửi finding vào Security Hub nên lệnh thứ hai chỉ còn finding Access Analyzer (analyzer của tổ chức nằm ở `svp-security`).
-Đọc finding GuardDuty của account thẳng ở delegated admin GuardDuty, từ đầu buổi, mọi mức (cùng terminal, sau dòng `ACC` trên; `date -j`
-là của macOS):
-
-```sh
-det=$(AWS_PROFILE=anhnv-security-ro aws guardduty list-detectors --region ap-southeast-1 --query 'DetectorIds[0]' --output text)
-since=$(($(date -j -u -f %Y-%m-%dT%H:%M:%SZ "$(head -n 1 "$SVP_SESSION_DIR/timeline.tsv" | cut -f 1)" +%s) * 1000))
-ids=$(AWS_PROFILE=anhnv-security-ro aws guardduty list-findings --detector-id "$det" --region ap-southeast-1 --max-items 50 \
-  --finding-criteria "{\"Criterion\":{\"accountId\":{\"Equals\":[\"$ACC\"]},\"updatedAt\":{\"GreaterThanOrEqual\":$since}}}" \
-  --query 'FindingIds' --output text)
-echo "${ids:-none}"
-```
-
-`none` là không finding nào. Finding toàn cục (IAM, CloudFront, WAF) nằm ở `us-east-1`: chạy lại cả khối với `--region us-east-1` ở mọi
-lệnh. Có id thì in mức, loại, tiêu đề (dán output; mức là số: HIGH từ 7, CRITICAL từ 9), cùng region với lượt `list-findings`:
-
-```sh
-printf '%s\n' "$ids" | tr '\t' '\n' | xargs env AWS_PROFILE=anhnv-security-ro aws guardduty get-findings --detector-id "$det" \
-  --region ap-southeast-1 --output text --query 'Findings[].[Severity,Type,Title]' --finding-ids | sort -rn
-```
-
-Mức HIGH, CRITICAL cũng đã tới email qua rule `svp-security-guardduty-findings` (dòng chung `svp-security: GuardDuty Finding …` cho finding
-ở `us-east-1`); xử lý theo cùng runbook `security-alert.md`.
+buổi sau tạo lại tài nguyên từ cùng code, nên lỗi không sửa trong Terraform sẽ quay lại. Của finding, chỉ mức HIGH, CRITICAL
+tới email (cả finding phát sinh trong lúc gỡ), qua rule `svp-security-guardduty-findings` (dòng chung
+`svp-security: GuardDuty Finding …` cho finding ở `us-east-1`); mức thấp hơn (ngoài `[SAMPLE]`) đối chiếu thời điểm với
+`timeline.tsv` (diễn tập, đo) rồi xử lý theo cùng runbook. `FAIL` nêu lệnh `aws` lỗi và profile của nó: sửa nguyên nhân
+(phiên SSO hết hạn: mục **Mở terminal của buổi**) rồi chạy lại.
 
 ### 20. Gỡ trong cluster trước destroy
 
@@ -2104,17 +2092,21 @@ như bước 11), làm trọn một lượt xoay theo thứ tự của `make k8s
 
 **Mật khẩu Kafka hay Valkey** (ADR-0053 §12): tăng version write-only của nhóm đó trong `aws/envs/stg/stg.auto.tfvars` (git bỏ qua; giữ giá
 trị mới tới hết buổi và các buổi sau: apply với version khác lại sinh mật khẩu mới), plan, đọc, apply, rồi một lượt như trên. Mỗi version đổi
-mọi user của nhóm cùng lúc (một entry chung). Đọc version đang có (không có dòng của nhóm: version là 1, mặc định của biến), rồi sửa
-trong editor đúng dòng đó thành số lớn hơn (`msk_password_version` cho Kafka, `valkey_password_version` cho Valkey); file chưa có dòng của
-nhóm thì thêm một dòng `msk_password_version = 2` (hay `valkey_password_version = 2`). Không nối thêm dòng cùng tên: Terraform từ chối file
-có một biến hai lần (`Attribute redefined`) ngay ở plan:
+mọi user của nhóm cùng lúc (một entry chung). `tfvars.sh bump` tăng đúng dòng `msk_password_version` (Kafka) hay `valkey_password_version`
+(Valkey) thêm 1; file chưa có dòng của nhóm thì version đang dùng là mặc định của biến (1) và script ghi dòng mới bằng mặc
+định cộng 1, không nối dòng thứ hai cùng tên (Terraform từ chối file có một biến hai lần, `Attribute redefined`, ngay ở
+plan). Các dòng khác của file giữ nguyên:
 
 ```sh
-grep -E '^(msk|valkey)_password_version' aws/envs/stg/stg.auto.tfvars
+aws/scripts/tfvars.sh bump stg msk            # or valkey
 aws/scripts/tf.sh stg env plan
 aws/scripts/tf.sh stg env apply
 aws/scripts/bootstrap.sh stg secrets
 ```
+
+`tfvars.sh bump` in `ok    aws/envs/stg/stg.auto.tfvars: msk_password_version from N to N+1 written (… lines, mode 600)`;
+`FAIL  … is not a whole number: fix it by hand; file unchanged` là dòng
+bị sửa tay thành giá trị khác số, script không đoán.
 
 Plan chỉ đổi phiên bản của secret, `aws_secretsmanager_secret_version` (mọi secret `AmazonMSK_*` và hai entry `kafka-*`, hay entry
 `valkey-users`), và với Valkey bốn `aws_elasticache_user` tại chỗ; thấy cluster MSK, replication group, user group hay chính secret bị

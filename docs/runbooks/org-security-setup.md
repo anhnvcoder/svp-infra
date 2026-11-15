@@ -30,15 +30,19 @@ flowchart TD
   B7["(7) kiểm sau áp: dịch vụ, root tập trung, trail, phép thử guardrail, cảnh báo thử, chi phí"]
 ```
 
-| Bước | Root | Hướng dẫn | Dán lại |
-| --- | --- | --- | --- |
-| (1) | `aws/bootstrap` | [README mục 5](../../aws/bootstrap/README.md#5-áp-thay-đổi-khi-state-đã-ở-bucket) | dòng `Plan:`, `Apply complete!`, `No changes.` của plan cuối |
-| (2) | `aws/org` (`-target`) | [README, Bước (2)](../../aws/org/README.md#bước-2-tổ-chức-ou-account) | **plan đủ** (điểm dừng), `Apply complete!`, hai id đã che bớt |
-| (3) | `aws/log-archive` | [README, Apply lần đầu](../../aws/log-archive/README.md#apply-lần-đầu) | dòng `Plan:`, `Apply complete!`, số bucket và key của output |
-| (4) | `aws/org` (đủ) | [README, Bước (4)](../../aws/org/README.md#bước-4-đủ-root) | **plan đủ** (điểm dừng), `Apply complete!`, `No changes.`, `get-trail-status` |
-| (5) | `aws/security` | [README, Apply](../../aws/security/README.md#apply-bước-5-của-thứ-tự-áp-lần-đầu) | dòng `Plan:`, `Apply complete!`, output mục "Kiểm nhanh" |
-| (6) | `aws/baseline` | [README, Apply lần đầu](../../aws/baseline/README.md#apply-lần-đầu) | output mục "Kiểm cái đã có", dòng `Plan:`, `Apply complete!` |
-| (7) | — | [Bước (7)](#bước-7-kiểm-sau-áp) | output từng mục |
+- **(1)** `aws/bootstrap`; [README mục 5](../../aws/bootstrap/README.md#5-áp-thay-đổi-khi-state-đã-ở-bucket). Dán lại:
+  dòng `Plan:`, `Apply complete!`, `No changes.` của plan cuối.
+- **(2)** `aws/org` (`-target`); [README, Bước (2)](../../aws/org/README.md#bước-2-tổ-chức-ou-account). Dán lại: **plan
+  đủ** (điểm dừng), `Apply complete!`, hai id đã che bớt.
+- **(3)** `aws/log-archive`; [README, Apply lần đầu](../../aws/log-archive/README.md#apply-lần-đầu). Dán lại: dòng
+  `Plan:`, `Apply complete!`, số bucket và key của output.
+- **(4)** `aws/org` (đủ); [README, Bước (4)](../../aws/org/README.md#bước-4-đủ-root). Dán lại: **plan đủ** (điểm dừng),
+  `Apply complete!`, `No changes.`, `get-trail-status`.
+- **(5)** `aws/security`; [README, Apply](../../aws/security/README.md#apply-bước-5-của-thứ-tự-áp-lần-đầu). Dán lại: dòng
+  `Plan:`, `Apply complete!`, output mục "Kiểm nhanh".
+- **(6)** `aws/baseline`; [README, Apply lần đầu](../../aws/baseline/README.md#apply-lần-đầu). Dán lại: output mục "Kiểm
+  cái đã có", dòng `Plan:`, `Apply complete!`.
+- **(7)** —; [Bước (7)](#bước-7-kiểm-sau-áp). Dán lại: output từng mục.
 
 ## Trước khi bắt đầu
 
@@ -70,11 +74,16 @@ export SVP_SESSION_DIR="$PWD/.session/$(date -u +%Y%m%dT%H%M%SZ)"               
 aws/scripts/check-account.sh mgmt
 ```
 
-Tìm `ok    account <12 số> of mgmt, arn:aws:sts::<12 số>:assumed-role/AWSReservedSSO_…`. Từ bước (2) thêm hai biến
-`SVP_AWS_LOG_ACCOUNT_ID`, `SVP_AWS_SECURITY_ACCOUNT_ID`. Mở lại terminal giữa chừng: đặt lại mọi biến của khối trên và hai biến của bước
-(2), rồi chạy lại `check-account.sh mgmt`.
-Mọi lệnh ghi của bước (1)–(6) chạy bằng `anhnv-sso` (root `aws/log-archive`, `aws/security`, `aws/baseline` vào account đích qua
-`OrganizationAccountAccessRole`); trước mỗi bước, chạy lại `check-account.sh mgmt`.
+Tìm `ok    account <12 số> of mgmt, arn:aws:sts::<12 số>:assumed-role/AWSReservedSSO_…`. Profile `anhnv-sso` và phiên
+SSO chưa có thì làm [Profile gốc](../../aws/org/README.md#profile-gốc-anhnv-sso) trước. `SVP_AWS_MGMT_ACCOUNT_ID` luôn
+gõ tay (là giá trị mà `check-account.sh` đối chiếu với account thật); bốn biến thành viên đọc trên trang SSO chỉ ở lần
+dựng đầu này, vì `aws/scripts/accounts.sh` đòi đủ năm account thành viên mà `svp-backup` chỉ có sau
+[`backup-setup.md`](backup-setup.md#thứ-tự-áp-lần-đầu). Từ bước (2) thêm hai biến `SVP_AWS_LOG_ACCOUNT_ID`,
+`SVP_AWS_SECURITY_ACCOUNT_ID`. Mở lại terminal giữa chừng: đặt lại mọi biến của khối trên và hai biến của bước (2), rồi
+chạy lại `check-account.sh mgmt`; khi `svp-backup` đã có, `export SVP_AWS_MGMT_ACCOUNT_ID=<12 số>` rồi `eval
+"$(aws/scripts/accounts.sh)"` thay mọi biến còn lại. Mọi lệnh ghi của bước (1)–(6) chạy bằng `anhnv-sso` (root
+`aws/log-archive`, `aws/security`, `aws/baseline` vào account đích qua `OrganizationAccountAccessRole`); trước mỗi bước,
+chạy lại `check-account.sh mgmt`.
 
 Budget tổng của org (điều 3 của mục Trước khi bắt đầu):
 
@@ -106,7 +115,8 @@ cd aws/bootstrap
 ```
 
 Theo [README mục 5](../../aws/bootstrap/README.md#5-áp-thay-đổi-khi-state-đã-ở-bucket): kiểm monitor và tag, plan, apply, sinh lại
-`aws/backend.hcl` (lần đầu có `kms_key_id`), `terraform init -reconfigure` ở mọi root dùng nó, kể cả ba root mới. Tag `Env` chưa có trong dữ
+`aws/backend.hcl` bằng `aws/scripts/tfvars.sh backend mgmt` (lần đầu có `kms_key_id`), `aws/scripts/tfvars.sh init` chạy `terraform init
+-reconfigure` ở mọi root dùng nó, kể cả các root mới. Tag `Env` chưa có trong dữ
 liệu billing thì `apply` lỗi ở đúng tag đó; thứ tự áp không đổi (README, mục Tag phân bổ chi phí). `cd ../..` về `infra/` khi xong.
 
 ## Bước (2): `aws/org`, chỉ tổ chức, OU, account
@@ -145,8 +155,16 @@ Theo [README, Bước (4)](../../aws/org/README.md#bước-4-đủ-root): plan, 
 admin và cấu hình tổ chức của dịch vụ có thể mất vài phút mới nhận: lỗi kiểu đó thì chờ rồi chạy lại đúng bước này. `cd ../..` khi xong.
 
 **Bốn profile chỉ đọc**, ngay sau bước này (bước (5), (6), (7) dùng chúng): `anhnv-stg-ro`, `anhnv-prd-ro`, `anhnv-security-ro` (`SvpReadOnly`),
-`anhnv-log-ro` (`SvpLogReader`), theo [README `aws/org`, Profile](../../aws/org/README.md#profile). Dán bốn dòng `get-caller-identity`, che
-account: `Arn` là `AWSReservedSSO_SvpReadOnly_…` ở ba profile đầu, `AWSReservedSSO_SvpLogReader_…` ở `anhnv-log-ro`.
+`anhnv-log-ro` (`SvpLogReader`), theo [README `aws/org`, Profile](../../aws/org/README.md#bảy-profile-còn-lại):
+
+```sh
+aws/scripts/sso-profiles.sh write
+aws/scripts/sso-profiles.sh check
+```
+
+`write` ghi các profile mà biến account đã đặt (`skip  profile <tên>: SVP_AWS_<…>_ACCOUNT_ID is not exported` cho
+profile còn lại: đặt biến rồi chạy lại). Dán các dòng `ok    account <12 số> of <tên>, arn:…` của `check`, che account:
+`Arn` là `AWSReservedSSO_SvpReadOnly_…` ở ba profile đầu, `AWSReservedSSO_SvpLogReader_…` ở `anhnv-log-ro`.
 
 ## Bước (5): `aws/security`
 
@@ -158,10 +176,12 @@ aws/scripts/check-account.sh mgmt
 cd aws/security
 ```
 
-Theo [README, Apply](../../aws/security/README.md#apply-bước-5-của-thứ-tự-áp-lần-đầu): giá trị cá nhân, plan, apply, **xác nhận email SNS**
-(thư "AWS Notification - Subscription Confirmation" tới `security_alert_email`), kiểm nhanh. Root đọc cờ `security_hub`, `inspector_ecr`:
-account `off` gắn policy `svp-security-off`, không có liên kết Inspector, và có rule `svp-security-guardduty-findings` giữ email finding
-GuardDuty của nó (mục Cờ chi phí của [README `aws/security`](../../aws/security/README.md#cờ-chi-phí)). `cd ../..` khi xong.
+Theo [README, Apply](../../aws/security/README.md#apply-bước-5-của-thứ-tự-áp-lần-đầu): giá trị cá nhân, plan, apply,
+**xác nhận email SNS** (thư "AWS Notification - Subscription Confirmation" tới `security_alert_email`; `verify.sh
+subscriptions mgmt` kiểm), kiểm nhanh. Root đọc cờ `security_hub`, `inspector_ecr`: account `off` gắn policy
+`svp-security-off`, không có liên kết Inspector, và có rule `svp-security-guardduty-findings` giữ email finding
+GuardDuty của nó (mục Cờ chi phí của [README `aws/security`](../../aws/security/README.md#cờ-chi-phí)). `cd ../..` khi
+xong.
 
 ## Bước (6): `aws/baseline`
 
@@ -183,75 +203,53 @@ chỉ đọc trừ phép thử guardrail. Dán output từng mục; che 8 số �
 
 ### 7a. Dịch vụ bật
 
-GuardDuty, publishing destination, Access Analyzer, cấu hình tập trung của Security Hub, nguồn aggregator Config: lệnh và mong đợi ở
-[README `aws/security`, Kiểm nhanh](../../aws/security/README.md#6-kiểm-nhanh). Thêm:
+Một lệnh đọc 7a, 7c và phần chỉ đọc của 7b (`iam list-organizations-features`), mỗi kiểm một dòng `ok`, `FAIL` hay `note`; một `FAIL`
+không dừng kiểm sau, cuối cùng `FAIL  N check(s) failed, each named above` và exit 1:
 
 ```sh
-AWS_PROFILE=anhnv-sso aws organizations list-delegated-services-for-account --account-id "$SVP_AWS_SECURITY_ACCOUNT_ID" --region us-east-1 \
-  --query 'DelegatedServices[].ServicePrincipal' --output text
-R="$(AWS_PROFILE=anhnv-sso terraform -chdir=aws/org output -raw root_id)"
-for t in SERVICE_CONTROL_POLICY RESOURCE_CONTROL_POLICY DECLARATIVE_POLICY_EC2 TAG_POLICY; do
-  AWS_PROFILE=anhnv-sso aws organizations list-policies-for-target --target-id "$R" --filter "$t" --region us-east-1 \
-    --query 'Policies[].Name' --output text
-done
-AWS_PROFILE=anhnv-sso aws organizations list-policies-for-target --filter SERVICE_CONTROL_POLICY --region us-east-1 --query 'Policies[].Name' \
-  --target-id "$(AWS_PROFILE=anhnv-sso terraform -chdir=aws/org output -json organizational_unit_ids | jq -r .Prod)" --output text
-AWS_PROFILE=anhnv-security-ro aws securityhub list-members --region ap-southeast-1 --query 'Members[].[AccountId,MemberStatus]' --output text
+aws/scripts/verify.sh org
 ```
 
-Mong: principal của GuardDuty, Security Hub, `config.amazonaws.com`, `config-multiaccountsetup.amazonaws.com`, Access Analyzer, Inspector
-(`inspector2.amazonaws.com`; trạng thái quét của từng account ở phần Inspector của "Kiểm nhanh" trên: chỉ ECR, mọi account thành viên
-`ACTIVE` trừ `svp-security` và account có `inspector_ecr` `off` là thành viên `ENABLED`); ở root
-`FullAWSAccess` với năm SCP `svp-*` (danh sách ở README [`org-policies`](../../aws/modules/org-policies/README.md)), `RCPFullAWSAccess` với
-`svp-data-perimeter`, `svp-ec2-baseline`, `svp-tags`; ở OU `Prod` `FullAWSAccess` với `svp-prod-guardrails`; mỗi account `ACTIVE` của tổ
-chức trừ `svp-security`, kể cả management, một member Security Hub `Enabled` (danh sách account: lệnh `list-accounts` ở bước 4 của mục
-[Gỡ có chủ đích](../../aws/org/README.md#gỡ-có-chủ-đích) của README `aws/org`); account có `security_hub` `off` không `Enabled` (policy
-`svp-security-off` tắt Security Hub ở đó).
+Cần các profile `anhnv-sso`, `anhnv-security-ro`, `anhnv-stg-ro`, `anhnv-prd-ro`, `anhnv-log-ro`, bốn biến account thành viên của
+[Mở terminal](#mở-terminal) và `aws/org` đã `init` trong bản clone này (`aws/scripts/tfvars.sh init`). Trước mỗi nhóm kiểm lệnh đối chiếu
+account của profile và in `ok    profile <tên> is the account of <tên>`; dòng `FAIL` đó nghĩa là bỏ cả nhóm của profile ấy. Mong đợi:
 
-Chuẩn Security Hub và recorder Config của từng account, hai region (`anhnv-sso` là management; `svp-log-archive` hiện qua member Security Hub
-và nguồn aggregator ở trên):
+- **7a** `svp-security administers GuardDuty, Security Hub, Config, Access Analyzer and Inspector`: sáu principal của
+  delegated administrator.
+- **7a** `policies of the root and of OU Prod as expected`: root `FullAWSAccess` với năm SCP `svp-*`
+  ([`org-policies`](../../aws/modules/org-policies/README.md)), `RCPFullAWSAccess` với `svp-data-perimeter`,
+  `svp-ec2-baseline`, `svp-tags`; OU `Prod` `svp-prod-guardrails`.
+- **7a** `GuardDuty in <region>`, `Access Analyzer svp-org ACTIVE`, `Security Hub is CENTRAL ENABLED`, `every source of
+  the Config aggregator`, `Inspector scans only ECR`: các dịch vụ của [`aws/security`, Kiểm
+  nhanh](../../aws/security/README.md#6-kiểm-nhanh).
+- **7a** `every ACTIVE account but svp-security is a Security Hub member as its cost flag says`: account có
+  `security_hub` `off` không phải member.
+- **7a** `<profile> <region>: Security Hub standards and Config recorder as expected`: hai chuẩn `READY`, recorder
+  `CONTINUOUS` và `True SUCCESS` ở hai region của management, `svp-security`, stg, prd; account có cờ `off` thì `note`
+  thay `ok`.
+- **7a** `rule svp-security-admin-sso ENABLED in the region of Identity Center`: rule phải ở đúng `sso_region` của
+  `org.auto.tfvars`, không thì im lặng.
+- **7b** `RootCredentialsManagement and RootSessions are on`: root tập trung.
+- **7c** `trail svp-audit is logging with no delivery error`: `[true,null,null]`.
+- **7c** `the Log Archive bucket holds logs of every ACTIVE account, management included`: log mới của mọi account, đọc
+  được bằng `SvpLogReader`; sau bước (4) ít nhất một giờ.
 
-```sh
-for p in anhnv-sso anhnv-security-ro anhnv-stg-ro anhnv-prd-ro; do
-  for r in ap-southeast-1 us-east-1; do
-    echo "== $p $r"
-    AWS_PROFILE=$p aws securityhub get-enabled-standards --region $r \
-      --query 'StandardsSubscriptions[].[StandardsArn,StandardsStatus]' --output text
-    AWS_PROFILE=$p aws configservice describe-configuration-recorders --region $r \
-      --query 'ConfigurationRecorders[].[name,recordingMode.recordingFrequency]' --output text
-    AWS_PROFILE=$p aws configservice describe-configuration-recorder-status --region $r \
-      --query 'ConfigurationRecordersStatus[].[name,recording,lastStatus]' --output text
-  done
-done
-```
-
-Mong mỗi cặp: hai chuẩn `…/aws-foundational-security-best-practices/v/1.0.0`, `…/cis-aws-foundations-benchmark/v/5.0.0` ở `READY`; recorder
-`CONTINUOUS`; trạng thái `True SUCCESS`. Trừ account có cờ `off` (`anhnv-stg-ro` với file của repo): `security_hub` `off` thì
-`get-enabled-standards` không in chuẩn nào hay báo lỗi `InvalidAccessException` (account không bật Security Hub); `config_recording` `off`
-thì hai lệnh Config không in gì. Lỗi quyền ở một profile chỉ đọc: dán lệnh và lỗi, đó cũng là kết quả kiểm của permission set.
-
-Control FAILED ban đầu, theo control (đầu vào của việc sửa sau, không phải lỗi của bước này):
-
-```sh
-AWS_PROFILE=anhnv-security-ro aws securityhub get-findings --region ap-southeast-1 --output text \
-  --filters '{"ComplianceStatus":[{"Value":"FAILED","Comparison":"EQUALS"}],"RecordState":[{"Value":"ACTIVE","Comparison":"EQUALS"}]}' \
-  --query 'Findings[].Compliance.SecurityControlId' | tr '\t' '\n' | sort | uniq -c | sort -rn
-```
-
-Dán cả danh sách, cùng điểm "Security score" ở trang Summary của Security Hub trên console của `svp-security` (profile `anhnv-security-ro`).
-
-Rule `svp-security-admin-sso` phải ở đúng region của Identity Center (`sso_region` của `org.auto.tfvars`), không thì nó im lặng:
-
-```sh
-AWS_PROFILE=anhnv-sso aws events describe-rule --name svp-security-admin-sso --region <sso_region> --query State --output text
-```
-
-Mong `ENABLED`; `ResourceNotFoundException` là `sso_region` của `baseline.auto.tfvars` sai.
+Account mới nhận có thể tới 24 giờ mới hiện (`FAIL  7a: … Member status …`, `PENDING` ở association): đọc lại hôm sau,
+vẫn `FAIL` thì dán dòng đó. Lỗi quyền ở một profile chỉ đọc: dán lệnh và lỗi, đó cũng là kết quả kiểm của permission
+set. Dòng `note` dán lại và đọc bằng mắt: `7a: control <id> FAILED in <n> finding(s)` là control FAILED ban đầu, đầu vào
+của việc sửa sau, không phải lỗi của bước này; `7c: last write to the old management trail bucket: <giờ>` là lần ghi
+cuối vào bucket trail cũ, không mới hơn lúc apply bước (4) cộng vài phút giao log; `7a: Security score` chỉ trang
+Summary của Security Hub trên console của `svp-security` (profile `anhnv-security-ro`), không có API đọc điểm: dán điểm
+đó cùng danh sách control.
 
 ### 7b. Root tập trung
 
+Phần chỉ đọc (`RootCredentialsManagement RootSessions`) nằm ở `verify.sh org` trên. Kiểm credential root của từng account giữ tay: mỗi
+`sts assume-root` mở một phiên root, ghi lại một email `svp-security-root-session` (mục 7e), và credential của phiên là bí mật, nên
+người học chạy từng account và đọc kết quả, `verify.sh` chỉ nhắc bằng một dòng `note`. Lệnh dùng `sts assume-root` với task policy
+`IAMAuditRootUserCredentials`:
+
 ```sh
-AWS_PROFILE=anhnv-sso aws iam list-organizations-features --region us-east-1 --query 'EnabledFeatures' --output text
 for id in "$SVP_AWS_LOG_ACCOUNT_ID" "$SVP_AWS_SECURITY_ACCOUNT_ID" "$SVP_AWS_STG_ACCOUNT_ID" "$SVP_AWS_PRD_ACCOUNT_ID"; do
   (
     creds=$(AWS_PROFILE=anhnv-sso aws sts assume-root --target-principal "$id" --region ap-southeast-1 \
@@ -267,32 +265,22 @@ for id in "$SVP_AWS_LOG_ACCOUNT_ID" "$SVP_AWS_SECURITY_ACCOUNT_ID" "$SVP_AWS_STG
 done
 ```
 
-Mong `RootCredentialsManagement RootSessions`; mỗi account `none`, `0`, `0`. Credential của phiên root chỉ nằm trong subshell, không in ra.
-Mỗi `assume-root` sinh một email `svp-security-root-session` (mục 7e). `PRESENT` hay số khác `0`: dọn theo
+Mong mỗi account `none`, `0`, `0`. Credential của phiên root chỉ nằm trong subshell, không in ra. `PRESENT` hay số khác `0`: dọn theo
 [`break-glass.md`](break-glass.md#dọn-sau-khi-dùng).
 
 ### 7c. Trail
 
-`get-trail-status` ở [README `aws/org`, Bước (4)](../../aws/org/README.md#bước-4-đủ-root). Thêm, sau bước (4) ít nhất một giờ:
-
-```sh
-O="$(AWS_PROFILE=anhnv-sso terraform -chdir=aws/org output -raw organization_id)"
-AWS_PROFILE=anhnv-log-ro aws s3 ls "s3://svp-cloudtrail-$SVP_AWS_LOG_ACCOUNT_ID-ap-southeast-1/AWSLogs/$O/" --region ap-southeast-1 |
-  awk '{print substr($2, 9)}'
-AWS_PROFILE=anhnv-sso aws s3api list-objects-v2 --bucket "svp-cloudtrail-$SVP_AWS_MGMT_ACCOUNT_ID-ap-southeast-1" --region ap-southeast-1 \
-  --query 'max_by(Contents, &LastModified).LastModified' --output text
-```
-
-Mong một dòng mỗi account `ACTIVE` của tổ chức, kể cả management (4 số cuối và `/`; danh sách account như mục 7a): log mới của mọi account vào
-bucket Log Archive, đọc được bằng
-`SvpLogReader` (quyền `kms:Decrypt` qua S3 chưa được thử ở lệnh này; đọc một object bằng `aws s3 cp … -` khi cần). Lệnh sau là lần ghi cuối vào
-bucket trail cũ của management: trước lúc apply bước (4) cộng vài phút giao log, không mới hơn.
+`verify.sh org` ở trên đọc trạng thái trail `svp-audit` và bucket Log Archive; `get-trail-status` tay ở
+[README `aws/org`, Bước (4)](../../aws/org/README.md#bước-4-đủ-root) chỉ cần khi `verify.sh org` báo `FAIL  7c: trail svp-audit …`.
 
 ### 7d. Phép thử guardrail
 
-Mỗi probe là một lệnh mà guardrail phải từ chối, chọn sao cho không đổi gì nếu guardrail hỏng (`--dry-run`, giá trị đang có, user tạm có lệnh
-xoá viết sẵn). Chạy bằng `SvpAdmin`: `anhnv-stg`, probe Spot bằng `anhnv-prd`. Lệnh bị từ chối phải nói `explicit deny in a service control
-policy`. Lỗi EC2 chỉ có `Encoded authorization failure message` thì giải mã, mong `"explicitDeny":true`:
+Giữ tay vì mỗi probe là lệnh ghi (hay thử ghi) lên account, có bước hoàn tác, và lệnh không bị từ chối nghĩa là
+guardrail hỏng: người học đọc từng kết quả và chạy bước hoàn tác viết sẵn, không để script tiếp tục. Mỗi probe là một
+lệnh mà guardrail phải từ chối, chọn sao cho không đổi gì nếu guardrail hỏng (`--dry-run`, giá trị đang có, user tạm có
+lệnh xoá viết sẵn). Chạy bằng `SvpAdmin`: `anhnv-stg`, probe Spot bằng `anhnv-prd`. Lệnh bị từ chối phải nói `explicit
+deny in a service control policy`. Lỗi EC2 chỉ có `Encoded authorization failure message` thì giải mã, mong
+`"explicitDeny":true`:
 
 ```sh
 AWS_PROFILE=anhnv-stg aws sts decode-authorization-message --encoded-message <chuỗi> --region ap-southeast-1 --query DecodedMessage --output text |
@@ -389,7 +377,8 @@ Mong `HttpTokens` `required`, `HttpPutResponseHopLimit` `1`; serial console `fal
 
 ### 7e. Cảnh báo thử
 
-Finding mẫu GuardDuty mức HIGH ở `svp-stg`: finding đi về delegated admin ở `svp-security`, rồi tới email: qua aggregator Security Hub và
+Giữ tay vì lệnh tạo finding mẫu ghi vào GuardDuty của `svp-stg` và kéo theo email cảnh báo mà người học phải đọc ở hộp thư. Finding mẫu
+GuardDuty mức HIGH ở `svp-stg`: finding đi về delegated admin ở `svp-security`, rồi tới email: qua aggregator Security Hub và
 rule `svp-security-findings` khi cờ `security_hub` của stg là `always`, qua rule `svp-security-guardduty-findings` khi `off`.
 
 ```sh
@@ -418,20 +407,39 @@ Finding mẫu ở lại tới khi GuardDuty tự xoá (90 ngày); đổi trạng
 
 ### 7f. Chi phí sau 1 và 7 ngày
 
-Cost Explorer có dữ liệu sau ~24 giờ. Sau 1 ngày và sau 7 ngày kể từ bước (5), theo dịch vụ, cả org:
+Cost Explorer có dữ liệu sau ~24 giờ. Sau 1 ngày và sau 7 ngày kể từ bước (5), theo dịch vụ, cả org (ngày áp bước (5) dạng `yyyy-mm-dd`):
 
 ```sh
-AWS_PROFILE=anhnv-sso aws ce get-cost-and-usage --region us-east-1 --granularity DAILY --metrics UnblendedCost \
-  --time-period Start=<ngày áp bước 5, yyyy-mm-dd>,End=<hôm nay, yyyy-mm-dd> --group-by Type=DIMENSION,Key=SERVICE \
-  --filter '{"Dimensions":{"Key":"SERVICE","Values":["Amazon GuardDuty","AWS Security Hub","AWS Config","AWS Key Management Service","Amazon Simple Storage Service","AWS CloudTrail"]}}' \
-  --query 'ResultsByTime[].[TimePeriod.Start, Groups[].[Keys[0], Metrics.UnblendedCost.Amount]]' --output text
+aws/scripts/verify.sh cost mgmt <ngày áp bước 5>
 ```
 
-So với [ADR-0060 §12](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0060-org-detection-logging.md#12-chi-phí-liên-tục). Trong 30
-ngày dùng thử GuardDuty và Security Hub ghi $0: đọc chi phí ước sau dùng thử ở trang "Usage" của GuardDuty và Security Hub trên console của
-`svp-security`, dán cả hai. Monitor, subscription Cost Anomaly Detection và trạng thái tag phân bổ: hai lệnh đọc ở
-[README `aws/bootstrap`, mục 5](../../aws/bootstrap/README.md#5-áp-thay-đổi-khi-state-đã-ở-bucket), mong monitor `svp-services` và ba tag
-`Active` (`Env` chỉ sau buổi stg hay prd đầu tiên).
+Mỗi dòng dữ liệu là `note  <ngày>  <dịch vụ>  <số> USD` cho sáu dịch vụ của mục này (GuardDuty, Security Hub, Config,
+KMS, S3, CloudTrail), cuối `ok    N row(s) from <ngày> to <hôm nay>, <tổng> USD`; chưa có dữ liệu thì `note  no cost
+data from … yet (Cost Explorer lags about 24 hours)`. So với [ADR-0060
+§12](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0060-org-detection-logging.md#12-chi-phí-liên-tục).
+Trong 30 ngày dùng thử GuardDuty và Security Hub ghi $0: đọc chi phí ước sau dùng thử ở trang "Usage" của GuardDuty và
+Security Hub trên console của `svp-security` (giữ tay: không có API đọc ước tính đó), dán cả hai; lệnh nhắc bằng hai
+dòng `note` cuối. Monitor, subscription Cost Anomaly Detection và trạng thái tag phân bổ: hai lệnh đọc ở [README
+`aws/bootstrap`, mục 5](../../aws/bootstrap/README.md#5-áp-thay-đổi-khi-state-đã-ở-bucket), mong monitor `svp-services`
+và ba tag `Active` (`Env` chỉ sau buổi stg hay prd đầu tiên).
+
+#### Bật Cost Explorer lần đầu
+
+`verify.sh cost` (và mọi lệnh `ce`) lỗi `FAIL  ce get-cost-and-usage (first use: turn Cost Explorer on once in the
+console …)` khi account chưa bật Cost Explorer. Giữ tay vì chỉ bật được trên console, không có API
+([nguồn](https://docs.aws.amazon.com/cost-management/latest/userguide/ce-enable.html), đọc 2026-11-15). Làm một lần, ở
+management account:
+
+1. Đăng nhập management account bằng quyền đủ (root hay người dùng IAM được phép), không bằng profile chỉ đọc.
+2. Console **Billing and Cost Management** → **Cost Explorer** → **Launch Cost Explorer**. Bật ở management account thì
+   mọi account thành viên dùng được; thành viên không tự bật khi management chưa bật
+   ([nguồn](https://docs.aws.amazon.com/cost-management/latest/userguide/ce-access.html), đọc 2026-11-15).
+3. Chờ: dữ liệu của tháng hiện tại hiện sau khoảng 24 giờ, phần còn lại thêm vài ngày. Trong lúc đó `verify.sh cost` in
+   `note  no cost data …` hay lỗi như trên là bình thường.
+
+Bẫy: bật Cost Explorer cũng tự cấu hình Cost Anomaly Detection (tắt được) và AWS tạo monitor `Default-Services-Monitor`;
+monitor này làm `apply` của `aws/bootstrap` lỗi `Limit exceeded on dimensional spend monitor creation` cho tới khi nhận
+quản nó: mục "Cái đã có trước khi áp" ở trên. Kiểm: chạy lại `verify.sh cost mgmt` sau 24 giờ, mong `ok    N row(s) …`.
 
 ## Khi một bước đỏ
 

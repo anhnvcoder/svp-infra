@@ -13,8 +13,8 @@ luật trên AMP, dashboard) do root `aws/envs/<env>` và Argo CD dựng, gỡ t
 Cờ của từng account nằm ở [`aws/paid-features.json`](../../aws/paid-features.json); đổi cờ theo [`paid-features.md`](paid-features.md).
 
 **Người học chạy mọi lệnh ở đây.** AI không chạy lệnh nào chạm account, kể cả lệnh chỉ đọc; AI đọc output dán lại. Mọi lệnh chạy từ gốc repo
-này (`infra/`) trừ chỗ ghi `cd`. Bước nào đỏ thì dừng ở đó, dán output, không đi tiếp. Token và PAT chỉ đi qua stdin (prompt `read -s`, rồi
-`printf`, lệnh có sẵn của shell nên không thành tiến trình), không bao giờ nằm trên dòng lệnh, trong lịch sử shell hay trong file. Lệnh
+này (`infra/`) trừ chỗ ghi `cd`. Bước nào đỏ thì dừng ở đó, dán output, không đi tiếp. Token và PAT chỉ đi qua prompt không echo hay stdin
+của script (`cache-secrets.sh`, `make github-secrets`), không bao giờ nằm trên dòng lệnh, trong lịch sử shell hay trong file. Lệnh
 chạy được trong zsh (shell mặc định của macOS) và bash.
 
 ## Thứ tự áp lần đầu
@@ -25,7 +25,7 @@ flowchart TD
   B1["(1) aws/org: delegated admin Inspector, nhóm svp-platform-admins, svp-platform-viewers"] --> B2
   B2["(2) aws/security: Inspector quét ECR của account thành viên có inspector_ecr always"] --> B3
   B3["(3) github/: action aws-actions/configure-aws-credentials, environment ecr-rescan"] --> B4
-  B4["(4) gán người vào hai nhóm, id nhóm vào aws/accounts/ENV/ENV.auto.tfvars"] --> B5
+  B4["(4) platform-member.sh gán người vào hai nhóm, tfvars.sh groups ghi id nhóm vào aws/accounts/ENV/ENV.auto.tfvars"] --> B5
   B5["(5) aws/accounts/stg, prd: vỏ secret cache trước, rồi registry, OIDC, role CI, AMP, log group, X-Ray, AMG khi managed_grafana always"] --> B6
   B6["(6) credential pull-through cache (giữa hai lượt apply của 5)"] --> B7
   B7["(7) secret SVP_AWS_STG_ACCOUNT_ID, SVP_AWS_PRD_ACCOUNT_ID ở svp-backend, svp-frontend"] --> B8
@@ -34,17 +34,20 @@ flowchart TD
   B10["(10) sau buổi đầu có span: retention aws/spans"]
 ```
 
-| Bước | Root hay việc | Mục | Dán lại |
-| --- | --- | --- | --- |
-| (1) | `aws/org` | [Bước (1)](#bước-1-awsorg) | dòng `Plan:`, `Apply complete!`, `No changes.` |
-| (2) | `aws/security` | [Bước (2)](#bước-2-awssecurity) | dòng `Plan:`, `Apply complete!`, output phần Inspector của "Kiểm nhanh" |
-| (3) | `github/` | [Bước (3)](#bước-3-github) | dòng `Plan:`, `Apply complete!`, `No changes.` |
-| (4) | Identity Center, tfvars | [Bước (4)](#bước-4-nhóm-nền-tảng) | số thành viên mỗi nhóm, hai dòng `2` |
-| (5), (6) | `aws/accounts/stg`, `aws/accounts/prd` | [Bước (5)](#bước-5-awsaccountsenv), [Bước (6)](#bước-6-credential-của-pull-through-cache) | mỗi account: hai dòng `Plan:`, hai `Apply complete!`, `No changes.`, tên role, hai `VersionId` (che), `validate` |
-| (7) | GitHub | [Bước (7)](#bước-7-biến-ci-ecr) | `gh secret list` (chỉ tên) |
-| (8) | Service Quotas | [Bước (8)](#bước-8-quota-chu-kỳ-luật-amp) | mã quota, trạng thái yêu cầu |
-| (9) | AMG | [Bước (9)](#bước-9-grafana-managed) | vai trò thấy được sau khi đăng nhập |
-| (10) | log group `aws/spans` | [Bước (10)](#bước-10-retention-của-awsspans) | output `describe-log-groups` |
+- **(1)** `aws/org`; [Bước (1)](#bước-1-awsorg). Dán lại: dòng `Plan:`, `Apply complete!`, `No changes.`.
+- **(2)** `aws/security`; [Bước (2)](#bước-2-awssecurity). Dán lại: dòng `Plan:`, `Apply complete!`, output phần
+  Inspector của "Kiểm nhanh".
+- **(3)** `github/`; [Bước (3)](#bước-3-github). Dán lại: dòng `Plan:`, `Apply complete!`, `No changes.`.
+- **(4)** Identity Center, tfvars; [Bước (4)](#bước-4-nhóm-nền-tảng). Dán lại: dòng `ok` của `platform-member.sh count`
+  mỗi nhóm, hai dòng `ok` của `tfvars.sh groups`.
+- **(5), (6)** `aws/accounts/stg`, `aws/accounts/prd`; [Bước (5)](#bước-5-awsaccountsenv), [Bước
+  (6)](#bước-6-credential-của-pull-through-cache). Dán lại: mỗi account: hai dòng `Plan:`, hai `Apply complete!`, `No
+  changes.`, tên role, hai dòng `ok` của `cache-secrets.sh`, `validate`.
+- **(7)** GitHub; [Bước (7)](#bước-7-biến-ci-ecr). Dán lại: các dòng `ok` của `make github-secrets`.
+- **(8)** Service Quotas; [Bước (8)](#bước-8-quota-chu-kỳ-luật-amp). Dán lại: dòng `ok`, `note` của `preflight.sh
+  quotas`.
+- **(9)** AMG; [Bước (9)](#bước-9-grafana-managed). Dán lại: vai trò thấy được sau khi đăng nhập.
+- **(10)** log group `aws/spans`; [Bước (10)](#bước-10-retention-của-awsspans). Dán lại: output `describe-log-groups`.
 
 Job ECR của `svp-backend`, `svp-frontend` (chép bản phát hành vào ECR, promote prd, rescan) chỉ chạy được sau bước (7): chúng nhận role của bước
 (5) và đọc secret của bước (7), nên PR thêm các job đó merge sau runbook này. Xoay PAT và token: mục [Xoay credential](#xoay-credential).
@@ -71,14 +74,17 @@ Job ECR của `svp-backend`, `svp-frontend` (chép bản phát hành vào ECR, p
 
 ```sh
 cd infra
-AWS_PROFILE=anhnv-sso aws sso login --region us-east-1      # cùng sso_session thì một lần cho mọi profile
-export SVP_AWS_MGMT_ACCOUNT_ID=<12 số> SVP_AWS_LOG_ACCOUNT_ID=<12 số> SVP_AWS_SECURITY_ACCOUNT_ID=<12 số>
-export SVP_AWS_STG_ACCOUNT_ID=<12 số> SVP_AWS_PRD_ACCOUNT_ID=<12 số>             # đọc trên trang SSO; không ghi vào file nào
-export SVP_SESSION_DIR="$PWD/.session/$(date -u +%Y%m%dT%H%M%SZ)"                # check-account.sh ghi mốc ở đây
+AWS_PROFILE=anhnv-sso aws sso login --region us-east-1      # one login for every profile of the same sso_session
+export SVP_AWS_MGMT_ACCOUNT_ID=<12 số>                      # typed by hand: the value check-account.sh compares against
+eval "$(aws/scripts/accounts.sh)"                           # sets the other five SVP_AWS_*_ACCOUNT_ID, no file
+export SVP_SESSION_DIR="$PWD/.session/$(date -u +%Y%m%dT%H%M%SZ)"   # check-account.sh marks its timeline here
 aws/scripts/check-account.sh mgmt
 ```
 
-Tìm `ok    account <12 số> of mgmt, arn:aws:sts::<12 số>:assumed-role/AWSReservedSSO_…`. Mở lại terminal giữa chừng: đặt lại cả sáu biến.
+Tìm năm dòng `ok    SVP_AWS_<…>_ACCOUNT_ID: account svp-<tên>, ACTIVE` của `accounts.sh` (không in id) rồi
+`ok    account <12 số> of mgmt, arn:aws:sts::<12 số>:assumed-role/AWSReservedSSO_…`. `FAIL  no account svp-<tên> in the organization` thì
+`aws/org` chưa tạo account đó; `FAIL  profile anhnv-sso is account …` thì `SVP_AWS_MGMT_ACCOUNT_ID` sai. Mở lại terminal giữa chừng: đặt lại
+`SVP_AWS_MGMT_ACCOUNT_ID` và `SVP_SESSION_DIR`, chạy lại `eval` trên.
 
 ## Bước (1): `aws/org`
 
@@ -117,33 +123,35 @@ người học chạy", mong đợi `Plan: 4 to add, 2 to change, 0 to destroy` 
 
 ## Bước (4): nhóm nền tảng
 
-Gán người vào hai nhóm trên console IAM Identity Center ở region của instance (`sso_region` của `aws/org/org.auto.tfvars`): **Groups** →
-`svp-platform-admins` (vai trò `ADMIN` của Grafana) hay `svp-platform-viewers` (`VIEWER`) → **Add users**. Đọc lại số thành viên (không in id):
+Gán người vào hai nhóm bằng script, ở region của instance (đọc từ `sso_region` của `aws/org/org.auto.tfvars`):
+`svp-platform-admins` (vai trò `ADMIN` của Grafana) hay `svp-platform-viewers` (`VIEWER`). Người học chọn user lúc chạy
+(user name như ở góc phải trên của AWS access portal); ai thuộc nhóm không nằm trong cấu hình Terraform:
 
 ```sh
-sso_region=<sso_region của aws/org/org.auto.tfvars>
-store=$(AWS_PROFILE=anhnv-sso aws sso-admin list-instances --region "$sso_region" --query 'Instances[0].IdentityStoreId' --output text)
-for g in platform_admin_group_id platform_viewer_group_id; do
-  printf '%s: ' "$g"
-  AWS_PROFILE=anhnv-sso aws identitystore list-group-memberships --identity-store-id "$store" --region "$sso_region" \
-    --group-id "$(AWS_PROFILE=anhnv-sso terraform -chdir=aws/org output -raw "$g")" --query 'length(GroupMemberships)' --output text
-done
+aws/scripts/platform-member.sh add admins <user-name>
+aws/scripts/platform-member.sh count admins
+aws/scripts/platform-member.sh count viewers
 ```
 
-Mong ít nhất `1` ở nhóm admin. Ghi id hai nhóm vào `<env>.auto.tfvars` của hai root `aws/accounts/<env>` (git bỏ qua; repo public không giữ id
-nhóm), mỗi biến một dòng, không in giá trị:
+`add` in `ok    <user-name> added to svp-platform-admins` (hay `skip  … is already a member`); `count` in `ok
+svp-platform-admins has N member(s)`, chỉ số lượng, không id. Mong ít nhất `1` ở nhóm admin. `FAIL  no user <user-name>
+in Identity Center` là tên sai hay user chưa tạo ([`aws/org`, Profile
+gốc](../../aws/org/README.md#profile-gốc-anhnv-sso), bước 3); `FAIL  terraform output platform_admin_group_id of
+aws/org` là `aws/org` chưa apply bước (1) hay chưa `init`. Gỡ người: `remove admins <user-name>`.
+
+Ghi id hai nhóm vào `<env>.auto.tfvars` của hai root `aws/accounts/<env>` (git bỏ qua; repo public không giữ id nhóm), không in giá trị:
 
 ```sh
-for e in stg prd; do
-  f=aws/accounts/$e/$e.auto.tfvars
-  for g in platform_admin_group_id platform_viewer_group_id; do
-    grep -q "^$g " "$f" || printf '%s = "%s"\n' "$g" "$(AWS_PROFILE=anhnv-sso terraform -chdir=aws/org output -raw "$g")" >>"$f"
-  done
-  grep -c -E '^platform_(admin|viewer)_group_id ' "$f"      # 2
-done
+aws/scripts/tfvars.sh example aws/accounts/stg      # only when the file is missing
+aws/scripts/tfvars.sh groups stg
+aws/scripts/tfvars.sh example aws/accounts/prd
+aws/scripts/tfvars.sh groups prd
 ```
 
-Mỗi file in `2`. File đã có dòng của một biến (từ `.example`) thì lệnh không ghi thêm: sửa giá trị đó trong editor cho đúng output của `aws/org`.
+Mỗi `groups` in `ok    aws/accounts/<env>/<env>.auto.tfvars: platform_admin_group_id, platform_viewer_group_id from
+aws/org written (N lines, mode 600)` (hay `already as written, file unchanged` khi chạy lại). Script chỉ đổi hai dòng
+của hai biến đó, giữ nguyên dòng và comment khác; file có biến đó hai lần thì `FAIL … is set more than once` và không
+ghi gì: giữ một dòng rồi chạy lại.
 
 ## Bước (5): `aws/accounts/<env>`
 
@@ -214,63 +222,66 @@ hàng quản lý cho secret này); giá trị là JSON hai khoá `username`, `ac
 ([README module `registry`](../../aws/modules/registry/README.md#pull-through-cache)). Cùng PAT cho hai account. Mỗi account:
 
 ```sh
-aws/scripts/check-account.sh stg
-printf 'GitHub user: '; read -r u; printf 'PAT read:packages: '; read -rs t; echo
-printf '{"username":"%s","accessToken":"%s"}' "$u" "$t" |
-  AWS_PROFILE=anhnv-stg aws secretsmanager put-secret-value --secret-id ecr-pullthroughcache/ghcr \
-    --secret-string file:///dev/stdin --region ap-southeast-1 --query VersionId --output text | cut -c 1-8
-printf 'Docker Hub user: '; read -r u; printf 'Docker Hub token (Public Repo Read-only): '; read -rs t; echo
-printf '{"username":"%s","accessToken":"%s"}' "$u" "$t" |
-  AWS_PROFILE=anhnv-stg aws secretsmanager put-secret-value --secret-id ecr-pullthroughcache/docker-hub \
-    --secret-string file:///dev/stdin --region ap-southeast-1 --query VersionId --output text | cut -c 1-8
-unset u t
+aws/scripts/cache-secrets.sh stg ghcr
+aws/scripts/cache-secrets.sh stg dockerhub
 ```
 
-Mỗi lệnh `put-secret-value` in 8 ký tự đầu của `VersionId`; dán hai dòng đó. PAT của GitHub có dạng `ghp_…`, token Docker Hub `dckr_pat_…`: chỉ
-chữ, số, `_`, nên `printf` dựng JSON không cần thoát ký tự. Lệnh lỗi thì token mất cùng shell này: chạy lại cả khối.
+Mỗi lệnh kiểm account, kiểm entry đã có, rồi hỏi user và token ở terminal (token không echo; stdin không phải terminal
+thì nhận `{"username": "…", "accessToken": "…"}`). Token phải đúng dạng của nơi cấp: `ghp_…` cho GHCR, `dckr_pat_…` cho
+Docker Hub; sai dạng thì `FAIL  the token is not of the form ghp_... (or is empty); nothing written` và không ghi gì.
+Thành công in `ok    entry ecr-pullthroughcache/ghcr of stg: version <8 ký tự> (value not shown); next: …`: dán hai dòng
+đó. Token đi vào lệnh ghi version mới của secret qua pipe từ `printf` (lệnh có sẵn của shell nên không thành tiến
+trình), không lên dòng lệnh, file hay màn hình; lỗi của `aws` in ra đã cắt token. Mỗi lần chạy ghi một version mới của
+entry nên chạy lại sau lỗi là an toàn. `FAIL  no entry … in stg: apply aws/accounts/stg first` là lượt `-target` đầu của
+bước (5) chưa chạy.
+
+Tạo PAT và token giữ tay vì do bên thứ ba cấp, bằng chính tài khoản của người học trên trang web của họ (lab không giữ công cụ nào để tạo
+thay): PAT
+classic scope `read:packages` ở <https://github.com/settings/tokens>, token Docker Hub quyền "Public Repo Read-only" ở
+Docker Hub → **Account settings** → **Personal access tokens**; đặt hạn 90 ngày. Cùng PAT cho hai account.
 
 ## Bước (7): biến CI ECR
 
 Hai secret repo `SVP_AWS_STG_ACCOUNT_ID`, `SVP_AWS_PRD_ACCOUNT_ID` ở `svp-backend` và `svp-frontend`: workflow dựng ARN role từ chúng (region,
-tên role cố định trong workflow); là secret để GitHub che account ID trong log của repo public. `gh secret set` đọc giá trị từ stdin:
+tên role cố định trong workflow); là secret để GitHub che account ID trong log của repo public. Hai biến cùng tên đã export trong terminal
+(`eval "$(aws/scripts/accounts.sh)"`), `gh` đăng nhập tài khoản admin của hai repo (`gh auth status`):
 
 ```sh
-for r in svp-backend svp-frontend; do
-  printf '%s' "$SVP_AWS_STG_ACCOUNT_ID" | gh secret set SVP_AWS_STG_ACCOUNT_ID -R "anhnvcoder/$r"
-  printf '%s' "$SVP_AWS_PRD_ACCOUNT_ID" | gh secret set SVP_AWS_PRD_ACCOUNT_ID -R "anhnvcoder/$r"
-  gh secret list -R "anhnvcoder/$r" | grep -E '^SVP_AWS_(STG|PRD)_ACCOUNT_ID'
-done
+make github-secrets
 ```
 
-Mong hai dòng mỗi repo. Secret không có resource Terraform (giá trị sẽ nằm rõ trong state): bảng "Không quản" của
+Lệnh nằm trong [`github-setup.md`](github-setup.md#thứ-tự-trên-một-account-mới) (bước 7 của mục đó, cùng các target
+`make github-*` khác). Mong mỗi repo hai dòng `ok    secret SVP_AWS_<STG|PRD>_ACCOUNT_ID of <repo>`. Giá trị đi qua
+stdin của `gh`, không lên dòng lệnh hay màn hình. Biến thiếu hay không đủ 12 chữ số: `FAIL  SVP_AWS_<…>_ACCOUNT_ID is
+not set` (hay `is not 12 digits`) và chưa secret nào được ghi. Kiểm: `gh secret list -R anhnvcoder/<repo>` (chỉ in tên)
+có hai tên đó.
+
+Secret không có resource Terraform (giá trị sẽ nằm rõ trong state): bảng "Không quản" của
 [`github/README.md`](../../github/README.md#không-quản-và-vì-sao).
 
 Secret account của CI plan (environment `terraform-plan` của `svp-infra`, cho role plan chỉ đọc mà bước (5) tạo) đặt khi bật plan cho env:
-lệnh và thứ tự ở [`github-setup.md`](github-setup.md#environment-terraform-plan).
+lệnh (`make github-secrets ENV=<stg|prd>`) và thứ tự ở [`github-setup.md`](github-setup.md#environment-terraform-plan).
 
 ## Bước (8): quota chu kỳ luật AMP
 
-Chart ghi `interval: 15s` vào mỗi nhóm luật như k3d; AMP mặc định tối thiểu 30 s, chỉnh được qua quota "Rule evaluation interval"
-([AMP quotas](https://docs.aws.amazon.com/prometheus/latest/userguide/AMP_quotas.html)). Workspace có từ bước (5). Mỗi account (stg rồi prd), tìm
-mã quota rồi xin 15:
+Chart ghi `interval: 15s` vào mỗi nhóm luật như k3d; AMP mặc định tối thiểu 30 s, chỉnh được qua quota "Rule evaluation
+interval" ([AMP quotas](https://docs.aws.amazon.com/prometheus/latest/userguide/AMP_quotas.html)). Workspace có từ bước
+(5). Mỗi account (stg rồi prd), đọc quota (mã quota tra theo tên, không chép mã vào đây), rồi xin 15 nếu chưa đủ:
 
 ```sh
-aws/scripts/check-account.sh stg
-AWS_PROFILE=anhnv-stg aws service-quotas list-aws-default-service-quotas --service-code aps --region ap-southeast-1 \
-  --query "Quotas[?contains(QuotaName, 'valuation interval')].[QuotaCode,QuotaName,Value,Adjustable]" --output text
-AWS_PROFILE=anhnv-stg aws service-quotas request-service-quota-increase --service-code aps --quota-code <QuotaCode trên> \
-  --desired-value 15 --region ap-southeast-1 --query 'RequestedQuota.[Id,Status]' --output text
+aws/scripts/preflight.sh quotas stg
+aws/scripts/preflight.sh quotas stg request
 ```
 
-Lệnh đầu in một dòng `L-… Rule evaluation interval 30.0 True` (tên chính xác có thể khác: dán cả dòng). Lệnh sau in id yêu cầu và `PENDING` hay
-`CASE_OPENED`; đọc lại tới khi `APPROVED`:
+Lệnh đầu in mỗi quota một dòng; dòng của AMP là `ok    L-… AMP rule evaluation interval (seconds): 15.0 (max 15)` khi đã
+đủ, hay `FAIL  L-… …: 30.0, needs max 15: run preflight.sh quotas stg request` khi chưa. Lệnh sau là lệnh duy nhất ghi:
+gửi yêu cầu cho mỗi quota thiếu và in `note  L-… …: 30.0, asked for 15 (<id> PENDING|CASE_OPENED): wait for APPROVED,
+then run quotas again`; quota đã có yêu cầu mở thì `note  … a request is already open … not sent again`, nên chạy lại
+không gửi hai lần. Chờ `APPROVED` rồi chạy lại lệnh đầu tới khi mọi dòng `ok`. Quota EC2 và Elastic IP của cùng lệnh đọc
+theo [`aws/org`, Quota](../../aws/org/README.md#quota-và-xác-minh-cloudfront-của-account-workload).
 
-```sh
-AWS_PROFILE=anhnv-stg aws service-quotas get-requested-service-quota-change --request-id <Id trên> --region ap-southeast-1 \
-  --query 'RequestedQuota.[Status,DesiredValue]' --output text
-```
-
-Service Quotas từ chối vì giá trị xin nhỏ hơn giá trị đang có (lỗi `IllegalArgumentException`, `InvalidParameterValue`): mở case trên console AWS
+Service Quotas từ chối vì giá trị xin nhỏ hơn giá trị đang có (lỗi `IllegalArgumentException`, `InvalidParameterValue`; script in
+`FAIL  service-quotas request-service-quota-increase …`): mở case trên console AWS
 Support từ account đó (**Create case** → **Service limit increase** → Amazon Managed Service for Prometheus, quota "Rule evaluation interval",
 giá trị 15 s, region `ap-southeast-1`), dán id case. AWS từ chối hẳn: không chạy buổi có luật trên AMP; báo AI (ADR-0063 §5: quyết lại bằng ADR
 mới, không chạy với 30 s). Buổi stg đầu kiểm chu kỳ thật ở phép kiểm cảnh báo của runbook buổi.
@@ -313,30 +324,30 @@ dòng nào: X-Ray chưa nhận span, làm sau buổi kế.
 | Secret account của CI (bước 7) | không hạn | chỉ khi account đổi: chạy lại bước (7) |
 
 Cache hết credential (PAT hết hạn) thì ECR vẫn trả bản đã cache, nhưng image chưa cache kéo lỗi: làm nóng cache của buổi đỏ ở dòng của GHCR,
-Docker Hub. Một PAT hay token lộ: thu hồi nó trên GitHub, Docker Hub trước, rồi tạo, ghi bản mới như trên. Token AMG lộ giữa buổi: chạy lại
-`aws/scripts/bootstrap.sh <env> secrets` (xoá mọi token cũ, ghi token mới); ngoài buổi, xoá token còn lại (env có `managed_grafana`
-`session` thì ngoài buổi không có workspace, cũng không token nào). Terminal có các biến của
-[Mở terminal](#mở-terminal) (`check-account.sh` cần biến account và `SVP_SESSION_DIR`). Ví dụ là stg; với prd thay như bước (5). Đọc trước:
+Docker Hub. Một PAT hay token lộ: thu hồi nó trên GitHub, Docker Hub trước (giữ tay, trên trang của họ), rồi tạo bản mới và ghi bằng
+`cache-secrets.sh` như bước (6). Xoay trước hạn: tạo PAT mới, chạy lại `cache-secrets.sh <env> ghcr|dockerhub` ở hai account, chạy vòng
+`validate` của bước (5), rồi thu hồi bản cũ.
+
+Token AMG lộ giữa buổi: chạy lại `aws/scripts/bootstrap.sh <env> secrets` (xoá mọi token cũ, ghi token mới). Ngoài buổi, xoá token còn lại
+(env có `managed_grafana` `session` thì ngoài buổi không có workspace, cũng không token nào). Terminal có các biến của
+[Mở terminal](#mở-terminal) (`grafana-tokens.sh` đối chiếu account của profile với biến account của env). Ví dụ là stg;
+với prd thay như bước (5). Đọc trước:
 
 ```sh
-aws/scripts/check-account.sh stg
-ws=$(AWS_PROFILE=anhnv-stg terraform -chdir=aws/accounts/stg output -raw grafana_url | sed -E 's#^https://(g-[0-9a-z]+)\..*#\1#')
-sa=$(AWS_PROFILE=anhnv-stg aws grafana list-workspace-service-accounts --workspace-id "$ws" --region ap-southeast-1 \
-  --query "serviceAccounts[?name=='svp-grafana-operator'].id | [0]" --output text)
-AWS_PROFILE=anhnv-stg aws grafana list-workspace-service-account-tokens --workspace-id "$ws" --service-account-id "$sa" \
-  --region ap-southeast-1 --query 'serviceAccountTokens[].[id,expiresAt]' --output text
+aws/scripts/grafana-tokens.sh stg list
 ```
 
-Tìm `ok    account <12 số> of stg, …` rồi mỗi token một dòng id và hạn. `check-account.sh` dừng ở account khác: không làm tiếp, dán dòng lỗi.
-Không dòng token nào: không còn gì để thu hồi. Rồi xoá từng token, lệnh xoá chỉ chạy khi account vẫn đúng:
+Tìm `ok    svp-grafana-operator of stg: N token(s)` rồi mỗi token một dòng `note  token <id> expires <hạn>`. Không có
+workspace thì `skip  no Grafana workspace in stg …, so no token`: không còn gì để thu hồi. Account sai thì
+`grafana-tokens.sh` in `FAIL  profile anhnv-stg is account …: stop here and check the profile` và dừng: không làm
+tiếp, dán dòng lỗi. Rồi xoá mọi token (script kiểm lại account ngay trước mỗi lần xoá và đọc lại sau khi xoá):
 
 ```sh
-aws/scripts/check-account.sh stg &&
-  AWS_PROFILE=anhnv-stg aws grafana delete-workspace-service-account-token --workspace-id "$ws" --service-account-id "$sa" \
-    --token-id <id trên> --region ap-southeast-1
+aws/scripts/grafana-tokens.sh stg revoke
 ```
 
-Chạy lại lệnh `list-workspace-service-account-tokens` ở khối trên; mong không dòng nào.
+Mong `ok    token <id> deleted` mỗi token và dòng cuối `ok    no token of svp-grafana-operator left in stg`; còn token thì `FAIL  tokens of
+svp-grafana-operator left after the deletes: …`, chạy lại lệnh. Không đọc khoá của token: API chỉ trả khoá lúc tạo.
 
 ## Khi một bước đỏ
 

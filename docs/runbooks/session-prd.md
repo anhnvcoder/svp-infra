@@ -62,8 +62,9 @@ aws/scripts/session.sh --print prd                 # mọi lệnh script của b
 
 ## Điều kiện trước buổi
 
-1. Root `aws/org` đã apply (account `svp-prd`, SCP, permission set `SvpAdmin` gán vào account đó); profile `anhnv-prd` đã tạo bằng
-   `aws configure sso`; baseline `aws/accounts/prd` đã apply và zone gốc `aws.<domain>` của nó đã được uỷ quyền bằng bốn bản ghi `NS` `aws` ở DNS cha của domain
+1. Root `aws/org` đã apply (account `svp-prd`, SCP, permission set `SvpAdmin` gán vào account đó); profile `anhnv-prd` đã ghi bằng
+   `aws/scripts/sso-profiles.sh write` ([`aws/org`, Profile](../../aws/org/README.md#profile)); baseline `aws/accounts/prd`
+   đã apply và zone gốc `aws.<domain>` của nó đã được uỷ quyền bằng bốn bản ghi `NS` `aws` ở DNS cha của domain
    ([`aws/accounts/README.md`](../../aws/accounts/README.md), mục 5); zone `stg.aws.<domain>` là zone con của nó, uỷ quyền bằng
    `delegated_subdomains` của chính root `aws/accounts/prd`.
 2. Buổi stg ở account `svp-stg` đã chạy xong theo [`session-stg.md`](session-stg.md), và mọi PR của code, `svp-gitops`, repo này đã merge.
@@ -78,40 +79,36 @@ aws/scripts/session.sh --print prd                 # mọi lệnh script của b
    ```
 
 4. Account prd: AWS đã xác minh cho CloudFront (case Support mở từ account prd, như `session-stg.md` điều kiện 1) và quota EC2 on-demand đủ
-   cho mọi node của prd, cả node Karpenter (NodePool prd on-demand): đọc quota vCPU on-demand chuẩn (`L-1216C47A`):
+   cho mọi node của prd, cả node Karpenter (NodePool prd on-demand). Đọc quota (chỉ đọc) ở terminal của buổi:
 
    ```sh
-   AWS_PROFILE=anhnv-prd aws service-quotas get-service-quota --service-code ec2 --quota-code L-1216C47A --region ap-southeast-1 \
-     --query 'Quota.Value'
+   aws/scripts/preflight.sh quotas prd
    ```
 
-   Cần ≥ 14 vCPU cộng `limits.cpu` của NodePool prd (`envs/prd/svp-cluster.yaml` của `svp-gitops`, số ở ADR-0056 §2): nhóm node hệ thống tới
-   `system_node_max_size` 6 node `m7g.large` × 2 vCPU, bastion `t4g.nano` 2 vCPU
-   ([trang loại instance của AWS](https://aws.amazon.com/ec2/instance-types/)); thiếu thì xin tăng và chờ trước buổi.
+   Mong mỗi quota một dòng `ok    <mã> <tên>: <giá trị> (min|max <cần>)`; thiếu thì `FAIL  <mã> …: run preflight.sh quotas prd request`
+   (xin tăng bằng đúng lệnh đó, chờ `APPROVED` trước buổi). Quota vCPU on-demand chuẩn (`L-1216C47A`) cần ≥ 14 vCPU cộng
+   `limits.cpu` của NodePool prd (`envs/prd/svp-cluster.yaml` của `svp-gitops`, số ở ADR-0056 §2): nhóm node hệ thống tới
+   `system_node_max_size` 6 node `m7g.large` × 2 vCPU, bastion `t4g.nano` 2 vCPU ([trang loại instance của
+   AWS](https://aws.amazon.com/ec2/instance-types/)); số cần ở `quota_table` của script.
 5. Trên máy, ngoài các công cụ của stg: `gh` đã đăng nhập.
-6. `aws/backend-prd.hcl` và `aws/envs/prd/prd.auto.tfvars` như điều kiện 4, 5 của stg (profile `anhnv-prd`, root `aws/accounts/prd`,
-   `domain = "aws.<domain>"`: tên zone prd, web ở đỉnh, API ở `api.aws.<domain>`; `alarm_email` là hộp thư nhận alarm). Root env đọc id
-   workspace AMG `svp-prd` từ tham số SSM `/svp/prd/grafana-workspace-id` của `aws/accounts/prd`; file có sẵn còn dòng
-   `grafana_workspace_id` thì xoá như điều kiện 5 của stg:
+6. `aws/backend-prd.hcl` và `aws/envs/prd/prd.auto.tfvars` như điều kiện 4, 5 của stg (root `aws/accounts/prd`; `domain = "aws.<domain>"`:
+   tên zone prd, web ở đỉnh, API ở `api.aws.<domain>`; `alarm_email` là hộp thư nhận alarm). Root env đọc id workspace AMG `svp-prd` từ tham
+   số SSM `/svp/prd/grafana-workspace-id` của `aws/accounts/prd`; dòng `grafana_workspace_id` có sẵn trong file thì script xoá:
 
    ```sh
-   AWS_PROFILE=anhnv-prd terraform -chdir=aws/accounts/prd output -raw backend_hcl > aws/backend-prd.hcl
-   zone=$(AWS_PROFILE=anhnv-prd terraform -chdir=aws/accounts/prd output -raw zone_id)
-   cat > aws/envs/prd/prd.auto.tfvars <<EOF
-   hosted_zone_id = "$zone"
-   domain         = "aws.<domain>"
-   alarm_email    = "<email>"
-   EOF
+   aws/scripts/tfvars.sh backend prd
+   aws/scripts/tfvars.sh env prd
    ```
 
 7. **Không gói CloudFront nào**: prd không đăng ký gói flat-rate, nên một gói còn ở account là sót (của buổi trước hay của console), giữ
    distribution của nó. Mỗi buổi, trước bước 3 (chỉ đọc):
 
    ```sh
-   AWS_PROFILE=anhnv-prd aws pricing-plan-manager list-subscriptions --region us-east-1 --query 'subscriptionSummaries[].[arn,planTier,status]' --output json
+   aws/scripts/preflight.sh freetier prd
    ```
 
-   Mong `[]`; dán lại. Còn gói: huỷ theo `session-stg.md`, mục **Lệnh xoá tay theo loại** (CloudFront), với `AWS_PROFILE=anhnv-prd`.
+   Mong `ok    no CloudFront flat-rate plan in prd` và `ok    account plan of prd is PAID`; dán lại. `FAIL  N CloudFront plan(s) left in
+   prd …`: huỷ gói theo `session-stg.md`, mục **Lệnh xoá tay theo loại** (CloudFront), với `AWS_PROFILE=anhnv-prd`, rồi chạy lại.
 8. **Nền bảo mật của org đã áp** tới ít nhất bước (3) của [`org-security-setup.md`](org-security-setup.md#thứ-tự-áp-lần-đầu), và biến
    `SVP_AWS_LOG_ACCOUNT_ID` đặt trong terminal của buổi: như `session-stg.md` điều kiện 6 (root env prd ghi flow log, log WAF vào bucket
    của `svp-log-archive`).
@@ -126,15 +123,16 @@ aws/scripts/session.sh --print prd                 # mọi lệnh script của b
 
 ## Mở terminal của buổi
 
-Như `session-stg.md` với profile và biến của prd:
+Như `session-stg.md` (cùng phiên SSO dùng chung cho mọi profile, cùng cách đọc `FAIL`; mục
+[Mở terminal của buổi](session-stg.md#mở-terminal-của-buổi)), vì `accounts.sh` đặt cả `SVP_AWS_PRD_ACCOUNT_ID`:
 
 ```sh
 cd infra
-AWS_PROFILE=anhnv-prd aws sso login --region us-east-1
-AWS_PROFILE=anhnv-sso aws sso login --region us-east-1                                             # cho lượt sweep.sh mgmt cuối buổi
-export SVP_AWS_PRD_ACCOUNT_ID=<12 số của account svp-prd> SVP_AWS_MGMT_ACCOUNT_ID=<12 số của account management>
-export SVP_AWS_LOG_ACCOUNT_ID=<12 số của account svp-log-archive> SVP_AWS_BACKUP_ACCOUNT_ID=<12 số của account svp-backup>
+AWS_PROFILE=anhnv-sso aws sso login --region us-east-1                          # one login per sso_session
+export SVP_AWS_MGMT_ACCOUNT_ID=<12 số của account management>
+eval "$(aws/scripts/accounts.sh)"
 export SVP_SESSION_DIR="$PWD/.session/$(date -u +%Y%m%dT%H%M%SZ)"
+aws/scripts/sso-profiles.sh check
 ```
 
 ## Thứ tự
@@ -193,49 +191,36 @@ gitops dừng khi khoá vắng, `require_pinned_revision = true`). Làm cổng n
 2. Duyệt environment `promote-prd` của lượt chạy đó (trang của run trên GitHub, "Review deployments"). Job mở PR ở `svp-gitops` (nhánh
    `bot/promote-prd`) đặt `gitopsRevision = <stg_ref>` cùng image và chart của commit đó.
 3. Code Owner duyệt PR đó, check của `svp-gitops` xanh, merge.
-4. Kiểm hai khoá trên `main` (dán lại hai dòng in ra): `revision` là commit của repo code (chart), `gitopsRevision` là commit `svp-gitops`
-   (`stg_ref`):
+4. Kiểm cổng bằng script (sau khi PR đã merge), thay các lệnh `git show`/`grep` tay:
 
    ```sh
-   git -C ../gitops fetch origin && git -C ../gitops show origin/main:envs/prd/charts.yaml | grep -E '^(revision|gitopsRevision):'
+   aws/scripts/preflight.sh promote
    ```
+
+   Script không gọi `aws`; nó đọc hai bản clone `../backend` và `../gitops` (`SVP_BACKEND_DIR`, `SVP_GITOPS_DIR` đổi chỗ),
+   `git fetch origin` rồi đọc `origin/main`, không đổi nhánh. Mong, theo thứ tự:
+
+   - `ok    clone … is clean and fetched` hai lần; clone có thay đổi trên file đã theo dõi thì `FAIL … has uncommitted changes`;
+   - `ok    envs/prd/charts.yaml: revision <40 hex>, gitopsRevision <40 hex>`: `revision` là commit của repo code (chart), `gitopsRevision`
+     là commit `svp-gitops` (`stg_ref`). `FAIL  gitopsRevision … is '', not a commit: promote-prd has not merged` là bước 1–3 chưa xong;
+   - `ok    chart revision <…> has the eks Collector and canaryPrometheus`: **chart có nền tảng managed**. `revision` phải là
+     commit của repo code có Collector theo nền tảng và value `canaryPrometheus`. Values eks của `svp-gitops` chỉ đúng với
+     chart đó; chart cũ chạy với chúng thì Prometheus thành agent mà canary cũ vẫn hỏi nó (Inconclusive), Collector cũ gửi
+     tới Prometheus, Loki, Tempo không còn trên eks (mất metric, log, trace), không luật trên AMP, không dashboard ở AMG,
+     image kéo thẳng upstream, Kyverno và External Secrets bị NetworkPolicy chặn tới endpoint interface (Secret không tạo
+     được);
+   - `ok    media-worker runs mediaconvert at <…> and the chart at <…> takes args`: **bản ghim có transcode MediaConvert**. Ở
+     `gitopsRevision` (`G`), release `media-worker` của nền tảng eks chạy lệnh con `mediaconvert`, nhận ba biến của queue,
+     role, hàng đợi từ hợp đồng cluster và được ra TCP 443 trong VPC (endpoint interface); ở `revision` (`R`), schema của
+     chart `svp-service` nhận value `args` và Deployment đưa nó vào container chính.
+
+Script nêu điều kiện hụt trong mỗi `FAIL`. Hụt chart hay bản ghim (prd sẽ chạy `media-worker serve` với ffmpeg, hay pod không
+khởi động): **không dựng prd**; promote lại từ `stg_ref` của một buổi stg đã chạy với
+chart mới và đã qua phép kiểm transcode. Dán lại mọi dòng `ok`/`FAIL`.
 
 Job từ chối (`stg_ref` không có `argocd/stg` `success`, hay không trên `main`), environment hay PR bị từ chối: **dừng buổi**, không chạy bước 1.
 Job `promote-prd` chép và kiểm mọi image của `envs/stg/images/` vào ECR prd trước khi mở PR; một image lỗi thì không có PR: đọc log của job,
 dán dòng lỗi (`vuln` quá hạn thì dòng đó nêu lệnh rescan).
-
-**Chart có nền tảng managed** (sau bước 4, vẫn trước bước 1): `revision` vừa kiểm phải là commit của repo code có Collector theo nền tảng và
-value `canaryPrometheus`. Values eks của `svp-gitops` chỉ đúng với chart đó; chart cũ chạy với chúng thì Prometheus thành agent mà canary cũ vẫn
-hỏi nó (Inconclusive), Collector cũ gửi tới Prometheus, Loki, Tempo không còn trên eks (mất metric, log, trace), không luật trên AMP, không
-dashboard ở AMG, image kéo thẳng upstream, Kyverno và External Secrets bị NetworkPolicy chặn tới endpoint interface (Secret không tạo được).
-Mong hai dòng `ok`; thiếu thì **không dựng prd**: promote lại từ một `stg_ref` mà buổi stg đã chạy với chart mới.
-
-```sh
-rev=$(git -C ../gitops show origin/main:envs/prd/charts.yaml | sed -n 's/^revision: *//p')
-git -C ../backend fetch origin
-git -C ../backend cat-file -e "$rev:deploy/observability/otelcol/k8s-eks.yaml" && echo ok
-git -C ../backend show "$rev:deploy/helm/svp-service/values.yaml" | grep -q '^canaryPrometheus:' && echo ok
-```
-
-**Bản ghim có transcode MediaConvert** (sau bước 4, vẫn trước bước 1): ở `gitopsRevision` (`G`), release `media-worker` của nền tảng eks chạy
-lệnh con `mediaconvert`, nhận ba biến của queue, role, hàng đợi từ hợp đồng cluster và được ra TCP 443 trong VPC (endpoint interface); ở
-`revision` (`R`), schema của chart `svp-service` nhận value `args` và Deployment đưa nó vào container chính. Thiếu một điều: prd sẽ chạy
-`media-worker serve` (ffmpeg) hay pod không khởi động, **không dựng prd**; promote lại từ `stg_ref` của một buổi stg đã qua phép kiểm transcode.
-Chỉ đọc bản clone, không đổi nhánh:
-
-```sh
-G=$(git -C ../gitops show origin/main:envs/prd/charts.yaml | sed -n 's/^gitopsRevision: *//p')
-R=$(git -C ../gitops show origin/main:envs/prd/charts.yaml | sed -n 's/^revision: *//p')
-git -C ../gitops show "$G:platforms/eks/media-worker.yaml" | grep -x 'args: \[mediaconvert\]'
-git -C ../gitops show "$G:platforms/eks/media-worker.values.tpl" |
-  grep -c -E '^ +(MEDIACONVERT_QUEUE_ARN|MEDIACONVERT_ROLE_ARN|TRANSCODE_EVENTS_QUEUE_URL):|cidr: .*vpcCidr.*ports: \[443\]'
-git -C ../gitops show "$G:argocd/apps/templates/applications.yaml" | grep -c -E 'mediaconvertQueueArn|mediaconvertRoleArn|transcodeEventsQueueUrl'
-git -C ../backend show "$R:deploy/helm/svp-service/values.schema.json" | jq -e '.properties.args.type == "array"'
-git -C ../backend show "$R:deploy/helm/svp-service/templates/deployment.yaml" | grep -c 'with .Values.args'
-```
-
-Mong `args: [mediaconvert]`, `4` (ba biến và mục egress), `3` (ba khoá của hợp đồng cluster được kiểm dạng), `true`, `1`; dán lại cả
-năm dòng. Khác: dán cho AI trước bước 1.
 
 ## Bước 1–10: account, DNS, root account, root env, khoá ký
 
@@ -252,8 +237,10 @@ response headers policy `svp-prd-media`, delivery log, behavior mặc định ti
 cluster MSK ba broker `kafka.m7g.large` (configuration RF 3, min ISR 2) cùng log group `/aws/msk/svp-prd`, replication group ElastiCache hai
 node `cache.m7g.large` (`automatic_failover_enabled`, `multi_az_enabled` `true`). Apply ~65–70 phút (MSK là phần dài nhất). `apply` đỏ giữa
 chừng và lỗi apply đã biết (account chưa xác minh, delivery destination chưa có, ElastiCache không nhận access string) theo
-`session-stg.md`, mục 6–10: lượt đỏ đã ghi một tài nguyên mang mật khẩu của nhóm Kafka hay Valkey thì tăng `msk_password_version` hay
-`valkey_password_version` trong `aws/envs/prd/prd.auto.tfvars` trước khi `plan` lại, rồi `bootstrap.sh prd secrets` ở bước 11. Plan có cùng
+`session-stg.md`, mục 6–10: lượt đỏ đã ghi một tài nguyên mang mật khẩu của nhóm Kafka hay Valkey thì
+`aws/scripts/tfvars.sh bump prd msk` hay
+`bump prd valkey` (tăng `msk_password_version` hay `valkey_password_version` trong `aws/envs/prd/prd.auto.tfvars`) trước khi
+`plan` lại, rồi `bootstrap.sh prd secrets` ở bước 11. Plan có cùng
 các tài nguyên của Karpenter, bastion, KMS key, SNS và alarm như stg (`session-stg.md`, mục 6–10), tên `svp-prd-*`. Sau apply, xác nhận email
 của topic `svp-prd-alarms` theo `session-stg.md`, mục 6–10 (`AWS_PROFILE=anhnv-prd`, `$SVP_AWS_PRD_ACCOUNT_ID`).
 
@@ -549,27 +536,29 @@ aws/scripts/restore-drill.sh prd s3
 Khác stg ở dữ liệu: plan `svp-prd` của Backup policy `svp-backup-prd`, vault `svp-prd`, role `svp-prd-backup`, bản copy vào `svp-prd-copy`
 (retention và vault lock của prd, ADR-0067 §4); instance `svp-prd-pitr` một AZ cùng lớp với `svp-prd` (nguồn Multi-AZ, bản khôi phục không),
 nên giờ của nó là khoản lớn nhất của phần backup mỗi buổi. Cùng mục tiêu RTO/RPO, cùng cách đọc dòng `FAIL`. Đọc bản copy bằng lệnh của mục
-stg với `svp-prd-copy`:
+stg:
 
 ```sh
-k=$(AWS_PROFILE=anhnv-backup-ro aws backup describe-backup-vault --backup-vault-name svp-prd-copy --region ap-southeast-1 \
-  --query EncryptionKeyArn --output text)
-AWS_PROFILE=anhnv-backup-ro aws backup list-recovery-points-by-backup-vault --backup-vault-name svp-prd-copy --region ap-southeast-1 \
-  --by-created-after "$(head -n 1 "$SVP_SESSION_DIR/timeline.tsv" | cut -f 1)" --output json |
-  jq -r --arg k "$k" '.RecoveryPoints[] | [.ResourceType, .Status, .CreationDate, .CalculatedLifecycle.DeleteAt,
-    (if .EncryptionKeyArn == $k then "vault-key" else "other-key" end)] | @tsv'
+aws/scripts/preflight.sh findings prd
 ```
 
-Mong ba dòng `COMPLETED`, `DeleteAt` cách `CreationDate` đúng retention bản copy của prd, `vault-key`. Lệnh xem log quanh T_r, khôi phục
+Mong ba dòng `note  svp-prd-copy: … COMPLETED … vault-key` rồi dòng `ok`, `DeleteAt` cách `CreationDate` đúng retention bản
+copy của prd; chưa profile `anhnv-security-ro` thì dòng `FAIL` cuối ở profile đó là đúng, như stg. Lệnh xem log quanh T_r, khôi phục
 object bằng delete marker khi restore job lỗi: như stg với `anhnv-prd`, `--context svp-prd`, bucket `svp-prd-media-<account prd>-ap-southeast-1`.
 Dán bảng `restore-drill.tsv` (lệnh `column` của mục stg); số đo vào phụ lục ADR-0067 cùng số của stg.
 
 ## Kết thúc buổi
 
-**Trước bước 20, finding bảo mật của buổi** (chỉ đọc, khi tài nguyên của buổi còn sống, cả khi buổi dừng sớm): hai lệnh và cách xử lý của
+**Trước bước 20, finding bảo mật của buổi** (chỉ đọc, khi tài nguyên của buổi còn sống, cả khi buổi dừng sớm): lệnh và cách xử lý của
 `session-stg.md`, mục [Finding bảo mật của buổi](session-stg.md#finding-bảo-mật-của-buổi-sau-bước-19-trước-bước-20), cùng điều kiện
-(bước (4), (5) của nền bảo mật org), với dòng đầu `ACC="${SVP_AWS_PRD_ACCOUNT_ID:?not set}"` của prd (comment trên dòng `ACC` của stg) thay
-dòng của stg: dòng của stg chạy ở terminal prd thì đọc finding của account stg. Mốc của diễn tập prd cũng nằm trong `timeline.tsv` của buổi.
+(bước (4), (5) của nền bảo mật org), với `prd`:
+
+```sh
+aws/scripts/preflight.sh findings prd
+```
+
+Script lọc theo `SVP_AWS_PRD_ACCOUNT_ID`: `findings stg` chạy ở terminal prd thì đọc finding của account stg. Mốc của diễn tập prd cũng
+nằm trong `timeline.tsv` của buổi.
 
 Theo thứ tự, mỗi bước xong mới sang bước sau:
 

@@ -85,18 +85,17 @@ git -C "$ws/backend" archive "$rev" deploy/helm/svp-cluster | tar -x -C /tmp/svp
 
 ### Lệnh
 
-Kiểm account trước (cột `Account` phải bằng `$SVP_AWS_STG_ACCOUNT_ID`; khác thì dừng):
+Kiểm account trước (tìm `ok    account <12 số> of stg, …`; `FAIL  profile anhnv-stg is account …` thì dừng):
 
 ```sh
 cd infra/aws/gitops/stg
-AWS_PROFILE=anhnv-stg aws sts get-caller-identity --region ap-southeast-1 --query '{Account:Account,Arn:Arn}' --output table
-echo "$SVP_AWS_STG_ACCOUNT_ID"
+../../scripts/check-account.sh stg
 ```
 
 Dựng (đọc plan trước khi apply: tạo mới namespace, ba release, Secret `in-cluster`; B in ở output `bootstrap_revision`):
 
 ```sh
-cp example.auto.tfvars.example stg.auto.tfvars          # rồi sửa telegram_chat_id nếu có
+../../scripts/tfvars.sh example aws/gitops/stg          # then set telegram_chat_id if needed
 AWS_PROFILE=anhnv-stg terraform init -reconfigure -backend-config=../../backend-stg.hcl -backend-config=key=aws/gitops/stg/terraform.tfstate
 AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_svp_cluster_chart=/tmp/svp-cluster-stg/deploy/helm/svp-cluster \
   terraform plan -var-file=stg.tfvars -out=stg.tfplan

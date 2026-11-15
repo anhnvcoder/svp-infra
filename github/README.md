@@ -45,18 +45,18 @@ bằng `make github-app`); `make github-check` đọc lại mọi hàng có API 
 | Cài đặt | Vì sao không | Kiểm bằng |
 | --- | --- | --- |
 | Secret `SVP_GITOPS_APP_PRIVATE_KEY`, `SVP_WEB_APP_PRIVATE_KEY` (environment `promote`); `SVP_GITOPS_APP_PRIVATE_KEY` của `promote-prd` (khoá riêng thứ hai của App `svp-gitops-promoter`, thu hồi riêng với khoá của stg) | Giá trị của secret trong resource nằm rõ trong state; khoá App đặt tay một lần, đổi khi xoay khoá | Settings → Environments → `promote`, `promote-prd` |
-| Secret repo `SVP_AWS_STG_ACCOUNT_ID`, `SVP_AWS_PRD_ACCOUNT_ID` (`svp-backend`, `svp-frontend`): id account của role ECR, secret để GitHub che id trong log của repo public | Như khoá App: giá trị trong resource nằm rõ trong state; người học đặt bằng `gh secret set` | Settings → Secrets and variables → Actions, hay `gh secret list -R anhnvcoder/<repo>` |
+| Secret repo `SVP_AWS_STG_ACCOUNT_ID`, `SVP_AWS_PRD_ACCOUNT_ID` (`svp-backend`, `svp-frontend`): id account của role ECR, secret để GitHub che id trong log của repo public | Như khoá App: giá trị trong resource nằm rõ trong state; người học đặt bằng `make github-secrets` | Settings → Secrets and variables → Actions, hay `gh secret list -R anhnvcoder/<repo>` |
 | Secret `SVP_RELEASE_APP_PRIVATE_KEY` (environment `release` của `svp-backend`) | Như khoá App promote | Settings → Environments → `release` |
-| Secret của environment `terraform-plan` (`svp-infra`): `SVP_AWS_<STG\|PRD\|LOG\|BACKUP>_ACCOUNT_ID`, `SVP_TFVARS_ACCOUNT_<ENV>`, `SVP_TFVARS_ENV_<ENV>` (nội dung `*.auto.tfvars` của `aws/accounts/<env>`, `aws/envs/<env>`) | Giá trị trong resource nằm rõ trong state; người học đặt sau khi role plan của env có | `make github-check` cho mỗi env trong `SVP_TF_PLAN_ENVS` |
-| Secret repo `INFRACOST_API_KEY` (`svp-infra`): khoá API Infracost của `cost.yml` | Như trên | `gh secret list -R anhnvcoder/svp-infra` |
+| Secret của environment `terraform-plan` (`svp-infra`): `SVP_AWS_<STG\|PRD\|LOG\|BACKUP>_ACCOUNT_ID`, `SVP_TFVARS_ACCOUNT_<ENV>`, `SVP_TFVARS_ENV_<ENV>` (nội dung `*.auto.tfvars` của `aws/accounts/<env>`, `aws/envs/<env>`) | Giá trị trong resource nằm rõ trong state; người học đặt bằng `make github-secrets ENV=<env>` sau khi role plan của env có | `make github-check` cho mỗi env trong `SVP_TF_PLAN_ENVS` |
+| Secret repo `INFRACOST_API_KEY` (`svp-infra`): khoá API Infracost của `cost.yml` | Như trên; người học đặt bằng `make infracost-key` | `make github-check` |
 | GitHub App `svp-gitops-promoter`, `svp-web-promoter`, `svp-release-please` (quyền, repo cài) và App Renovate (Mend) | Provider không quản App của tài khoản cá nhân hay việc cài App | trang cài đặt App, runbook của từng repo |
-| Duyệt workflow của PR fork (`fork-pr-contributor-approval`; `svp-labs`, `.github` người học đặt tay `all_external_contributors` theo ADR-0041) | Provider 6.13.0 không có resource | `gh api repos/anhnvcoder/<repo>/actions/permissions/fork-pr-contributor-approval` |
-| CodeQL default setup (`svp-backend`) | Provider không có resource cho default setup | `docs/ci-cd.md` mục 7 của repo code |
+| Duyệt workflow của PR fork (`fork-pr-contributor-approval`: `all_external_contributors` theo ADR-0041) | Provider 6.13.0 không có resource; `make github-settings` đặt | `make github-check` |
+| CodeQL default setup (repo trong `CODEQL_DEFAULT_SETUP` của `scripts/github-app.py`) | Provider không có resource cho default setup; `make github-settings` đặt | `make github-check`; `docs/ci-cd.md` mục 7 của repo code |
 | Package GHCR public | Không có resource cho visibility của package | runbook của repo code |
 | Environment `stg` của `svp-gitops` | Không ai bật tay: API deployments của `record-stg.sh` tự tạo khi ghi bản ghi stg, không luật nào; quản nó chỉ thêm đường để Terraform xoá hay tạo lại nó | `gh api repos/anhnvcoder/svp-gitops/environments` |
 | Nhánh mặc định (`github_branch_default`) | Push đầu đặt nó; mọi repo trong `local.repositories` đang là `main` | `gh api repos/anhnvcoder/<repo> -q .default_branch` |
 | `require_extra_approval_for_unattributed_changes` của luật `pull_request` | Provider không có trường này (không đọc, không gửi); GitHub đang để `true` ở mọi ruleset có luật này (mặc định). Sau một `apply` sửa ruleset, đọc lại trường này | `gh api repos/anhnvcoder/<repo>/rulesets/<id> -q '.rules[] \| select(.type=="pull_request") \| .parameters'` |
-| Private vulnerability reporting | Provider 6.13.0 không có resource; `SECURITY.md` và `.github/ISSUE_TEMPLATE/config.yml` của `anhnvcoder/.github` dẫn người báo tới nó. Người học bật bằng `gh api -X PUT repos/anhnvcoder/<repo>/private-vulnerability-reporting` cho mọi repo trong `local.repositories` | `gh api repos/anhnvcoder/<repo>/private-vulnerability-reporting -q .enabled` in `true` |
+| Private vulnerability reporting | Provider 6.13.0 không có resource; `SECURITY.md` và `.github/ISSUE_TEMPLATE/config.yml` của `anhnvcoder/.github` dẫn người báo tới nó. Người học bật bằng `make github-settings` cho mọi repo trong `local.repositories` | `gh api repos/anhnvcoder/<repo>/private-vulnerability-reporting -q .enabled` in `true` |
 | Dependabot security updates | Đang tắt ở mọi repo trong `local.repositories`, không ai bật; Renovate nâng dependency | `gh api repos/anhnvcoder/<repo> -q .security_and_analysis` |
 
 ## Khác runbook (mã hoá đúng như đang chạy)
@@ -71,38 +71,34 @@ bằng `make github-app`); `make github-check` đọc lại mọi hàng có API 
 AI không chạy lệnh nào dưới đây. Cần: Terraform 1.15 trên máy (khớp Terraform của máy dev, cài bằng Homebrew, và `TERRAFORM_IMAGE` của `Makefile`; `use_lockfile` của backend S3 đòi 1.10 trở lên, khối `import {}` dùng tạm để nhận quản repo đã có đòi 1.5 trở lên), `aws/backend.hcl` (bước 3 của `aws/bootstrap/README.md`), `gh` đăng nhập
 bằng tài khoản admin của mọi repo trong `local.repositories` với scope `repo` (`gh auth status` liệt kê scope), `jq`.
 
-**1. `github.auto.tfvars`** (một lần mỗi máy): ghi thẳng từ biến đang có trên GitHub, không in ra màn hình. Không chép tay client ID từ
-trang cài đặt App: một ký tự khác là `plan` đòi ghi đè biến của environment `promote`.
+**1. `github.auto.tfvars`** (một lần mỗi máy, và sau khi biến trên GitHub đổi):
 
 ```sh
-cd infra/github
-{
-  printf 'svp_gitops_app_client_id = "%s"\n' \
-    "$(gh api repos/anhnvcoder/svp-backend/environments/promote/variables/SVP_GITOPS_APP_CLIENT_ID --jq .value)"
-  printf 'svp_web_app_client_id = "%s"\n' \
-    "$(gh api repos/anhnvcoder/svp-frontend/environments/promote/variables/SVP_WEB_APP_CLIENT_ID --jq .value)"
-  printf 'svp_release_app_client_id = "%s"\n' \
-    "$(gh api repos/anhnvcoder/svp-backend/environments/release/variables/SVP_RELEASE_APP_CLIENT_ID --jq .value)"
-  printf 'terraform_plan_envs = %s\n' "$(gh api repos/anhnvcoder/svp-infra/actions/variables/SVP_TF_PLAN_ENVS --jq .value)"
-} > github.auto.tfvars
+make github-tfvars
 ```
 
-Environment `release` hay biến `SVP_TF_PLAN_ENVS` chưa có (trước `apply` đầu tạo chúng): `make github-app APP=svp-release-please` đã ghi
-`svp_release_app_client_id`, còn `terraform_plan_envs` để mặc định `[]`; bỏ hai dòng đó khỏi khối trên.
+Script đọc client ID của ba App và `SVP_TF_PLAN_ENVS` từ biến Actions trên GitHub (nguồn ở `TFVARS_SOURCES` của
+`scripts/github-app.py`), không chép tay từ trang cài đặt App: một ký tự khác là `plan` đòi ghi đè biến của environment `promote`. Mong mỗi
+biến một dòng `ok    <biến tfvars> ← <biến GitHub> of <repo> …` (giá trị không in), rồi `ok    github/github.auto.tfvars written (mode
+600)`. File ghi qua file tạm rồi đổi tên, dòng khác của file giữ nguyên.
 
-`gh api` lỗi thì nó in thân lỗi JSON thay cho giá trị, `github.auto.tfvars` hỏng cú pháp và `plan` dừng ở lỗi đọc file đó: chạy lại khi
-`gh api` trả đúng giá trị.
+- `note  … is not on GitHub yet`: biến chưa có (environment `release` hay biến `SVP_TF_PLAN_ENVS` trước `apply` đầu); dòng của biến đó
+  trong file giữ như cũ (`make github-app APP=svp-release-please` đã ghi `svp_release_app_client_id`), `terraform_plan_envs` thiếu thì
+  mặc định `[]`.
+- `FAIL … does not look like a client ID` hay `is not a JSON list`: `gh api` trả thân lỗi JSON hay giá trị sai dạng; file không đổi.
+  Sửa đăng nhập `gh` (`gh auth status`) rồi chạy lại.
 
 **2. `plan`:**
 
 ```sh
-AWS_PROFILE=anhnv-sso aws sts get-caller-identity --region ap-southeast-1 --query '{Account:Account,Arn:Arn}' --output table
-export GITHUB_TOKEN="$(gh auth token)"                  # chỉ trong terminal này; không ghi vào file nào
-AWS_PROFILE=anhnv-sso terraform init -backend-config=../aws/backend.hcl
-AWS_PROFILE=anhnv-sso terraform plan -out=github.tfplan
+make github-plan
 ```
 
-`Account` phải là account sandbox như mọi buổi AWS (state nằm ở đó).
+Script kiểm `AWS_PROFILE=anhnv-sso aws sts get-caller-identity` trả đúng `SVP_AWS_MGMT_ACCOUNT_ID` (export trong terminal; state nằm ở
+account này), lấy `GITHUB_TOKEN` từ `gh auth token` chỉ cho tiến trình `terraform` (không vào dòng lệnh, file hay shell của bạn), rồi
+`terraform init -backend-config=../aws/backend.hcl` và `terraform plan -out=github.tfplan` trong `github/`. Phiên SSO hết hạn hay chưa
+đăng nhập: `FAIL` in lệnh `AWS_PROFILE=anhnv-sso aws sso login --region us-east-1`. Account khác: `FAIL` trước `init`. Thiếu
+`aws/backend.hcl`: `FAIL`, ghi nó theo `aws/bootstrap/README.md`.
 
 **3. Đọc `plan`:** chỉ thay đổi bạn định làm; `No changes.` khi code và GitHub khớp nhau. Dòng nào khác là cài đặt trên GitHub đã đổi
 so với code: dừng, không `apply`, so với `gh api` GET của repo đó.
@@ -110,10 +106,11 @@ so với code: dừng, không `apply`, so với `gh api` GET của repo đó.
 **4. `apply`** khi đúng mong đợi:
 
 ```sh
-AWS_PROFILE=anhnv-sso terraform apply github.tfplan
-AWS_PROFILE=anhnv-sso terraform plan                    # mong đợi: No changes.
-rm github.tfplan                                        # plan chứa giá trị của biến
+make github-apply
 ```
+
+Script chỉ apply đúng `github/github.tfplan` đã lưu (không có file thì từ chối), xoá file đó (plan chứa giá trị của biến), rồi plan lại:
+mong `ok    plan after apply: No changes.`; còn thay đổi thì `FAIL`, đọc chúng trước mọi việc khác.
 
 **Account mới hay state mới:** repo đã có trên GitHub phải nhận quản trước theo mục "Nhận quản repo đã có" (không thì `plan` đòi tạo
 lại mọi repo và `apply` lỗi ở repo đầu tiên). Sau đó `apply` tạo `github_repository_ruleset.infra_main`. Chỉ `apply` nó sau khi `svp-infra` có nhánh mặc định `main` và lượt
@@ -126,8 +123,7 @@ chạy `make docs-check`): chỉ `apply` chúng sau khi `docs.yml` đã ở `mai
 **Đổi cài đặt.**
 
 1. PR vào `svp-infra` sửa `.tf` của thư mục này; `make check DIRS=github` trên máy, `infra-ok` trên PR.
-2. Merge, rồi từ `main`: cùng các lệnh `export GITHUB_TOKEN`, `terraform plan -out=github.tfplan` như trên, đọc plan (chỉ thay đổi của PR),
-   `terraform apply github.tfplan`.
+2. Merge, rồi từ `main`: `make github-plan`, đọc plan (chỉ thay đổi của PR), `make github-apply`.
 3. Không sửa cài đặt đã quản ở UI: `plan` lần sau thấy lệch và sẽ đưa về code. Lỡ sửa thì hoặc làm PR đưa giá trị đó vào code, hoặc
    `apply` để trả về.
 
@@ -175,7 +171,7 @@ environment là `<repo>:<tên environment>:<TÊN_BIẾN>`). `plan` thấy các i
 provider 6.13.0, hai trường chỉ sống trong state ở mỗi `github_repository` được import: `+ archive_on_destroy = true` (cờ của Terraform,
 GitHub không có) và `+ ignore_vulnerability_alerts_during_read = false` (trường đã deprecated của provider, không bao giờ đọc lại). Mỗi
 `github_actions_environment_variable` được import hiện `update` không đổi giá trị. Kiểm không có thay đổi nào khác (in tên tài nguyên và tên
-thuộc tính, không in giá trị):
+thuộc tính, không in giá trị; chạy trong `github/` sau `make github-plan`):
 
 ```sh
 terraform show -json github.tfplan | jq -r '.resource_changes[] | select(.change.actions != ["no-op"])
@@ -185,9 +181,9 @@ terraform show -json github.tfplan | jq -r '.resource_changes[] | select(.change
 ```
 
 Dòng nào ngoài import và hai trường trên là cài đặt trên GitHub khác với code: dừng, không `apply`, so với `gh api` GET của repo đó. Đúng
-mong đợi thì `apply`, rồi `plan` phải ra `No changes.`. Xoá khối `import {}` tạm trong PR sau.
+mong đợi thì `make github-apply` (nó plan lại, phải ra `No changes.`). Xoá khối `import {}` tạm trong PR sau.
 
-**Tfvars.** Giá trị các biến lấy từ biến GitHub như bước 1; không chép tay.
+**Tfvars.** Giá trị các biến lấy từ biến GitHub bằng `make github-tfvars` (bước 1); không chép tay.
 
 Bỏ một repo khỏi `local.repositories` hay một repo
 khỏi `local.promote_environments` thì `plan` dừng ở `prevent_destroy` (repo, quyền Actions, environment `promote`); muốn thôi quản một

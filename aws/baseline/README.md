@@ -98,7 +98,8 @@ Account `svp-backup` thêm phần của một account không chạy workload (ch
 
 Bước (6) của thứ tự áp nền bảo mật org: sau `aws/log-archive` (bucket Config và key), `aws/org` áp đủ (SCP `svp-protect-baseline`) và
 `aws/security` (bus `svp-security-events`, topic đã xác nhận email). **Người học chạy mọi lệnh dưới đây** (AI không chạy lệnh nào chạm account).
-Cần Terraform 1.15, AWS CLI v2, `aws sso login --profile anhnv-sso`.
+Cần Terraform 1.15, AWS CLI v2, `aws sso login --profile anhnv-sso`, profile chỉ đọc `anhnv-security-ro`, `anhnv-stg-ro`, `anhnv-prd-ro`
+(`aws/scripts/sso-profiles.sh write`, [`aws/org`, Profile](../org/README.md#profile)).
 
 Account thêm vào org khi root đã áp (như `svp-backup`): sau khi `aws/org` tạo account đó, chạy bước 1, 3, 4 và bỏ bước 2. Role, recorder của các
 account cũ đã nằm trong state của root này, nên bước 2 không còn mong đợi role hay recorder trống; account mới chỉ có cái `aws/org` tạo. Bucket
@@ -107,15 +108,21 @@ Config và bus nhận account mới theo id của org, không đổi policy.
 ### 1. Kiểm account và biến
 
 ```sh
-cd infra/aws/baseline
-AWS_PROFILE=anhnv-sso aws sts get-caller-identity --region ap-southeast-1 --query '[Account,Arn]' --output text
-printf '%s\n' "$SVP_AWS_MGMT_ACCOUNT_ID" "$SVP_AWS_LOG_ACCOUNT_ID" "$SVP_AWS_SECURITY_ACCOUNT_ID" "$SVP_AWS_BACKUP_ACCOUNT_ID" \
-  "$SVP_AWS_STG_ACCOUNT_ID" "$SVP_AWS_PRD_ACCOUNT_ID"
-cp -n baseline.auto.tfvars.example baseline.auto.tfvars
+cd infra
+eval "$(aws/scripts/accounts.sh)"
+cd aws/baseline
+../scripts/check-account.sh mgmt
+../scripts/tfvars.sh example aws/baseline
 ```
 
-`Account` phải bằng `SVP_AWS_MGMT_ACCOUNT_ID`, `Arn` là role SSO của người học. Mỗi dòng sau đều là 12 số. Sửa `sso_region` trong
-`baseline.auto.tfvars` (không commit) cho bằng `sso_region` của `aws/org/org.auto.tfvars`. Khác hay thiếu thì dừng.
+`accounts.sh` đặt năm biến account của thành viên (mỗi biến một dòng `ok    SVP_AWS_<…>_ACCOUNT_ID: account svp-<tên>, ACTIVE`, không in
+id; `SVP_AWS_MGMT_ACCOUNT_ID` gõ tay trước đó). Khi tổ chức chưa có `svp-backup`, nó in `FAIL  no account svp-backup in the
+organization` và không đặt gì: bỏ dòng `eval`, đặt biến thành viên bằng `export` như mục
+[Mở terminal](../../docs/runbooks/org-security-setup.md#mở-terminal) và bước (2) của runbook. `check-account.sh` in
+`ok    account … of mgmt, …`. `tfvars.sh example` chép `baseline.auto.tfvars.example` thành `baseline.auto.tfvars` (mode 600)
+khi file chưa có và liệt kê mỗi giá trị còn `<…>`. Sửa `sso_region`
+trong `baseline.auto.tfvars` (không commit; giá trị cá nhân giữ tay) cho bằng `sso_region` của `aws/org/org.auto.tfvars`. Khác hay thiếu thì
+dừng.
 
 ### 2. Kiểm cái đã có
 
@@ -140,7 +147,7 @@ Mong đợi mỗi account một dòng `NoSuchEntity` và hai dòng rỗng. Có r
 ### 3. Init và plan
 
 ```sh
-AWS_PROFILE=anhnv-sso terraform init -backend-config=../backend.hcl
+../scripts/tfvars.sh init
 AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
   TF_VAR_security_account_id="$SVP_AWS_SECURITY_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" \
   TF_VAR_stg_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_prd_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform plan -out=baseline.tfplan

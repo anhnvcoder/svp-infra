@@ -22,6 +22,10 @@ backend.hcl
 aws/backend-stg.hcl
 aws/backend-prd.hcl
 
+# Temporary files the setup scripts write beside a file they then replace (removed on exit).
+.tfvars.??????
+.github.auto.tfvars.*
+
 # Override files, such as the local_override.tf of the first apply of aws/bootstrap.
 override.tf
 override.tf.json
