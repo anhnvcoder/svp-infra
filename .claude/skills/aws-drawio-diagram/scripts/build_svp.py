@@ -355,8 +355,8 @@ def env_page(env: Env) -> Page:
     for i, (kind, label) in enumerate(SVP_DATA):
         workload(p, kind, label, COL[1], b + 200 + 40 * i)
     frame(p, "svp-obs", COL[2], b + 160, COL_W, 200)
-    p.text(bullets("Prometheus agent ×2 → AMP", "OTel Collector", "ACK prometheusservice", "Grafana Operator", "Pyroscope, GlitchTip"),
-           COL[2], b + 200, COL_W, 120)
+    p.text(bullets("Prometheus agent ×2 → AMP", "OpenCost → AMP", "Blackbox exporter ×2", "OTel Collector", "ACK prometheusservice",
+                   "Grafana Operator", "Pyroscope, GlitchTip"), COL[2], b + 200, COL_W, 120)
     mid = COL[3] + 120                                    # x of svp → S3 endpoint (centre of the endpoint)
 
     # global services of the account, left of the Region; users outside the Cloud. Web and api distributions sit
@@ -446,10 +446,12 @@ def env_page(env: Env) -> Page:
         f"{outlive} are in the root of the account, so they outlive the "
         f"session; keys alias/svp-{env.name}-ecr and alias/svp-{env.name}-observability",
         *amg_life,
-        "Collector and Prometheus agent write to AMP, CloudWatch Logs and X-Ray; nodes pull images from ECR, third-party images "
-        "through its pull-through cache",
+        "Collector and Prometheus agent write to AMP, CloudWatch Logs and X-Ray; OpenCost reads AMP through the aps-workspaces "
+        "endpoint (Pod Identity role svp-" + env.name + "-opencost); nodes pull images from ECR, third-party images through its "
+        "pull-through cache",
         f"Interface endpoints: private DNS, 443 from the VPC, ENIs in the private subnets of the first {env.endpoint_azs} AZ(s); "
-        "GitHub, Sigstore, Telegram, upstream registries, the Pricing API and AMG still go through NAT"),
+        "GitHub, Sigstore, Telegram, upstream registries, the Pricing API, OpenCost's price file, the blackbox probes of the three "
+        "distributions (web, api, media/uptime-probe.txt in S3 media) and AMG still go through NAT"),
         2320, row2, 1160, 160 if amg_life else 120, valign="top")
     p.icon(f"ACM · ALB certificate, {env.region}<br>viewer certificates in us-east-1", "certificate_manager_2", 2960, row, SEC, cid="acm")
 
@@ -776,8 +778,10 @@ def flows(region: str) -> Page:
     u, r, t = 880, 1240, 1840              # tops of the upload, request and telemetry blocks
     yb = t + 2040                          # tops of the backup and restore blocks, under the transcode block
     yr = yb + 1000
-    p = Page("flows", 1880, yr + 960)
-    p.text("Flows — image release, upload to playback, request to the web and API, telemetry, transcode, backup, restore", 40, 0, 1400, 40,
+    yc = yr + 1000                         # top of the cost and uptime block, under the restore block
+    p = Page("flows", 1880, yc + 1080)
+    p.text("Flows — image release, upload to playback, request to the web and API, telemetry, transcode, backup, restore, "
+           "cost and uptime", 40, 0, 1400, 40,
            size=17, bold=1)
     p.text("Release: commit → signed image → ECR (same digest) → svp-gitops → Argo CD", 40, 120, 880, 40, size=13, bold=1)
     p.text("Upload to playback", 40, u, 880, 40, size=13, bold=1)
@@ -1008,6 +1012,53 @@ def flows(region: str) -> Page:
         "The instance svp-&lt;env&gt;-pitr is deleted when the drill ends; the application is not cut over to it in the drill",
         "The restored object has a new ETag (AWS Backup does not keep it): the drill compares length and SHA-256 of the content"),
         240, yr + 680, 1520, 160, valign="top")
+
+    # Cost and uptime (eks): the agent remote-writes through the aps-workspaces endpoint; OpenCost queries AMP the same
+    # way with its own Pod Identity role and downloads the price file through NAT; blackbox probes the three
+    # distributions through NAT, the media probe fetching an object of S3 media.
+    r0, r1, r2 = yc + 240, yc + 440, yc + 640
+    p.text("Cost and uptime (eks): OpenCost reads AMP, blackbox exporter probes the public domains", 40, yc, 1400, 40, size=13, bold=1)
+    p.group("EKS cluster svp-&lt;env&gt; · namespace svp-obs", 40, yc + 80, 560, 800, gr="eks", stroke="#D05C17", font="#D05C17")
+    p.group(f"AWS Cloud · {region}", 680, yc + 80, 1160, 800, **CLOUD)
+    p.group("AWS Account svp-&lt;env&gt;", 720, yc + 120, 1080, 720, **ACCOUNT)
+    agent = p.k8s("Prometheus agent ×2<br>svp-obs/kps-prometheus", "sts", 120, r0, size=80, cid="cagent")
+    oc = p.k8s("OpenCost + sigv4proxy sidecar<br>svp-obs/opencost", "deploy", 120, r1, size=80, cid="coc")
+    bb = p.k8s("Blackbox exporter ×2<br>svp-obs/blackbox-exporter", "deploy", 120, r2, size=80, cid="cbb")
+    ep = p.flat("Interface endpoint<br>aps-workspaces", "endpoints", 800, r0, VPC_PURPLE, cid="cep")
+    amp = p.icon("AMP workspace svp-&lt;env&gt;<br>rules, alert manager", "managed_service_for_prometheus", 1120, r0, SEC, cid="camp", label_top=True)
+    sns = p.icon("SNS svp-&lt;env&gt;-alarms<br>page, ticket", "sns", 1440, r0, INTEG, cid="csns")
+    role = p.flat("Role svp-&lt;env&gt;-opencost<br>aps:QueryMetrics, GetSeries,<br>GetLabels, GetMetricMetadata", "role", 1120, r1, SEC[0], cid="crole")
+    price = p.box("<b>AWS Price List</b><br>pricing.us-east-1.amazonaws.com", 1440, r1, 240, 80, "#F7F7F7", MUTED, align="center")
+    nat = p.flat("NAT gateway", "nat_gateway", 800, r2, VPC_PURPLE, cid="cnat")
+    cdn = p.icon("CloudFront<br>svp-&lt;env&gt;-web, -api, -media", "cloudfront", 1120, r2, NET, cid="ccdn")
+    media = p.icon("S3 media<br>media/uptime-probe.txt", "s3", 1440, r2, STO, cid="cmedia")
+    p.edge(agent, ep, STROKE["sec"], label="remote write", exit_=(1, 0.5), entry=(0, 0.5), label_pos=-0.3)
+    p.edge(ep, amp, STROKE["sec"], label="443", exit_=(1, 0.5), entry=(0, 0.5))
+    p.edge(amp, sns, STROKE["integ"], label="alerts", exit_=(1, 0.5), entry=(0, 0.5))
+    # into the side of the endpoint, left of its column: from below the line would cross the endpoint's label
+    route = [(200, r1 + 20), (760, r1 + 20), (760, r0 + 60), (800, r0 + 60)]
+    p.edge(oc, ep, STROKE["sec"], label="PromQL, SigV4", exit_=(1, 0.25), entry=(0, 0.75), points=route[1:3],
+           label_pos=along(route, (300, r1 + 20)))
+    route = [(200, r1 + 40), (1120, r1 + 40)]
+    p.edge(oc, role, COMP[0], dashed=True, label="assumes, Pod Identity", exit_=(1, 0.5), entry=(0, 0.5),
+           label_pos=along(route, (440, r1 + 40)))
+    p.edge(role, amp, STROKE["sec"], dashed=True, label="four read actions", exit_=(0.5, 0), entry=(0.5, 1))
+    route = [(200, r1 + 60), (840, r1 + 60), (840, r2)]
+    p.edge(oc, nat, STROKE["vpc"], dashed=True, label="price file", exit_=(1, 0.75), entry=(0.5, 0), points=route[1:2],
+           label_pos=along(route, (540, r1 + 60)))
+    p.edge(bb, nat, STROKE["vpc"], dashed=True, label="probes: web, api, media", exit_=(1, 0.5), entry=(0, 0.5))
+    p.edge(nat, cdn, STROKE["net"], label="HTTPS 443", exit_=(1, 0.5), entry=(0, 0.5))
+    p.edge(cdn, media, STROKE["sto"], label="OAC", exit_=(1, 0.5), entry=(0, 0.5))
+    route = [(880, r2 + 20), (1000, r2 + 20), (1000, r1 + 160), (1560, r1 + 160), (1560, r1 + 80)]
+    p.edge(nat, price, STROKE["vpc"], dashed=True, exit_=(1, 0.25), entry=(0.5, 1), points=route[1:4])
+    p.text(bullets(
+        "The agent scrapes OpenCost (9003) and the blackbox exporter (/probe, 9115) and remote-writes both to AMP; OpenCost "
+        "queries AMP, so it needs the four read actions of its own role, and no other AWS permission",
+        "OpenCost's price file and the probes leave through NAT; the probes follow the users' path (DNS, CloudFront and its web ACL, "
+        "internal ALB, Envoy) and fetch media/uptime-probe.txt from S3 media; DNS probes ask CoreDNS",
+        "The AMP ruler, outside the cluster, evaluates UptimeProbesAbsent, TLSCertExpiringSoon, TLSCertExpiryImminent and "
+        "PublicUptimeBudgetBurn, so a dead cluster or agent still pages; no AWS service is added"),
+        80, yc + 920, 1720, 120, valign="top")
     return p
 
 

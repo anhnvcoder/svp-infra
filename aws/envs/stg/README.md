@@ -189,6 +189,7 @@ flowchart LR
 | --- | --- | --- |
 | Distribution `svp-<env>-web` (`<domain>`), `svp-<env>-api` (`api.<domain>`), VPC origin, ALB internal, target group, cert ACM, bản ghi DNS | module `edge` (`main.tf`) | ALB ở `edge_subnet_ids` của `network`; SG ALB tới SG node của `eks`; `edge_alb_deletion_protection` |
 | Distribution `svp-<env>-media` (`media.<domain>`), cert ACM, bản ghi DNS | module `media` (`main.tf`) | gói theo `media_flat_rate_free` |
+| Object `media/uptime-probe.txt` | module `media` (`uptime-probe.tf`) | blackbox exporter tải qua `media.<domain>`, cùng đường với HLS |
 | Web ACL `svp-<env>-web`, `-api`, `-media` | module `waf` gọi ba lần (`waf.tf`, provider `aws.us_east_1`: CloudFront chỉ nhận web ACL ở `us-east-1`) | web: `SizeRestrictions_BODY` chỉ đếm, Bot Control `COMMON` chỉ gắn nhãn; api: ATP cho `POST /auth/login` |
 
 Output `target_group_arn` của `edge` vào `cluster_values` (`edgeTargetGroupArn`): `TargetGroupBinding` của Envoy đăng ký pod vào đó. Không
@@ -312,9 +313,10 @@ Trust policy như role của controller trong module `eks`: `pods.eks.amazonaws.
 session tag `eks-cluster-name`, `kubernetes-namespace`, `kubernetes-service-account` đúng cặp ở bảng. ServiceAccount của chart `svp-service`
 mang tên release, nên tên release phải giữ `video-service`, `media-worker`. Chỉ hai service này gọi API AWS.
 
-Controller nền tảng (Collector, Prometheus agent, ACK, admission controller Kyverno, Argo Rollouts) nhận role Pod
+Controller nền tảng (Collector, Prometheus agent, ACK, admission controller Kyverno, Argo Rollouts, OpenCost) nhận role Pod
 Identity của module [`eks`](../../modules/eks/README.md) trên workspace AMP, log group, khoá và repo phát hành mà
-`baseline.tf` đọc; role node được kéo qua pull-through cache và giải mã image qua ECR. Topic `svp-stg-alarms` nhận thêm
+`baseline.tf` đọc (OpenCost chỉ có bốn quyền đọc của AMP: `aps:QueryMetrics`, `aps:GetSeries`, `aps:GetLabels`,
+`aps:GetMetricMetadata`); role node được kéo qua pull-through cache và giải mã image qua ECR. Topic `svp-stg-alarms` nhận thêm
 publisher `aps.amazonaws.com`, giới hạn ở đúng workspace của env (module [`alarms`](../../modules/alarms/README.md)).
 
 Secret của cluster: module `external-secrets` tạo vỏ entry `svp/stg/<entry>` (giá trị của `kafka-admin`, `kafka-users`,

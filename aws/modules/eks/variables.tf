@@ -135,7 +135,7 @@ variable "guardduty_data_endpoint_id" {
 }
 
 variable "amp_workspace_arn" {
-  description = "ARN of the Amazon Managed Service for Prometheus workspace of the env (output amp_workspace_arn of the observability module): the Collector and the Prometheus agent write to it, Argo Rollouts queries it, the ACK controller manages its rules and alert manager definition."
+  description = "ARN of the Amazon Managed Service for Prometheus workspace of the env (output amp_workspace_arn of the observability module): the Collector and the Prometheus agent write to it, Argo Rollouts and OpenCost query it, the ACK controller manages its rules and alert manager definition."
   type        = string
 
   validation {
