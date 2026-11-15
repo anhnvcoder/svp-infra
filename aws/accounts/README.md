@@ -103,11 +103,11 @@ AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_
 ```
 
 Đọc plan (số ứng với cờ `managed_grafana` của stg là `session`, của prd là `always`, không buổi nào mở; mục [Cờ chi
-phí](#cờ-chi-phí)): ở stg `Plan: 62 to add, 0 to change, 0 to destroy`: 11 của `module.baseline` (KMS key và alias,
-bucket cùng 5 cấu hình của nó, hosted zone, bản ghi `caa`, budget; không bản ghi `delegation` nào), 42 của
+phí](#cờ-chi-phí)): ở stg `Plan: 63 to add, 0 to change, 0 to destroy`: 11 của `module.baseline` (KMS key và alias,
+bucket cùng 5 cấu hình của nó, hosted zone, bản ghi `caa`, budget; không bản ghi `delegation` nào), 43 của
 `module.registry`, `module.observability` (danh sách ở [Thêm vào account đã có
 baseline](#thêm-vào-account-đã-có-baseline); không phần AMG vì không buổi nào mở) và 9 của `backup.tf` (danh sách ở
-[Backup](#backup)). Ở prd `Plan: 81 to add, 0 to change, 0 to destroy`: 47 của hai module đó, 11 của `module.baseline`
+[Backup](#backup)). Ở prd `Plan: 82 to add, 0 to change, 0 to destroy`: 48 của hai module đó, 11 của `module.baseline`
 và 9 của `backup.tf` như stg, thêm 6 của DNSSEC (`aws_kms_key.dnssec` và alias ở `us-east-1`,
 `aws_route53_key_signing_key.this`, `aws_route53_hosted_zone_dnssec.this`, hai `aws_cloudwatch_metric_alarm.dnssec`), 3
 của query log (log group, resource policy, `aws_route53_query_log.this`) và 5 của `module.alarms` (key KMS, alias,
@@ -354,10 +354,10 @@ Các phần của root và số tài nguyên `plan` thêm cho phần account ch�
 | --- | --- | --- | --- |
 | `CAA` | `module.baseline.aws_route53_record.caa` | 1 | 1 |
 | DNSSEC, query log của zone prd | 6 của DNSSEC, 3 của query log, 5 của `module.alarms` ([bước 3](#3-apply-lần-đầu-state-local)) | — | 14 |
-| Registry, observability | `module.registry`, `module.observability` (danh sách dưới bảng) | 42 | 47 |
+| Registry, observability | `module.registry`, `module.observability` (danh sách dưới bảng) | 43 | 48 |
 | Backup | 9 của `backup.tf` (danh sách ở mục [Backup](#backup)) | 9 | 9 |
 
-- `module.registry` (stg 33, prd 31): key KMS và alias, 7 `aws_ecr_repository.release`,
+- `module.registry` (stg 34, prd 32): key KMS và alias, 8 `aws_ecr_repository.release` (`local.release_repositories`),
   `aws_ecr_registry_scanning_configuration.this`, 5 `aws_ecr_pull_through_cache_rule.this`, 2
   `aws_secretsmanager_secret.cache`, 5 `aws_ecr_repository_creation_template.cache`, role `svp-<env>-ecr-template` và
   policy của nó, `aws_iam_openid_connect_provider.github`, mỗi role của `ci_roles` một `aws_iam_role.ci` và một
@@ -388,9 +388,11 @@ AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_
 `Account` phải bằng `$SVP_AWS_STG_ACCOUNT_ID`, `Arn` chứa `assumed-role/AWSReservedSSO_SvpAdmin_`; dòng `echo` in hai số
 12 chữ số khác nhau. Plan chỉ thêm (`0 to change, 0 to destroy`); mọi tài nguyên của plan thuộc một phần của bảng; phần
 nào có trong plan thì có đủ số tài nguyên ở cột của env; số `to add` bằng tổng các phần đó. Ví dụ: account chỉ có
-baseline (cùng `CAA` và, ở prd, DNSSEC, query log) thì stg `Plan: 51 to add, 0 to change, 0 to destroy`, prd
-`Plan: 56 to add, 0 to change, 0 to destroy`; account đã có registry, observability thì
-`Plan: 9 to add, 0 to change, 0 to destroy` ở cả hai env, đúng phần backup. Dừng (không apply, dán plan lại) nếu có
+baseline (cùng `CAA` và, ở prd, DNSSEC, query log) thì stg `Plan: 52 to add, 0 to change, 0 to destroy`, prd
+`Plan: 57 to add, 0 to change, 0 to destroy`; account đã có registry, observability thì
+`Plan: 9 to add, 0 to change, 0 to destroy` ở cả hai env, đúng phần backup. Account có registry từ trước khi
+`local.release_repositories` của module `registry` thêm repo thì phần registry chỉ thiếu một `aws_ecr_repository.release`
+mỗi repo mới. Dừng (không apply, dán plan lại) nếu có
 `change`, `destroy`, tài nguyên ngoài bảng hay phần thiếu tài nguyên; trừ khi account đã có observability với AMG từ
 trước mà cờ `managed_grafana` của env là `session`, hay đã quét `ENHANCED` mà cờ `inspector_ecr` là `off`: plan còn xoá,
 sửa đúng phần đổi cờ của mục [Cờ chi phí](#cờ-chi-phí), và áp theo thứ tự của ADR-0071. Rồi:
@@ -449,8 +451,8 @@ hành trong ECR (GHCR còn bản gốc), metric, log, span và workspace Grafana
    version cũ và state của các root khác) và `force_delete = true` vào `aws_ecr_repository.release` của
    `aws/modules/registry/repositories.tf` (ECR không xoá repo còn image). Rồi
    `AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform apply` (ở prd, khi mặc định của
-   `dnssec_signing` còn `true`, thêm `-var dnssec_signing=false` như bước 1): mong đợi
-   `0 to add, 8 to change, 0 to destroy`, chỉ đổi `force_destroy` của bucket và `force_delete` của 7 repo phát hành.
+   `dnssec_signing` còn `true`, thêm `-var dnssec_signing=false` như bước 1): mong đợi `0 to add`, `0 to destroy`,
+   `change` chỉ đổi `force_destroy` của bucket và `force_delete` của mọi repo phát hành (`aws_ecr_repository.release`).
 6. Xoá repo do pull-through cache tạo: ECR tạo chúng khi node kéo image qua cache, nên chúng nằm ngoài state, mã hoá
    bằng key `alias/svp-<env>-ecr` mà bước 8 lên lịch xoá. Liệt kê theo tiền tố của các rule cache:
 

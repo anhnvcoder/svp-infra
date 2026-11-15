@@ -63,7 +63,7 @@ variables {
       subject = "repo:anhnvcoder@1000001/svp-backend@2000001:environment:promote-prd"
       repositories = [
         "svp-backend/gateway", "svp-backend/user-service", "svp-backend/video-service", "svp-backend/engagement-service",
-        "svp-backend/feed-service", "svp-backend/media-worker", "svp-frontend/web",
+        "svp-backend/feed-service", "svp-backend/media-worker", "svp-backend/dlq-replay", "svp-frontend/web",
       ]
       delete = false
     }
@@ -81,7 +81,7 @@ variables {
 
   release_repositories = [
     "svp-backend/gateway", "svp-backend/user-service", "svp-backend/video-service", "svp-backend/engagement-service",
-    "svp-backend/feed-service", "svp-backend/media-worker", "svp-frontend/web",
+    "svp-backend/feed-service", "svp-backend/media-worker", "svp-backend/dlq-replay", "svp-frontend/web",
   ]
 
   cache_upstreams = {
@@ -359,6 +359,30 @@ run "prd" {
         for arn in s.resources : arn == "*" || startswith(arn, "${var.repository_arn_prefix}/${regex("^repo:[^/]+/([^@:]+)", var.prd_ci_roles[name].subject)[0]}/")
     ]]))])
     error_message = "A rescan role of prd may reach only the repositories of its own source repository."
+  }
+}
+
+# The DLQ replay image has its release repository, and a CI role may name it alone: it is one of the choices.
+run "dlq_replay_release" {
+  command = plan
+
+  variables {
+    ci_roles = {
+      svp-ci-ecr-release-backend = {
+        subject      = "repo:anhnvcoder@1000001/svp-backend@2000001:ref:refs/heads/main"
+        repositories = ["svp-backend/dlq-replay"]
+        delete       = false
+      }
+    }
+  }
+
+  assert {
+    condition = (
+      aws_ecr_repository.release["svp-backend/dlq-replay"].image_tag_mutability == "IMMUTABLE" &&
+      toset([for s in data.aws_iam_policy_document.ci["svp-ci-ecr-release-backend"].statement : s.resources if s.sid == "PushReleases"][0]) ==
+      toset(["${var.repository_arn_prefix}/svp-backend/dlq-replay"])
+    )
+    error_message = "svp-backend/dlq-replay must be an immutable release repository that a CI role can push to by name."
   }
 }
 

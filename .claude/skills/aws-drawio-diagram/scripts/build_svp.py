@@ -172,6 +172,7 @@ SVP = [  # (name, stg, prd) — row A of the svp frame holds the first four, row
     ("engagement-service", "×1", "×2"),
     ("feed-service", "×2", "×2"),
     ("media-worker", "×1–2 · KEDA", "×1–2 · KEDA"),
+    ("dlq-replay", "×1 · standby", "×1 · standby"),
 ]
 # svp-data chart on EKS (Kafka, Valkey and Postgres managed): the ops Deployment and the two PostSync Jobs of Argo CD
 SVP_DATA = [("deploy", "svp-ops ×1"), ("job", "kafka-init · Job"), ("job", "pg-bootstrap · Job")]

@@ -386,7 +386,8 @@ hiện có: `aws/scripts/tf.sh stg env show`. **Đọc file text đó trước k
 distribution `svp-stg-media` (`media.<domain>`) với gói `module.media.aws_pricingplanmanager_subscription.media[0]` `plan_tier = "FREE"`
 (phép kiểm (b) của ADR-0052), behavior mặc định có `trusted_key_groups` (`media/*`, `preview/*` không), public key `module.media.aws_cloudfront_public_key.media["a"]`
 (`svp-stg-media-a-<8 hex>`) và key group `svp-stg-media`. Plan có cluster `module.msk.aws_msk_cluster.this` (`kafka_version = "4.1.x.kraft"`,
-`kafka.t3.small`, 2 broker), tám secret `AmazonMSK_svp-stg-*`, replication group `module.elasticache.aws_elasticache_replication_group.this`
+`kafka.t3.small`, 2 broker), mỗi user của module `msk` một secret `AmazonMSK_svp-stg-*`,
+replication group `module.elasticache.aws_elasticache_replication_group.this`
 (`engine = "valkey"`, `engine_version = "9.1"`) và bốn `aws_elasticache_user`; mật khẩu của chúng là đối số write-only, plan chỉ in
 `(write-only attribute)`, không giá trị. Plan cũng có: node group `system` của `module.eks` (không node group nào khác), submodule
 `module.eks.module.karpenter` (hàng đợi SQS `svp-stg-karpenter`, rule EventBridge, role `svp-stg-karpenter`, `svp-stg-karpenter-node`, Pod
@@ -2115,7 +2116,7 @@ aws/scripts/tf.sh stg env apply
 aws/scripts/bootstrap.sh stg secrets
 ```
 
-Plan chỉ đổi phiên bản của secret, `aws_secretsmanager_secret_version` (tám secret `AmazonMSK_*` và hai entry `kafka-*`, hay entry
+Plan chỉ đổi phiên bản của secret, `aws_secretsmanager_secret_version` (mọi secret `AmazonMSK_*` và hai entry `kafka-*`, hay entry
 `valkey-users`), và với Valkey bốn `aws_elasticache_user` tại chỗ; thấy cluster MSK, replication group, user group hay chính secret bị
 `replace`, `destroy`: dừng, dán plan cho AI. Kafka: chờ 10 phút giữa
 `apply` và `bootstrap.sh` (MSK đồng bộ secret SCRAM tới broker trong tối đa 10 phút; Job `kafka-init` của bước 3 là chốt, nó chỉ xanh khi
