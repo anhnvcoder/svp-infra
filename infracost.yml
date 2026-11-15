@@ -1,0 +1,24 @@
+# Projects of make infracost (workflow cost.yml): the roots CI plans, priced from their HCL and the values committed
+# beside them. A variable with no default and no value in <env>.tfvars (domain, emails, account ids) stays empty: its
+# value lives in a *.auto.tfvars, which is never committed. Design notes: README.md.
+version: 0.1
+
+projects:
+  - path: aws/envs/stg
+    name: envs-stg
+    terraform_var_files:
+      - stg.tfvars
+  - path: aws/envs/prd
+    name: envs-prd
+    terraform_var_files:
+      - prd.tfvars
+  # No var file: every value of an account root is in its <env>.auto.tfvars.
+  - path: aws/accounts/stg
+    name: accounts-stg
+  # As applied while a session is open, so the features of aws/paid-features.json at session show their price.
+  - path: aws/accounts/stg
+    name: accounts-stg-session
+    terraform_vars:
+      session_open: true
+  - path: aws/accounts/prd
+    name: accounts-prd

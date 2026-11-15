@@ -117,3 +117,60 @@ resource "github_repository_environment_deployment_policy" "ecr_rescan_main" {
   environment    = github_repository_environment.ecr_rescan[each.key].environment
   branch_pattern = "main"
 }
+
+# release: the release-please job of svp-backend signs in as the App svp-release-please, whose private key is a secret
+# of this environment, so only jobs on main may use it.
+resource "github_repository_environment" "release" {
+  repository        = github_repository.this["svp-backend"].name
+  environment       = "release"
+  can_admins_bypass = true
+
+  deployment_branch_policy {
+    protected_branches     = false
+    custom_branch_policies = true
+  }
+
+  # As for promote: destroying it would delete the App's private key with it.
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "github_repository_environment_deployment_policy" "release_main" {
+  repository     = github_repository_environment.release.repository
+  environment    = github_repository_environment.release.environment
+  branch_pattern = "main"
+}
+
+resource "github_actions_environment_variable" "release_app_client_id" {
+  repository    = github_repository_environment.release.repository
+  environment   = github_repository_environment.release.environment
+  variable_name = "SVP_RELEASE_APP_CLIENT_ID"
+  value         = var.svp_release_app_client_id
+}
+
+# terraform-plan: the plan jobs of svp-infra take the read-only plan role of stg and prd, whose trust names this
+# environment, and each run waits for the learner's approval; no admin skips it. No branch rule: the jobs run on a pull
+# request's merge ref. Its secrets (account IDs, tfvars) are set by hand and stay out of Terraform.
+resource "github_repository_environment" "terraform_plan" {
+  repository          = github_repository.this["svp-infra"].name
+  environment         = "terraform-plan"
+  can_admins_bypass   = false
+  prevent_self_review = false
+
+  reviewers {
+    users = [tonumber(data.github_user.learner.id)]
+  }
+
+  # As for promote: destroying it would delete its secrets with it.
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+# The envs whose accounts plan.yml plans, as a JSON array for fromJSON: [] keeps the plan job from running at all.
+resource "github_actions_variable" "terraform_plan_envs" {
+  repository    = github_repository.this["svp-infra"].name
+  variable_name = "SVP_TF_PLAN_ENVS"
+  value         = jsonencode(var.terraform_plan_envs)
+}

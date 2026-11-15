@@ -195,7 +195,9 @@ done
 ```
 
 Lệnh `output` in đúng tên role của `ci_roles` ở `locals` của root: stg `svp-ci-ecr-release-backend`, `svp-ci-ecr-release-frontend` và hai
-`svp-ci-ecr-rescan-*`; prd `svp-ci-ecr-promote` và hai `svp-ci-ecr-rescan-*`. Mỗi rule một dòng `<tiền tố> True None`; `False` ở `ghcr` hay
+`svp-ci-ecr-rescan-*`; prd `svp-ci-ecr-promote` và hai `svp-ci-ecr-rescan-*`. Role plan chỉ đọc `svp-ci-terraform-plan` (ở cả hai
+account, do module `ci_plan_role` tạo) không nằm trong `ci_roles`: lấy ARN từ output `ci_plan_role_arn`, bật plan cho env theo
+[`github-setup.md`](github-setup.md#environment-terraform-plan). Mỗi rule một dòng `<tiền tố> True None`; `False` ở `ghcr` hay
 `docker-hub` kèm `failure` là credential của bước (6) sai: ghi lại theo bước đó rồi chạy lại vòng `validate`.
 
 Apply đỏ ở `aws_grafana_workspace` (env có `managed_grafana` `always`) khi Identity Center chưa bật cho AMG ở account thành viên hay khác
@@ -242,6 +244,9 @@ done
 
 Mong hai dòng mỗi repo. Secret không có resource Terraform (giá trị sẽ nằm rõ trong state): bảng "Không quản" của
 [`github/README.md`](../../github/README.md#không-quản-và-vì-sao).
+
+Secret account của CI plan (environment `terraform-plan` của `svp-infra`, cho role plan chỉ đọc mà bước (5) tạo) đặt khi bật plan cho env:
+lệnh và thứ tự ở [`github-setup.md`](github-setup.md#environment-terraform-plan).
 
 ## Bước (8): quota chu kỳ luật AMP
 

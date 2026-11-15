@@ -1,0 +1,141 @@
+# terraform plan of each pull request of this repository that changes Terraform, posted as one masked summary comment.
+# Public repository, and job plan reads the AWS accounts of the envs, so:
+# - pull_request alone (no pull_request_target, no workflow_run); a fork's pull request never reaches job plan;
+# - job plan alone has id-token: write, in environment terraform-plan whose reviewer approves each run after reading
+#   the whole diff of the pull request; the role it assumes is read-only and never writes or locks the state;
+# - no plan text, attribute value, account id or domain in a log, artifact or comment: ci/terraform-plan.sh masks them;
+# - every action is GitHub's own, pinned to a full commit SHA; terraform runs from the image pinned in the Makefile.
+# Design notes: README.md.
+name: plan
+
+on:
+  pull_request:
+    # Not a required check, so a pull request this workflow skips waits for nothing.
+    paths:
+      - aws/**
+      - ci/**
+      - Makefile
+      - .github/workflows/plan.yml
+
+permissions: {}
+
+concurrency:
+  group: plan-${{ github.event.pull_request.number }}
+  # A new push makes the previous run useless, one still waiting for approval included.
+  cancel-in-progress: true
+
+jobs:
+  # Which envs plan: those of variable SVP_TF_PLAN_ENVS, none for a fork's pull request or one that changes only roots
+  # CI does not plan (a notice names each and why).
+  gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      envs: ${{ steps.gate.outputs.envs }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLAN_ENVS: ${{ vars.SVP_TF_PLAN_ENVS }}
+          REPO: ${{ github.repository }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          PR: ${{ github.event.pull_request.number }}
+          CHANGED: ${{ github.event.pull_request.changed_files }}
+        run: bash ci/terraform-plan.sh gate
+
+  # The fork check is repeated from the event: job gate runs a fork's own code.
+  plan:
+    needs: gate
+    if: needs.gate.outputs.envs != '[]' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    environment: terraform-plan
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        env: ${{ fromJSON(needs.gate.outputs.envs) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: make ci-plan
+        env:
+          ENV: ${{ matrix.env }}
+          SVP_AWS_STG_ACCOUNT_ID: ${{ secrets.SVP_AWS_STG_ACCOUNT_ID }}
+          SVP_AWS_PRD_ACCOUNT_ID: ${{ secrets.SVP_AWS_PRD_ACCOUNT_ID }}
+          SVP_AWS_LOG_ACCOUNT_ID: ${{ secrets.SVP_AWS_LOG_ACCOUNT_ID }}
+          SVP_AWS_BACKUP_ACCOUNT_ID: ${{ secrets.SVP_AWS_BACKUP_ACCOUNT_ID }}
+          SVP_TFVARS_ACCOUNT_STG: ${{ secrets.SVP_TFVARS_ACCOUNT_STG }}
+          SVP_TFVARS_ACCOUNT_PRD: ${{ secrets.SVP_TFVARS_ACCOUNT_PRD }}
+          SVP_TFVARS_ENV_STG: ${{ secrets.SVP_TFVARS_ENV_STG }}
+          SVP_TFVARS_ENV_PRD: ${{ secrets.SVP_TFVARS_ENV_PRD }}
+        run: make ci-plan
+      # The masked summary alone, for job plan-comment; the job summary keeps it after the artifact expires.
+      # The artifact holds directory <env>/, so the merged download of plan-comment keeps the envs apart.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: plan-summary-${{ matrix.env }}
+          path: ${{ runner.temp }}/plan-summary/
+          if-no-files-found: ignore
+          retention-days: 1
+
+  # One sticky comment per pull request, edited by each run. No checkout and no credential: it posts the summaries.
+  # Its step stays inline for want of a checkout; ci/terraform-plan-test.sh runs it from this file.
+  plan-comment:
+    needs: [gate, plan]
+    if: always() && needs.gate.outputs.envs != '[]' && (needs.plan.result == 'success' || needs.plan.result == 'failure')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+    steps:
+      # Merged: a single artifact matching the pattern lands in path itself, not in a directory named after it.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: plan-summary-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/summaries
+      - name: Post the summary
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          ENVS: ${{ needs.gate.outputs.envs }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          marker='<!-- svp-terraform-plan -->'
+          body=$RUNNER_TEMP/body.md
+          # build FILE: the comment from FILE of each env's summary (summary.md, or short.md with the counts alone).
+          build() {
+            printf '%s\n# Terraform plan\n\nCommit %s, [run](%s). Masked: no attribute value, account id or domain.\n\n' \
+              "$marker" "$SHA" "$RUN_URL"
+            for e in $(jq -r '.[]' <<<"$ENVS"); do
+              f=$RUNNER_TEMP/summaries/$e/$1
+              if [ -f "$f" ]; then cat "$f"; else printf '## %s\n\nNo summary: the plan did not finish (see the run).\n' "$e"; fi
+              echo
+            done
+          }
+          build summary.md >"$body"
+          # A comment holds at most 65536 characters.
+          if [ "$(wc -c <"$body")" -gt 60000 ]; then
+            { build short.md; echo 'The list of changes is too long for a comment: see the job summary of the run.'; } >"$body"
+          fi
+          ids=$(gh api --paginate "repos/$REPO/issues/$PR/comments" \
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$marker\"))) | .id")
+          id=${ids%%$'\n'*}
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$id" -F body=@"$body" >/dev/null
+          else
+            gh api "repos/$REPO/issues/$PR/comments" -F body=@"$body" >/dev/null
+          fi

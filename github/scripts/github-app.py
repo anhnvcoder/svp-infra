@@ -10,6 +10,7 @@
   github-app.py check [--with-app-keys] Read-only check of every setting of the README table "Không quản" that has an API.
                                         Local key files (backend/.env) are left alone unless --with-app-keys: then their
                                         variables are checked and the Apps whose key is local sign in to read their installation.
+                                        Secrets of environment terraform-plan: checked for the envs in SVP_TF_PLAN_ENVS.
   github-app.py selftest                Offline checks of the manifests, destinations and helpers (make check runs it).
 
 Private keys are never printed. Run by the person who owns the account (gh signed in with scope repo), never by CI.
@@ -46,6 +47,7 @@ PUBLIC_PACKAGES = [f"svp-backend/{s}" for s in
                    ("gateway", "user-service", "video-service", "engagement-service", "feed-service", "media-worker",
                     "dlq-replay")] + ["svp-frontend/web"]
 CODEQL_DEFAULT_SETUP = ["svp-backend", "svp-frontend"]
+PLAN_REPO, PLAN_ENVIRONMENT, PLAN_ENVS_VARIABLE = "svp-infra", "terraform-plan", "SVP_TF_PLAN_ENVS"
 MANIFEST_KEYS = {"name", "url", "hook_attributes", "redirect_url", "callback_urls", "setup_url", "description", "public",
                  "default_events", "default_permissions", "request_oauth_on_install", "setup_on_update"}
 
@@ -273,6 +275,16 @@ def set_key(name, key, pem_path):
 
 # --- check ------------------------------------------------------------------------------------------------------------
 
+def plan_secret_names(envs):
+    """Secrets of environment terraform-plan that plan.yml reads to plan the given envs (the value of SVP_TF_PLAN_ENVS)."""
+    if not envs:
+        return []
+    names = ["SVP_AWS_LOG_ACCOUNT_ID", "SVP_AWS_BACKUP_ACCOUNT_ID"]
+    for env in envs:
+        names += [f"SVP_AWS_{env.upper()}_ACCOUNT_ID", f"SVP_TFVARS_ACCOUNT_{env.upper()}", f"SVP_TFVARS_ENV_{env.upper()}"]
+    return names
+
+
 def check(with_app_keys):
     bad = []
 
@@ -320,6 +332,20 @@ def check(with_app_keys):
                     inst_id, repos = installed_repositories(values[f"{key['prefix']}_APP_ID"], pem)
                     expect(f"{name} installation repositories", repos, sorted(dest["install_on"]))
                     expect(f"{name} installation ID in {key['file']}", values[f"{key['prefix']}_INSTALLATION_ID"], str(inst_id))
+    raw = api(f"repos/{OWNER}/{PLAN_REPO}/actions/variables/{PLAN_ENVS_VARIABLE}", ".value")
+    try:
+        plan_envs = json.loads(raw)
+    except json.JSONDecodeError:
+        plan_envs = None
+    if not isinstance(plan_envs, list):
+        expect(f"{PLAN_REPO} variable {PLAN_ENVS_VARIABLE}", raw, "a JSON array")
+    elif not plan_envs:
+        # Their secrets are set only once the plan role of an env exists, so an empty list is not a failure.
+        print(f"skip  secrets of {PLAN_REPO} {PLAN_ENVIRONMENT}: {PLAN_ENVS_VARIABLE} is [] (plan.yml plans nothing)")
+    else:
+        names = api(f"repos/{OWNER}/{PLAN_REPO}/environments/{PLAN_ENVIRONMENT}/secrets", ".secrets[].name").split()
+        for name in plan_secret_names(plan_envs):
+            expect(f"{PLAN_REPO} {PLAN_ENVIRONMENT} secret {name}", name in names, True)
     for pkg in PUBLIC_PACKAGES:
         url = f"https://ghcr.io/token?scope=repository:{OWNER}/{pkg}:pull"
         try:

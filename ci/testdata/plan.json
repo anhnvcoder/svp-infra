@@ -1,0 +1,85 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.15.8",
+  "resource_changes": [
+    {
+      "address": "module.baseline.aws_route53_record.caa[\"stg.aws.svp.example\"]",
+      "mode": "managed",
+      "type": "aws_route53_record",
+      "name": "caa",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {"name": "stg.aws.svp.example", "zone_id": "Z0TFVARS"}
+      }
+    },
+    {
+      "address": "module.registry.aws_iam_role.ci[\"svp-ci-terraform-plan\"]",
+      "mode": "managed",
+      "type": "aws_iam_role",
+      "name": "ci",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {"arn": "arn:aws:iam::111111111111:role/svp-ci-terraform-plan"}
+      }
+    },
+    {
+      "address": "module.media.aws_cloudfront_public_key.media[\"a\"]",
+      "mode": "managed",
+      "type": "aws_cloudfront_public_key",
+      "name": "media",
+      "change": {"actions": ["create"], "before": null, "after": {"name": "svp-stg-media-a-0123abcd"}}
+    },
+    {
+      "address": "module.baseline.aws_budgets_budget.monthly",
+      "mode": "managed",
+      "type": "aws_budgets_budget",
+      "name": "monthly",
+      "change": {
+        "actions": ["update"],
+        "before": {"limit_amount": "20", "subscriber_email_addresses": ["you@svp.example"]},
+        "after": {"limit_amount": "25", "subscriber_email_addresses": ["you@svp.example"]}
+      }
+    },
+    {
+      "address": "module.observability.aws_ssm_parameter.grafana_workspace_id[0]",
+      "mode": "managed",
+      "type": "aws_ssm_parameter",
+      "name": "grafana_workspace_id",
+      "change": {"actions": ["delete"], "before": {"value": "g-0123456789"}, "after": null}
+    },
+    {
+      "address": "aws_kms_key.state",
+      "mode": "managed",
+      "type": "aws_kms_key",
+      "name": "state",
+      "change": {"actions": ["delete", "create"], "before": {"description": "state"}, "after": {"description": "state"}}
+    },
+    {
+      "address": "module.baseline.aws_route53_zone.this",
+      "mode": "managed",
+      "type": "aws_route53_zone",
+      "name": "this",
+      "change": {"actions": ["create", "delete"], "before": {"name": "stg.aws.svp.example"}, "after": {"name": "stg.aws.svp.example"}}
+    },
+    {
+      "address": "module.baseline.aws_s3_bucket.state",
+      "mode": "managed",
+      "type": "aws_s3_bucket",
+      "name": "state",
+      "change": {
+        "actions": ["no-op"],
+        "before": {"bucket": "svp-tfstate-111111111111-ap-southeast-1"},
+        "after": {"bucket": "svp-tfstate-111111111111-ap-southeast-1"}
+      }
+    },
+    {
+      "address": "data.aws_caller_identity.current",
+      "mode": "data",
+      "type": "aws_caller_identity",
+      "name": "current",
+      "change": {"actions": ["read"], "before": null, "after": {"account_id": "111111111111"}}
+    }
+  ]
+}

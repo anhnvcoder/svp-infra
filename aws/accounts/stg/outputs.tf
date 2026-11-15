@@ -28,6 +28,11 @@ output "ci_role_arns" {
   value       = module.registry.ci_role_arns
 }
 
+output "ci_plan_role_arn" {
+  description = "ARN of the read-only role svp-ci-terraform-plan that the plan workflow of svp-infra assumes through OIDC."
+  value       = module.ci_plan_role.role_arn
+}
+
 output "amp_workspace_id" {
   description = "Id of the Prometheus workspace svp-<env> (ws-<uuid>): key ampWorkspaceId of the cluster values."
   value       = module.observability.amp_workspace_id

@@ -9,7 +9,7 @@ quyết định chung của lab nằm ở `docs/` của repo code (bản clone `
 ## An toàn cloud
 
 - **AI chỉ chạy:** `make check` (và từng target của nó: `fmt-check`, `validate`, `tflint`, `tfdocs-check`, `trivy`, `shellcheck`, `zizmor`, `docs-check`,
-  `session-test`, `test-guard`, `test`), `make fmt`,
+  `session-test`, `test-guard`, `test`, `ci-plan-test`, `infracost-test`), `make fmt`,
   `make tfdocs` (terraform-docs, chỉ đọc `.tf`), `make lock`, tức `terraform fmt`, `terraform init -backend=false`, `terraform validate`, `terraform providers lock`; `bash -n`,
   test script với lệnh giả trên PATH; `aws --version`.
 - **`terraform test` chỉ qua `make test`**, target tự ép ba điều kiện, không tin người viết test: (1) chạy trong container image Terraform
@@ -21,7 +21,9 @@ quyết định chung của lab nằm ở `docs/` của repo code (bản clone `
   `command` hay `/*`, dòng nào chứa `alias`, `*/` hay `<<` (heredoc), symlink trong thư mục module và `*.tftest.json` đều bị từ chối, target nêu
   file và dòng. `make test-guard` kiểm chính ba điều kiện với `docker` giả. AI không chạy `terraform test` trần.
 - **AI không chạy lệnh nào chạm account AWS, kể cả chỉ đọc:** `terraform init` có backend, `plan`, `apply`, `destroy`, `import`,
-  `state`, `output`, `test` trần (ngoài `make test`), `refresh`; `aws` (trừ `--version`); script hay chương trình dùng SDK AWS; script buổi của `aws/scripts/`.
+  `state`, `output`, `test` trần (ngoài `make test`), `refresh`; `aws` (trừ `--version`); script hay chương trình dùng SDK AWS; script
+  buổi của `aws/scripts/`; `make ci-plan` (target của job CI, từ chối chạy ngoài GitHub Actions). `make infracost`,
+  `make infracost-comment` không chạm AWS nhưng cần khoá API Infracost của người học: AI không chạy chúng với khoá.
 - **Mọi lệnh chạm account do người học chạy** theo script và runbook viết sẵn, mỗi bước một khối, nói rõ cần dán lại output nào và tìm gì
   trong đó. Mỗi account một biến account (export trong terminal, không ghi vào file nào) và profile SSO (bảng ở mục "Plan và apply" của
   `README.md`):
@@ -49,11 +51,16 @@ quyết định chung của lab nằm ở `docs/` của repo code (bản clone `
   get-caller-identity` với **cùng profile** (`aws/scripts/check-account.sh mgmt|stg|prd`), hai bên cùng đọc account. Script buổi lấy
   profile và biến từ bảng env của `aws/scripts/lib.sh`. Buổi tạo tài nguyên kết thúc bằng lệnh destroy và lệnh quét sót (`sweep.sh <env>`
   rồi `sweep.sh mgmt`); AI nhắc tới khi người học xác nhận đã chạy cả hai.
-- CI (`check.yml`) không có credential AWS, secret, OIDC hay environment nào; thêm thì phải có ADR trước. Ngoại lệ có ADR duy nhất nằm
-  ngoài repo này ([ADR-0062](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0062-ecr-registry-ci-oidc.md) §5): workflow của hai
+- CI (`check.yml`) không có credential AWS, secret, OIDC hay environment nào. Ngoại lệ trong repo này là plan trên PR
+  ([ADR-0076](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0076-terraform-plan-infracost-pr.md)): chỉ job `plan` của
+  `.github/workflows/plan.yml` nhận role chỉ đọc `svp-ci-terraform-plan` của account env qua OIDC, trong environment `terraform-plan` mà
+  người học duyệt từng lượt sau khi đọc diff của PR; không `apply`, không ghi hay khoá state, chỉ đăng tóm tắt
+  đã che (`ci/terraform-plan.sh`). `.github/workflows/cost.yml` có một secret repo, `INFRACOST_API_KEY` (khoá API giá của Infracost,
+  không credential AWS), chỉ vào container theo tên biến, không bao giờ trong tham số hay log (`ci/infracost.sh`). Ngoại lệ ngoài repo này
+  ([ADR-0062](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0062-ecr-registry-ci-oidc.md) §5): workflow của hai
   repo code `svp-backend`, `svp-frontend` nhận role OIDC chỉ có quyền đẩy ECR (role rescan thêm quyền xoá để gỡ `vuln` cũ) trên các repo
   ECR mà bảng role của ADR đó giao cho repo nguồn và mục đích của nó (`ci_roles` ở `locals` của `aws/accounts/<env>`, module `registry`);
-  role, trust và quyền là code ở đây, người học apply.
+  role, trust và quyền là code ở đây, người học apply. Thêm ngoại lệ khác thì phải có ADR trước.
 - **API EKS chỉ qua tunnel:** endpoint công khai của API tắt ở cả hai env; lệnh viết sẵn tới cluster (`kubectl`, script buổi, root
   `aws/gitops/<env>`) đi qua tunnel SSM tới bastion (output `api_tunnel_command` của `aws/envs/<env>`), mỗi env một cổng local (cột `tunnel`
   của `env_table`: stg `6444`, prd `6443`). Không bật lại endpoint công khai, không cho hai env chung một cổng; AI không mở tunnel.
@@ -90,6 +97,7 @@ Quy ước chung (ngôn ngữ, tài liệu timeless, ADR, comment, Git, repo pub
 - **Tiêu đề PR** thành tiêu đề commit squash, theo Conventional Commits: `<type>[(<scope>)][!]: <mô tả>`, `type` là một trong
   `feat fix chore docs refactor test ci build perf revert`, hoặc `Revert "<tiêu đề>"`; check `pr-title` (`.github/workflows/pr-title.yml`)
   chặn tiêu đề sai. Đổi regex thì đổi cùng bộ thử ở cả bốn repo có CI.
-- **Đường có chủ** (`CODEOWNERS`): `CODEOWNERS`, `.github/`, `renovate.json`, `Makefile`, `.trivyignore.yaml`, `github/`, `aws/`; PR đổi
+- **Đường có chủ** (`CODEOWNERS`): `CODEOWNERS`, `.github/`, `renovate.json`, `infracost.yml`, `infracost-usage.yml`, `Makefile`,
+  `.trivyignore.yaml`, `github/`, `aws/`, `ci/`; PR đổi
   chúng cần Code Owner duyệt.
 - **Workflow:** mọi workflow qua `make zizmor` sạch; ngoại lệ có chủ đích vào `.github/zizmor.yml`, mỗi mục một comment lý do.

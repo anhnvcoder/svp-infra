@@ -1,0 +1,87 @@
+# Infracost of each pull request of this repository that changes Terraform: the monthly cost of base and pull request.
+# Public repository, so:
+# - pull_request alone (no pull_request_target, no workflow_run); a fork's pull request is skipped with a notice;
+# - no AWS credential, plan or state: Infracost reads the HCL and the committed tfvars of both trees;
+# - job infracost alone has the secret INFRACOST_API_KEY and read access; job infracost-comment also needs the key to
+#   post, and alone can write to the pull request, from the diff that job infracost leaves in an artifact;
+# - every action is GitHub's own, pinned to a full commit SHA; Infracost runs from the image pinned in the Makefile.
+# Design notes: README.md.
+name: cost
+
+on:
+  pull_request:
+    # Not a required check, so a pull request this workflow skips waits for nothing.
+    paths:
+      - aws/**
+      - ci/**
+      - Makefile
+      - infracost.yml
+      - infracost-usage.yml
+      - .github/workflows/cost.yml
+
+permissions: {}
+
+concurrency:
+  group: cost-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  # Both trees side by side: the pull request in pr/, its base commit in base/. The diff of every resource is the
+  # artifact; the totals of each project go to the job summary.
+  infracost:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    outputs:
+      estimated: ${{ steps.estimate.outputs.estimated }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: pr
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
+          persist-credentials: false
+      - id: estimate
+        working-directory: pr
+        env:
+          INFRACOST_API_KEY: ${{ secrets.INFRACOST_API_KEY }}
+          REPO: ${{ github.repository }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: make infracost BASE=../base
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.estimate.outputs.estimated == 'true'
+        with:
+          name: infracost
+          path: ${{ runner.temp }}/infracost/diff.json
+          if-no-files-found: error
+          retention-days: 1
+
+  # One Infracost comment per pull request, edited by each run. The fork check is repeated from the event.
+  infracost-comment:
+    needs: infracost
+    if: needs.infracost.outputs.estimated == 'true' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # By name: the one artifact lands in path itself.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: infracost
+          path: ${{ runner.temp }}/infracost
+      - name: make infracost-comment
+        env:
+          INFRACOST_API_KEY: ${{ secrets.INFRACOST_API_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: make infracost-comment
