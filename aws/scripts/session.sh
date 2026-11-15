@@ -20,8 +20,10 @@ tf.sh $env_name account init
 tf.sh $env_name account plan --open
 tf.sh $env_name account apply
 tf.sh $env_name env init
+media-signing-key.sh $env_name new a
 tf.sh $env_name env plan
 tf.sh $env_name env apply
+media-signing-key.sh $env_name activate a
 bootstrap.sh $env_name secrets
 tf.sh $env_name gitops init
 tf.sh $env_name gitops plan

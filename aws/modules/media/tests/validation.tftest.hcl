@@ -33,6 +33,10 @@ variables {
   domain               = "svp.example"
   hosted_zone_id       = "Z0123456789ABCDEFGHIJ"
   flat_rate_free       = true
+  # Fake public keys, not keys of any pair: the plan only reads them as text.
+  signing_public_keys = {
+    a = "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtestkeyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n-----END PUBLIC KEY-----\n"
+  }
 }
 
 run "valid" {
@@ -131,6 +135,57 @@ run "log_delivery_destination_arn_bucket" {
   expect_failures = [var.log_delivery_destination_arn]
 }
 
+run "signing_public_keys_other_slot" {
+  command = plan
+
+  variables {
+    signing_public_keys = {
+      a = "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtestkeyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n-----END PUBLIC KEY-----\n"
+      c = "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtestkeyBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB\n-----END PUBLIC KEY-----\n"
+    }
+  }
+
+  expect_failures = [var.signing_public_keys]
+}
+
+# An empty key group would refuse every signed URL.
+run "signing_public_keys_empty" {
+  command = plan
+
+  variables {
+    signing_public_keys = {}
+  }
+
+  expect_failures = [var.signing_public_keys]
+}
+
+# Only two slots exist, so a third key also uses a slot outside a and b.
+run "signing_public_keys_three" {
+  command = plan
+
+  variables {
+    signing_public_keys = {
+      a = "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtestkeyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n-----END PUBLIC KEY-----\n"
+      b = "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtestkeyBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB\n-----END PUBLIC KEY-----\n"
+      c = "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtestkeyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n-----END PUBLIC KEY-----\n"
+    }
+  }
+
+  expect_failures = [var.signing_public_keys]
+}
+
+run "signing_public_keys_not_pem" {
+  command = plan
+
+  variables {
+    signing_public_keys = {
+      a = "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEAtestkey\n-----END RSA PRIVATE KEY-----\n"
+    }
+  }
+
+  expect_failures = [var.signing_public_keys]
+}
+
 # The defaults keep the buckets as they were: no versioning, no access log and no log bucket.
 run "defaults" {
   command = plan
@@ -148,8 +203,8 @@ run "defaults" {
 }
 
 # The S3 rights of media-worker, the MediaConvert bridge on AWS, exactly: Probe reads the upload, the bridge reads and
-# writes media/ and the job records under transcode-jobs/, and lists both prefixes. Records expire after 30 days, and
-# CloudFront still reads media/ alone. The KMS statement is checked in uploads_kms.
+# writes the three media prefixes and the job records under transcode-jobs/, and lists those prefixes. Records expire
+# after 30 days, and CloudFront never reads them. The KMS statement is checked in uploads_kms.
 run "bridge_s3_policy" {
   command = plan
 
@@ -174,19 +229,23 @@ run "bridge_s3_policy" {
         actions = ["s3:GetObject", "s3:PutObject"]
         resources = [
           "arn:aws:s3:::svp-stg-media-000000000000-ap-southeast-1/media/*",
+          "arn:aws:s3:::svp-stg-media-000000000000-ap-southeast-1/premium/*",
+          "arn:aws:s3:::svp-stg-media-000000000000-ap-southeast-1/preview/*",
           "arn:aws:s3:::svp-stg-media-000000000000-ap-southeast-1/transcode-jobs/*",
         ]
         conditions = []
       },
       {
-        sid        = "ListMedia"
-        effect     = "Allow"
-        actions    = ["s3:ListBucket"]
-        resources  = ["arn:aws:s3:::svp-stg-media-000000000000-ap-southeast-1"]
-        conditions = [{ test = "StringLike", variable = "s3:prefix", values = ["media/*", "transcode-jobs/*"] }]
+        sid       = "ListMedia"
+        effect    = "Allow"
+        actions   = ["s3:ListBucket"]
+        resources = ["arn:aws:s3:::svp-stg-media-000000000000-ap-southeast-1"]
+        conditions = [{
+          test = "StringLike", variable = "s3:prefix", values = ["media/*", "premium/*", "preview/*", "transcode-jobs/*"]
+        }]
       },
     ] : jsonencode(s)])
-    error_message = "The bridge must get exactly GetObject on uploads/*, GetObject and PutObject on media/* and transcode-jobs/*, and a listing of those two prefixes."
+    error_message = "The bridge must get exactly GetObject on uploads/*, GetObject and PutObject on media/*, premium/*, preview/* and transcode-jobs/*, and a listing of those four prefixes."
   }
 
   assert {
@@ -196,11 +255,86 @@ run "bridge_s3_policy" {
     error_message = "The media bucket must delete the transcode job records under transcode-jobs/ after 30 days."
   }
 
+  # The three media prefixes, read by this distribution alone: nothing is open to an anonymous principal.
   assert {
-    condition = jsonencode([for s in data.aws_iam_policy_document.media.statement : sort(s.resources) if s.effect == "Allow"]) == jsonencode([
-      ["arn:aws:s3:::svp-stg-media-000000000000-ap-southeast-1/media/*"]
-    ])
-    error_message = "The bucket policy must let CloudFront read media/* alone, never the job records."
+    condition = jsonencode([for s in data.aws_iam_policy_document.media.statement : [
+      sort(s.actions), sort(s.resources), [for p in s.principals : [p.type, sort(p.identifiers)]],
+      [for c in s.condition : [c.test, c.variable]],
+      ] if s.effect == "Allow"]) == jsonencode([[
+      ["s3:GetObject"],
+      [
+        "arn:aws:s3:::svp-stg-media-000000000000-ap-southeast-1/media/*",
+        "arn:aws:s3:::svp-stg-media-000000000000-ap-southeast-1/premium/*",
+        "arn:aws:s3:::svp-stg-media-000000000000-ap-southeast-1/preview/*",
+      ],
+      [["Service", ["cloudfront.amazonaws.com"]]],
+      [["StringEquals", "AWS:SourceArn"]],
+    ]])
+    error_message = "The bucket policy must let only CloudFront, for this distribution, read media/*, premium/* and preview/*, never the job records."
+  }
+
+  assert {
+    condition = alltrue([for s in data.aws_iam_policy_document.media.statement : s.effect == "Deny" if anytrue([
+      for p in s.principals : contains(p.identifiers, "*")
+    ])])
+    error_message = "The bucket policy may name every principal only to deny, never to allow."
+  }
+}
+
+# The S3 rights of video-service on the media bucket, exactly: list and delete a video under each media prefix, read
+# the playlists of premium/. Its uploads rights stay as they were; the KMS statement is checked in uploads_kms.
+run "video_service_s3_policy" {
+  command = plan
+
+  assert {
+    condition = toset([for s in data.aws_iam_policy_document.video_service.statement : jsonencode({
+      sid        = s.sid
+      effect     = s.effect
+      actions    = sort(s.actions)
+      resources  = sort(s.resources)
+      conditions = [for c in s.condition : { test = c.test, variable = c.variable, values = sort(c.values) }]
+      }) if s.sid != "EncryptUploads"]) == toset([for s in [
+      {
+        sid        = "Uploads"
+        effect     = "Allow"
+        actions    = ["s3:DeleteObject", "s3:GetObject", "s3:PutObject"]
+        resources  = ["arn:aws:s3:::svp-stg-uploads-000000000000-ap-southeast-1/uploads/*"]
+        conditions = []
+      },
+      {
+        sid        = "ListUploads"
+        effect     = "Allow"
+        actions    = ["s3:ListBucket"]
+        resources  = ["arn:aws:s3:::svp-stg-uploads-000000000000-ap-southeast-1"]
+        conditions = []
+      },
+      {
+        sid        = "ListMedia"
+        effect     = "Allow"
+        actions    = ["s3:ListBucket"]
+        resources  = ["arn:aws:s3:::svp-stg-media-000000000000-ap-southeast-1"]
+        conditions = [{ test = "StringLike", variable = "s3:prefix", values = ["media/*", "premium/*", "preview/*"] }]
+      },
+      {
+        sid     = "DeleteMedia"
+        effect  = "Allow"
+        actions = ["s3:DeleteObject"]
+        resources = [
+          "arn:aws:s3:::svp-stg-media-000000000000-ap-southeast-1/media/*",
+          "arn:aws:s3:::svp-stg-media-000000000000-ap-southeast-1/premium/*",
+          "arn:aws:s3:::svp-stg-media-000000000000-ap-southeast-1/preview/*",
+        ]
+        conditions = []
+      },
+      {
+        sid        = "ReadPremium"
+        effect     = "Allow"
+        actions    = ["s3:GetObject"]
+        resources  = ["arn:aws:s3:::svp-stg-media-000000000000-ap-southeast-1/premium/*"]
+        conditions = []
+      },
+    ] : jsonencode(s)])
+    error_message = "video-service must get exactly its uploads rights, a listing and DeleteObject of media/*, premium/* and preview/*, and GetObject on premium/*."
   }
 }
 
@@ -315,6 +449,73 @@ run "name_and_tls" {
   }
 }
 
+# Both slots during a rotation: one public key per slot, named after the hash of its PEM, all in the key group. Key
+# IDs are only known after apply, and so is the size of the set of them, so the tests count the public keys; that the
+# group holds all of them is read in the code.
+run "signing_keys" {
+  command = plan
+
+  variables {
+    signing_public_keys = {
+      a = "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtestkeyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n-----END PUBLIC KEY-----\n"
+      b = "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtestkeyBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB\n-----END PUBLIC KEY-----\n"
+    }
+  }
+
+  assert {
+    condition = (length(aws_cloudfront_public_key.media) == 2 &&
+      aws_cloudfront_public_key.media["a"].name == "svp-stg-media-a-bab396c9" &&
+      aws_cloudfront_public_key.media["b"].name == "svp-stg-media-b-615dd182" &&
+      aws_cloudfront_public_key.media["a"].encoded_key == var.signing_public_keys["a"] &&
+    aws_cloudfront_public_key.media["b"].encoded_key == var.signing_public_keys["b"])
+    error_message = "Each slot must get a public key <name_prefix>-media-<slot>-<first 8 hex of sha256(PEM)> holding its PEM."
+  }
+
+  assert {
+    condition     = aws_cloudfront_key_group.media.name == "svp-stg-media" && aws_cloudfront_key_group.media.items != null
+    error_message = "The key group must be named <name_prefix>-media and hold keys."
+  }
+
+  assert {
+    condition     = toset(keys(output.signing_key_ids)) == toset(["a", "b"])
+    error_message = "signing_key_ids must give the key ID of each slot."
+  }
+}
+
+# Signed unless public: the default behavior asks for the key group, so a path that misses media/* and preview/*
+# (premium/ in any spelling) needs a signature; media/* and preview/* are the only ordered behaviors, without one. All
+# three cache and answer alike, so a signed segment shares the cache key of an unsigned request.
+run "premium_behavior" {
+  command = plan
+
+  assert {
+    condition = (length(aws_cloudfront_public_key.media) == 1 &&
+    aws_cloudfront_public_key.media["a"].name == "svp-stg-media-a-bab396c9" && toset(keys(output.signing_key_ids)) == toset(["a"]))
+    error_message = "One key in signing_public_keys must give one public key."
+  }
+
+  # The key group ID is only known after apply, so the test counts the groups of each behavior.
+  assert {
+    condition     = length(aws_cloudfront_distribution.media.default_cache_behavior[0].trusted_key_groups) == 1
+    error_message = "The default behavior must ask for a signature of the key group."
+  }
+
+  assert {
+    condition = ([for b in aws_cloudfront_distribution.media.ordered_cache_behavior : b.path_pattern] == ["media/*", "preview/*"] &&
+    alltrue([for b in aws_cloudfront_distribution.media.ordered_cache_behavior : length(b.trusted_key_groups) == 0 && b.trusted_signers == null]))
+    error_message = "The ordered behaviors must be exactly media/* and preview/*, public: no key group, no trusted signer."
+  }
+
+  assert {
+    condition = alltrue([for b in concat(aws_cloudfront_distribution.media.default_cache_behavior, aws_cloudfront_distribution.media.ordered_cache_behavior) :
+      b.target_origin_id == "media" && b.allowed_methods == toset(["GET", "HEAD"]) && b.cached_methods == toset(["GET", "HEAD"]) &&
+      b.viewer_protocol_policy == "https-only" && b.compress &&
+      b.cache_policy_id == data.aws_cloudfront_cache_policy.caching_optimized.id &&
+    b.response_headers_policy_id == "60669652-455b-4ae9-85a4-c4c02393f86c"])
+    error_message = "On the Free plan every behavior must serve GET and HEAD from the bucket over HTTPS only, compressed, with Managed-CachingOptimized and Managed-SimpleCORS."
+  }
+}
+
 # The flat-rate Free plan: it covers the distribution and its web ACL, and the distribution uses only features of the
 # plan (a managed response headers policy, no access log).
 run "flat_rate_plan" {
@@ -405,6 +606,16 @@ run "pay_as_you_go" {
     condition = (aws_cloudwatch_log_delivery.media[0].s3_delivery_configuration[0].suffix_path == "{DistributionId}/{yyyy}/{MM}/{dd}/{HH}" &&
     aws_cloudwatch_log_delivery.media[0].s3_delivery_configuration[0].enable_hive_compatible_path)
     error_message = "Logs must be written under a Hive-style path per distribution and hour."
+  }
+
+  # The ID of the module's own headers policy is only known after apply; every behavior takes it from one local.
+  assert {
+    condition = ([for b in aws_cloudfront_distribution.media.ordered_cache_behavior : b.path_pattern] == ["media/*", "preview/*"] &&
+      alltrue([for b in aws_cloudfront_distribution.media.ordered_cache_behavior : length(b.trusted_key_groups) == 0]) &&
+      length(aws_cloudfront_distribution.media.default_cache_behavior[0].trusted_key_groups) == 1 &&
+      alltrue([for b in concat(aws_cloudfront_distribution.media.default_cache_behavior, aws_cloudfront_distribution.media.ordered_cache_behavior) :
+    b.viewer_protocol_policy == "https-only" && b.cache_policy_id == data.aws_cloudfront_cache_policy.caching_optimized.id]))
+    error_message = "Off the plan the default behavior keeps its key group, media/* and preview/* stay public, all HTTPS only with Managed-CachingOptimized."
   }
 
   assert {

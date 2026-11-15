@@ -69,6 +69,32 @@ variable "alarm_email" {
 }
 
 ################################################################################
+# Media signing keys: media-signing.auto.tfvars.json beside this file, written by aws/scripts/media-signing-key.sh
+################################################################################
+
+variable "media_signing_public_keys" {
+  description = "Public keys (PEM, `-----BEGIN PUBLIC KEY-----`, RSA 2048) of the key group that signs URLs of premium/* on the media distribution, by slot: `a`, `b`, one or two of them; two let a new key enter the key group before the old one leaves. No default and not in <env>.tfvars: aws/scripts/media-signing-key.sh <env> new <slot> writes the slot into the uncommitted media-signing.auto.tfvars.json beside this file and keeps the private key outside the repository."
+  type        = map(string)
+  nullable    = false
+
+  validation {
+    condition     = alltrue([for k in keys(var.media_signing_public_keys) : contains(["a", "b"], k)])
+    error_message = "media_signing_public_keys may only use the slots a and b."
+  }
+
+  validation {
+    condition     = length(var.media_signing_public_keys) >= 1 && length(var.media_signing_public_keys) <= 2
+    error_message = "media_signing_public_keys must hold one or two keys: a key group is never empty."
+  }
+
+  validation {
+    condition = alltrue([for v in values(var.media_signing_public_keys) :
+    can(regex("^-----BEGIN PUBLIC KEY-----\\n[A-Za-z0-9+/=\\n]+-----END PUBLIC KEY-----\\n?$", v))])
+    error_message = "Each value of media_signing_public_keys must be one PEM public key, from -----BEGIN PUBLIC KEY----- to -----END PUBLIC KEY-----."
+  }
+}
+
+################################################################################
 # Size and protection of the env: committed in <env>.tfvars, the only place where stg and prd differ
 ################################################################################
 

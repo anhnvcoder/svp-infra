@@ -33,3 +33,8 @@ output "media_worker_policy_json" {
   description = "S3 and uploads key part of the IAM policy of media-worker, the MediaConvert bridge on AWS (JSON), for the role of its Pod Identity association."
   value       = data.aws_iam_policy_document.media_worker.json
 }
+
+output "signing_key_ids" {
+  description = "ID of the CloudFront public key of each slot of signing_public_keys (`a`, `b`): the Key-Pair-Id that a URL signed with the private key of that slot carries (MEDIA_SIGNING_KEY_ID of video-service)."
+  value       = { for slot, key in aws_cloudfront_public_key.media : slot => key.id }
+}

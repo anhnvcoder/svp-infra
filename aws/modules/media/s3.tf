@@ -1,6 +1,6 @@
 # Two private buckets. Keys keep their prefix: the uploads bucket holds uploads/<video_id>, the media bucket
-# media/<video_id>/<version>/..., so the object keys, the IAM policies and the media URLs are the same on every
-# object store of the platform.
+# <prefix><video_id>/<version>/... under media/, premium/ or preview/, so the object keys, the IAM policies and the
+# media URLs are the same on every object store of the platform.
 
 # Bucket names are global. <name>-<account>-<region>, the convention of AWS's own buckets, is unique without a random
 # part and tells the account and region at a glance. AWS does not treat an account id as a secret, and the uploads
@@ -276,7 +276,8 @@ data "aws_iam_policy_document" "tls_only" {
 }
 
 # The media bucket stays private: only this distribution may read, through its origin access control, and only single
-# objects under media/, never a listing (a missing key then answers 403, not 404).
+# objects under the three media prefixes, never a listing (a missing key then answers 403, not 404). premium/ is read
+# the same way: the distribution, not the bucket, asks for the signature.
 data "aws_iam_policy_document" "media" {
   source_policy_documents = [data.aws_iam_policy_document.tls_only["media"].json]
 
@@ -284,7 +285,7 @@ data "aws_iam_policy_document" "media" {
     sid       = "CloudFrontReadMedia"
     effect    = "Allow"
     actions   = ["s3:GetObject"]
-    resources = ["${local.bucket_arns["media"]}/media/*"]
+    resources = [for p in local.media_prefixes : "${local.bucket_arns["media"]}/${p}*"]
 
     principals {
       type        = "Service"

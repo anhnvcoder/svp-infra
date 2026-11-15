@@ -38,7 +38,7 @@ variables {
   expected_entries = {
     argocd   = ["argocd-notifications"]
     keda     = ["kafka-users"]
-    svp      = ["glitchtip-runtime", "jwt-signing", "jwt-verify", "kafka-users", "pg-roles", "valkey-users", "web"]
+    svp      = ["glitchtip-runtime", "jwt-signing", "jwt-verify", "kafka-users", "media-signing", "pg-roles", "valkey-users", "web"]
     svp-data = ["kafka-admin", "pg-roles", "pg-superuser", "valkey-users"]
     svp-obs  = ["glitchtip-runtime", "grafana-operator", "kafka-users", "obs", "pg-roles"]
   }
@@ -83,6 +83,19 @@ run "stg" {
       for s in d.statement : [for r in s.resources : !strcontains(r, "*")]
     ]]))
     error_message = "No resource of a namespace policy may contain a *."
+  }
+
+  # The signing key of premium media URLs: only the SecretStore role of svp may read the entry, nothing else.
+  assert {
+    condition = (
+      contains([for s in aws_secretsmanager_secret.this : s.name], "svp/stg/media-signing") &&
+      contains(data.aws_iam_policy_document.namespace["svp"].statement[0].actions, "secretsmanager:GetSecretValue") &&
+      contains(data.aws_iam_policy_document.namespace["svp"].statement[0].resources, "arn:aws:secretsmanager:ap-southeast-1:111111111111:secret:svp/stg/media-signing-??????") &&
+      alltrue(flatten([for ns, d in data.aws_iam_policy_document.namespace : [
+        for st in d.statement : [for r in st.resources : ns == "svp" || !strcontains(r, "media-signing")]
+      ]]))
+    )
+    error_message = "Only the svp namespace role may get svp/stg/media-signing-??????."
   }
 
   assert {
@@ -168,6 +181,19 @@ run "prd" {
       toset(one(data.aws_iam_policy_document.namespace_trust[ns].statement[0].principals).identifiers) == toset(["arn:aws:iam::111111111111:role/svp-prd-external-secrets"])
     ])
     error_message = "The prd namespace roles must read svp/prd/ entries and trust svp-prd-external-secrets."
+  }
+
+  # The signing key of premium media URLs: only the SecretStore role of svp may read the entry, nothing else.
+  assert {
+    condition = (
+      contains([for s in aws_secretsmanager_secret.this : s.name], "svp/prd/media-signing") &&
+      contains(data.aws_iam_policy_document.namespace["svp"].statement[0].actions, "secretsmanager:GetSecretValue") &&
+      contains(data.aws_iam_policy_document.namespace["svp"].statement[0].resources, "arn:aws:secretsmanager:ap-southeast-1:111111111111:secret:svp/prd/media-signing-??????") &&
+      alltrue(flatten([for ns, d in data.aws_iam_policy_document.namespace : [
+        for st in d.statement : [for r in st.resources : ns == "svp" || !strcontains(r, "media-signing")]
+      ]]))
+    )
+    error_message = "Only the svp namespace role may get svp/prd/media-signing-??????."
   }
 
   assert {

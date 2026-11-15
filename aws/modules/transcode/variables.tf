@@ -29,7 +29,7 @@ variable "uploads_kms_key_arn" {
 }
 
 variable "media_bucket_arn" {
-  description = "ARN of the media bucket of the env (arn:aws:s3:::<name>): MediaConvert writes the output of a job under media/ with its role."
+  description = "ARN of the media bucket of the env (arn:aws:s3:::<name>): MediaConvert writes the output of a job under media/, or premium/ for a premium video, with its role."
   type        = string
 
   validation {

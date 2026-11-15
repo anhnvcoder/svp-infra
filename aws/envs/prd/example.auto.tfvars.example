@@ -14,3 +14,5 @@ domain = "aws.svp.example"
 
 # Inbox of the CloudWatch alarms of the env: open the confirmation link SNS sends after the apply.
 alarm_email = "you@svp.example"
+
+# media_signing_public_keys: in media-signing.auto.tfvars.json, from aws/scripts/media-signing-key.sh prd new a.

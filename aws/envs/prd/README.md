@@ -35,7 +35,7 @@ stg](../stg/README.md#tài-nguyên-sống-lâu-của-account)).
 ## Cái gì khác với stg
 
 Các file `*.tf` chép từ root stg, giống hệt trừ dòng `env = "prd"` của `locals` (`main.tf`). Khác biệt được phép
-([ADR-0055](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0055-environment-matrix.md) §6, kiểm bằng `diff -r -x .terraform -x '*.auto.tfvars' aws/envs/stg aws/envs/prd`):
+([ADR-0055](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0055-environment-matrix.md) §6, kiểm bằng `diff -r -x .terraform -x '*.auto.tfvars' -x '*.auto.tfvars.json' aws/envs/stg aws/envs/prd`):
 dòng `env` đó, `<env>.tfvars`, `teardown.tfvars`, `README.md`, `backend.hcl.example` (profile, tên bucket), `example.auto.tfvars.example`
 (giá trị ví dụ theo env). Ngoài các chỗ đó là lỗi.
 
@@ -44,6 +44,7 @@ dòng `env` đó, `<env>.tfvars`, `teardown.tfvars`, `README.md`, `backend.hcl.e
 | `prd.tfvars` | có | cỡ, dự phòng, retention và mức bảo vệ của prd; không giá trị cá nhân nào |
 | `teardown.tfvars` | có | chỉ ba bảo vệ cần nhấc để xoá (mục "Gỡ") |
 | `prd.auto.tfvars` | **không** (git bỏ qua) | giá trị cá nhân, chép từ `example.auto.tfvars.example` |
+| `media-signing.auto.tfvars.json` | **không** (git bỏ qua) | khoá công khai của key group media, `aws/scripts/media-signing-key.sh prd new <ô>` ghi (mục [Khoá ký media](#khoá-ký-media)) |
 | `../../backend-prd.hcl` | **không** | phần chung của backend trong account prd |
 | `TF_VAR_account_id` | biến môi trường, đặt ngay trong lệnh | account được phép đổi (`allowed_account_ids`) |
 | `TF_VAR_log_archive_account_id`, `TF_VAR_backup_account_id` | biến môi trường, đặt ngay trong lệnh | account `svp-log-archive`, `svp-backup` (bảng trên) |
@@ -70,6 +71,15 @@ API ở `api.<tên này>`, media ở `media.<tên này>`; plan dừng ở precon
 SNS gửi sau apply). Không có IP của máy người học. Id workspace AMG `svp-prd` không phải giá trị cá nhân: root đọc tham
 số SSM `/svp/prd/grafana-workspace-id` mà `aws/accounts/prd` ghi cùng workspace, theo cờ `managed_grafana` của prd trong
 `aws/paid-features.json` như ở stg ([README của stg](../stg/README.md#tài-nguyên-sống-lâu-của-account)).
+
+## Khoá ký media
+
+Như stg ([mục "Khoá ký media" của stg](../stg/README.md#khoá-ký-media)), với key group `svp-prd-media` và entry
+`svp/prd/media-signing`: biến `media_signing_public_keys` không mặc định, không ở `prd.tfvars`, giá trị từ
+`media-signing.auto.tfvars.json` (git bỏ qua) do `aws/scripts/media-signing-key.sh prd new <ô>` ghi trước `plan`; output
+`media_signing_key_ids` (ô → ID CloudFront public key) cho `aws/scripts/media-signing-key.sh prd activate <ô>` sau
+`apply`. Thứ tự trong buổi, xoay ô và xử lý khi lộ khoá ở runbook
+[`media-signing-keys.md`](../../../docs/runbooks/media-signing-keys.md).
 
 ## Tới API: tunnel SSM
 
@@ -107,6 +117,7 @@ Dựng:
 ```sh
 cp example.auto.tfvars.example prd.auto.tfvars          # rồi sửa bốn giá trị
 AWS_PROFILE=anhnv-prd terraform init -reconfigure -backend-config=../../backend-prd.hcl -backend-config=key=aws/prd/terraform.tfstate
+../../scripts/media-signing-key.sh prd new a     # plan reads slot a's public key from media-signing.auto.tfvars.json
 AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
   TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform plan -var-file=prd.tfvars -out=prd.tfplan
 AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
@@ -114,8 +125,9 @@ AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" TF_VAR_log_arc
 ```
 
 Sau `apply`: xác nhận email của topic `svp-prd-alarms`, mở tunnel và kubeconfig (mục trên); `AWS_PROFILE=anhnv-prd terraform output -raw rds_master_user_secret_arn` cho script buổi.
-Tiếp theo: ghi giá trị secret (`AWS_PROFILE=anhnv-prd make eks-secrets CONTEXT=svp-prd` ở repo code), rồi apply root `aws/gitops/prd` khi
-tunnel đang mở.
+Tiếp theo: ghi khoá ký của ô `a` vào entry `svp/prd/media-signing` (`aws/scripts/media-signing-key.sh prd activate a`,
+mục [Khoá ký media](#khoá-ký-media)), giá trị các secret khác (`AWS_PROFILE=anhnv-prd make eks-secrets CONTEXT=svp-prd`
+ở repo code), rồi apply root `aws/gitops/prd` khi tunnel đang mở.
 
 ## Gỡ
 

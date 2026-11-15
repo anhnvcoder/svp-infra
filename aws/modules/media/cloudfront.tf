@@ -1,7 +1,7 @@
-# CloudFront in front of the media bucket, at media.<domain>. The URL of an object is https://media.<domain>/<key>:
-# the gateway joins MEDIA_PUBLIC_BASE_URL with the key, and the key already starts with media/. flat_rate_free picks
-# the plan: true subscribes to the flat-rate Free plan (managed CORS policy, no access log), false is pay-as-you-go
-# with the module's own headers policy and a standard log. Design notes: aws/modules/media/README.md.
+# CloudFront in front of the media bucket, at media.<domain>. The URL of an object is https://media.<domain>/<key>, the
+# key starting with its prefix: media/ and preview/ are public, any other path (premium/) needs a signed URL.
+# flat_rate_free picks the plan: true subscribes to the flat-rate Free plan (managed CORS policy, no access log), false
+# is pay-as-you-go with the module's own headers policy and a standard log. Design notes: aws/modules/media/README.md.
 
 locals {
   # CloudFront takes viewer certificates, and delivers its logs, only in us-east-1.
@@ -31,6 +31,26 @@ resource "aws_cloudfront_origin_access_control" "media" {
   origin_access_control_origin_type = "s3"
   signing_behavior                  = "always"
   signing_protocol                  = "sigv4"
+}
+
+# CloudFront cannot change a public key in place, so a new PEM in a slot is a new key under a new name, created before
+# the old one goes: the key group always holds a key that checks the URLs signed meanwhile.
+resource "aws_cloudfront_public_key" "media" {
+  for_each = var.signing_public_keys
+
+  name        = "${local.distribution_name}-${each.key}-${substr(sha256(each.value), 0, 8)}"
+  comment     = "Signs premium/ URLs of ${local.media_domain}, slot ${each.key}"
+  encoded_key = each.value
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "aws_cloudfront_key_group" "media" {
+  name    = local.distribution_name
+  comment = "Signers of premium/ on ${local.media_domain}"
+  items   = [for key in aws_cloudfront_public_key.media : key.id]
 }
 
 # Managed policy: no query string, cookie or header in the cache key, compressed variants cached, and the TTL taken
@@ -88,6 +108,11 @@ resource "aws_cloudfront_response_headers_policy" "media" {
   }
 }
 
+locals {
+  response_headers_policy_id = (var.flat_rate_free ?
+  data.aws_cloudfront_response_headers_policy.simple_cors[0].id : aws_cloudfront_response_headers_policy.media[0].id)
+}
+
 resource "aws_acm_certificate" "viewer" {
   region            = local.global_region
   domain_name       = local.media_domain
@@ -135,16 +160,37 @@ resource "aws_cloudfront_distribution" "media" {
     origin_access_control_id = aws_cloudfront_origin_access_control.media.id
   }
 
+  # Signed unless public: a path that misses media/* and preview/* falls here, so a spelling of premium/ that the
+  # behavior match and S3 read apart (premium%2F...) still needs a signature. CloudFront checks the signature and its
+  # policy before it looks in the cache, and the signature stays out of the cache key: viewers share one cached copy.
   default_cache_behavior {
     target_origin_id = "media"
     # The player only reads; preflights do not happen, since its requests carry no header that needs one.
-    allowed_methods        = ["GET", "HEAD"]
-    cached_methods         = ["GET", "HEAD"]
-    viewer_protocol_policy = "https-only"
-    compress               = true
-    cache_policy_id        = data.aws_cloudfront_cache_policy.caching_optimized.id
-    response_headers_policy_id = (var.flat_rate_free ?
-    data.aws_cloudfront_response_headers_policy.simple_cors[0].id : aws_cloudfront_response_headers_policy.media[0].id)
+    allowed_methods            = ["GET", "HEAD"]
+    cached_methods             = ["GET", "HEAD"]
+    viewer_protocol_policy     = "https-only"
+    compress                   = true
+    cache_policy_id            = data.aws_cloudfront_cache_policy.caching_optimized.id
+    response_headers_policy_id = local.response_headers_policy_id
+    trusted_key_groups         = [aws_cloudfront_key_group.media.id]
+  }
+
+  # The public prefixes: same as the default behavior but without a signature.
+  dynamic "ordered_cache_behavior" {
+    for_each = ["media/*", "preview/*"]
+
+    content {
+      path_pattern               = ordered_cache_behavior.value
+      target_origin_id           = "media"
+      allowed_methods            = ["GET", "HEAD"]
+      cached_methods             = ["GET", "HEAD"]
+      viewer_protocol_policy     = "https-only"
+      compress                   = true
+      cache_policy_id            = data.aws_cloudfront_cache_policy.caching_optimized.id
+      response_headers_policy_id = local.response_headers_policy_id
+      # Left unset, the provider computes it and a plan cannot show it.
+      trusted_key_groups = []
+    }
   }
 
   restrictions {

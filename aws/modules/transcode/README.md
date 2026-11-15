@@ -35,7 +35,9 @@ on-demand (phụ lục, dòng "Job đồng thời"). Tier Basic hay Professional
 - **Trust:** `mediaconvert.amazonaws.com`, `sts:AssumeRole`, `StringEquals` `aws:SourceAccount` là account và `ArnLike` `aws:SourceArn` là ARN queue
   `svp-<env>`: cách tài liệu MediaConvert chống confused deputy, nên job của account hay queue khác không dùng được role.
 - **Quyền:** đúng bảng "Role MediaConvert" của phụ lục §9: `s3:GetObject` trên `<uploads>/uploads/*` (đọc input), `s3:PutObject` trên
-  `<media>/media/*` (ghi output), `kms:Decrypt` trên `uploads_kms_key_arn` (bucket `uploads` mã hoá SSE-KMS bằng key của module `media`,
+  `<media>/media/*` và `<media>/premium/*` (ghi output; video premium ghi dưới `premium/`,
+  [ADR-0073](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0073-premium-playback.md) §7; không `preview/*`: bản xem thử do
+  media-worker chép), `kms:Decrypt` trên `uploads_kms_key_arn` (bucket `uploads` mã hoá SSE-KMS bằng key của module `media`,
   [ADR-0067](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0067-backup-dr.md) §8; `media` SSE-S3 nên ghi không cần quyền KMS).
   Policy inline tên `s3`.
 
@@ -129,7 +131,7 @@ một action, resource hay điều kiện làm test fail; kiểm event pattern, 
 | ---- | ----------- | ---- | ------- | :------: |
 | alarm\_topic\_arn | ARN of the SNS topic the alarm of the dead-letter queue notifies, when it fires and when it clears (output topic\_arn of the alarms module). | `string` | n/a | yes |
 | env | Environment (stg, prd): every name of the module starts with svp-<env>. | `string` | n/a | yes |
-| media\_bucket\_arn | ARN of the media bucket of the env (arn:aws:s3:::<name>): MediaConvert writes the output of a job under media/ with its role. | `string` | n/a | yes |
+| media\_bucket\_arn | ARN of the media bucket of the env (arn:aws:s3:::<name>): MediaConvert writes the output of a job under media/, or premium/ for a premium video, with its role. | `string` | n/a | yes |
 | uploads\_bucket\_arn | ARN of the uploads bucket of the env (arn:aws:s3:::<name>): MediaConvert reads the input of a job under uploads/ with its role. | `string` | n/a | yes |
 | uploads\_kms\_key\_arn | ARN of the KMS key that encrypts the uploads bucket (output uploads\_kms\_key\_arn of the media module): MediaConvert decrypts the input of a job with its role. | `string` | n/a | yes |
 

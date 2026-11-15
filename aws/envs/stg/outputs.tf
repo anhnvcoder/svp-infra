@@ -54,6 +54,11 @@ output "rds_master_user_secret_arn" {
   value       = module.rds.master_user_secret_arn
 }
 
+output "media_signing_key_ids" {
+  description = "ID of the CloudFront public key of each slot of media_signing_public_keys (`a`, `b`): the MEDIA_SIGNING_KEY_ID that aws/scripts/media-signing-key.sh <env> activate <slot> writes into the entry svp/<env>/media-signing."
+  value       = module.media.signing_key_ids
+}
+
 # Read by the GitOps bootstrap root aws/gitops/<env> through terraform_remote_state, for its helm and kubernetes
 # providers.
 output "cluster_name" {
