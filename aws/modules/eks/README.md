@@ -267,7 +267,8 @@ thay vì IMDS (driver tự thử Kubernetes khi IMDS không trả lời); contro
 
 Với VPC CNI, pod mang IP phụ của ENI node, nên security group node lọc cả lưu lượng tới pod; NetworkPolicy (agent network policy của VPC CNI)
 thu hẹp thêm theo từng pod. Rule của module (giữ `node_security_group_enable_recommended_rules = true`, ghi lại ở `security-groups.tf`).
-Module luôn bật: 443 hai chiều giữa node và cluster, 10250, và TCP/UDP 53 giữa node. Phần còn lại, gồm TCP 1025–65535 giữa node và egress, là rule khuyến nghị, giữ bật:
+Module luôn bật: 443 hai chiều giữa node và cluster, 10250, và TCP/UDP 53 giữa node. Phần còn lại, gồm TCP 1025–65535 giữa node và egress, là rule khuyến nghị, giữ bật;
+riêng TCP 15017 từ security group cluster là rule bổ sung (`node_security_group_additional_rules`, `security-groups.tf`):
 
 | Hướng | Cổng | Ai cần |
 | --- | --- | --- |
@@ -279,7 +280,8 @@ Module luôn bật: 443 hai chiều giữa node và cluster, 10250, và TCP/UDP 
 | cluster → node | TCP 6443 | API metrics của KEDA |
 | cluster → node | TCP 8443 | webhook của Karpenter |
 | cluster → node | TCP 9443 | webhook của LBC, Kyverno, KEDA |
-| node ↔ node | TCP/UDP 53, TCP 1025–65535 | CoreDNS, pod tới pod |
+| cluster → node | TCP 15017 | webhook inject, validation của istiod (Service `istiod` cổng 443, `targetPort` 15017) |
+| node ↔ node | TCP/UDP 53, TCP 1025–65535 | CoreDNS, pod tới pod (gồm HBONE 15008, xDS 15012 của Istio ambient) |
 | node → mọi nơi | tất cả | kéo image qua NAT, gọi API AWS (finding trivy `AWS-0104` bỏ qua có lý do ở `cluster.tf`) |
 
 Webhook hay aggregated API ở cổng khác sẽ quá hạn tới khi thêm rule ở `security-groups.tf`. Rule cho lưu lượng và health check từ ALB edge

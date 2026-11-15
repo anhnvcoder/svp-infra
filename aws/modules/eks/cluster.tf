@@ -82,6 +82,7 @@ module "eks" {
   }
 
   node_security_group_enable_recommended_rules = local.node_security_group_enable_recommended_rules
+  node_security_group_additional_rules         = local.node_security_group_additional_rules
   node_security_group_tags                     = local.karpenter_discovery_tag
 
   addons                  = local.addons
