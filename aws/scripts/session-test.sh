@@ -1592,6 +1592,11 @@ clear_log
 expect "tf.sh stg env destroy runs and says to close the account features, then sweep" \
   sh -c 'bash "$1/tf.sh" stg env destroy >"$2" 2>&1 && grep -q "next: tf.sh stg account plan --close, read it, tf.sh stg account apply, then aws/scripts/sweep.sh stg" "$2"' _ "$here" "$work/out"
 expect "tf.sh stg env destroy marks env-destroy-start and env-destroy-end" sh -c 'has() { awk -F "\t" -v e="$2" "\$3 == e { f = 1 } END { exit !f }" "$1"; }; has "$1" env-destroy-start && has "$1" env-destroy-end' _ "$SVP_SESSION_DIR/timeline.tsv"
+set_flags '{"stg": {"managed_grafana": "always"}}'
+expect "tf.sh stg env destroy without a session feature (managed_grafana always) says sweep.sh next, no account step" \
+  sh -c 'bash "$1/tf.sh" stg env plan --destroy >/dev/null 2>&1 && bash "$1/tf.sh" stg env destroy >"$2" 2>&1 &&
+    grep -qx "ok    destroyed aws/envs/stg; now aws/scripts/sweep.sh stg" "$2" && ! grep -q "account plan --close" "$2"' _ "$here" "$work/out"
+set_flags "$stg_session"
 
 new_session
 add_mark gitops-destroy-end
@@ -2582,6 +2587,12 @@ done
 expect "media-signing-key.sh refuses a key directory inside the repository, before any aws" \
   sh -c '! XDG_STATE_HOME="$2/.state" bash "$1" stg new a >"$3" 2>&1 && grep -q "is inside .*: a private key never sits in the repository" "$3" &&
     [ ! -s "$4" ] && [ ! -e "$2/.state" ]' _ "$mskey" "$infra_root" "$work/out" "$log"
+mkdir -p "$work/xdg-link/svp" "$work/link-target" && ln -s "$work/link-target" "$work/xdg-link/svp/media-signing"
+cksum "$tfv" >"$work/sums"
+expect "media-signing-key.sh refuses a key directory that is a symbolic link, writes no key and no tfvars" \
+  sh -c '! XDG_STATE_HOME="$2" bash "$1" stg new b >"$3" 2>&1 && grep -q "media-signing is a symbolic link: the private keys go in a real directory" "$3" &&
+    [ -z "$(ls -A "$4")" ] && cksum "$5" | diff "$6" - >/dev/null' \
+  _ "$mskey" "$work/xdg-link" "$work/out" "$work/link-target" "$tfv" "$work/sums"
 cksum "$tfv" >"$work/sums"
 for form in "stg new a --print" "--print stg new a" "stg activate a --print"; do
   clear_log

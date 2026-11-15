@@ -8,8 +8,10 @@ phần tốn tiền theo cờ (mục [Cờ chi phí](#cờ-chi-phí)), role ch�
 [`ci-plan-role`](../modules/ci-plan-role/README.md), mục [Role plan của CI](#role-plan-của-ci)), và vault AWS Backup
 `svp-<env>` cùng key, opt-in, role của nó
 (mục [Backup](#backup)). Root prd bật thêm DNSSEC (key KMS, KSK, hai alarm `page`) và query log cho zone prd, cùng topic
-SNS `svp-prd-dns-alarms` ở `us-east-1` (module [`alarms`](../modules/alarms/README.md)) nhận hai alarm đó. Mọi thứ sống
-giữa các buổi AWS, mang tag `Stack=baseline` (script quét sót của buổi giữ lại tag này).
+SNS `svp-prd-dns-alarms` ở `us-east-1` (module [`alarms`](../modules/alarms/README.md)) nhận hai alarm đó.
+Mọi thứ sống giữa các buổi AWS, mang tag `Stack=baseline` (script quét sót của buổi giữ lại tag này), trừ phần theo cờ
+`session` của [`aws/paid-features.json`](../paid-features.json) (workspace AMG và tham số SSM của stg): chỉ có trong
+buổi, `sweep.sh` báo nó là sót.
 
 Zone của prd là zone gốc của lab, `aws.<domain>` (web prd ở đỉnh zone, API `api.aws.<domain>`), được DNS của domain cha (Cloudflare) uỷ
 quyền bằng bốn bản ghi `NS` tên `aws`. Zone của stg là `stg.aws.<domain>`, zone con mà zone prd uỷ quyền bằng bản ghi `NS` của biến

@@ -543,8 +543,11 @@ AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n argocd get applications.argop
 
 sửa xong chạy lại (chạy lại được). Muốn bỏ buổi ở đây: sang bước 20; `pre-destroy.sh` chạy được cả khi Argo CD chưa được cài.
 
-Cảnh báo `PublicUptimeBudgetBurn` (SLO `public-uptime`) cháy trong giờ đầu sau khi dựng cluster mới là do probe lỗi
-lúc dựng (Probe chạy từ wave 5, trước service wave 7): chờ, không điều tra.
+Cảnh báo `PublicUptimeBudgetBurn` (SLO `public-uptime`, hai mức cùng tên: `page` và `ticket`) cháy sau khi dựng cluster
+mới là do probe lỗi lúc dựng (probe chạy trước các service, thứ tự ở `argocd/apps/components.json` của svp-gitops):
+chờ, không điều tra. Khi ba đích đã xanh, page hết sau chừng 30 phút, ticket theo cửa sổ 6 giờ; cửa sổ của hai mức ở
+`deploy/observability/prometheus/rules/slo-generated.yaml` của svp-backend, cách đọc ở
+[`public-uptime-budget-burn.md`](https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks/public-uptime-budget-burn.md).
 
 ### 16. Đo
 
@@ -890,8 +893,10 @@ make -C ../backend eks-premium-check CONTEXT=svp-stg DOMAIN="$domain" WAIT_EXPIR
 Mong mỗi dòng `ok` (ca âm 403: segment `premium/` không ký, chữ ký của V1 trên segment V2 hay trên 720p, playlist ngoài gói; bản xem thử không
 ký 200), bảng `round video segments hit miss …` với tỉ lệ trúng của lượt 2–3 ở V1 (đã ký) xấp xỉ V0 (công khai): query, kể cả chữ ký, không
 vào cache key; dòng cuối `ok every check of the premium edge`. Lượt `WAIT_EXPIRY=1` thêm dòng `ok V1 360p signed segment 5 s past
-DateLessThan: 403`; chạy nó trong lúc chờ bậc k6. Dòng `FAIL`: dán toàn bộ output. Một lượt **Xoay khoá ký** trong buổi theo
-[`media-signing-keys.md`](media-signing-keys.md#xoay-khoá-ký), rồi lượt đầu lại một lần.
+DateLessThan: 403`; chạy nó trong lúc chờ bậc k6. Dòng `FAIL`: dán toàn bộ output. Một lượt **Xoay khoá ký** trong buổi
+theo [`media-signing-keys.md`](media-signing-keys.md#xoay-khoá-ký), rồi lượt đầu lại một lần. Chạy lượt xoay sau khi
+`measure.sh` kết thúc, không trong lúc chờ bậc k6: `bootstrap.sh stg secrets` đồng bộ lại `svp-data` và Reloader khởi
+động lại video-service, nên lỗi và p99 của bậc đang đo có thể vượt ngưỡng và kết thúc thang k6.
 
 #### Kafka và Valkey managed
 

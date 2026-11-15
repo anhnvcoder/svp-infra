@@ -1,7 +1,8 @@
 # Runbook: khoá ký URL media premium
 
-Người xem chỉ đọc được object `premium/*` của bucket media qua distribution media bằng URL đã ký: distribution đòi chữ ký ở mọi path
-ngoài hai tiền tố công khai `media/`, `preview/`. Distribution tin key group `svp-<env>-media` của module [`media`](../../aws/modules/media/README.md): tối đa hai ô `a`, `b`, mỗi ô một CloudFront public key.
+Người xem chỉ đọc được object `premium/*` của bucket media qua distribution media bằng URL đã ký: distribution đòi chữ
+ký ở mọi path ngoài hai tiền tố công khai `media/`, `preview/`. Distribution tin key group `svp-<env>-media` của module
+[`media`](../../aws/modules/media/README.md): tối đa hai ô `a`, `b`, mỗi ô một CloudFront public key.
 video-service ký bằng khoá riêng của ô đang dùng, đọc từ entry Secrets Manager `svp/<env>/media-signing` qua External Secrets (Secret
 `svp/video-service-env`). Runbook này làm bốn việc: dựng khoá lần đầu của một env (mỗi buổi), xoay sang ô kia, thay khoá bị lộ, dọn. Thiết
 kế: [ADR-0073](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0073-premium-playback.md) §5, §8; biến và output của root env:
@@ -109,6 +110,7 @@ sequenceDiagram
     participant ES as External Secrets
     participant VS as video-service
     participant CF as CloudFront
+    actor V as Người xem
     L->>S: new Y
     S->>S: khoá riêng Y vào thư mục khoá, khoá công khai Y vào tfvars
     L->>T: env plan, env apply
@@ -120,7 +122,9 @@ sequenceDiagram
     L->>ES: bootstrap.sh secrets dựng lại ExternalSecret từ entry
     ES->>SM: đọc entry
     ES->>VS: Secret video-service-env đổi, Reloader khởi động lại
-    VS->>CF: URL mới ký bằng Y, Key-Pair-Id của Y
+    Note over VS: ký URL playlist và segment bằng Y, trả về qua API
+    VS-->>V: playlist đã ký, Key-Pair-Id của Y
+    V->>CF: segment kèm chữ ký của Y
     Note over CF: URL ký bằng X còn hợp lệ tới DateLessThan của nó
 ```
 
@@ -131,8 +135,14 @@ sequenceDiagram
    ```
 
    Tìm `ok slot Y: … (slots a b)`: hai ô đều ở file tfvars. `Y` còn khoá của lần xoay trước thì có thêm `warn slot Y … is replaced: …`: đúng ý,
-   `Y` không phải ô đang dùng. `FAIL …stg-Y.pem exists`: `Y` đã có khoá riêng chưa activate (mục **Khoá bị lộ**, ô không dùng); bỏ bước 1–2,
-   sang bước 3.
+   `Y` không phải ô đang dùng. `FAIL …stg-Y.pem exists`: `Y` đã có khoá riêng chưa activate. Chạy phép (a): ID của `Y`
+   có trong key group (đã `new` và `apply` trong buổi này, mục **Khoá bị lộ**, ô không dùng) thì bỏ bước 1–2, sang bước
+   3. Không có ID của `Y` (pem sót từ buổi trước, khoá của nó chưa vào key group) thì xoá nó rồi làm lại từ bước 1:
+
+   ```sh
+   rm -f "${XDG_STATE_HOME:-$HOME/.local/state}/svp/media-signing/stg-Y.pem"
+   ```
+
 2. Khoá công khai mới vào key group:
 
    ```sh
@@ -215,7 +225,9 @@ activate), nên lần xoay sau sang `X` bắt đầu ở bước 3 của **Xoay 
   rm -f "${XDG_STATE_HOME:-$HOME/.local/state}/svp/media-signing/stg-a.pem"
   ```
 
-- **Cuối buổi**: destroy root env xoá public key, key group và entry (`recovery_window_in_days = 0`, không chặn buổi sau). File
-  `aws/envs/<env>/media-signing.auto.tfvars.json` ở lại (git bỏ qua, chỉ khoá công khai); `new a` của buổi sau bỏ ô `b` của nó.
+- **Cuối buổi**: destroy root env xoá public key, key group và entry (`recovery_window_in_days = 0`, không chặn buổi
+  sau), nhưng không xoá khoá riêng ở máy này: đọc lại thư mục khoá ở trên và xoá `<env>-<ô>.pem` còn lại (lệnh `rm -f`
+  như trên). File `aws/envs/<env>/media-signing.auto.tfvars.json` ở lại (git bỏ qua, chỉ khoá công khai); `new a` của
+  buổi sau bỏ ô `b` của nó.
 - **Sót**: `sweep.sh <env>` liệt kê key group `svp-<env>-media` và public key `svp-<env>-media-*` còn lại là sót; xoá sau distribution media theo
   mục [Lệnh xoá tay theo loại](session-stg.md#lệnh-xoá-tay-theo-loại) của `session-stg.md` (key group trước, rồi public key).

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""GitHub settings that Terraform's github provider cannot manage: GitHub Apps from their manifests, and a read-only check.
+"""The GitHub setup around Terraform's github provider: GitHub Apps from their manifests and their keys, a read-only
+check, the repository settings, secrets and github.auto.tfvars the provider cannot write, and plan/apply of github/.
 
   github-app.py create <app>            Register the App from github/apps/<app>.json (GitHub's manifest flow: one click on
                                         "Create GitHub App" in the browser), write its private key and client ID where

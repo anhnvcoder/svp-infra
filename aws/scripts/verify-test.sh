@@ -588,7 +588,14 @@ ans ce_get-cost-and-usage '{"ResultsByTime": [{"TimePeriod": {"Start": "2026-11-
 expect "cost: no rows yet is a note, not a FAIL" run cost mgmt 2026-11-08
 expect "cost: the note says Cost Explorer lags" notel "no cost data from 2026-11-08"
 expect "cost FAIL: a START that is not a date" runs_fail cost mgmt yesterday
-expect "cost FAIL: a START that is today" runs_fail cost mgmt "$today"
+# fails_today: cost mgmt with START the UTC date of the run fails; a run across 00:00 UTC runs again with the new date.
+fails_today() {
+  local t0
+  t0=$(date -u +%Y-%m-%d)
+  runs_fail cost mgmt "$t0" && [ "$t0" = "$(date -u +%Y-%m-%d)" ] && return 0
+  runs_fail cost mgmt "$(date -u +%Y-%m-%d)"
+}
+expect "cost FAIL: a START that is today" fails_today
 SVP_AWS_BACKUP_ACCOUNT_ID='' expect "cost FAIL: backup without its account variable" runs_fail cost backup 2026-11-08
 SVP_AWS_STG_ACCOUNT_ID=999999999999 expect "cost FAIL: a profile in another account" runs_fail cost stg 2026-11-08
 : >"$log"

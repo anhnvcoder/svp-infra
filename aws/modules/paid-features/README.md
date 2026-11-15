@@ -13,7 +13,8 @@ Grafana, quét ECR). Script buổi đọc cùng file qua `paid_feature`, `sessio
 
 File là object `{"<khoá account>": {"<cờ>": "<giá trị>"}}` và chỉ ghi giá trị khác `always`; account vắng, cờ vắng là `always` (mặc định theo
 prd). Khoá account, tên cờ, tập giá trị và account đặt được của từng cờ do `validation` của biến `features` ở
-[`variables.tf`](variables.tf) giữ; tài nguyên mỗi cờ điều khiển ở [ADR-0071](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0071-paid-features.md).
+[`variables.tf`](variables.tf) giữ; tài nguyên mỗi cờ điều khiển ở
+[ADR-0071](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0071-paid-features.md).
 
 ## Kiểm
 

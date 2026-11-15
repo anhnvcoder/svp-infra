@@ -25,17 +25,20 @@ config=${AWS_CONFIG_FILE:-$HOME/.aws/config}
 root_help="make it with aws configure sso --profile anhnv-sso, giving the SSO session a name, then run this again"
 
 # block NAME: the lines of the first [profile NAME] block of the config file but its header, blank ones and trailing
-# spaces left out; nothing when the file has no such block.
+# spaces left out; nothing when the file has no such block. A header may end in a comment after its "]", as botocore
+# reads it; the comment lines after the last key belong to what follows the block, not to it.
 block() {
   awk -v n="$1" '
     /^[ \t]*\[/ {
       if (done) exit
       h = $0
+      sub(/\][^]]*$/, "]", h)
       gsub(/[ \t]/, "", h)
       on = (h == "[profile" n "]")
       if (on) { done = 1; next }
     }
-    on && NF { sub(/[ \t\r]+$/, ""); print }
+    on && /^[ \t]*[#;]/ { sub(/[ \t\r]+$/, ""); comments = comments $0 "\n"; next }
+    on && NF { sub(/[ \t\r]+$/, ""); printf "%s%s\n", comments, $0; comments = "" }
   ' "$config"
 }
 
@@ -69,8 +72,12 @@ write() {
   ok "profile anhnv-sso uses SSO session $session"
 
   # spec: one line per line of a block to write, "<profile><TAB><line>"; every value is checked before anything is
-  # written, so a bad variable leaves the whole file as it was.
+  # written or said of a profile, so a bad variable leaves the whole file as it was.
   local p v ps id old new changed=
+  while read -r p v _; do
+    id=${!v:-}
+    [ -z "$id" ] || [[ $id =~ ^[0-9]{12}$ ]] || fail "$v is not the 12 digits of an account id: nothing written"
+  done < <(member_rows)
   spec=$(mktemp)
   trap 'rm -f "$spec" "${tmp:-}"' EXIT
   while read -r p v ps _; do
@@ -79,7 +86,6 @@ write() {
       skip "profile $p: $v is not exported (eval \"\$(aws/scripts/accounts.sh)\" sets it)"
       continue
     fi
-    [[ $id =~ ^[0-9]{12}$ ]] || fail "$v is not the 12 digits of an account id: nothing written"
     new=$(want "$p" "$id" "$ps")
     old=$(block "$p")
     if [ -z "$old" ]; then
@@ -101,8 +107,8 @@ write() {
     return 0
   fi
 
-  # Each block of the spec takes the place of the profile's block, the blank lines after it kept, so the file comes out
-  # the same when nothing changes; a profile the file lacks is appended.
+  # Each block of the spec takes the place of the profile's block, its header line and the blank and comment lines
+  # after its last key kept, so the file comes out the same when nothing changes; a profile the file lacks is appended.
   tmp=$(mktemp "$(dirname "$config")/.config.XXXXXX")
   awk -v specf="$spec" '
     BEGIN {
@@ -115,21 +121,23 @@ write() {
     }
     function flush() {
       if (cur == "") return
-      printf "[profile %s]\n%s%s", cur, body[cur], blanks
+      printf "%s\n%s%s", header, body[cur], tail
       seen[cur] = 1
-      lastblank = (blanks != "")
+      lastblank = tailblank
       cur = ""
     }
     /^[ \t]*\[/ {
       flush()
       h = $0
+      sub(/\][^]]*$/, "]", h)
       gsub(/[ \t]/, "", h)
       if (h ~ /^\[profile.*\]$/) {
         n = substr(h, 9, length(h) - 9)
-        if (n in body) { cur = n; blanks = ""; next }
+        if (n in body) { cur = n; header = $0; tail = ""; tailblank = 0; next }
       }
     }
-    cur != "" { blanks = NF ? "" : blanks $0 "\n"; next }
+    cur != "" && (!NF || /^[ \t]*[#;]/) { tail = tail $0 "\n"; tailblank = !NF; next }
+    cur != "" { tail = ""; tailblank = 0; next }
     { print; lastblank = !NF }
     END {
       flush()

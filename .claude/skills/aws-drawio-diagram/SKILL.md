@@ -160,8 +160,9 @@ inventory thì đặt `cid` của icon là id tài nguyên và `cid` của box s
 
 ### Trang `org`
 
-14a. **Trang `flows`** gồm các khối dọc (danh sách ở `flows()` của `scripts/build_svp.py`), mỗi khối một tiêu đề: phát hành image (GitHub Actions → GHCR → ECR của từng account qua role OIDC, đường copy
-    từ một thân chung ở x 880 rẽ vào từng account; PR promote → svp-gitops → Argo CD trong cluster), upload tới phát lại, request, telemetry
+14a. **Trang `flows`** gồm các khối dọc (danh sách ở `flows()` của `scripts/build_svp.py`), mỗi khối một tiêu đề: phát hành image
+    (GitHub Actions → GHCR → ECR của từng account qua role OIDC, đường copy từ một thân chung ở x 880 rẽ vào từng account; PR promote →
+    svp-gitops → Argo CD trong cluster), upload tới phát lại, request, telemetry
     (Collector, Prometheus agent trong cluster → AMP, CloudWatch Logs, X-Ray; AMG đọc AMP và log; AMP → SNS). Mỗi khối có Cloud, Account hoặc
     cluster riêng khi cần; tên role, repo, log group khớp code. Ba đường ra từ Collector dùng một thân dọc chung, nhãn đặt bên phải thân.
 14b. **Trang cấu trúc tổ chức, không có VPC, AZ, subnet.** Container ngoài cùng là root của Organization; trong đó hộp chính sách gắn ở root

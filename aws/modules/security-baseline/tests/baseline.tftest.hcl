@@ -314,6 +314,7 @@ run "config_recording_off" {
 
   variables {
     config_recording = false
+    ebs_kms_key_arn  = "arn:aws:kms:ap-southeast-1:000000000000:key/11111111-1111-1111-1111-111111111111"
   }
 
   assert {
@@ -331,9 +332,11 @@ run "config_recording_off" {
         aws_s3_account_public_access_block.this.restrict_public_buckets,
       ]) &&
       toset(keys(aws_ebs_encryption_by_default.this)) == toset(["ap-southeast-1", "us-east-1"]) &&
-      alltrue([for e in aws_ebs_encryption_by_default.this : e.enabled])
+      alltrue([for e in aws_ebs_encryption_by_default.this : e.enabled]) &&
+      length(aws_ebs_default_kms_key.this) == 1 &&
+      aws_iam_role.forwarder.name == "svp-security-forwarder"
     )
-    error_message = "Without config_recording the service-linked role, S3 Block Public Access and EBS encryption by default must stay."
+    error_message = "Without config_recording the service-linked role, S3 Block Public Access, EBS encryption by default with its key and the forwarder role must stay."
   }
 
   # The Config events of these rules are CloudTrail API calls, recorded with or without a recorder.

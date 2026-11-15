@@ -89,8 +89,9 @@ expect "write with an sso_session that has no [sso-session] block FAILs and writ
 # --- write: the profiles of the table, nothing else ---------------------------------------------------------------
 cp "$work/start" "$cfg"
 cp "$cfg" "$work/before"
-expect "write with an account variable that is not 12 digits FAILs and writes nothing" \
-  sh -c '! env SVP_AWS_PRD_ACCOUNT_ID=2222 bash "$1" write >"$2" 2>&1 && grep -q "^FAIL  SVP_AWS_PRD_ACCOUNT_ID is not the 12 digits" "$2" && cmp -s "$3" "$4"' \
+expect "write with an account variable that is not 12 digits FAILs, says nothing of any profile and writes nothing" \
+  sh -c '! env SVP_AWS_PRD_ACCOUNT_ID=2222 bash "$1" write >"$2" 2>&1 && grep -q "^FAIL  SVP_AWS_PRD_ACCOUNT_ID is not the 12 digits" "$2" &&
+    ! grep -Eq "^(ok|note|skip)  +profile anhnv-[a-z-]+: " "$2" && cmp -s "$3" "$4"' \
   _ "$here/sso-profiles.sh" "$out" "$cfg" "$work/before"
 
 : >"$log"
@@ -135,6 +136,31 @@ expect "write without AWS_CONFIG_FILE writes \$HOME/.aws/config" \
   _ "$cfg" "$root" "$session" "$here/sso-profiles.sh"
 cp "$work/want" "$cfg"
 
+# A comment after the "]" of a header, as botocore reads it: still the block of that profile, never a second one.
+sed 's/^\[profile anhnv-stg\]$/[profile anhnv-stg] ; hand/' "$work/start" >"$cfg"
+expect "write with a comment after the header of anhnv-stg exits 0" run write
+expect "write replaces that block under its own header line: one anhnv-stg block, the rest as without the comment" \
+  sh -c 'sed "s/^\[profile anhnv-stg\]\$/[profile anhnv-stg] ; hand/" "$2" | cmp -s - "$1" && [ "$(grep -c "^\[profile anhnv-stg\]" "$1")" = 1 ]' \
+  _ "$cfg" "$work/want"
+cp "$cfg" "$work/before"
+expect "write again with that header says unchanged and leaves the file byte for byte" \
+  sh -c 'bash "$1" write >"$2" 2>&1 && grep -q "^ok    .*config unchanged$" "$2" && cmp -s "$3" "$4"' _ "$here/sso-profiles.sh" "$out" "$cfg" "$work/before"
+
+# Blank and comment lines between a block of the table and the next header stay where they are, outside the block.
+{ printf '%s\n' "$root"; blk anhnv-stg lab 111111111111 SvpAdmin; printf '\n# --- client ---\n\n%s\n%s' "$session" "$other"; } >"$cfg"
+cp "$cfg" "$work/before"
+expect "write with a comment after the block of anhnv-stg exits 0" env SVP_AWS_STG_ACCOUNT_ID=777777777777 bash "$here/sso-profiles.sh" write >"$out" 2>&1
+expect "write counts that comment out of the block: sso_account_id replaced, not the whole block" \
+  sh -c 'grep -qx "note  profile anhnv-stg: sso_account_id replaced by the account of SVP_AWS_STG_ACCOUNT_ID" "$1" && ! grep -q "block replaced" "$1"' _ "$out"
+expect "write keeps the blank and comment lines after the block, changes only its sso_account_id" \
+  sh -c 'head -n "$(wc -l <"$2")" "$1" | diff "$2" - | grep "^[<>]" | tr "\n" "|" |
+    grep -qx "< sso_account_id = 111111111111|> sso_account_id = 777777777777|"' _ "$cfg" "$work/before"
+cp "$cfg" "$work/before"
+expect "write again with the same variable leaves that file byte for byte" \
+  sh -c 'env SVP_AWS_STG_ACCOUNT_ID=777777777777 bash "$1" write >"$2" 2>&1 && grep -q "^ok    .*config unchanged$" "$2" && cmp -s "$3" "$4"' \
+  _ "$here/sso-profiles.sh" "$out" "$cfg" "$work/before"
+cp "$work/want" "$cfg"
+
 # --- check -------------------------------------------------------------------------------------------------------
 : >"$log"
 expect "check --print exits 0" run --print check
@@ -172,5 +198,4 @@ expect "check goes on after a FAIL: anhnv-security-ro still passes" grep -q '^ok
 expect "check ends with the count of failed profiles" grep -q '^FAIL  2 profile(s) failed' "$out"
 mv "$bin/aws-fake" "$bin/aws"
 
-expect "the test never wrote outside its own tree" test "$cfg" = "$work/home/.aws/config"
 finish

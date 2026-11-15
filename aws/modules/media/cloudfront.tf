@@ -62,8 +62,8 @@ data "aws_cloudfront_cache_policy" "caching_optimized" {
 
 # CORS is answered by CloudFront, not by the bucket: Origin is not in the cache key, so a copy cached for a request
 # without one (an <img>, curl) would reach a player that needs Access-Control-Allow-Origin without it. The Free plan
-# takes only managed policies; this one sends Access-Control-Allow-Origin: *, enough for public, immutable objects
-# that the player fetches without credentials.
+# takes only managed policies; this one sends Access-Control-Allow-Origin: *, enough for premium/ too: the player
+# fetches without credentials and a signed URL is its own credential, so * opens nothing more.
 data "aws_cloudfront_response_headers_policy" "simple_cors" {
   count = var.flat_rate_free ? 1 : 0
 

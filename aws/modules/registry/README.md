@@ -1,8 +1,9 @@
 # Module `registry`
 
-Registry ECR private của một account env (`svp-stg`, `svp-prd`), gọi từ root `aws/accounts/<env>` ([README](../../accounts/README.md)) nên sống
-qua `destroy` của buổi: repo phát hành, pull-through cache cho image bên thứ ba, quét image cache (Inspector hay quét cơ bản theo cờ `inspector_ecr`, mục [Quét](#quét)), IAM OIDC provider của GitHub Actions và các role
-CI chép bản phát hành vào registry. Thiết kế và lý do từng giá trị:
+Registry ECR private của một account env (`svp-stg`, `svp-prd`), gọi từ root `aws/accounts/<env>`
+([README](../../accounts/README.md)) nên sống qua `destroy` của buổi: repo phát hành, pull-through cache cho image bên
+thứ ba, quét image cache (Inspector hay quét cơ bản theo cờ `inspector_ecr`, mục [Quét](#quét)), IAM OIDC provider của
+GitHub Actions và các role CI chép bản phát hành vào registry. Thiết kế và lý do từng giá trị:
 [ADR-0062](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0062-ecr-registry-ci-oidc.md) và phụ lục của nó (số § dưới đây là § của
 ADR). Host registry (output `registry_host`) là khoá `ecrRegistry` của cluster values.
 
@@ -30,7 +31,8 @@ Kyverno của chart `svp-policy` đổi tham chiếu sang `<registry_host>/<pref
 - Tag `IMMUTABLE` (đạt ECR.2); mã hoá KMS bằng key `alias/svp-<env>-ecr` (§2).
 - **Không lifecycle policy:** bản phát hành chép theo digest, không tag, nên rule `untagged` hay `any` nào cũng chọn được image đang chạy hay
   đích rollback. ECR.3 FAILED ở repo này là chấp nhận có lý do; GC theo tập digest đang dùng là việc sau (§2).
-- Không vào filter quét của registry (Inspector hay quét cơ bản): CI quét trước khi đẩy, rescan hằng ngày, admission đòi `vuln` mới; ECR.1 FAILED ở repo này là chấp nhận (§10).
+- Không vào filter quét của registry (Inspector hay quét cơ bản): CI quét trước khi đẩy, rescan hằng ngày, admission đòi
+  `vuln` mới; ECR.1 FAILED ở repo này là chấp nhận (§10).
   trivy AWS-0030 được bỏ qua ngay trên resource với cùng lý do: cấu hình quét của registry, `ENHANCED` hay `BASIC`, chọn repo được quét thay
   cho thiết lập quét của từng repo (API cũ AWS đang bỏ).
 

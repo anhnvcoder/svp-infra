@@ -354,30 +354,33 @@ Bảng env của `lib.sh` (`env_table`) mỗi env một dòng và là nơi duy n
 | `tunnel` | cổng local của tunnel SSM tới endpoint API private; `-` khi endpoint public |
 | `teardown` | file của `aws/envs/<name>` nhấc các bảo vệ mà destroy cần; `-` khi không có |
 | `ladder` | `1` khi `measure.sh` chạy thang k6 sau smoke; `-` khi chỉ có smoke và seed |
-| `session` | `1` khi env có hai root của buổi, `aws/envs/<name>` và `aws/gitops/<name>` |
+| `session` | `1` khi env có ba root của buổi, `aws/accounts/<name>`, `aws/envs/<name>` và `aws/gitops/<name>` |
 
 `bootstrap.sh` mỏng có chủ đích: secret và GlitchTip là target `make` của repo code, Argo CD là của Terraform; script chỉ chạy chúng theo thứ
 tự, có kiểm account và có giới hạn cho mỗi lần chờ. `secrets` chạy sau `tf.sh <env> env apply` và trước root gitops (nguồn của các Secret
 trong cluster có trước Argo CD); `wait` chạy sau `tf.sh <env> gitops apply`.
 
-`tf.sh <env> env|gitops <thao tác>` chạy Terraform của hai root buổi; dòng `Usage` đầu file liệt kê đủ thao tác và cờ. Mọi thao tác kiểm
-account trước và đặt `TF_VAR_*` của root. Root env có thêm hai thao tác sửa state bằng tay, dùng khi khôi phục RDS thay chỗ (instance cũ đổi
-tên, bản khôi phục mang tên cũ, state vẫn trỏ instance cũ); mỗi thao tác ghi một mốc vào timeline của buổi:
+`tf.sh <env> env|gitops|account <thao tác>` chạy Terraform của ba root buổi (`env`, `gitops`, `account`); dòng `Usage`
+đầu file liệt kê đủ thao tác và cờ. Mọi thao tác kiểm account trước và đặt `TF_VAR_*` của root. Root env có thêm hai
+thao tác sửa state bằng tay, dùng khi khôi phục RDS thay chỗ (instance cũ đổi tên, bản khôi phục mang tên cũ, state
+vẫn trỏ instance cũ); mỗi thao tác ghi một mốc vào timeline của buổi:
 
 | Thao tác | Lệnh Terraform | Mốc timeline |
 | --- | --- | --- |
 | `tf.sh <env> env state-rm <địa chỉ>` | `terraform state rm <địa chỉ>` | `env-state-rm` |
 | `tf.sh <env> env import <địa chỉ> <id>` | `terraform import -input=false -var-file=<env>.tfvars <địa chỉ> <id>` | `env-import` |
 
-`tf.sh <env> account init|plan --open|plan --close|apply` chạy root `aws/accounts/<env>` trong buổi: `plan --open` plan với
-`-var session_open=true` (phần của cờ `session` của env trong `aws/paid-features.json`, như workspace AMG), `plan --close` với `false`,
-`apply` áp plan đã lưu và ghi mốc `account-open-applied` hay `account-close-applied`. `env plan` từ chối tới khi phần đó mở, `plan --close` tới
-khi root env đã destroy; env không có cờ `session` thì mọi lệnh `account` in `ok no session feature …` và không chạy gì.
+Địa chỉ đi nguyên một đối số (giữ `[` và `"` của khoá `for_each`). Root gitops và root account từ chối cả hai; không
+có thao tác state nào khác (`mv`, `pull`, `push`, `list`). Sau `import`, `tf.sh <env> env plan` không được thay
+(replace) hay xoá instance vừa nhập; nó vẫn sửa tại chỗ các thiết lập mà bản khôi phục không mang theo (tag,
+`copy_tags_to_snapshot`, monitoring, deletion protection, `skip_final_snapshot`, `delete_automated_backups`). Đọc plan
+rồi `tf.sh <env> env apply` để đưa chúng về như code.
 
-Địa chỉ đi nguyên một đối số (giữ `[` và `"` của khoá `for_each`). Root gitops từ chối cả hai; không có thao tác state nào khác (`mv`, `pull`,
-`push`, `list`). Sau `import`, `tf.sh <env> env plan` không được thay (replace) hay xoá instance vừa nhập; nó vẫn sửa tại chỗ các thiết lập
-mà bản khôi phục không mang theo (tag, `copy_tags_to_snapshot`, monitoring, deletion protection, `skip_final_snapshot`,
-`delete_automated_backups`). Đọc plan rồi `tf.sh <env> env apply` để đưa chúng về như code.
+`tf.sh <env> account init|plan --open|plan --close|apply` chạy root `aws/accounts/<env>` trong buổi: `plan --open`
+plan với `-var session_open=true` (phần của cờ `session` của env trong `aws/paid-features.json`, như workspace AMG),
+`plan --close` với `false`, `apply` áp plan đã lưu và ghi mốc `account-open-applied` hay `account-close-applied`. `env
+plan` từ chối tới khi phần đó mở, `plan --close` tới khi root env đã destroy; env không có cờ `session` thì mọi lệnh
+`account` in `ok no session feature …` và không chạy gì.
 
 **Luồng secret** của một env: root `aws/envs/<env>` (module `external-secrets`) tạo các entry `svp/<env>/*` của Secrets Manager. Mật khẩu
 Kafka và Valkey do chính apply đó sinh (ephemeral `random_password`, 32 chữ và số) và ghi bằng đối số write-only, không vào plan hay state,
@@ -413,7 +416,7 @@ sequenceDiagram
     Gate->>Gate: SVP_TF_PLAN_ENVS, fork, gốc không plan
     Gate->>Env: ma trận env (khác rỗng)
     Env-->>Learner: chờ duyệt
-    Learner->>Env: Approve sau khi đọc diff .github/, ci/, Makefile
+    Learner->>Env: Approve sau khi đọc toàn bộ diff của PR
     Env->>Plan: secret của environment, id-token: write
     Plan->>STS: AssumeRoleWithWebIdentity, token OIDC mới mỗi lệnh Terraform
     STS-->>Plan: phiên của svp-ci-terraform-plan
@@ -568,10 +571,11 @@ khác hiện "depends on usage". So với số đã ghi ở ADR:
 
 Các luồng của một buổi; tên tài nguyên khớp code (trong sơ đồ, `ENV` là `stg` hay `prd`), bước và lệnh ở runbook buổi.
 
-**Đường vào của người xem.** Web, API và media chỉ vào từ internet qua CloudFront, mỗi tên một distribution có web ACL riêng và cert ACM ở
-`us-east-1`; không load balancer nào internet-facing. Web và API đi qua VPC origin tới ALB internal ở tầng edge, rồi tới pod Envoy mà
-`TargetGroupBinding` của chart đăng ký vào target group; media đọc bucket qua OAC. Segment của video premium (`premium/*`) chỉ trả cho URL
-video-service ký bằng khoá của key group `svp-<env>-media`; `media/*`, `preview/*` công khai, mọi path khác cần chữ ký. Chi tiết từng chặng: README module
+**Đường vào của người xem.** Web, API và media chỉ vào từ internet qua CloudFront, mỗi tên một distribution có web ACL
+riêng và cert ACM ở `us-east-1`; không load balancer nào internet-facing. Web và API đi qua VPC origin tới ALB
+internal ở tầng edge, rồi tới pod Envoy mà `TargetGroupBinding` của chart đăng ký vào target group; media đọc bucket
+qua OAC. Segment của video premium (`premium/*`) chỉ trả cho URL video-service ký bằng khoá của key group
+`svp-<env>-media`; `media/*`, `preview/*` công khai, mọi path khác cần chữ ký. Chi tiết từng chặng: README module
 [`edge`](aws/modules/edge/README.md), [`media`](aws/modules/media/README.md).
 
 ```mermaid

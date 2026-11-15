@@ -211,7 +211,7 @@ cmd_init() {
   need_file aws/backend.hcl "$me backend mgmt first"
   check_account
   while read -r root cfg; do
-    tf_ "$root" init -input=false -reconfigure "-backend-config=$cfg" >&2 ||
+    tf_ "$root" init -input=false -reconfigure "-backend-config=$cfg" </dev/null >&2 ||
       fail "terraform init -reconfigure of $root (the roots before it are done; run $me init again once fixed)"
     ok "terraform init -reconfigure of $root with $cfg"
   done <<<"$init_roots"

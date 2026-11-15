@@ -117,6 +117,7 @@ Dựng:
 ```sh
 cp example.auto.tfvars.example prd.auto.tfvars          # rồi sửa bốn giá trị
 AWS_PROFILE=anhnv-prd terraform init -reconfigure -backend-config=../../backend-prd.hcl -backend-config=key=aws/prd/terraform.tfstate
+export SVP_SESSION_DIR="$(git rev-parse --show-toplevel)/.session/$(date -u +%Y%m%dT%H%M%SZ)"  # thư mục buổi đang dở
 ../../scripts/media-signing-key.sh prd new a     # plan reads slot a's public key from media-signing.auto.tfvars.json
 AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
   TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform plan -var-file=prd.tfvars -out=prd.tfplan
@@ -125,9 +126,9 @@ AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" TF_VAR_log_arc
 ```
 
 Sau `apply`: xác nhận email của topic `svp-prd-alarms`, mở tunnel và kubeconfig (mục trên); `AWS_PROFILE=anhnv-prd terraform output -raw rds_master_user_secret_arn` cho script buổi.
-Tiếp theo: ghi khoá ký của ô `a` vào entry `svp/prd/media-signing` (`aws/scripts/media-signing-key.sh prd activate a`,
-mục [Khoá ký media](#khoá-ký-media)), giá trị các secret khác (`AWS_PROFILE=anhnv-prd make eks-secrets CONTEXT=svp-prd`
-ở repo code), rồi apply root `aws/gitops/prd` khi tunnel đang mở.
+Tiếp theo: ghi khoá ký của ô `a` vào entry `svp/prd/media-signing` (`aws/scripts/media-signing-key.sh prd activate a`
+với cùng `SVP_SESSION_DIR`, mục [Khoá ký media](#khoá-ký-media)), giá trị các secret khác (`AWS_PROFILE=anhnv-prd make
+eks-secrets CONTEXT=svp-prd` ở repo code), rồi apply root `aws/gitops/prd` khi tunnel đang mở.
 
 ## Gỡ
 

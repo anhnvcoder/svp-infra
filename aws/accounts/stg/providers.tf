@@ -10,7 +10,8 @@ provider "aws" {
       Project   = "svp"
       Env       = local.env
       ManagedBy = "terraform"
-      # Session sweeps keep everything tagged Stack=baseline: it stays between sessions.
+      # Session sweeps keep everything tagged Stack=baseline: it stays between sessions, except what a `session` flag
+      # of paid-features.json makes (it carries the tag too, but sweep.sh reports it as left over).
       Stack = "baseline"
     }
   }
