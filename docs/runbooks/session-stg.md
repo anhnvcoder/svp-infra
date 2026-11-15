@@ -536,6 +536,9 @@ AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n argocd get applications.argop
 
 sửa xong chạy lại (chạy lại được). Muốn bỏ buổi ở đây: sang bước 20; `pre-destroy.sh` chạy được cả khi Argo CD chưa được cài.
 
+Cảnh báo `PublicUptimeBudgetBurn` (SLO `public-uptime`) cháy trong giờ đầu sau khi dựng cluster mới là do probe lỗi
+lúc dựng (Probe chạy từ wave 5, trước service wave 7): chờ, không điều tra.
+
 ### 16. Đo
 
 ```sh
@@ -1093,10 +1096,9 @@ AWS_PROFILE=anhnv-stg aws eks list-pod-identity-associations --cluster-name svp-
   --query 'associations[].[namespace,serviceAccount]' --output text | sort
 ```
 
-Mong mọi pod `Running` và `READY` đủ; dòng `<N> ExternalSecrets, not Ready: none`; association có năm danh tính của
-module `eks` (`svp-obs/otel-collector`, `svp-obs/kps-prometheus`, `svp-obs/ack-prometheusservice-controller`,
-`kyverno/kyverno-admission-controller`, `argo-rollouts/argo-rollouts`) cạnh các danh tính có sẵn. ExternalSecret không Ready hay pod Kyverno
-không Ready: NetworkPolicy chưa mở 443 tới CIDR của VPC (value `awsEndpointCidrs`); dán output và
+Mong mọi pod `Running` và `READY` đủ; dòng `<N> ExternalSecrets, not Ready: none`; association có đủ danh tính của
+module `eks` (`local.pod_identity_roles` ở `aws/modules/eks/iam.tf`) cạnh các danh tính có sẵn. ExternalSecret không
+Ready hay pod Kyverno không Ready: NetworkPolicy chưa mở 443 tới CIDR của VPC (value `awsEndpointCidrs`); dán output và
 `AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n external-secrets logs deploy/external-secrets --tail=30`.
 
 (c) Telemetry (ADR-0063): metric ở AMP (agent và Collector), log ở `/svp/stg/otel`, span ở `aws/spans`, series service graph do Collector

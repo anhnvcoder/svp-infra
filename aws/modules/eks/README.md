@@ -3,9 +3,9 @@
 Module nội bộ mỏng bọc [`terraform-aws-modules/eks/aws`](https://registry.terraform.io/modules/terraform-aws-modules/eks/aws/21.29.0)
 **21.29.0** (ghim chính xác): control plane, nhóm node hệ thống (managed node group Graviton on-demand), addon EKS, security group, IAM của
 cluster và node; submodule `karpenter` cùng version tạo IAM, hàng đợi interruption và rule EventBridge cho Karpenter; module nội bộ thêm role
-IAM và association EKS Pod Identity cho hai controller nền tảng (Load Balancer Controller, EBS CSI driver) và năm workload nền tảng
-(Collector, Prometheus agent, ACK, Kyverno, Argo Rollouts), cùng quyền pull-through cache của role node; không controller nào của cluster
-ghi DNS. Mức stg và prd chỉ khác ở biến (bảng dưới), một bộ code. Thiết kế node, Karpenter và version ghim: [ADR-0056](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0056-eks-platform-ha.md).
+IAM và association EKS Pod Identity cho hai controller nền tảng (Load Balancer Controller, EBS CSI driver) và sáu workload nền tảng
+(Collector, Prometheus agent, ACK, Kyverno, Argo Rollouts, OpenCost), cùng quyền pull-through cache của role node; không controller
+nào của cluster ghi DNS. Mức stg và prd chỉ khác ở biến (bảng dưới), một bộ code. Thiết kế node, Karpenter và version ghim: [ADR-0056](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0056-eks-platform-ha.md).
 
 Không có provider nào trong module (kể cả provider Kubernetes hay Helm: StorageClass `gp3` mặc định do chart `svp-cluster` render, controller
 do Argo CD cài): root gọi nó (`aws/envs/<env>`) đặt provider, `default_tags` và ghim version provider (`~> 6.59`) trong lock file. Module không
@@ -87,6 +87,7 @@ source theo tên suy từ `svp-<env>`, không ghi cứng ARN như ví dụ.
 | [aws_iam_policy_document.karpenter_trust](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
 | [aws_iam_policy_document.kyverno_admission](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
 | [aws_iam_policy_document.node_ecr_cache](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
+| [aws_iam_policy_document.opencost](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
 | [aws_iam_policy_document.otel_collector](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
 | [aws_iam_policy_document.pod_identity_trust](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
 | [aws_iam_policy_document.prometheus_agent](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
@@ -97,7 +98,7 @@ source theo tên suy từ `svp-<env>`, không ghi cứng ARN như ví dụ.
 
 | Name | Description | Type | Default | Required |
 | ---- | ----------- | ---- | ------- | :------: |
-| amp\_workspace\_arn | ARN of the Amazon Managed Service for Prometheus workspace of the env (output amp\_workspace\_arn of the observability module): the Collector and the Prometheus agent write to it, Argo Rollouts queries it, the ACK controller manages its rules and alert manager definition. | `string` | n/a | yes |
+| amp\_workspace\_arn | ARN of the Amazon Managed Service for Prometheus workspace of the env (output amp\_workspace\_arn of the observability module): the Collector and the Prometheus agent write to it, Argo Rollouts and OpenCost query it, the ACK controller manages its rules and alert manager definition. | `string` | n/a | yes |
 | control\_plane\_log\_retention\_days | Days CloudWatch keeps the control plane logs when control\_plane\_log\_types is not empty. | `number` | `1` | no |
 | control\_plane\_log\_types | Control plane logs sent to CloudWatch, e.g. ["api", "audit"]. Empty (the default) sends none and creates no log group: ingestion is billed per GB. | `list(string)` | `[]` | no |
 | ecr\_cache\_prefixes | Repository prefixes of the pull through cache rules of the env's registry (output cache\_prefixes of the registry module). Nodes may import images and create repositories under <prefix>/* only. | `list(string)` | n/a | yes |
@@ -213,8 +214,9 @@ API, gồm Secret, bằng key do AWS sở hữu theo mặc định), OIDC provid
 | ACK prometheusservice controller | `svp-obs` / `ack-prometheusservice-controller` | `<name>-ack-prometheusservice` | `aps:Create`, `Put`, `Describe`, `DeleteRuleGroupsNamespace`, `TagResource`, `UntagResource`, `ListTagsForResource` trên `rulegroupsnamespace/<ws>/*`; `aps:Create`, `Put`, `Describe`, `DeleteAlertManagerDefinition`, `ListRuleGroupsNamespaces` trên workspace |
 | Kyverno admission controller | `kyverno` / `kyverno-admission-controller` | `<name>-kyverno-admission` | `ecr:GetAuthorizationToken` trên `*`; `ecr:BatchGetImage`, `GetDownloadUrlForLayer` trên `release_repository_arns`; không KMS |
 | Argo Rollouts | `argo-rollouts` / `argo-rollouts` | `<name>-argo-rollouts` | `aps:QueryMetrics` trên workspace (phân tích canary chỉ chạy truy vấn tức thời) |
+| OpenCost | `svp-obs` / `opencost` | `<name>-opencost` | `aps:QueryMetrics`, `GetSeries`, `GetLabels`, `GetMetricMetadata` trên workspace (bốn action đọc của managed policy `AmazonPrometheusQueryAccess`, chỉ một workspace); không quyền giá, EC2, S3: giá on-demand lấy từ bảng giá công khai của AWS, không cần credential |
 
-Năm role cuối mang policy inline cùng tên role (`local.pod_identity_roles` ở `iam.tf`), association ở `pod-identity.tf`. Không action
+Sáu role cuối mang policy inline cùng tên role (`local.pod_identity_roles` ở `iam.tf`), association ở `pod-identity.tf`. Không action
 `*`; resource `*` chỉ cho `ecr:GetAuthorizationToken` và `xray:PutTraceSegments`, hai action không có resource type theo Service
 Authorization Reference. Không role nào trong bảng có quyền KMS của ECR: ECR giải mã repo mã hoá bằng key của khách hàng qua grant của
 chính nó.

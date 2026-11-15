@@ -196,7 +196,7 @@ thứ còn đi qua NAT ở §6 của phụ lục đó; `mediaconvert` theo §10 
 | `ecr.api`, `ecr.dkr` | kubelet, containerd, Kyverno |
 | `ec2` | Karpenter, VPC CNI, EBS CSI, AWS Load Balancer Controller |
 | `elasticloadbalancing` | AWS Load Balancer Controller |
-| `aps-workspaces` | Prometheus agent, Argo Rollouts, Collector |
+| `aps-workspaces` | Prometheus agent, Argo Rollouts, Collector, OpenCost |
 | `aps` | ACK |
 | `xray` | Collector |
 | `sqs` | Karpenter; `media-worker mediaconvert` (hàng đợi sự kiện transcode) |

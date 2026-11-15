@@ -251,9 +251,9 @@ run "no_dns_writer" {
   assert {
     condition = toset(keys(local.pod_identity)) == toset([
       "aws_load_balancer_controller", "ebs_csi", "otel_collector", "prometheus_agent", "ack_prometheusservice", "kyverno_admission",
-      "argo_rollouts",
+      "argo_rollouts", "opencost",
     ])
-    error_message = "Only the AWS Load Balancer Controller, the EBS CSI driver and the five roles of pod_identity_roles get a Pod Identity role from this module."
+    error_message = "Only the AWS Load Balancer Controller, the EBS CSI driver and the six roles of pod_identity_roles get a Pod Identity role from this module."
   }
 }
 
@@ -269,6 +269,7 @@ run "pod_identity_trust" {
       ack_prometheusservice = ["svp-obs", "ack-prometheusservice-controller"]
       kyverno_admission     = ["kyverno", "kyverno-admission-controller"]
       argo_rollouts         = ["argo-rollouts", "argo-rollouts"]
+      opencost              = ["svp-obs", "opencost"]
       } : length(data.aws_iam_policy_document.pod_identity_trust[k].statement[0].condition) == 3 && alltrue([
         for c in data.aws_iam_policy_document.pod_identity_trust[k].statement[0].condition :
         c.test == "StringEquals" && toset(c.values) == toset(lookup({
@@ -278,7 +279,7 @@ run "pod_identity_trust" {
         }, c.variable, []))
       ])
     ])
-    error_message = "Each workload role must trust only this cluster and its namespace/ServiceAccount: svp-obs/otel-collector, svp-obs/kps-prometheus, svp-obs/ack-prometheusservice-controller, kyverno/kyverno-admission-controller, argo-rollouts/argo-rollouts."
+    error_message = "Each workload role must trust only this cluster and its namespace/ServiceAccount: svp-obs/otel-collector, svp-obs/kps-prometheus, svp-obs/ack-prometheusservice-controller, kyverno/kyverno-admission-controller, argo-rollouts/argo-rollouts, svp-obs/opencost."
   }
 
   assert {
@@ -288,8 +289,9 @@ run "pod_identity_trust" {
       ack_prometheusservice = ["svp-obs", "ack-prometheusservice-controller"]
       kyverno_admission     = ["kyverno", "kyverno-admission-controller"]
       argo_rollouts         = ["argo-rollouts", "argo-rollouts"]
+      opencost              = ["svp-obs", "opencost"]
       } : aws_eks_pod_identity_association.pod_identity[k].cluster_name == "svp-stg" && aws_eks_pod_identity_association.pod_identity[k].namespace == sa[0] && aws_eks_pod_identity_association.pod_identity[k].service_account == sa[1]
-    ]) && length(aws_eks_pod_identity_association.pod_identity) == 5
+    ]) && length(aws_eks_pod_identity_association.pod_identity) == 6
     error_message = "Each workload role must have exactly one Pod Identity association, with the namespace and ServiceAccount its role trusts."
   }
 
@@ -302,8 +304,9 @@ run "pod_identity_trust" {
       ack_prometheusservice = "svp-stg-ack-prometheusservice"
       kyverno_admission     = "svp-stg-kyverno-admission"
       argo_rollouts         = "svp-stg-argo-rollouts"
+      opencost              = "svp-stg-opencost"
     }
-    error_message = "The workload roles must be named <name>-otel-collector, -prometheus-agent, -ack-prometheusservice, -kyverno-admission and -argo-rollouts."
+    error_message = "The workload roles must be named <name>-otel-collector, -prometheus-agent, -ack-prometheusservice, -kyverno-admission, -argo-rollouts and -opencost."
   }
 }
 
@@ -391,7 +394,8 @@ run "pod_identity_permissions" {
       for d in [
         data.aws_iam_policy_document.otel_collector, data.aws_iam_policy_document.prometheus_agent,
         data.aws_iam_policy_document.ack_prometheusservice, data.aws_iam_policy_document.kyverno_admission,
-        data.aws_iam_policy_document.argo_rollouts, data.aws_iam_policy_document.node_ecr_cache,
+        data.aws_iam_policy_document.argo_rollouts, data.aws_iam_policy_document.opencost,
+        data.aws_iam_policy_document.node_ecr_cache,
         ] : [for s in d.statement : [
           for a in s.actions : a != "*" && !endswith(a, ":*") && (!contains(s.resources, "*") || contains(["ecr:GetAuthorizationToken", "xray:PutTraceSegments"], a))
       ]]

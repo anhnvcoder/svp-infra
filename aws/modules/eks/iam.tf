@@ -74,7 +74,7 @@ resource "aws_iam_role_policy_attachment" "ebs_csi" {
 }
 
 ################################################################################
-# Telemetry, alert rules, image verification and canary analysis
+# Telemetry, alert rules, image verification, canary analysis and cost allocation
 ################################################################################
 
 locals {
@@ -86,6 +86,7 @@ locals {
     ack_prometheusservice = { role = "ack-prometheusservice", description = "ACK prometheusservice controller", policy = data.aws_iam_policy_document.ack_prometheusservice.json }
     kyverno_admission     = { role = "kyverno-admission", description = "Kyverno admission controller", policy = data.aws_iam_policy_document.kyverno_admission.json }
     argo_rollouts         = { role = "argo-rollouts", description = "Argo Rollouts controller", policy = data.aws_iam_policy_document.argo_rollouts.json }
+    opencost              = { role = "opencost", description = "OpenCost", policy = data.aws_iam_policy_document.opencost.json }
   }
 
   rule_groups_namespaces_arn = "${replace(var.amp_workspace_arn, ":workspace/", ":rulegroupsnamespace/")}/*"
@@ -186,6 +187,16 @@ data "aws_iam_policy_document" "argo_rollouts" {
   statement {
     sid       = "QueryMetrics"
     actions   = ["aps:QueryMetrics"]
+    resources = [var.amp_workspace_arn]
+  }
+}
+
+# The read actions of the AWS managed policy AmazonPrometheusQueryAccess, on this one workspace: OpenCost queries the
+# allocation and node metrics there. Prices come from the public AWS price list, which takes no credential.
+data "aws_iam_policy_document" "opencost" {
+  statement {
+    sid       = "QueryMetrics"
+    actions   = ["aps:QueryMetrics", "aps:GetSeries", "aps:GetLabels", "aps:GetMetricMetadata"]
     resources = [var.amp_workspace_arn]
   }
 }

@@ -290,6 +290,9 @@ như `make eks-secrets` đọc). Lệnh `kubectl` tay vào prd ghi profile và c
 AWS_PROFILE=anhnv-prd kubectl --context svp-prd -n argocd get applications.argoproj.io
 ```
 
+Cảnh báo `PublicUptimeBudgetBurn` (SLO `public-uptime`) cháy trong giờ đầu sau khi dựng cluster mới là do probe lỗi
+lúc dựng (Probe chạy từ wave 5, trước service wave 7): chờ, không điều tra.
+
 ## Bước 16: smoke, edge, commit status
 
 `measure.sh prd` chỉ chạy smoke (`make eks-smoke CONTEXT=svp-prd DOMAIN=<domain>`), không seed, không thang k6 (số đo của prd là các diễn tập

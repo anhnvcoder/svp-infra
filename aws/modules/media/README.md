@@ -159,6 +159,16 @@ flowchart LR
   `media/<video_id>/<version>/<attempt>/index_720p.m3u8` của bucket `media` (segment nằm phẳng cùng thư mục); master là `…/media/<video_id>/<version>/master.m3u8`.
   Không có đoạn `/media` thêm như đường path-style của k3d.
 
+## Object probe uptime
+
+`uptime-probe.tf` ghi object `media/uptime-probe.txt` (nội dung `ok` và một dòng mới, `Content-Type: text/plain`,
+`Cache-Control: no-store`) vào bucket `media`. Blackbox exporter của cluster tải nó qua
+`https://media.<domain>/media/uptime-probe.txt`, cùng đường với HLS: DNS công khai, CloudFront, WAF, origin access
+control, policy bucket (`media/*`). Object theo mã hoá mặc định SSE-S3 của bucket; không policy bucket hay SCP nào đòi
+header mã hoá khi `PutObject`. Cache policy `Managed-CachingOptimized` có TTL tối thiểu 1 giây, nên với `no-store` edge
+giữ bản sao tối đa 1 giây: mỗi lượt probe (cách nhau lâu hơn) tới tận bucket, origin hỏng thì probe đỏ ngay. Không rule
+lifecycle nào xoá object dưới `media/`. Object do Terraform quản, nên `destroy` xoá nó trước bucket.
+
 ## Policy IAM của hai service
 
 Policy của video-service dịch `deploy/s3/video-service-policy.json` của repo code sang ARN bucket thật, **thêm một quyền** mà store local
@@ -287,6 +297,7 @@ Role `<name_prefix>-uploads-malware-protection` theo đúng mẫu của
 | [aws_s3_bucket_server_side_encryption_configuration.logs](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket_server_side_encryption_configuration) | resource |
 | [aws_s3_bucket_server_side_encryption_configuration.this](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket_server_side_encryption_configuration) | resource |
 | [aws_s3_bucket_versioning.this](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket_versioning) | resource |
+| [aws_s3_object.uptime_probe](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_object) | resource |
 | [aws_cloudfront_cache_policy.caching_optimized](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/cloudfront_cache_policy) | data source |
 | [aws_cloudfront_response_headers_policy.simple_cors](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/cloudfront_response_headers_policy) | data source |
 | [aws_iam_policy_document.logs](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |

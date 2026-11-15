@@ -32,6 +32,10 @@ locals {
       namespace       = "argo-rollouts"
       service_account = "argo-rollouts"
     }
+    opencost = {
+      namespace       = "svp-obs"
+      service_account = "opencost"
+    }
   }
 }
 
