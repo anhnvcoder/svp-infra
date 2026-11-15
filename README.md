@@ -45,6 +45,8 @@ make check DIRS=aws/modules/network   # chỉ các phép Terraform của một t
 make help                             # liệt kê target
 ```
 
+Mục lục mọi runbook, các bước còn giữ tay, script và target dựng, và thứ tự dựng một lần ở
+[`docs/runbooks/README.md`](docs/runbooks/README.md).
 Dựng, đo và gỡ một env theo runbook [`docs/runbooks/session-stg.md`](docs/runbooks/session-stg.md) hay
 [`docs/runbooks/session-prd.md`](docs/runbooks/session-prd.md) (mục [Plan và apply](#plan-và-apply)).
 Dựng mỗi buổi, xoay và thay khi lộ khoá ký URL media premium theo runbook
@@ -154,7 +156,8 @@ Chạy từ gốc repo, không cần credential AWS, cần Docker và mạng (re
 | `make validate` | mỗi thư mục: `terraform init -backend=false -input=false`, rồi `terraform validate`; provider và module nằm ở thư mục tạm (`TF_DATA_DIR`), nên `.terraform/` của người học đã `init` với backend S3 không bị đọc hay ghi |
 | `make tflint` | mỗi thư mục: `tflint --init`, rồi `tflint` với `.tflint.hcl` |
 | `make trivy` | `trivy config` mỗi thư mục; HIGH và CRITICAL làm đỏ |
-| `make shellcheck` | shellcheck trên mọi `*.sh` (bản image, `--network none`; máy không cài shellcheck) |
+| `make shellcheck [SH='<file …>']` | shellcheck trên mọi `*.sh` (bản image, `--network none`; máy không cài shellcheck); `SH` chỉ kiểm các file đó, cho lúc sửa một script |
+| `make session-test` | tự kiểm script của `aws/scripts` với lệnh giả trên PATH, không account, cluster hay mạng: `session-test.sh` (mọi bước của buổi, khớp bảng bước của runbook buổi với `session.sh --print`), rồi mỗi `*-test.sh` còn lại; mỗi file lỗi một dòng `FAIL: <file>` |
 | `make zizmor` | lint bảo mật workflow bằng zizmor (`--persona=regular`), mọi finding làm đỏ; có `GH_TOKEN` thì chạy thêm audit online (impostor commit, action có lỗ hổng), không thì offline; `ZIZMOR_FORMAT=github` in annotation |
 | `make docs-check [DOCS='<file hay glob>']` | markdownlint-cli2 theo `.markdownlint.yaml`, rồi lychee `--offline --include-fragments` (link tương đối và anchor heading; link ra ngoài không kiểm), container `--network none`; mặc định mọi `.md` git theo dõi và file mới chưa theo dõi, trừ `.claude/` (cấu hình agent, không phải tài liệu của repo) |
 | `make lock [DIRS=<root>]` | `init -backend=false` rồi `terraform providers lock` cho ba nền tảng; module bị bỏ qua |
@@ -319,15 +322,24 @@ của account thành viên đọc `aws/backend-<env>.hcl` (sinh từ output `bac
 
 **Profile AWS không nằm trong code** (khuyến nghị của HashiCorp và AWS: thông tin đăng nhập là của môi trường chạy, không của cấu hình; CI
 cần credential thì dùng OIDC, máy khác đặt tên profile khác). Code chỉ chặn nhầm account bằng `allowed_account_ids = [var.account_id]`.
-Vì mỗi root thuộc một account, không đặt một `AWS_PROFILE` hay `TF_VAR_account_id` chung cho cả thư mục (`.envrc` của direnv, `~/.zshrc`):
-profile và account ghi trong từng lệnh, script buổi lấy chúng từ bảng env của `aws/scripts/lib.sh`.
+Vì mỗi root thuộc một account, không đặt một `TF_VAR_account_id` chung cho cả thư mục, và `AWS_PROFILE` chung chỉ như mặc định cá nhân của
+lệnh tay ở root management: `.envrc` của [direnv](https://direnv.net/) ở gốc repo (file cá nhân, git bỏ qua, không commit) đặt
+`AWS_PROFILE=anhnv-sso` và `AWS_REGION=ap-southeast-1`. Luật không đổi: lệnh viết sẵn và script vẫn ghi profile, `--region` trong lệnh
+(ghi đè mặc định của direnv), lệnh tay ở account thành viên phải ghi profile, và `allowed_account_ids = [var.account_id]` chặn nhầm account.
+Script buổi lấy profile và account từ bảng env của `aws/scripts/lib.sh`.
 
-**Script buổi** (`aws/scripts/`) dùng chung `lib.sh` và chạy từ terminal của máy Mac (bash 3.2 là đủ); các bước theo thứ tự ở runbook
-[`session-stg.md`](docs/runbooks/session-stg.md) và [`session-prd.md`](docs/runbooks/session-prd.md). Mỗi script nhận `--print` làm đối số đầu
-để in, theo thứ tự, mọi lệnh nó sẽ chạy rồi không chạy lệnh nào: không gọi `aws`, `kubectl`, `helm`, `terraform`, `make`, `git`, `nc` hay
-`dig`, không đọc gì từ account và không ghi gì. Mọi lệnh chạm AWS mang profile và region ngay trong lệnh (`AWS_PROFILE=anhnv-stg ... --region
-ap-southeast-1`), không qua biến shell mà người đọc phải tra. Mỗi bước in một dòng: `ok`, `FAIL` (script dừng), `note` hay `skip`. Không giá
-trị bí mật nào được in hay ghi vào file.
+**Script của `aws/scripts/`** gồm hai nhóm, dùng chung `lib.sh`, chạy từ terminal của máy Mac (bash 3.2 là đủ). Script buổi
+chạy theo thứ tự ở runbook [`session-stg.md`](docs/runbooks/session-stg.md) và
+[`session-prd.md`](docs/runbooks/session-prd.md). Script dựng thay lệnh gõ tay của các runbook dựng một lần
+(`sso-profiles.sh`, `accounts.sh`, `platform-member.sh`, `tfvars.sh`, `verify.sh`, `preflight.sh`, `cache-secrets.sh`,
+`grafana-tokens.sh`); bảng việc và runbook dùng chúng ở [`docs/runbooks/README.md`](docs/runbooks/README.md). `profiles.sh`
+(bảng profile của các account ngoài env của buổi, nạp sau `lib.sh`) và `testlib.sh` (bộ chung của các `*-test.sh`) là thư
+viện dùng chung, không chạy riêng. Mỗi script nhận `--print` làm đối số đầu để in, theo thứ tự, mọi lệnh nó sẽ chạy rồi không
+chạy lệnh nào: không gọi `aws`, `kubectl`, `helm`, `terraform`, `make`, `git`, `nc` hay `dig`, không đọc gì từ account và
+không ghi gì. Mọi lệnh chạm AWS mang profile và region ngay trong lệnh (`AWS_PROFILE=anhnv-stg ... --region ap-southeast-1`),
+không qua biến shell mà người đọc phải tra. Mỗi bước in một dòng: `ok`, `FAIL` (script dừng), `note` hay `skip`. Không giá
+trị bí mật nào được in hay ghi vào file. Mỗi script `<tên>.sh` có test `<tên>-test.sh` cạnh nó, chạy với `aws`, `terraform`,
+`gh` giả; `make session-test` chạy tất cả.
 
 Bảng env của `lib.sh` (`env_table`) mỗi env một dòng và là nơi duy nhất các env khác nhau: không script nào rẽ nhánh theo tên env, script
 đọc các trường của dòng:
@@ -335,7 +347,7 @@ Bảng env của `lib.sh` (`env_table`) mỗi env một dòng và là nơi duy n
 | Trường | Nghĩa |
 | --- | --- |
 | `name` | đối số của script; cluster, kubectl context và các root Terraform mang tên này |
-| `profile` | AWS profile (IAM Identity Center) của account của env, người học tạo bằng `aws configure sso` |
+| `profile` | AWS profile (IAM Identity Center) của account của env, người học ghi bằng `aws/scripts/sso-profiles.sh write` |
 | `account` | biến chứa 12 số của account đó, export trong terminal của buổi, không bao giờ ghi vào file |
 | `zone` | `1` khi account có hosted zone, tên là `zone_name` của `aws/accounts/<name>/<name>.auto.tfvars` (`env_zone`); `-` khi không có |
 | `kept` | tag `Stack` của thứ ở lại account giữa các buổi (`sweep.sh`), cách nhau bằng dấu phẩy |
@@ -463,11 +475,26 @@ soát duy nhất giữa code đó và account.
 2. PR của Renovate (nâng provider, module, lock dưới `aws/**`): đọc changelog của bản mới trước khi duyệt, vì provider mới chạy với
    credential của role; `init -lockfile=readonly` chỉ nhận provider khớp hash của lock file trong PR. Thấy thay đổi do nâng provider là giá
    trị chính của plan trên PR này.
-3. Mở lượt chờ (`gh run list -R anhnvcoder/svp-infra --workflow plan.yml --status waiting`, rồi
-   `gh run view <run-id> -R anhnvcoder/svp-infra --web`), chọn **Review deployments**, tick `terraform-plan`, **Approve and deploy**.
+3. Duyệt lượt chờ, bằng trang hay bằng `gh api`:
+   - Trang: `gh run list -R anhnvcoder/svp-infra --workflow plan.yml --status waiting`, rồi
+     `gh run view <run-id> -R anhnvcoder/svp-infra --web`, chọn **Review deployments**, tick `terraform-plan`, **Approve and deploy**.
+   - `gh api`
+     ([Review pending deployments](https://docs.github.com/en/rest/actions/workflow-runs#review-pending-deployments-for-a-workflow-run)):
 
-**Lượt chờ của PR đã đóng** không tự hết: mở lượt như bước 3, **Review deployments**, **Reject**. Không Reject thì GitHub huỷ lượt sau 30
-ngày; cổng PR không bị ảnh hưởng. Push mới vào PR huỷ lượt cũ, cả lượt đang chờ duyệt (`concurrency` theo số PR).
+     ```sh
+     gh api repos/anhnvcoder/svp-infra/actions/runs/<run-id>/pending_deployments \
+       --jq '.[] | {id: .environment.id, name: .environment.name, can: .current_user_can_approve}'
+     gh api -X POST repos/anhnvcoder/svp-infra/actions/runs/<run-id>/pending_deployments \
+       -F 'environment_ids[]=<id của terraform-plan>' -f state=approved -f comment='diff read'
+     ```
+
+     Lệnh đầu mong một dòng `terraform-plan` với `"can":true`. `gh` không có lệnh con cho việc duyệt, nên đường này là REST.
+
+Duyệt giữ tay có chủ đích: lượt duyệt là cổng người đọc diff trước khi code của PR chạy với role, script tự duyệt sẽ bỏ cổng đó.
+
+**Lượt chờ của PR đã đóng** không tự hết: mở lượt như bước 3, **Review deployments**, **Reject**; hay lệnh `POST` ở trên với
+`-f state=rejected -f comment='PR closed'`. Không Reject thì GitHub huỷ lượt sau 30 ngày; cổng PR không bị ảnh hưởng. Push mới vào PR huỷ
+lượt cũ, cả lượt đang chờ duyệt (`concurrency` theo số PR).
 
 **Bật plan cho một env:** sau khi role plan của env đã apply (root `aws/accounts/<env>`), đặt secret của environment rồi thêm env vào
 `terraform_plan_envs` theo mục [Environment `terraform-plan`](docs/runbooks/github-setup.md#environment-terraform-plan) của runbook
@@ -532,7 +559,9 @@ khác hiện "depends on usage". So với số đã ghi ở ADR:
 - Thứ không do Terraform tạo (node của Karpenter, volume của PVC, load balancer của controller trong cluster) không có trong ước lượng.
 - Cả hai cây dùng `infracost.yml` và `infracost-usage.yml` của PR: chênh chỉ do code đổi. PR chỉ đổi giả định mức dùng có tổng mới ở bảng,
   chênh bằng 0. PR thêm project cho root chưa có ở base thì breakdown của cây base đỏ.
-- `make infracost BASE=<cây base>` trên máy (cần `INFRACOST_API_KEY` trong terminal, thiếu thì từ chối) đọc cả `*.auto.tfvars` có trong
+- `make infracost BASE=<cây base>` trên máy cần `INFRACOST_API_KEY`, thiếu thì từ chối. Khoá lấy từ CLI Infracost đã `auth login` (mục
+  [Khoá Infracost](docs/runbooks/github-setup.md#khoá-infracost)), chỉ cho một lệnh, không ghi vào file:
+  `INFRACOST_API_KEY="$(infracost configure get api_key)" make infracost BASE=<cây base>`. Lệnh đọc cả `*.auto.tfvars` có trong
   thư mục root, vì Infracost nạp chúng như Terraform: số khác của CI. Image chỉ có bản `linux/amd64`, Mac chạy qua giả lập.
 
 ## Luồng vận hành

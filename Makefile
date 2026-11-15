@@ -78,7 +78,8 @@ IS_MODULE = case "/$$d/" in (*/modules/*) true;; (*) false;; esac
 .DEFAULT_GOAL := help
 
 .PHONY: help check fmt-check fmt validate tflint tfdocs tfdocs-check trivy shellcheck zizmor docs-check session-test test-guard test lock \
-	github-app-test github-check github-app github-app-key ci-plan ci-plan-test infracost infracost-comment infracost-test
+	github-app-test github-check github-app github-app-key github-settings github-secrets infracost-key github-tfvars \
+	github-plan github-apply ci-plan ci-plan-test infracost infracost-comment infracost-test
 
 help: ## List the targets
 	@grep -hE '^[a-zA-Z0-9_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-11s %s\n", $$1, $$2}'
@@ -157,8 +158,8 @@ trivy: ## trivy config on each checked directory (HIGH and CRITICAL fail; a root
 	    --ignorefile .trivyignore.yaml --severity HIGH,CRITICAL --exit-code 1 "$$@" "$$d" || { echo "FAIL: trivy $$d" >&2; exit 1; }; \
 	done
 
-shellcheck: ## shellcheck on every *.sh of the repository
-	@files=$$(find . -name .git -prune -o -name .terraform -prune -o -name '*.sh' -type f -print | sort); \
+shellcheck: ## shellcheck on every *.sh of the repository, or on the files of SH='<file> ...'
+	@files="$${SH:-}"; [ -n "$$files" ] || files=$$(find . -name .git -prune -o -name .terraform -prune -o -name '*.sh' -type f -print | sort); \
 	[ -n "$$files" ] || { echo "shellcheck: no shell script"; exit 0; }; \
 	echo "shellcheck $$(echo $$files | wc -w | tr -d ' ') files"; \
 	env -u DOCKER_DEFAULT_PLATFORM docker run --rm --network none -v "$(CURDIR):/mnt:ro" -w /mnt $(SHELLCHECK_IMAGE) $$files
@@ -212,9 +213,31 @@ github-app-key: ## Write PEM=<file> as key KEY=<stg|prd|local> of App APP=<name>
 	@test -n '$(APP)' -a -n '$(KEY)' -a -n '$(PEM)' || { echo "make github-app-key: set APP, KEY and PEM" >&2; exit 1; }; \
 	python3 -I -B github/scripts/github-app.py set-key '$(APP)' '$(KEY)' '$(PEM)'
 
-session-test: ## Self-test of the session scripts of aws/scripts with fake commands (no account, cluster or network)
-	@echo "session-test aws/scripts"; \
-	bash aws/scripts/session-test.sh >/dev/null || { echo "FAIL: session-test (bash aws/scripts/session-test.sh prints every check)" >&2; exit 1; }
+# The writes below are the account owner's: each reads the setting first and writes only what differs. Secret values
+# go to gh on stdin; ENV reaches the script through the environment, never through the recipe's text.
+github-settings: ## Fork PR approval, private vulnerability reporting, CodeQL default setup: read, write only what differs
+	@python3 -I -B github/scripts/github-app.py settings
+
+github-secrets: ## Secrets SVP_AWS_STG/PRD_ACCOUNT_ID of the ECR repos; ENV=<stg|prd>: secrets of environment terraform-plan
+	@python3 -I -B github/scripts/github-app.py secrets "$${ENV:-}"
+
+infracost-key: ## Secret INFRACOST_API_KEY of svp-infra from stdin (pbpaste | make infracost-key) or the infracost CLI login
+	@python3 -I -B github/scripts/github-app.py infracost-key
+
+github-tfvars: ## Write github/github.auto.tfvars (mode 600) from the Actions variables on GitHub, values checked first
+	@python3 -I -B github/scripts/github-app.py tfvars
+
+github-plan: ## terraform init and plan of github/ into github/github.tfplan (anhnv-sso, account checked; token from gh)
+	@python3 -I -B github/scripts/github-app.py plan
+
+github-apply: ## Apply github/github.tfplan alone, delete it, then plan again expecting No changes.
+	@python3 -I -B github/scripts/github-app.py apply
+
+session-test: ## Self-tests of aws/scripts (session-test.sh, then every other *-test.sh) with fake commands, no account or network
+	@echo "session-test aws/scripts"; rc=0; \
+	for f in aws/scripts/session-test.sh $$(ls aws/scripts/*-test.sh 2>/dev/null | grep -v '/session-test\.sh$$'); do \
+	  bash "$$f" >/dev/null || { echo "FAIL: $$f (bash $$f prints every check)" >&2; rc=1; }; \
+	done; exit $$rc
 
 # terraform plan of a pull request, for job plan of .github/workflows/plan.yml alone: the script reaches the account of
 # ENV with the job's OIDC token, so it refuses to run outside GitHub Actions. ENV reaches it through the environment,

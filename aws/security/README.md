@@ -184,25 +184,33 @@ Security Hub dùng thử. Inspector tính theo image quét ở registry của ac
 - Bước (4): `aws/org` đã apply đủ: trusted access và `svp-security` là delegated admin của GuardDuty (hai region), Security Hub, Inspector,
   Config, Access Analyzer. Thiếu bước này thì plan dừng ở data source `aws_guardduty_detector` (không có detector) hay apply lỗi quyền delegated
   admin.
-- Biến terminal `SVP_AWS_MGMT_ACCOUNT_ID`, `SVP_AWS_SECURITY_ACCOUNT_ID`, `SVP_AWS_LOG_ACCOUNT_ID` (output của `aws/org`).
+- Biến terminal `SVP_AWS_MGMT_ACCOUNT_ID` (gõ tay) và `SVP_AWS_SECURITY_ACCOUNT_ID`, `SVP_AWS_LOG_ACCOUNT_ID`. Lần dựng đầu,
+  chưa có `svp-backup`: hai biến sau là hai dòng `export` từ `terraform output` của
+  [`aws/org`, Bước (2)](../org/README.md#bước-2-tổ-chức-ou-account), `SVP_AWS_STG_ACCOUNT_ID`, `SVP_AWS_PRD_ACCOUNT_ID` (bước 6
+  cần) đọc trên trang SSO như mục [Mở terminal](../../docs/runbooks/org-security-setup.md#mở-terminal) của runbook;
+  `aws/scripts/accounts.sh` lúc đó in `FAIL  no account svp-backup in the organization` và không đặt gì. Khi `svp-backup` đã có:
+  `eval "$(aws/scripts/accounts.sh)"` từ `infra/` đặt mọi biến thành viên.
 
 ### 1. Kiểm account
 
 ```sh
 cd infra/aws/security
-AWS_PROFILE=anhnv-sso aws sts get-caller-identity --region ap-southeast-1 --query '[Account,Arn]' --output text
+../scripts/check-account.sh mgmt
 ```
 
-`Account` phải bằng `$SVP_AWS_MGMT_ACCOUNT_ID`, `Arn` là role SSO của người học. Khác thì dừng.
+Tìm `ok    account <12 số> of mgmt, arn:aws:sts::<12 số>:assumed-role/AWSReservedSSO_…`. `FAIL  profile anhnv-sso is account …` thì dừng.
 
 ### 2. Giá trị cá nhân và init
 
 ```sh
-cp security.auto.tfvars.example security.auto.tfvars
+../scripts/tfvars.sh example aws/security
 AWS_PROFILE=anhnv-sso terraform init -backend-config=../backend.hcl
 ```
 
-Sửa `security_alert_email` trong `security.auto.tfvars` (file bị git bỏ qua): địa chỉ nhận mọi cảnh báo bảo mật.
+Lệnh đầu chép `security.auto.tfvars.example` thành `security.auto.tfvars` (mode 600) khi file chưa có, không ghi đè, và
+liệt kê mỗi giá trị còn `<…>` một dòng `note`. Sửa `security_alert_email` trong editor (file bị git bỏ qua; giá trị cá
+nhân giữ tay): địa chỉ nhận mọi cảnh báo bảo mật. `init` chạy sẵn cho mọi root của management bằng
+`aws/scripts/tfvars.sh init` (xem [`aws/bootstrap`](../bootstrap/README.md#5-áp-thay-đổi-khi-state-đã-ở-bucket)).
 
 ### 3. Plan
 
@@ -242,67 +250,51 @@ rồi chạy lại plan và apply.
 
 ### 5. Xác nhận email SNS
 
-Apply tạo subscription ở `PendingConfirmation`; SNS gửi email "AWS Notification - Subscription Confirmation" tới `security_alert_email`. Mở link
-trong email; trước đó topic không gửi gì. Kiểm (profile chỉ đọc `anhnv-security-ro` của permission set `SvpReadOnly`):
+Apply tạo subscription ở `PendingConfirmation`; SNS gửi email "AWS Notification - Subscription Confirmation" tới `security_alert_email`. Bấm
+xác nhận giữ tay vì token nằm trong thư, không có API: mở link **Confirm subscription** trong email (xem cả thư rác; token của link chỉ dùng
+được trong hai ngày và SNS xoá subscription chưa xác nhận sau 48 giờ: quá hạn thì apply lại root để AWS gửi thư
+mới). Trước đó topic không gửi gì. Kiểm:
 
 ```sh
-TOPIC="$(AWS_PROFILE=anhnv-sso terraform output -raw security_alert_topic_arn)"
-AWS_PROFILE=anhnv-security-ro aws sns list-subscriptions-by-topic --topic-arn "$TOPIC" --region ap-southeast-1 \
-  --query 'Subscriptions[].SubscriptionArn' --output text
+../scripts/verify.sh subscriptions mgmt
 ```
 
-Mong đợi một ARN đầy đủ, không phải `PendingConfirmation`.
+Mong đợi `ok    topic svp-security-alarms: every subscription is confirmed`. `FAIL  topic svp-security-alarms: a subscription is still
+PendingConfirmation` là chưa bấm link.
 
 ### 6. Kiểm nhanh
 
-Mọi lệnh chỉ đọc, profile `anhnv-security-ro`, chạy với `R=ap-southeast-1` rồi `R=us-east-1` trừ dòng ghi khác:
+Chỉ đọc; profile `anhnv-sso` và các profile chỉ đọc (`anhnv-security-ro`, `anhnv-stg-ro`, `anhnv-prd-ro`, `anhnv-log-ro`; tạo bằng
+[`sso-profiles.sh write`](../org/README.md#profile)) đã có, và năm biến `SVP_AWS_MGMT_ACCOUNT_ID`, `SVP_AWS_STG_ACCOUNT_ID`,
+`SVP_AWS_PRD_ACCOUNT_ID`, `SVP_AWS_LOG_ACCOUNT_ID`, `SVP_AWS_SECURITY_ACCOUNT_ID` đã đặt (mục [Apply](#apply-bước-5-của-thứ-tự-áp-lần-đầu)).
+Từ `infra/aws/security` của bước 1:
 
 ```sh
-R=ap-southeast-1
-D="$(AWS_PROFILE=anhnv-security-ro aws guardduty list-detectors --region "$R" --query 'DetectorIds[0]' --output text)"
-AWS_PROFILE=anhnv-security-ro aws guardduty describe-organization-configuration --detector-id "$D" --region "$R" \
-  --query '[AutoEnableOrganizationMembers, Features[].[Name, AutoEnable]]' --output text
-AWS_PROFILE=anhnv-security-ro aws guardduty list-members --detector-id "$D" --region "$R" \
-  --query 'Members[].[AccountId, RelationshipStatus]' --output text
-AWS_PROFILE=anhnv-security-ro aws guardduty list-publishing-destinations --detector-id "$D" --region "$R" \
-  --query 'Destinations[].Status' --output text
-AWS_PROFILE=anhnv-security-ro aws accessanalyzer list-analyzers --type ORGANIZATION --region "$R" \
-  --query 'analyzers[].[name, status]' --output text
+../scripts/verify.sh org
 ```
 
-Mong đợi: `ALL` và sáu plan `ALL`; bốn member `Enabled` (management, `svp-log-archive`, `svp-stg`, `svp-prd`; account có sẵn có thể tới 24
-giờ mới hiện); destination `PUBLISHING`; analyzer `svp-org ACTIVE`.
+Mỗi kiểm một dòng `ok`, `FAIL` hay `note`; một `FAIL` không dừng kiểm sau, cuối cùng `FAIL  N check(s) failed, each named above` và exit 1.
+Phần của root này:
 
-Chỉ region nhà:
+- `7a: GuardDuty in <region>: auto-enable ALL, …, findings PUBLISHING`: mỗi trong hai region: cấu hình tổ chức `ALL` và
+  sáu protection plan `ALL`, mọi account `ACTIVE` trừ `svp-security` là member, destination `PUBLISHING`.
+- `7a: Access Analyzer svp-org ACTIVE in <region>`: analyzer tổ chức.
+- `7a: Security Hub is CENTRAL ENABLED, …`: cấu hình tập trung; association của root và của account có `security_hub`
+  `off`.
+- `7a: every source of the Config aggregator svp-org is SUCCEEDED, …`: nguồn aggregator `SUCCEEDED` sau khi
+  `aws/baseline` (bước 6) bật recorder; script bỏ qua nguồn của account có `config_recording` `off`: account đó không
+  có recorder nên aggregator không nhận dữ liệu mới của nó, và nguồn ấy không `SUCCEEDED` không phải lỗi.
+- `7a: Inspector scans only ECR in …`: chỉ ECR bật; thành viên là account có `inspector_ecr` khác `off`.
 
-```sh
-AWS_PROFILE=anhnv-security-ro aws securityhub describe-organization-configuration --region ap-southeast-1 \
-  --query 'OrganizationConfiguration.[ConfigurationType, Status]' --output text
-AWS_PROFILE=anhnv-security-ro aws securityhub list-configuration-policy-associations --region ap-southeast-1 \
-  --query 'ConfigurationPolicyAssociationSummaries[].[TargetId, AssociationStatus]' --output text
-AWS_PROFILE=anhnv-security-ro aws configservice describe-configuration-aggregator-sources-status \
-  --configuration-aggregator-name svp-org --region ap-southeast-1 --query 'AggregatedSourceStatusList[].[SourceId, AwsRegion, LastUpdateStatus]' --output text
-```
+Lần dựng đầu, lệnh chạy ở đây trước bước (6): các kiểm cần `aws/baseline` báo `FAIL` và đó là mong đợi, không phải lỗi
+của root này. Đó là dòng `FAIL  <profile> <region>: no Config recorder with CONTINUOUS recording` (hay `… is not recording
+…`) của mỗi profile, `FAIL  7a: Config aggregator sources not SUCCEEDED: …` và `FAIL  7a: rule svp-security-admin-sso not
+found …`. Đọc các dòng còn lại; bước (7) của runbook chạy lại `verify.sh org` sau bước (6), khi các dòng đó phải `ok`.
 
-Mong đợi: `CENTRAL ENABLED`; association của root (`r-…`) và của mỗi account có `security_hub` `off` `SUCCESS` (`PENDING` tới 24 giờ là
-bình thường); nguồn của aggregator `SUCCEEDED`
-sau khi `aws/baseline` (bước 6) bật recorder, trừ dòng của account có `config_recording` `off`: account đó không có recorder nên aggregator không
-nhận dữ liệu mới của nó, và dòng ấy không `SUCCEEDED` không phải lỗi. Cảnh báo thử và phép thử guardrail ở bước (7) của runbook.
-
-Inspector, chỉ region nhà (`<id>` là id của `svp-security` và mỗi account thành viên có `inspector_ecr` khác `off`, cách nhau bằng dấu
-cách):
-
-```sh
-AWS_PROFILE=anhnv-security-ro aws inspector2 describe-organization-configuration --region ap-southeast-1 \
-  --query 'autoEnable' --output json
-AWS_PROFILE=anhnv-security-ro aws inspector2 batch-get-account-status --account-ids <id> --region ap-southeast-1 \
-  --query 'accounts[].[accountId, resourceState.ecr.status, resourceState.ec2.status, resourceState.lambda.status]' --output text
-AWS_PROFILE=anhnv-security-ro aws inspector2 list-members --only-associated --region ap-southeast-1 \
-  --query 'members[].[accountId, relationshipStatus]' --output text
-```
-
-Mong đợi: `ecr` `true`, mọi khoá khác `false`; mỗi account một dòng `<id> ENABLED DISABLED DISABLED`; các thành viên đó (`svp-prd`,
-`svp-log-archive`, `svp-backup` khi chỉ stg `off`) `ENABLED`, account `off` không có trong danh sách.
+Account mới có thể cần tới 24 giờ mới hiện đủ member (`PENDING` ở association cũng vậy): `FAIL` ở các dòng đó trong ngày
+đầu thì chạy lại sau, không phải lỗi. Dán lại mọi dòng `FAIL` và `note`. Dòng `note  7a: Security score` chỉ bảng điều
+khiển của Security Hub trên console của `svp-security` (profile `anhnv-security-ro`), không có API đọc điểm: đọc bằng
+mắt. Cảnh báo thử và phép thử guardrail ở bước (7) của runbook.
 
 ## Thêm Inspector vào root đã áp
 

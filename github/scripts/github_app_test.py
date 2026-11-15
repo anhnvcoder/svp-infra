@@ -229,7 +229,7 @@ class Check(unittest.TestCase):
         answers = {
             ".enabled": "true", ".approval_policy": "all_external_contributors", ".default_branch": "main",
             ".security_and_analysis.dependabot_security_updates.status": "disabled", ".[].id": "1", ".state": "configured",
-            ".value": "[]", "plan secrets": "",
+            ".value": "[]", "plan secrets": "", "repo secrets": "INFRACOST_API_KEY\n",
         }
         answers.update(override or {})
 
@@ -239,6 +239,8 @@ class Check(unittest.TestCase):
                 return gh_result("true\n")
             if jq == ".secrets[].name" and "/environments/terraform-plan/" in args[2]:
                 return gh_result(answers["plan secrets"])
+            if jq == ".secrets[].name" and args[2].endswith("/svp-infra/actions/secrets"):
+                return gh_result(answers["repo secrets"])
             if jq == ".secrets[].name":
                 return gh_result("SVP_GITOPS_APP_PRIVATE_KEY\nSVP_WEB_APP_PRIVATE_KEY\nSVP_RELEASE_APP_PRIVATE_KEY\n")
             if answers[jq] is None:
@@ -311,6 +313,11 @@ class Check(unittest.TestCase):
         self.assertEqual(code, 1, out)
         self.assertIn("svp-infra terraform-plan secret SVP_TFVARS_ENV_STG: False (want True)", out)
 
+    def test_a_missing_infracost_key_fails(self):
+        code, out = self.run_check({"repo secrets": "OTHER\n"})
+        self.assertEqual(code, 1, out)
+        self.assertIn("svp-infra secret INFRACOST_API_KEY: False (want True)", out)
+
     def test_a_missing_plan_variable_fails(self):
         code, out = self.run_check({".value": None})
         self.assertEqual(code, 1, out)
@@ -323,6 +330,371 @@ class Check(unittest.TestCase):
             "SVP_AWS_STG_ACCOUNT_ID", "SVP_TFVARS_ACCOUNT_STG", "SVP_TFVARS_ENV_STG",
             "SVP_AWS_PRD_ACCOUNT_ID", "SVP_TFVARS_ACCOUNT_PRD", "SVP_TFVARS_ENV_PRD",
         ])
+
+
+class FakeGh:
+    """subprocess.run stand-in: records argv, stdin and env of each call, answers by a function of argv."""
+
+    def __init__(self, answer=lambda args: gh_result()):
+        self.calls, self.answer = [], answer
+
+    def __call__(self, args, **kw):
+        self.calls.append({"args": list(args), "input": kw.get("input"), "env": kw.get("env"), "cwd": kw.get("cwd")})
+        return self.answer(list(args))
+
+    def argv_text(self):
+        return "\n".join(" ".join(c["args"]) for c in self.calls)
+
+
+def run_quiet(fn, *args):
+    """Run fn; return (exit code, stdout + stderr)."""
+    with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()) as err:
+        try:
+            fn(*args)
+            code = 0
+        except SystemExit as exc:
+            code = exc.code
+    return code, out.getvalue() + err.getvalue()
+
+
+class Settings(unittest.TestCase):
+    def run_settings(self, override=None):
+        answers = {".enabled": "true", ".approval_policy": "all_external_contributors", ".state": "configured"}
+        answers.update(override or {})
+
+        def answer(args):
+            if "-X" in args:
+                return gh_result()
+            jq = args[args.index("--jq") + 1]
+            repo = args[2].split("/")[2]
+            return gh_result(answers.get((repo, jq), answers[jq]) + "\n")
+
+        fake = FakeGh(answer)
+        with mock.patch.object(ga.subprocess, "run", fake):
+            code, out = run_quiet(ga.settings)
+        return code, out, fake
+
+    def test_settings_already_right_send_only_gets(self):
+        code, out, fake = self.run_settings()
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("-X", fake.argv_text())
+        self.assertEqual(out.count("ok    "), 2 * len(ga.REPOSITORIES) + len(ga.CODEQL_DEFAULT_SETUP))
+        self.assertNotIn("changed", out)
+
+    def test_only_the_settings_that_differ_are_written(self):
+        code, out, fake = self.run_settings({("svp-labs", ".enabled"): "false",
+                                             ("svp-frontend", ".state"): "not-configured",
+                                             (".github", ".approval_policy"): "first_time_contributors"})
+        self.assertEqual(code, 0, out)
+        writes = [c["args"] for c in fake.calls if "-X" in c["args"]]
+        self.assertEqual(writes, [
+            ["gh", "api", "-X", "PUT", "repos/anhnvcoder/svp-labs/private-vulnerability-reporting"],
+            ["gh", "api", "-X", "PUT", "repos/anhnvcoder/.github/actions/permissions/fork-pr-contributor-approval",
+             "-f", "approval_policy=all_external_contributors"],
+            ["gh", "api", "-X", "PATCH", "repos/anhnvcoder/svp-frontend/code-scanning/default-setup", "-f", "state=configured"],
+        ])
+        self.assertIn("changed svp-labs private vulnerability reporting", out)
+        self.assertIn("changed .github fork pull request approval", out)
+        self.assertIn("changed svp-frontend CodeQL default setup", out)
+        self.assertIn("ok    svp-backend CodeQL default setup", out)
+
+
+class Secrets(TempDirs):
+    STG, PRD, LOG, BACKUP = "111111111111", "222222222222", "333333333333", "555555555555"
+    ACCOUNT_TFVARS, ENV_TFVARS = 'account_id = "x"\nalarm_email = "a@svp.example"\n', 'domain = "svp.example"\n'
+
+    def setUp(self):
+        super().setUp()
+        env = {"SVP_AWS_STG_ACCOUNT_ID": self.STG, "SVP_AWS_PRD_ACCOUNT_ID": self.PRD,
+               "SVP_AWS_LOG_ACCOUNT_ID": self.LOG, "SVP_AWS_BACKUP_ACCOUNT_ID": self.BACKUP}
+        patcher = mock.patch.dict(os.environ, env)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        for env_name in ("stg", "prd"):
+            for root, text in (("accounts", self.ACCOUNT_TFVARS), ("envs", self.ENV_TFVARS)):
+                path = self.tmp / "infra" / "aws" / root / env_name / f"{env_name}.auto.tfvars"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(text)
+
+    def secrets(self, env="", answer=lambda args: gh_result()):
+        fake = FakeGh(answer)
+        with mock.patch.object(ga.subprocess, "run", fake):
+            code, out = run_quiet(ga.set_secrets, env)
+        return code, out, fake
+
+    def assert_no_value(self, fake, out):
+        for value in (self.STG, self.PRD, self.LOG, self.BACKUP, "svp.example"):
+            self.assertNotIn(value, fake.argv_text())
+            self.assertNotIn(value, out)
+
+    def test_repository_secrets_of_both_ecr_repositories_through_stdin(self):
+        code, out, fake = self.secrets()
+        self.assertEqual(code, 0, out)
+        self.assertEqual([(c["args"], c["input"]) for c in fake.calls], [
+            (["gh", "secret", "set", "SVP_AWS_STG_ACCOUNT_ID", "--repo", "anhnvcoder/svp-backend"], self.STG),
+            (["gh", "secret", "set", "SVP_AWS_PRD_ACCOUNT_ID", "--repo", "anhnvcoder/svp-backend"], self.PRD),
+            (["gh", "secret", "set", "SVP_AWS_STG_ACCOUNT_ID", "--repo", "anhnvcoder/svp-frontend"], self.STG),
+            (["gh", "secret", "set", "SVP_AWS_PRD_ACCOUNT_ID", "--repo", "anhnvcoder/svp-frontend"], self.PRD),
+        ])
+        self.assert_no_value(fake, out)
+
+    def test_plan_secrets_of_an_env_take_their_names_from_plan_secret_names(self):
+        code, out, fake = self.secrets("stg")
+        self.assertEqual(code, 0, out)
+        self.assertEqual([c["args"][3] for c in fake.calls], ga.plan_secret_names(["stg"]))
+        for c in fake.calls:
+            self.assertEqual(c["args"][4:], ["--env", "terraform-plan", "--repo", "anhnvcoder/svp-infra"])
+        given = {c["args"][3]: c["input"] for c in fake.calls}
+        self.assertEqual(given, {"SVP_AWS_LOG_ACCOUNT_ID": self.LOG, "SVP_AWS_BACKUP_ACCOUNT_ID": self.BACKUP,
+                                 "SVP_AWS_STG_ACCOUNT_ID": self.STG, "SVP_TFVARS_ACCOUNT_STG": self.ACCOUNT_TFVARS,
+                                 "SVP_TFVARS_ENV_STG": self.ENV_TFVARS})
+        self.assert_no_value(fake, out)
+
+    def test_shared_secrets_are_set_again_with_the_same_value(self):
+        first, second = self.secrets("stg")[2], self.secrets("prd")[2]
+        shared = lambda fake: [(c["args"], c["input"]) for c in fake.calls if "_LOG_" in c["args"][3]  # noqa: E731
+                               or "_BACKUP_" in c["args"][3]]
+        self.assertEqual(shared(first), shared(second))
+        self.assertEqual(len(shared(first)), 2)
+
+    def test_an_env_outside_stg_prd_is_refused(self):
+        code, out, fake = self.secrets("dev")
+        self.assertEqual(code, 1)
+        self.assertEqual(fake.calls, [])
+
+    def test_a_missing_or_malformed_account_writes_nothing(self):
+        for name, value in (("SVP_AWS_PRD_ACCOUNT_ID", None), ("SVP_AWS_PRD_ACCOUNT_ID", "12345"),
+                            ("SVP_AWS_PRD_ACCOUNT_ID", "11111111111a"), ("SVP_AWS_LOG_ACCOUNT_ID", None)):
+            with self.subTest(name=name, value=value), mock.patch.dict(os.environ):
+                os.environ.pop(name)
+                if value is not None:
+                    os.environ[name] = value
+                code, out, fake = self.secrets("prd" if "LOG" in name else "")
+                self.assertEqual(code, 1, out)
+                self.assertIn(name, out)
+                self.assertEqual(fake.calls, [])
+
+    def test_a_missing_or_empty_tfvars_file_writes_nothing(self):
+        envs = self.tmp / "infra" / "aws" / "envs" / "stg" / "stg.auto.tfvars"
+        envs.write_text("  \n")
+        code, out, fake = self.secrets("stg")
+        self.assertEqual(code, 1, out)
+        self.assertIn("aws/envs/stg/stg.auto.tfvars is missing or empty", out)
+        self.assertEqual(fake.calls, [])
+        envs.unlink()
+        self.assertEqual(self.secrets("stg")[2].calls, [])
+
+    def test_a_failing_gh_prints_no_value(self):
+        code, out, fake = self.secrets("stg", lambda args: gh_result(code=1))
+        self.assertEqual(code, 1)
+        self.assertEqual(len(fake.calls), 1)
+        self.assert_no_value(fake, out)
+
+
+class InfracostKey(unittest.TestCase):
+    KEY = "ico-0123456789abcdef"
+
+    def run_key(self, stdin, which=None, cli=None):
+        def answer(args):
+            if args[0] == "infracost":
+                self.assertEqual(args, ["infracost", "configure", "get", "api_key"])
+                return cli
+            return gh_result()
+
+        fake = FakeGh(answer)
+        with mock.patch.object(ga.subprocess, "run", fake), mock.patch.object(ga.sys, "stdin", stdin), \
+                mock.patch.object(ga.shutil, "which", return_value=which):
+            code, out = run_quiet(ga.infracost_key)
+        return code, out, fake
+
+    @staticmethod
+    def tty():
+        stdin = mock.MagicMock()
+        stdin.isatty.return_value = True
+        return stdin
+
+    def assert_set_once(self, fake, out):
+        sets = [c for c in fake.calls if c["args"][:3] == ["gh", "secret", "set"]]
+        self.assertEqual([(c["args"], c["input"]) for c in sets],
+                         [(["gh", "secret", "set", "INFRACOST_API_KEY", "--repo", "anhnvcoder/svp-infra"], self.KEY)])
+        self.assertNotIn(self.KEY, fake.argv_text())
+        self.assertNotIn(self.KEY, out)
+
+    def test_key_from_stdin(self):
+        code, out, fake = self.run_key(io.StringIO(self.KEY + "\n"), which="/usr/local/bin/infracost")
+        self.assertEqual(code, 0, out)
+        self.assert_set_once(fake, out)
+        self.assertNotIn("infracost", fake.calls[0]["args"][0])  # stdin wins over the CLI
+
+    def test_key_from_the_cli_when_stdin_is_a_terminal(self):
+        code, out, fake = self.run_key(self.tty(), "/usr/local/bin/infracost", gh_result(self.KEY + "\n"))
+        self.assertEqual(code, 0, out)
+        self.assert_set_once(fake, out)
+
+    def test_no_stdin_and_no_cli_names_both_ways(self):
+        code, out, fake = self.run_key(self.tty())
+        self.assertEqual(code, 1)
+        self.assertIn("Org Settings", out)
+        self.assertIn("infracost auth login", out)
+        self.assertEqual(fake.calls, [])
+
+    def test_a_failing_or_silent_cli_is_refused(self):
+        for cli in (gh_result(code=1), gh_result("")):
+            with self.subTest(cli=cli):
+                code, out, fake = self.run_key(self.tty(), "/usr/local/bin/infracost", cli)
+                self.assertEqual(code, 1)
+                self.assertEqual(len(fake.calls), 1)
+
+    def test_empty_multiline_or_spaced_keys_are_refused_and_not_printed(self):
+        for text in ("", "\n", "ico-a\nico-b\n", "ico-a b", " ico-a", "ico-a\tb"):
+            with self.subTest(text=text):
+                code, out, fake = self.run_key(io.StringIO(text))
+                self.assertEqual(code, 1)
+                self.assertEqual(fake.calls, [])
+                if text.strip():
+                    self.assertNotIn("ico-a", out)
+
+
+class Tfvars(TempDirs):
+    VALUES = {"SVP_GITOPS_APP_CLIENT_ID": "Iv23liAAA", "SVP_WEB_APP_CLIENT_ID": "Iv23liBBB",
+              "SVP_RELEASE_APP_CLIENT_ID": "Iv1.ccc", "SVP_TF_PLAN_ENVS": '["stg"]'}
+    WANT = ('svp_gitops_app_client_id = "Iv23liAAA"\nsvp_web_app_client_id = "Iv23liBBB"\n'
+            'svp_release_app_client_id = "Iv1.ccc"\nterraform_plan_envs = ["stg"]\n')
+
+    def run_tfvars(self, override=None):
+        values = dict(self.VALUES, **(override or {}))
+
+        def answer(args):
+            self.assertEqual(args[:2], ["gh", "api"])
+            got = values[args[2].rsplit("/", 1)[1]]
+            return got if isinstance(got, subprocess.CompletedProcess) else gh_result(got + "\n")
+
+        fake = FakeGh(answer)
+        with mock.patch.object(ga.subprocess, "run", fake):
+            code, out = run_quiet(ga.tfvars)
+        return code, out
+
+    @property
+    def path(self):
+        return ga.GITHUB / "github.auto.tfvars"
+
+    def test_writes_every_variable_mode_600_and_no_temporary_file(self):
+        code, out = self.run_tfvars()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.path.read_text(), self.WANT)
+        self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(sorted(p.name for p in ga.GITHUB.iterdir()), ["github.auto.tfvars"])
+        self.assertNotIn("Iv23liAAA", out)
+
+    def test_a_variable_not_on_github_is_noted_and_its_line_kept(self):
+        self.path.write_text('svp_release_app_client_id = "Iv1.fromcreate"\nother = 1\n')
+        code, out = self.run_tfvars({"SVP_RELEASE_APP_CLIENT_ID": subprocess.CompletedProcess(
+            ["gh"], 1, stdout='{"message":"Not Found"}', stderr="gh: Not Found (HTTP 404)")})
+        self.assertEqual(code, 0, out)
+        self.assertIn("note  SVP_RELEASE_APP_CLIENT_ID of svp-backend environment release is not on GitHub yet", out)
+        self.assertEqual(self.path.read_text(), 'svp_release_app_client_id = "Iv1.fromcreate"\nother = 1\n'
+                         'svp_gitops_app_client_id = "Iv23liAAA"\nsvp_web_app_client_id = "Iv23liBBB"\n'
+                         'terraform_plan_envs = ["stg"]\n')
+
+    def test_an_error_body_or_a_wrong_shape_leaves_the_file_unchanged(self):
+        for override in ({"SVP_WEB_APP_CLIENT_ID": '{"message":"Bad credentials","status":"401"}'},
+                         {"SVP_TF_PLAN_ENVS": '{"message":"Bad credentials"}'},
+                         {"SVP_TF_PLAN_ENVS": '["stg","dev"]'}, {"SVP_TF_PLAN_ENVS": '["stg","stg"]'},
+                         {"SVP_GITOPS_APP_CLIENT_ID": subprocess.CompletedProcess(["gh"], 1, stdout="",
+                                                                                  stderr="HTTP 401: Bad credentials")}):
+            with self.subTest(override=override):
+                self.path.write_text("old\n")
+                code, out = self.run_tfvars(override)
+                self.assertEqual(code, 1, out)
+                self.assertEqual(self.path.read_text(), "old\n")
+                self.assertEqual(sorted(p.name for p in ga.GITHUB.iterdir()), ["github.auto.tfvars"])
+
+
+class PlanApply(TempDirs):
+    TOKEN = "gho_faketoken0000"
+
+    def setUp(self):
+        super().setUp()
+        patcher = mock.patch.dict(os.environ, {"SVP_AWS_MGMT_ACCOUNT_ID": "000000000000"})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        os.environ.pop("GITHUB_TOKEN", None)
+        (self.tmp / "infra" / "aws").mkdir()
+        (self.tmp / "infra" / "aws" / "backend.hcl").write_text("bucket = \"x\"\n")
+
+    def run_cmd(self, fn, account="000000000000", sts_code=0, codes=None):
+        codes = dict(codes or {})
+
+        def answer(args):
+            if args[0] == "aws":
+                return subprocess.CompletedProcess(args, sts_code, stdout=account + "\n", stderr="expired")
+            if args[:3] == ["gh", "auth", "token"]:
+                return gh_result(self.TOKEN + "\n")
+            return subprocess.CompletedProcess(args, codes.get(args[1], 0))
+
+        fake = FakeGh(answer)
+        with mock.patch.object(ga.subprocess, "run", fake):
+            code, out = run_quiet(fn)
+        self.assertNotIn(self.TOKEN, fake.argv_text())
+        self.assertNotIn(self.TOKEN, out)
+        self.assertNotIn("GITHUB_TOKEN", os.environ)
+        return code, out, fake
+
+    def terraform_calls(self, fake):
+        return [c for c in fake.calls if c["args"][0] == "terraform"]
+
+    def test_plan_checks_the_account_then_inits_and_saves_the_plan(self):
+        code, out, fake = self.run_cmd(ga.plan)
+        self.assertEqual(code, 0, out)
+        sts = fake.calls[0]
+        self.assertEqual(sts["args"], ["aws", "sts", "get-caller-identity", "--query", "Account", "--output", "text",
+                                       "--region", "ap-southeast-1"])
+        self.assertEqual(sts["env"]["AWS_PROFILE"], "anhnv-sso")
+        self.assertNotIn("GITHUB_TOKEN", sts["env"])
+        tf = self.terraform_calls(fake)
+        self.assertEqual([c["args"] for c in tf], [
+            ["terraform", "init", "-input=false", "-backend-config=../aws/backend.hcl"],
+            ["terraform", "plan", "-input=false", "-out=github.tfplan"],
+        ])
+        for c in tf:
+            self.assertEqual((c["cwd"], c["env"]["GITHUB_TOKEN"], c["env"]["AWS_PROFILE"]),
+                             (ga.GITHUB, self.TOKEN, "anhnv-sso"))
+
+    def test_another_account_or_no_session_stops_before_init(self):
+        for kw, want in (({"account": "111111111111"}, "another account"),
+                         ({"sts_code": 255}, "AWS_PROFILE=anhnv-sso aws sso login --region us-east-1")):
+            with self.subTest(kw=kw):
+                code, out, fake = self.run_cmd(ga.plan, **kw)
+                self.assertEqual(code, 1)
+                self.assertIn(want, out)
+                self.assertNotIn("111111111111", out)
+                self.assertEqual(self.terraform_calls(fake), [])
+                self.assertNotIn(["gh", "auth", "token"], [c["args"] for c in fake.calls])
+
+    def test_apply_without_a_saved_plan_is_refused(self):
+        code, out, fake = self.run_cmd(ga.apply)
+        self.assertEqual(code, 1)
+        self.assertIn("make github-plan", out)
+        self.assertEqual(fake.calls, [])
+
+    def test_apply_applies_the_saved_plan_deletes_it_and_plans_again(self):
+        (ga.GITHUB / "github.tfplan").write_text("plan")
+        code, out, fake = self.run_cmd(ga.apply)
+        self.assertEqual(code, 0, out)
+        self.assertEqual([c["args"] for c in self.terraform_calls(fake)], [
+            ["terraform", "apply", "-input=false", "github.tfplan"],
+            ["terraform", "plan", "-input=false", "-detailed-exitcode"],
+        ])
+        self.assertFalse((ga.GITHUB / "github.tfplan").exists())
+        self.assertIn("No changes.", out)
+
+    def test_changes_after_apply_fail_and_a_failed_apply_still_deletes_the_plan(self):
+        for codes in ({"plan": 2}, {"apply": 1}):
+            with self.subTest(codes=codes):
+                (ga.GITHUB / "github.tfplan").write_text("plan")
+                code, out, fake = self.run_cmd(ga.apply, codes=codes)
+                self.assertEqual(code, 1, out)
+                self.assertFalse((ga.GITHUB / "github.tfplan").exists())
 
 
 class Config(unittest.TestCase):

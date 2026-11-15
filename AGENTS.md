@@ -10,7 +10,8 @@ quyết định chung của lab nằm ở `docs/` của repo code (bản clone `
 
 - **AI chỉ chạy:** `make check` (và từng target của nó: `fmt-check`, `validate`, `tflint`, `tfdocs-check`, `trivy`, `shellcheck`, `zizmor`, `docs-check`,
   `session-test`, `test-guard`, `test`, `ci-plan-test`, `infracost-test`), `make fmt`,
-  `make tfdocs` (terraform-docs, chỉ đọc `.tf`), `make lock`, tức `terraform fmt`, `terraform init -backend=false`, `terraform validate`, `terraform providers lock`; `bash -n`,
+  `make tfdocs` (terraform-docs, chỉ đọc `.tf`), `make shellcheck SH='<file …>'` (một script đang sửa), `make lock`, tức
+  `terraform fmt`, `terraform init -backend=false`, `terraform validate`, `terraform providers lock`; `bash -n`,
   test script với lệnh giả trên PATH; `aws --version`.
 - **`terraform test` chỉ qua `make test`**, target tự ép ba điều kiện, không tin người viết test: (1) chạy trong container image Terraform
   ghim digest (`TERRAFORM_IMAGE`) với `--network none`; (2) không truyền credential nào: `env -u` mọi biến `AWS_*`, không `-e AWS_*`, không
@@ -22,8 +23,12 @@ quyết định chung của lab nằm ở `docs/` của repo code (bản clone `
   file và dòng. `make test-guard` kiểm chính ba điều kiện với `docker` giả. AI không chạy `terraform test` trần.
 - **AI không chạy lệnh nào chạm account AWS, kể cả chỉ đọc:** `terraform init` có backend, `plan`, `apply`, `destroy`, `import`,
   `state`, `output`, `test` trần (ngoài `make test`), `refresh`; `aws` (trừ `--version`); script hay chương trình dùng SDK AWS; script
-  buổi của `aws/scripts/`; `make ci-plan` (target của job CI, từ chối chạy ngoài GitHub Actions). `make infracost`,
-  `make infracost-comment` không chạm AWS nhưng cần khoá API Infracost của người học: AI không chạy chúng với khoá.
+  buổi và script dựng của `aws/scripts/` (`sso-profiles.sh`, `accounts.sh`, `tfvars.sh`, `verify.sh`, `preflight.sh`…: việc
+  của người học như script buổi, kể cả lệnh chỉ đọc, vì chúng đều gọi `aws`; AI chỉ chạy test của chúng với lệnh giả);
+  `make ci-plan` (target của job CI, từ chối chạy ngoài GitHub Actions). `make infracost`,
+  `make infracost-comment` không chạm AWS nhưng cần khoá API Infracost của người học: AI không chạy chúng với khoá. Target
+  ghi cài đặt GitHub (`github-settings`, `github-secrets`, `infracost-key`, `github-tfvars`, `github-plan`, `github-apply`,
+  `github-app`, `github-app-key`) là của người học; AI chỉ chạy `make github-app-test` và `make github-check` (chỉ đọc).
 - **Mọi lệnh chạm account do người học chạy** theo script và runbook viết sẵn, mỗi bước một khối, nói rõ cần dán lại output nào và tìm gì
   trong đó. Mỗi account một biến account (export trong terminal, không ghi vào file nào) và profile SSO (bảng ở mục "Plan và apply" của
   `README.md`):

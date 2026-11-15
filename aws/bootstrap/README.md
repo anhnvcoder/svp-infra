@@ -23,7 +23,9 @@ Management account không giữ hosted zone nào: zone DNS của lab nằm ở a
 `TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID"` ngay trong lệnh. Root của account stg, prd ở [`aws/accounts/`](../accounts/README.md).
 
 **Người học chạy mọi lệnh dưới đây** (AI không chạy lệnh nào chạm account). Làm trước root `aws/org` và buổi AWS đầu. Cần: Terraform
-1.15 trên máy (`terraform version`), AWS CLI v2, đã `aws sso login --profile anhnv-sso`.
+1.15 trên máy (`terraform version`), AWS CLI v2, profile `anhnv-sso` đã có (người học tạo tay một lần:
+[`aws/org`, Profile gốc `anhnv-sso`](../org/README.md#profile-gốc-anhnv-sso)) và đã `aws sso login --profile anhnv-sso`.
+Mọi script `aws/scripts/*.sh` nhận `--print` làm đối số đầu: in lệnh sẽ chạy, không gọi công cụ nào, không ghi gì.
 
 ## 1. Kiểm account
 
@@ -42,11 +44,14 @@ export SVP_AWS_MGMT_ACCOUNT_ID=<12 số của Account vừa đọc>
 ## 2. Giá trị cá nhân
 
 ```sh
-cp bootstrap.auto.tfvars.example bootstrap.auto.tfvars
+../scripts/tfvars.sh example aws/bootstrap
 ```
 
-Sửa `bootstrap.auto.tfvars` (git bỏ qua): `budget_emails` (email nhận cảnh báo; AWS Budgets gửi thẳng, không có thư xác nhận),
-`budget_limit_usd` nếu muốn khác $20.
+Lệnh chép `bootstrap.auto.tfvars.example` thành `bootstrap.auto.tfvars` (mode 600) khi file chưa có, không bao giờ ghi
+đè file có sẵn, rồi mỗi giá trị còn `<…>` một dòng `note  aws/bootstrap/bootstrap.auto.tfvars:<dòng> <biến> still holds
+a placeholder <...>`; chạy lại tới khi in `ok    … no placeholder <...> left`. Sửa `bootstrap.auto.tfvars` trong editor
+(git bỏ qua; giá trị cá nhân giữ tay): `budget_emails` (email nhận cảnh báo; AWS Budgets gửi thẳng, không có thư xác
+nhận), `budget_limit_usd` nếu muốn khác $20.
 
 ## 3. Apply lần đầu, state local
 
@@ -74,19 +79,20 @@ subscription, 3 tag phân bổ). Dán dòng đó lại nếu muốn kiểm cùng
 
 ```sh
 AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform apply bootstrap.tfplan
-AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform output -raw backend_hcl > ../backend.hcl
-cat ../backend.hcl            # bucket, region, encrypt, kms_key_id (ARN key/<id> của alias/svp-tfstate), use_lockfile
+../scripts/tfvars.sh backend mgmt
 ```
 
-`aws/backend.hcl` (git bỏ qua) là cấu hình backend mà mọi root ở [mục 5](#5-áp-thay-đổi-khi-state-đã-ở-bucket) đọc bằng
-`-backend-config`.
+Lệnh kiểm account, đọc output `backend_hcl` và ghi `aws/backend.hcl` (mode 600, qua file tạm rồi `mv`): in `ok    account … of mgmt, …` rồi
+`ok    aws/backend.hcl: output backend_hcl of aws/bootstrap written (N lines, mode 600)`; output không có dòng `bucket` thì `FAIL` và
+không ghi gì. `aws/backend.hcl` (git bỏ qua) là cấu hình backend mà mọi root ở [mục 5](#5-áp-thay-đổi-khi-state-đã-ở-bucket) đọc bằng
+`-backend-config`; nội dung gồm bucket, region, encrypt, `kms_key_id` (ARN `key/<id>` của `alias/svp-tfstate`) và `use_lockfile`.
 
 ## 4. Chuyển state vào bucket
 
 ```sh
 rm local_override.tf bootstrap.tfplan
 AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform init -migrate-state -backend-config=../backend.hcl    # trả lời yes khi được hỏi chép state
-AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform plan                                                    # mong đợi: No changes.
+AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform plan   # expect: No changes.
 AWS_PROFILE=anhnv-sso aws s3api head-object --region ap-southeast-1 \
   --bucket "$(AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform output -raw state_bucket)" \
   --key aws/bootstrap/terraform.tfstate --query '{Size:ContentLength,SSE:ServerSideEncryption,Key:SSEKMSKeyId}'   # SSE: aws:kms
@@ -123,23 +129,25 @@ subscription, 3 tag; đổi tại chỗ cấu hình mã hoá của bucket). Khô
 
 ```sh
 AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform apply bootstrap.tfplan && rm bootstrap.tfplan
-AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform output -raw backend_hcl > ../backend.hcl
-cat ../backend.hcl            # có thêm kms_key_id khi bucket vừa chuyển sang KMS
+../scripts/tfvars.sh backend mgmt
 ```
+
+Dòng `ok` thứ hai là `… written` khi file đổi (lần đầu có thêm `kms_key_id` khi bucket vừa chuyển sang KMS), `… already as written, file
+unchanged` khi không đổi.
 
 `aws/backend.hcl` đổi (lần đầu có `kms_key_id`) thì mọi root đọc nó phải nhận lại cấu hình backend. `-reconfigure` ghi cấu hình mới
-mà không chép state (bucket, key không đổi). Root chưa từng `init` cũng chạy được lệnh của nó (lần `init` đầu). Từ
-`infra/aws/bootstrap`:
+mà không chép state (bucket, key không đổi). Root chưa từng `init` cũng chạy được lệnh của nó (lần `init` đầu). Từ `infra/aws/bootstrap`:
 
 ```sh
-AWS_PROFILE=anhnv-sso terraform init -reconfigure -backend-config=../backend.hcl
-cd ../org              && AWS_PROFILE=anhnv-sso terraform init -reconfigure -backend-config=../backend.hcl
-cd ../log-archive      && AWS_PROFILE=anhnv-sso terraform init -reconfigure -backend-config=../backend.hcl
-cd ../security         && AWS_PROFILE=anhnv-sso terraform init -reconfigure -backend-config=../backend.hcl
-cd ../baseline         && AWS_PROFILE=anhnv-sso terraform init -reconfigure -backend-config=../backend.hcl
-cd ../../github        && AWS_PROFILE=anhnv-sso terraform init -reconfigure -backend-config=../aws/backend.hcl
-cd ../aws/bootstrap    && AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform plan    # mong đợi: No changes.
+../scripts/tfvars.sh init
+AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform plan    # expect: No changes.
 ```
+
+`tfvars.sh init` chạy `terraform init -reconfigure` với `aws/backend.hcl` ở bảy root của management theo thứ tự `aws/bootstrap`, `aws/org`,
+`aws/log-archive`, `aws/security`, `aws/baseline`, `aws/backup` và `github/` (root cuối đọc `../aws/backend.hcl`), mỗi root một dòng
+`ok    terraform init -reconfigure of <root> with <backend-config>`. Root nào lỗi thì `FAIL  terraform init -reconfigure of <root>` và
+các root trước đã xong: sửa nguyên nhân rồi chạy lại cả lệnh (chạy lại an toàn). Thiếu `aws/backend.hcl` thì `FAIL  no aws/backend.hcl`:
+chạy `tfvars.sh backend mgmt` trước.
 
 Backend S3 có `encrypt = true` mà không `kms_key_id` tự đặt SSE-S3 cho mỗi lần ghi, ghi đè mã hoá mặc định của bucket; nên root nào
 chưa `init -reconfigure` vẫn ghi state SSE-S3, kể cả `apply` trên của chính root này. Object state đã có giữ SSE-S3 tới lần ghi kế của

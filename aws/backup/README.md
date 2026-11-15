@@ -66,25 +66,26 @@ tháng ở [ADR-0067 §13](https://github.com/anhnvcoder/svp-backend/blob/main/d
 Theo thứ tự của runbook `docs/runbooks/backup-setup.md`: sau khi `aws/org` đã tạo account `svp-backup` và bật
 cross-account backup, trước `aws/accounts/<env>` (vault env và role của nó) và trước lần chạy đầu của plan `svp-<env>`:
 copy job tới vault chưa có thì lỗi. **Người học chạy mọi lệnh dưới đây** (AI không chạy lệnh nào chạm account). Cần
-Terraform 1.15, AWS CLI v2, `aws sso login --profile anhnv-sso`.
+Terraform 1.15, AWS CLI v2, `aws sso login --profile anhnv-sso`, profile `anhnv-backup-ro` (`aws/scripts/sso-profiles.sh write`,
+[`aws/org`, Profile](../org/README.md#profile)).
 
 ### 1. Kiểm account và biến
 
 ```sh
 cd infra
+eval "$(aws/scripts/accounts.sh)"
 aws/scripts/check-account.sh mgmt
-printf '%s\n' "$SVP_AWS_MGMT_ACCOUNT_ID" "$SVP_AWS_BACKUP_ACCOUNT_ID" "$SVP_AWS_STG_ACCOUNT_ID" \
-  "$SVP_AWS_PRD_ACCOUNT_ID"
 cd aws/backup
 ```
 
-Script in account của `anhnv-sso` và dừng nếu khác `SVP_AWS_MGMT_ACCOUNT_ID`. Bốn dòng sau đều là 12 số, khác nhau:
-account backup từ output `backup_account_id` của `aws/org`. Khác hay thiếu thì dừng.
+`accounts.sh` đặt năm biến account của thành viên, gồm `SVP_AWS_BACKUP_ACCOUNT_ID` (mỗi biến một dòng `ok    SVP_AWS_<…>_ACCOUNT_ID:
+account svp-<tên>, ACTIVE`, không in id; `FAIL  no account svp-backup in the organization` là `aws/org` chưa tạo nó). `check-account.sh` in
+`ok    account … of mgmt, …` và dừng nếu account của `anhnv-sso` khác `SVP_AWS_MGMT_ACCOUNT_ID`.
 
 ### 2. Init và plan
 
 ```sh
-AWS_PROFILE=anhnv-sso terraform init -backend-config=../backend.hcl
+../scripts/tfvars.sh init
 AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
   TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" TF_VAR_stg_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
   TF_VAR_prd_account_id="$SVP_AWS_PRD_ACCOUNT_ID" \
@@ -107,14 +108,15 @@ AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
   terraform apply backup.tfplan
 rm backup.tfplan
 AWS_PROFILE=anhnv-sso terraform output vault_arns
-for v in svp-stg-copy svp-prd-copy; do
-  AWS_PROFILE=anhnv-backup-ro aws backup describe-backup-vault --backup-vault-name "$v" --region ap-southeast-1 \
-    --query '[BackupVaultName,Locked,MinRetentionDays,MaxRetentionDays,EncryptionKeyArn]' --output text
-done
+../scripts/verify.sh backup
 ```
 
-`vault_arns` có hai ARN dạng `arn:aws:backup:ap-southeast-1:<backup>:backup-vault:svp-<env>-copy`. Mỗi vault in `True`,
-min và max như bảng, và cùng ARN key. `Locked` là `False` nghĩa là lock chưa áp: dừng, dán output lại.
+`vault_arns` có hai ARN dạng `arn:aws:backup:ap-southeast-1:<backup>:backup-vault:svp-<env>-copy`. Phần của root này trong
+`verify.sh backup` là hai dòng `ok    7d: the vault svp-<env>-copy is locked and accepts copies from the account of <env> only`, kèm
+`note  7d: svp-<env>-copy lock min <n> days, max <n> days`: so hai số với bảng [Tài nguyên](#tài-nguyên). `FAIL  7d: the vault
+svp-<env>-copy is Locked 'False'` nghĩa là lock chưa áp: dừng, dán output lại. Các dòng 7a–7c của lệnh kiểm account, Backup policy và
+vault `svp-<env>` của account env, nên `FAIL` cho tới khi `aws/org` và `aws/accounts/<env>` đã apply theo thứ tự của runbook
+`docs/runbooks/backup-setup.md`.
 
 ## Gỡ có chủ đích
 

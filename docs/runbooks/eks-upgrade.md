@@ -23,36 +23,31 @@ ADR-0056 §8 ghi các bản lúc quyết định; bản đang chạy là bản t
 
 ## 1. Chọn minor và tra version (chỉ đọc)
 
-Một lần nâng chỉ đi một minor: EKS không nhảy minor và không hạ minor. Đọc trạng thái hỗ trợ của minor mới, bản add-on mới nhất cho minor
-đó, và bản phát hành AMI AL2023 arm64 khuyên dùng (thay `1.N+1` bằng số thật):
+Một lần nâng chỉ đi một minor: EKS không nhảy minor và không hạ minor. Script đọc minor hiện tại từ `kubernetes_version`
+của `aws/envs/stg/stg.tfvars`, lấy minor kế tiếp (`1.N+1`), rồi đọc trạng thái hỗ trợ của nó, bản add-on mới nhất cho
+minor đó và bản phát hành AMI AL2023 arm64 khuyên dùng:
 
 ```sh
-AWS_PROFILE=anhnv-stg aws eks describe-cluster-versions --region ap-southeast-1 --output text \
-  --query 'clusterVersions[].[clusterVersion,status,endOfStandardSupportDate]'
-for a in vpc-cni kube-proxy coredns eks-pod-identity-agent aws-ebs-csi-driver metrics-server aws-guardduty-agent; do
-  printf '%s ' "$a"
-  AWS_PROFILE=anhnv-stg aws eks describe-addon-versions --addon-name "$a" --kubernetes-version 1.N+1 --region ap-southeast-1 \
-    --query 'addons[0].addonVersions[0].addonVersion' --output text
-done
-AWS_PROFILE=anhnv-stg aws ssm get-parameter --region ap-southeast-1 --query Parameter.Value --output text \
-  --name /aws/service/eks/optimized-ami/1.N+1/amazon-linux-2023/arm64/standard/recommended/release_version
+aws/scripts/preflight.sh eks-upgrade stg
 ```
 
-Mong minor mới `STANDARD_SUPPORT`; một dòng version mỗi add-on; một chuỗi `1.N+1.<patch>-<ngày>`. Dán lại cả ba output. Alias của EC2NodeClass
-là `al2023@v<ngày>` của cùng chuỗi đó.
+Lệnh in tiêu đề `== preflight.sh eks-upgrade stg: 1.N -> 1.N+1`, rồi:
 
-Karpenter phân giải alias theo minor mà control plane đang chạy (tên AMI `amazon-eks-node-al2023-arm64-standard-<minor>-v<ngày>`, trang
-"Managing AMIs" của Karpenter: <https://karpenter.sh/docs/tasks/managing-amis/>), nên ngày mới phải có bản cho cả `1.N` lẫn `1.N+1`:
+- `ok    EKS 1.N+1  STANDARD_SUPPORT until <ngày>`; minor mới chưa `STANDARD_SUPPORT` thì `FAIL  EKS 1.N+1 is …, not STANDARD_SUPPORT`;
+- mỗi add-on một dòng `ok    add-on <tên>  <version>`; add-on không có bản cho `1.N+1` thì `FAIL  add-on <tên> has no
+  version for EKS 1.N+1`;
+- `ok    AMI release_version  1.N+1.<patch>-<ngày> (alias al2023@v<ngày>)`: chuỗi này là `ami_release_version`, alias của EC2NodeClass là
+  `al2023@v<ngày>` của cùng chuỗi;
+- hai dòng `ok    AMI 1.N at v<ngày>  ami-…` và `AMI 1.N+1 at v<ngày>  ami-…`: Karpenter phân giải alias theo minor mà
+  control plane đang chạy (tên AMI `amazon-eks-node-al2023-arm64-standard-<minor>-v<ngày>`, trang "Managing AMIs" của
+  Karpenter: <https://karpenter.sh/docs/tasks/managing-amis/>), nên ngày mới phải có bản cho cả `1.N` lẫn `1.N+1`.
+  `FAIL  ssm get-parameter image_id of <minor> at v<ngày>` (`ParameterNotFound`): chọn bản phát hành mới nhất có cho cả
+  hai minor (danh sách ở <https://github.com/awslabs/amazon-eks-ami/releases>) và đọc lại `release_version` của `1.N+1`
+  cho ngày đó.
 
-```sh
-for m in 1.N 1.N+1; do
-  AWS_PROFILE=anhnv-stg aws ssm get-parameter --region ap-southeast-1 --query Parameter.Value --output text \
-    --name "/aws/service/eks/optimized-ami/$m/amazon-linux-2023/arm64/standard/amazon-eks-node-al2023-arm64-standard-$m-v<ngày>/image_id"
-done
-```
-
-Mong hai AMI ID `ami-…`. `ParameterNotFound` ở một minor: chọn bản phát hành mới nhất có cho cả hai minor (danh sách ở
-<https://github.com/awslabs/amazon-eks-ami/releases>) và đọc lại `release_version` của `1.N+1` cho ngày đó.
+Hai dòng `note` cuối nhắc việc giữ tay: insight và metric API deprecated (bước 2, cần cluster chạy) và bảng tương thích
+của Karpenter (dưới, là trang web). Dán lại toàn bộ output, kể cả `FAIL`. Script chỉ đọc (profile `anhnv-stg`, account
+kiểm trước), không ghi gì.
 
 Rồi kiểm Karpenter: bảng tương thích (<https://karpenter.sh/docs/upgrading/compatibility/>) phải có minor mới cho bản chart đang ghim. Không có
 thì nâng chart Karpenter trước (PR riêng ở `svp-gitops`, một buổi stg xanh), rồi mới tới các bước dưới.

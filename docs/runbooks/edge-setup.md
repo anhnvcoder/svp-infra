@@ -22,13 +22,14 @@ flowchart TD
   B4["(4) buổi stg, prd: phép kiểm edge"]
 ```
 
-| Bước | Root hay việc | Mục | Dán lại |
-| --- | --- | --- | --- |
-| (1) | `aws/log-archive`, rồi `aws/org` | [Bước (1)](#bước-1-log-cloudfront-và-quyền-đọc) | hai dòng `Plan:`, hai `Apply complete!`, `No changes.` của `aws/org`, output destination (che account) |
-| (2a) | zone `aws.<domain>` | [Bước (2a)](#bước-2a-hạ-ttl-của-zone-prd) | danh sách bản ghi trước và sau, `INSYNC` |
-| (2) | `aws/accounts/stg`, `aws/accounts/prd` | [Bước (2)](#bước-2-baseline-của-hai-account) | hai dòng `Plan:`, hai `Apply complete!`, `confirmed`, output `get-dnssec` |
-| (3) | DNS cha | [Bước (3)](#bước-3-chuỗi-tin-cậy) | output từng lệnh kiểm |
-| (4) | buổi | [Bước (4)](#bước-4-buổi-stg-prd) | phép kiểm edge của runbook buổi |
+- **(1)** `aws/log-archive`, rồi `aws/org`; [Bước (1)](#bước-1-log-cloudfront-và-quyền-đọc). Dán lại: hai dòng `Plan:`,
+  hai `Apply complete!`, `No changes.` của `aws/org`, output destination (che account).
+- **(2a)** zone `aws.<domain>`; [Bước (2a)](#bước-2a-hạ-ttl-của-zone-prd). Dán lại: danh sách bản ghi trước và sau,
+  `INSYNC`.
+- **(2)** `aws/accounts/stg`, `aws/accounts/prd`; [Bước (2)](#bước-2-baseline-của-hai-account). Dán lại: hai dòng
+  `Plan:`, hai `Apply complete!`, dòng `ok` của `verify.sh subscriptions prd` và dòng đầu của `verify.sh dnssec`.
+- **(3)** DNS cha; [Bước (3)](#bước-3-chuỗi-tin-cậy). Dán lại: mọi dòng của `verify.sh dnssec`.
+- **(4)** buổi; [Bước (4)](#bước-4-buổi-stg-prd). Dán lại: phép kiểm edge của runbook buổi.
 
 CAA chỉ cho CA của Amazon cấp cert, nên Let's Encrypt bị chặn từ bước (2): bước (2) chỉ chạy khi không cluster nào còn xin cert ACME (điều 1 của
 mục dưới). Gỡ DNSSEC theo mục [Tắt ký DNSSEC](#tắt-ký-dnssec).
@@ -43,34 +44,42 @@ mục dưới). Gỡ DNSSEC theo mục [Tắt ký DNSSEC](#tắt-ký-dnssec).
    ```
 
 2. **Giá trị ngoài repo** (git bỏ qua, không in giá trị):
-   - Root env không còn biến `acme_email`: xoá dòng đó khỏi `aws/envs/stg/stg.auto.tfvars`, `aws/envs/prd/prd.auto.tfvars` (Terraform chỉ cảnh
-     báo `Value for undeclared variable`), rồi đếm:
+   - Root env không còn biến `acme_email` (Terraform chỉ cảnh báo `Value for undeclared variable`): `tfvars.sh env` xoá
+     dòng của biến mà root không còn khai báo, và ghi `hosted_zone_id` từ output `zone_id` của `aws/accounts/<env>`;
+     `domain`, `alarm_email` giữ nếu file đã có, chưa có thì hỏi ở terminal (giá trị cá nhân, không in lại). Mỗi env một
+     lệnh:
 
      ```sh
-     sed -i '' '/^acme_email[[:space:]]*=/d' aws/envs/stg/stg.auto.tfvars aws/envs/prd/prd.auto.tfvars
-     grep -c -E '^(hosted_zone_id|domain|alarm_email) ' aws/envs/stg/stg.auto.tfvars aws/envs/prd/prd.auto.tfvars   # 3 mỗi file
+     aws/scripts/tfvars.sh env stg
+     aws/scripts/tfvars.sh env prd
      ```
 
-   - `aws/accounts/prd/prd.auto.tfvars`: thêm trong editor một dòng `alarm_email = "<email>"` (hộp thư của topic `svp-prd-dns-alarms`, dạng ở
-     `prd.auto.tfvars.example`), rồi `grep -c '^alarm_email ' aws/accounts/prd/prd.auto.tfvars` in `1`.
+     Mong `ok    aws/envs/<env>/<env>.auto.tfvars: hosted_zone_id from aws/accounts/<env>, domain, alarm_email; removed:
+     acme_email written (N lines, mode 600)` rồi `ok    … : 3 of hosted_zone_id, domain, alarm_email`; chưa có file thì
+     dòng `FAIL … stdin is not a terminal` nghĩa là chạy trong terminal thật để nhập `domain`, `alarm_email`.
+   - `aws/accounts/prd/prd.auto.tfvars`: thêm trong editor một dòng `alarm_email = "<email>"` (hộp thư của topic `svp-prd-dns-alarms`; giá
+     trị cá nhân giữ tay, dạng ở `prd.auto.tfvars.example`; file chưa có thì `aws/scripts/tfvars.sh example aws/accounts/prd` chép nó), rồi
+     `grep -c '^alarm_email ' aws/accounts/prd/prd.auto.tfvars` in `1`.
 3. **Chi phí liên tục**: từ bước (2), account prd giữ key KMS DNSSEC, key và topic của alarm DNSSEC, hai alarm, log query DNS cả khi không có
    buổi; bảng "Lúc không buổi" ở
    [phụ lục ADR-0061 §13](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0061-edge-cloudfront-waf-acm.md#13-chi-phí-edge).
-4. **Trên máy**: Terraform 1.15, AWS CLI v2, `jq`, `dig`; `delv` (BIND 9) khi có. Profile `anhnv-log-ro` đã tạo
-   ([`org-security-setup.md`](org-security-setup.md#bước-4-awsorg-đủ), bốn profile chỉ đọc).
+4. **Trên máy**: Terraform 1.15, AWS CLI v2, `jq`, `dig`; `delv` (BIND 9) khi có. Profile `anhnv-log-ro` đã ghi
+   ([`org-security-setup.md`](org-security-setup.md#bước-4-awsorg-đủ), `sso-profiles.sh write`).
 
 ## Mở terminal
 
 ```sh
 cd infra
-AWS_PROFILE=anhnv-sso aws sso login --region us-east-1      # cùng sso_session thì một lần cho mọi profile
-export SVP_AWS_MGMT_ACCOUNT_ID=<12 số> SVP_AWS_LOG_ACCOUNT_ID=<12 số> SVP_AWS_SECURITY_ACCOUNT_ID=<12 số>
-export SVP_AWS_STG_ACCOUNT_ID=<12 số> SVP_AWS_PRD_ACCOUNT_ID=<12 số>             # đọc trên trang SSO; không ghi vào file nào
-export SVP_SESSION_DIR="$PWD/.session/$(date -u +%Y%m%dT%H%M%SZ)"                # check-account.sh ghi mốc ở đây
+AWS_PROFILE=anhnv-sso aws sso login --region us-east-1      # one login for every profile of the same sso_session
+export SVP_AWS_MGMT_ACCOUNT_ID=<12 số>                      # typed by hand: the value check-account.sh compares against
+eval "$(aws/scripts/accounts.sh)"                           # sets the other five SVP_AWS_*_ACCOUNT_ID, no file
+export SVP_SESSION_DIR="$PWD/.session/$(date -u +%Y%m%dT%H%M%SZ)"   # check-account.sh marks its timeline here
 aws/scripts/check-account.sh mgmt
 ```
 
-Tìm `ok    account <12 số> of mgmt, arn:aws:sts::<12 số>:assumed-role/AWSReservedSSO_…`. Mở lại terminal giữa chừng: đặt lại cả sáu biến.
+Tìm năm dòng `ok    SVP_AWS_<…>_ACCOUNT_ID: account svp-<tên>, ACTIVE` rồi `ok    account <12 số> of mgmt,
+arn:aws:sts::<12 số>:assumed-role/AWSReservedSSO_…`. Mở lại terminal giữa chừng: đặt lại `SVP_AWS_MGMT_ACCOUNT_ID` và `SVP_SESSION_DIR`,
+chạy lại `eval` trên.
 
 ## Bước (1): log CloudFront và quyền đọc
 
@@ -119,16 +128,17 @@ Lệnh cuối không in object nào (chưa buổi nào ghi log) và `exit 0`; `A
 đăng nhập lại rồi chạy lại lệnh cuối:
 
 ```sh
-AWS_PROFILE=anhnv-log-ro aws sso login --region us-east-1
+AWS_PROFILE=anhnv-sso aws sso login --region us-east-1   # one login for every profile of the same sso_session
 ```
 
 ## Bước (2a): hạ TTL của zone prd
 
-Route 53 khuyên trước khi ký: TTL lớn nhất của zone còn 1 giờ, hạ TTL và trường minimum của `SOA`, để đường lui không phải chờ bản ghi cũ hết hạn
-trong cache
-([Route 53: Enabling DNSSEC signing](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/dns-configuring-dnssec-enable-signing.html),
-bước 1). Zone prd có `NS` ở đỉnh TTL 172 800 (Route 53 tạo, ngoài state) và `SOA` minimum 86 400; `NS` uỷ quyền stg không được ký (bản ghi ở
-điểm uỷ quyền, RFC 4035 §2.2) nên giữ nguyên. Đọc hiện trạng:
+Giữ tay vì chỉ làm một lần mỗi zone, trên hai bản ghi ở đỉnh zone mà Terraform không quản (Route 53 tạo, ngoài state),
+và người học phải đọc từng bản ghi trước khi gửi. Route 53 khuyên trước khi ký: TTL lớn nhất của zone còn 1 giờ, hạ TTL
+và trường minimum của `SOA`, để đường lui không phải chờ bản ghi cũ hết hạn trong cache ([Route 53: Enabling DNSSEC
+signing](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/dns-configuring-dnssec-enable-signing.html), bước 1).
+Zone prd có `NS` ở đỉnh TTL 172 800 (Route 53 tạo, ngoài state) và `SOA` minimum 86 400; `NS` uỷ quyền stg không được ký
+(bản ghi ở điểm uỷ quyền, RFC 4035 §2.2) nên giữ nguyên. Đọc hiện trạng:
 
 ```sh
 aws/scripts/check-account.sh prd
@@ -192,46 +202,54 @@ date -u +%Y-%m-%dT%H:%M:%SZ | tee "$SVP_SESSION_DIR/zone-signed"
 cd ../../..
 ```
 
-**Xác nhận email**: mở link "Confirm subscription" của thư "AWS Notification - Subscription Confirmation" gửi tới `alarm_email`, rồi đọc (mong
-`confirmed`; `PendingConfirmation` là chưa mở link):
+**Xác nhận email**: giữ tay vì token nằm trong thư, không có API. Mở link **Confirm subscription** của thư "AWS Notification -
+Subscription Confirmation" gửi tới `alarm_email` (xem cả thư rác), rồi kiểm:
 
 ```sh
-AWS_PROFILE=anhnv-prd aws sns list-subscriptions-by-topic --region us-east-1 \
-  --topic-arn "arn:aws:sns:us-east-1:$SVP_AWS_PRD_ACCOUNT_ID:svp-prd-dns-alarms" --query 'Subscriptions[].SubscriptionArn' --output text |
-  sed -E 's/^arn:.*/confirmed/'
+aws/scripts/verify.sh subscriptions prd
 ```
+
+Mong `ok    topic svp-prd-dns-alarms: every subscription is confirmed`; `FAIL  … a subscription is still
+PendingConfirmation` là chưa mở link.
 
 **Trạng thái ký, KSK, alarm, CAA:**
 
 ```sh
-zone_id=$(AWS_PROFILE=anhnv-prd terraform -chdir=aws/accounts/prd output -raw zone_id)
-AWS_PROFILE=anhnv-prd aws route53 get-dnssec --hosted-zone-id "$zone_id" --region us-east-1 \
-  --query '{Signing:Status.ServeSignature,KSK:KeySigningKeys[].[Name,Status]}' --output json
+aws/scripts/verify.sh dnssec
 AWS_PROFILE=anhnv-prd aws cloudwatch describe-alarms --alarm-name-prefix svp-prd-dnssec- --region us-east-1 \
   --query 'MetricAlarms[].[AlarmName,StateValue]' --output text
 for z in aws.<domain> stg.aws.<domain>; do echo "== $z"; dig +short CAA "$z" @1.1.1.1 | sort; done
 ```
 
-Mong `SIGNING`, KSK `svp_prd_ksk` `ACTIVE`; hai alarm `svp-prd-dnssec-internal-failure`, `svp-prd-dnssec-ksk-action-needed` ở `OK` hay
-`INSUFFICIENT_DATA` (Route 53 gửi metric DNSSEC thưa, thiếu dữ liệu là bình thường); mỗi zone tám dòng `0 issue "…"`, `0 issuewild "…"` cho
-`amazon.com`, `amazontrust.com`, `awstrust.com`, `amazonaws.com`. KSK ở trạng thái khác `ACTIVE`: runbook alarm KSK ở mục
-[Alarm DNSSEC](#alarm-dnssec), không sang bước (3).
+Ở bước (2), chỉ dòng đầu của `verify.sh dnssec` đã mong đợi: `ok    zone aws.<domain> is SIGNING and its KSK svp_prd_ksk
+is ACTIVE`. Các dòng sau (`FAIL  no DS for <domain> at 1.1.1.1`, `no DS aws.<domain> at the parent's name server`) đỏ
+tới khi bước (3) xong và là đúng như vậy. Hai alarm `svp-prd-dnssec-internal-failure`,
+`svp-prd-dnssec-ksk-action-needed` ở `OK` hay `INSUFFICIENT_DATA` (Route 53 gửi metric DNSSEC thưa, thiếu dữ liệu là
+bình thường); mỗi zone tám dòng `0 issue "…"`, `0 issuewild "…"` cho `amazon.com`, `amazontrust.com`, `awstrust.com`,
+`amazonaws.com`. KSK ở trạng thái khác `ACTIVE`: runbook alarm KSK ở mục [Alarm DNSSEC](#alarm-dnssec), không sang bước
+(3).
 
 ## Bước (3): chuỗi tin cậy
 
 Resolver chỉ kiểm chữ ký của `aws.<domain>` khi `<domain>` đã ký, TLD có `DS` của `<domain>`, và zone `<domain>` có `DS` tên `aws` trỏ KSK của
 zone prd. Theo thứ tự, mỗi mục đạt mới sang mục sau.
 
-**3a. Domain cha đã ký.** Bật DNSSEC của `<domain>` ở Cloudflare (DNS → Settings → DNSSEC) và đặt `DS` nó đưa ra ở registrar của TLD là việc
-một lần; kiểm:
+**3a. Domain cha đã ký.** Mọi lệnh kiểm của bước này đọc bằng `aws/scripts/verify.sh dnssec` (dưới). Việc ở registrar là một lần, giữ tay vì
+registrar của TLD là bên thứ ba, không có API chung và cần đăng nhập của người học:
 
-```sh
-dig +short DS <domain> @1.1.1.1
-dig +dnssec SOA <domain> @1.1.1.1 | grep -E '^;; flags:'
-```
+1. Cloudflare → chọn `<domain>` → **DNS** → **Settings** → **DNSSEC** → **Enable DNSSEC**. Cloudflare hiện bản ghi `DS`
+   của `<domain>` (key tag, thuật toán, kiểu digest, digest; thuật toán 13 là ECDSA P-256 SHA-256)
+   ([nguồn](https://developers.cloudflare.com/dns/dnssec/), đọc 2026-11-15).
+2. Registrar của `<domain>` (nơi mua tên miền): mục DNSSEC hay **DS records** của domain → nhập bốn trường đó. Nếu
+   registrar chính là Cloudflare Registrar thì Cloudflare tự đặt `DS`, không còn việc ở bước này. Registrar có thể chèn
+   `DS` theo lịch, chờ tới khi registry nhận.
+3. Kiểm: `verify.sh dnssec` in `ok    <domain> has a DS at 1.1.1.1 and validates` và `note  registrar: DS of <domain> is
+   key tag …, algorithm …, digest type …, digest …` (so với giá trị Cloudflare đưa ra). `FAIL  no DS for <domain> at
+   1.1.1.1` là registrar chưa nhận hay chưa bật DNSSEC ở Cloudflare; `FAIL  <domain> does not validate at 1.1.1.1 (no ad
+   flag)` là `DS` ở registrar sai hay chưa lan truyền: đừng đi tiếp.
 
-Mong ít nhất một dòng `DS` và cờ `ad` trong dòng `flags`. Chưa có: làm việc một lần đó, chờ registry nhận (registrar có thể chỉ chèn `DS` theo
-lịch), không đi tiếp.
+Bẫy: bật DNSSEC ở Cloudflare mà không đặt `DS` ở registrar thì chưa có chuỗi tin cậy (không hỏng gì, chỉ chưa có `ad`); đặt `DS` sai thì
+resolver kiểm DNSSEC trả `SERVFAIL` cho cả `<domain>`: xoá `DS` đó ở registrar trước khi làm gì khác.
 
 **3b. Chờ.** Thêm `DS` chỉ khi đã qua 48 giờ (TTL `NS` cũ, 172 800 giây) kể từ mốc `ttl-lowered` và một giờ kể từ mốc `zone-signed`: cache của
 resolver không còn bản ghi chưa ký nào của zone.
@@ -240,46 +258,43 @@ resolver không còn bản ghi chưa ký nào của zone.
 cat "$SVP_SESSION_DIR/ttl-lowered" "$SVP_SESSION_DIR/zone-signed"; date -u +%Y-%m-%dT%H:%M:%SZ
 ```
 
-**3c. Lấy `DS`:**
+**3c. Lấy giá trị cho Cloudflare:**
 
 ```sh
-aws/scripts/check-account.sh prd
-zone_id=$(AWS_PROFILE=anhnv-prd terraform -chdir=aws/accounts/prd output -raw zone_id)
-AWS_PROFILE=anhnv-prd aws route53 get-dnssec --hosted-zone-id "$zone_id" --region us-east-1 \
-  --query 'KeySigningKeys[?Name==`svp_prd_ksk`].[Status,DSRecord]' --output text
+aws/scripts/verify.sh dnssec
 ```
 
-Mong `ACTIVE` và giá trị `DSRecord` dạng `<key tag> 13 2 <digest hex>` (thuật toán 13 là ECDSA P-256 SHA-256, digest 2 là SHA-256).
+Các dòng `note  Cloudflare: NS record, name aws, value <name server>` (bốn dòng) và `note  Cloudflare: DS record, name
+aws, key tag <n>, algorithm 13, digest type 2, digest <hex>` là giá trị cần nhập ở 3d; KSK phải `ACTIVE` (dòng `ok
+zone … is SIGNING and its KSK svp_prd_ksk is ACTIVE`).
 
-**3d. Thêm `DS` ở DNS cha.** Cloudflare, DNS → Records của `<domain>` → Add record: **Type** `DS`, **Name** `aws`, **TTL** 5 min (300 giây,
-lùi nhanh khi hỏng, theo hướng dẫn Route 53), **Key Tag**, **Algorithm**, **Digest Type**, **Digest** lần lượt là bốn trường của `DSRecord`.
-Đã có `DS` `aws` (lần trước) thì sửa nó, không thêm cái thứ hai.
+**3d. Thêm `DS` ở DNS cha.** Giữ tay vì ghi DNS của Cloudflare cần API token quyền sửa DNS của zone cha, mà lab không
+giữ. Hai cách làm: trang web (dưới), hoặc API Cloudflare `POST /zones/{zone_id}/dns_records` với token **DNS Edit**
+([nguồn](https://developers.cloudflare.com/api/resources/dns/subresources/records/methods/create/), đọc 2026-11-15) khi
+đã có token sẵn. Trang web: Cloudflare, DNS → Records của `<domain>` → Add record: **Type** `DS`, **Name** `aws`,
+**TTL** 5 min (300 giây, lùi nhanh khi hỏng, theo hướng dẫn Route 53), **Key Tag**, **Algorithm**, **Digest Type**,
+**Digest** lần lượt là bốn trường của dòng `note` ở 3c. Đã có `DS` `aws` (lần trước) thì sửa nó, không thêm cái thứ hai.
+Bốn bản ghi `NS` `aws` đã đặt ở [`aws/accounts`, mục 5](../../aws/accounts/README.md#5-uỷ-quyền-zone-của-env). Bẫy: dán
+digest thiếu hay thừa một ký tự là chuỗi tin cậy hỏng.
 
-**3e. Kiểm lan truyền ở DNS cha**, rồi chờ thêm 10 phút và TTL `NS` lớn nhất (resolver chỉ thấy `DS` khi `NS` của zone trong cache hết hạn):
+**3e, 3f. Kiểm lan truyền và xác thực.** Chờ thêm 10 phút và TTL `NS` lớn nhất (resolver chỉ thấy `DS` khi `NS` của zone
+trong cache hết hạn; dòng `note  3e: NS TTL <n> s at the parent, <m> s at the zone (3600 after 2a)` cho hai TTL đó),
+rồi:
 
 ```sh
-pns=$(dig +short NS <domain> | head -n 1)
-dig +norec +short DS aws.<domain> @"$pns"                              # đúng giá trị DSRecord
-dig +norec +noall +authority NS aws.<domain> @"$pns"                   # cột 2: TTL NS ở DNS cha
-dig +noall +answer NS aws.<domain> @"$(dig +short NS aws.<domain> | head -n 1)"   # cột 2: 3600 sau bước (2a)
+aws/scripts/verify.sh dnssec
 ```
 
-**3f. Kiểm resolver xác thực được**, cả zone stg vẫn phân giải (uỷ quyền không `DS`, không cờ `ad`, không lỗi):
+Mong `ok    the DS of aws.<domain> at the parent is the DSRecord of the KSK`; ở mỗi resolver `1.1.1.1`, `8.8.8.8`: `ok
+aws.<domain> at <r>: NOERROR, ad` và `ok    stg.aws.<domain> at <r>: NOERROR, noad` (zone stg phân giải, uỷ quyền không
+`DS`, không cờ `ad`); `ok    delv: aws.<domain> is fully validated` khi `delv` có trên máy, thiếu thì `note  delv is not
+installed: the dig checks above are enough`. `FAIL  … answers 'SERVFAIL'` ở zone prd hay zone stg: làm ngay [đường
+lui](#đường-lui). `FAIL  the DS of aws.<domain> at Cloudflare differs from the KSK's DSRecord`: sửa lại ở 3d. Dán mọi
+dòng `FAIL` và `note` của lượt chạy.
 
-```sh
-for r in 1.1.1.1 8.8.8.8; do
-  echo "== $r"
-  dig +dnssec SOA aws.<domain> @"$r" | grep -E '^;; (flags|->>HEADER)'
-  dig +dnssec SOA stg.aws.<domain> @"$r" | grep -E '^;; (flags|->>HEADER)'
-done
-delv @1.1.1.1 aws.<domain> SOA
-```
-
-Mong ở mỗi resolver: zone prd `status: NOERROR` và cờ `ad`; zone stg `status: NOERROR`, không `ad`. `delv` in `; fully validated`; `delv` báo
-thiếu thuật toán hay không có trên máy: hai dòng `dig` đủ. `SERVFAIL` ở zone prd hay zone stg: làm ngay [đường lui](#đường-lui).
-
-**3g. Theo dõi.** Route 53 khuyên theo dõi phân giải tới hai tuần; lặp lại 3f vài ngày một lần, đọc email alarm. Sau đó, tuỳ chọn, tăng TTL
-của `DS` `aws` lên 1 giờ ở Cloudflare (đường lui khi đó chờ 1 giờ thay vì 5 phút).
+**3g. Theo dõi.** Route 53 khuyên theo dõi phân giải tới hai tuần; chạy lại `verify.sh dnssec` vài ngày một lần, đọc
+email alarm. Sau đó, tuỳ chọn, tăng TTL của `DS` `aws` lên 1 giờ ở Cloudflare (đường lui khi đó chờ 1 giờ thay vì 5
+phút).
 
 ## Bước (4): buổi stg, prd
 
@@ -312,8 +327,8 @@ zone prd lẫn zone stg dưới nó. Thứ tự luôn là: gỡ `DS` ở cha, ch
    dig +norec +noall +answer DS aws.<domain> @"$pns"
    ```
 
-2. Cloudflare, DNS → Records của `<domain>`: xoá bản ghi `DS` `aws`. Kiểm DNS cha không còn nó (không in dòng nào), rồi chờ 10 phút cộng TTL
-   vừa đọc:
+2. Cloudflare, DNS → Records của `<domain>`: xoá bản ghi `DS` `aws` (giữ tay như 3d). Kiểm DNS cha không còn nó (không
+   in dòng nào), rồi chờ 10 phút cộng TTL vừa đọc:
 
    ```sh
    dig +norec +short DS aws.<domain> @"$pns"
@@ -340,7 +355,8 @@ zone prd lẫn zone stg dưới nó. Thứ tự luôn là: gỡ `DS` ở cha, ch
    Mong `NOT_SIGNING`; KSK vẫn `ACTIVE`, key KMS vẫn còn, nên ký lại chỉ cần apply với `dnssec_signing = true` rồi làm lại bước (3).
 4. PR đổi `default` của biến `dnssec_signing` trong `aws/accounts/prd/variables.tf` thành `false`: lượt apply sau không ký lại. Ký lại về sau là
    PR ngược lại, rồi bước (3) từ 3b.
-5. Kiểm hai zone phân giải lại: lệnh của 3f, mong `NOERROR` không `ad` ở cả hai.
+5. Kiểm hai zone phân giải lại: `verify.sh dnssec` sẽ `FAIL` ở các dòng cần `ad` vì zone đã `NOT_SIGNING`; đọc `dig +dnssec SOA` của zone
+   prd và stg ở mỗi resolver, mong `NOERROR` không `ad` ở cả hai.
 
 ### Gỡ hẳn
 
@@ -388,4 +404,4 @@ còn trong state: plan lỗi ở `prevent_destroy`.
 - Lỗi ở `plan`: không gì đổi trên account; sửa nguyên nhân (biến terminal, `.auto.tfvars`, phiên SSO), chạy lại đúng bước.
 - Lỗi giữa `apply`: phần đã tạo nằm trong state; `plan` lại chỉ còn phần chưa tạo. Dán lỗi và plan mới trước khi apply lại.
 - Plan có `destroy` hay `-/+` ở zone, bucket, key có sẵn: dừng, không apply, dán plan.
-- `SERVFAIL` ở zone prd hay stg sau bước (3): [đường lui](#đường-lui) ngay, rồi dán output của 3c, 3e, 3f.
+- `SERVFAIL` ở zone prd hay stg sau bước (3): [đường lui](#đường-lui) ngay, rồi dán output của `verify.sh dnssec`.

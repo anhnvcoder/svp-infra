@@ -67,32 +67,40 @@ gán permission set `SvpAdmin` và `aws/security` đã apply ([Thứ tự apply]
 Dựng mới cả hai env thì prd trước: zone stg được uỷ quyền từ zone prd (mục 5). Ví dụ dưới là stg; với prd thay `stg`
 bằng `prd`, `anhnv-stg` bằng `anhnv-prd`, `SVP_AWS_STG_ACCOUNT_ID` bằng `SVP_AWS_PRD_ACCOUNT_ID`.
 
-Cần: Terraform 1.15, AWS CLI v2, `jq`, `dig`; profile `anhnv-stg` đã tạo bằng `aws configure sso` (permission set `SvpAdmin` của account
-stg) và `aws sso login --profile anhnv-stg`; trong terminal của buổi (không file commit nào) đã `export SVP_AWS_STG_ACCOUNT_ID=<12 số>` và
-`export SVP_AWS_BACKUP_ACCOUNT_ID=<12 số>` (output `backup_account_id` của `aws/org`; account `svp-backup` phải có trước).
+Cần: Terraform 1.15, AWS CLI v2, `jq`, `dig`; profile `anhnv-stg` (permission set `SvpAdmin` của account stg) đã có từ
+`aws/scripts/sso-profiles.sh write` ([`aws/org`, Profile](../org/README.md#profile)) và đã `aws sso login --profile anhnv-sso` (một lần
+cho mọi profile cùng `sso_session`). Trong terminal của buổi (không file commit nào) đã `export SVP_AWS_MGMT_ACCOUNT_ID=<12 số>` rồi
+`eval "$(aws/scripts/accounts.sh)"`: lệnh đọc tổ chức bằng `anhnv-sso` và đặt `SVP_AWS_STG_ACCOUNT_ID`, `SVP_AWS_PRD_ACCOUNT_ID`,
+`SVP_AWS_LOG_ACCOUNT_ID`, `SVP_AWS_SECURITY_ACCOUNT_ID`, `SVP_AWS_BACKUP_ACCOUNT_ID` (account `svp-backup` phải có trước). Mỗi biến một dòng
+`ok    SVP_AWS_<…>_ACCOUNT_ID: account svp-<tên>, ACTIVE` trên stderr, không in id; lỗi (`FAIL  no account svp-backup in the organization`,
+account không `ACTIVE`, mgmt sai) thì stdout rỗng nên `eval` không đặt gì.
 
 ### 1. Kiểm account và role
 
 ```sh
 cd infra/aws/accounts/stg
-AWS_PROFILE=anhnv-stg aws sts get-caller-identity --region ap-southeast-1 --query '{Account:Account,Arn:Arn}' --output table
-echo "$SVP_AWS_STG_ACCOUNT_ID"
+../../scripts/check-account.sh stg
 ```
 
-`Account` phải bằng số vừa in, `Arn` phải chứa `assumed-role/AWSReservedSSO_SvpAdmin_`. Sai một trong hai thì dừng: key policy chỉ cho role
-SSO của `SvpAdmin` mã hoá, giải mã, nên apply bằng role khác (vd `OrganizationAccountAccessRole`) tạo được key nhưng không ghi được state vào
-bucket ở bước 4.
+Tìm `ok    account <12 số> of stg, arn:aws:sts::<12 số>:assumed-role/AWSReservedSSO_SvpAdmin_…`: account bằng `SVP_AWS_STG_ACCOUNT_ID` và
+`Arn` chứa `AWSReservedSSO_SvpAdmin_`. `FAIL  profile anhnv-stg is account …` thì dừng, dán dòng đó: key policy chỉ cho role SSO của
+`SvpAdmin` mã hoá, giải mã, nên apply bằng role khác (vd `OrganizationAccountAccessRole`) tạo được key nhưng không ghi được state vào bucket
+ở bước 4.
 
 ### 2. Giá trị cá nhân
 
 ```sh
-cp stg.auto.tfvars.example stg.auto.tfvars
+../../scripts/tfvars.sh example aws/accounts/stg
+../../scripts/tfvars.sh groups stg
 ```
 
-Sửa `stg.auto.tfvars` (git bỏ qua): `budget_emails`, `zone_name` (không dấu chấm cuối: `stg.aws.<domain>` ở stg,
-`aws.<domain>` ở prd), `budget_limit_usd` nếu muốn khác $20, `platform_admin_group_id`, `platform_viewer_group_id`
-(output cùng tên của `aws/org`); ở prd thêm `alarm_email` (hộp thư của topic `svp-prd-dns-alarms`). Ở prd bỏ khối
-`delegated_subdomains` của file ví dụ cho tới mục 5 (zone stg chưa có).
+Lệnh đầu chép `stg.auto.tfvars.example` thành `stg.auto.tfvars` (mode 600) khi file chưa có và liệt kê mỗi giá trị còn
+`<…>` một dòng `note  … still holds a placeholder <...>`; lệnh sau ghi `platform_admin_group_id`,
+`platform_viewer_group_id` từ output cùng tên của `aws/org` (root đã apply và `init`), chỉ hai dòng đó đổi: `ok
+aws/accounts/stg/stg.auto.tfvars: platform_admin_group_id, platform_viewer_group_id from aws/org written (N lines, mode
+600)`. Giá trị cá nhân giữ tay, sửa trong editor (git bỏ qua): `budget_emails`, `zone_name` (không dấu chấm cuối:
+`stg.aws.<domain>` ở stg, `aws.<domain>` ở prd), `budget_limit_usd` nếu muốn khác $20; ở prd thêm `alarm_email` (hộp thư
+của topic `svp-prd-dns-alarms`). Ở prd bỏ khối `delegated_subdomains` của file ví dụ cho tới mục 5 (zone stg chưa có).
 
 ### 3. Apply lần đầu, state local
 
@@ -118,11 +126,13 @@ topic, topic policy, subscription email). Rồi:
 
 ```sh
 AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform apply stg.tfplan
-AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform output -raw backend_hcl > ../../backend-stg.hcl
-cat ../../backend-stg.hcl     # bucket, region, encrypt, kms_key_id, use_lockfile của account stg
+../../scripts/tfvars.sh backend stg
 ```
 
-`aws/backend-stg.hcl` (git bỏ qua) là cấu hình backend mà mọi root của account stg đọc bằng `-backend-config`.
+Lệnh kiểm account stg, đọc output `backend_hcl` của root này và ghi `aws/backend-stg.hcl` (mode 600, qua file tạm rồi
+`mv`): `ok    aws/backend-stg.hcl: output backend_hcl of aws/accounts/stg written (N lines, mode 600)`. File (git bỏ
+qua) là cấu hình backend mà mọi root của account stg đọc bằng `-backend-config`: bucket, region, encrypt, `kms_key_id`,
+`use_lockfile` của account stg.
 
 ### 4. Chuyển state vào bucket
 
@@ -152,9 +162,14 @@ cd infra/aws/accounts/prd
 AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform output -json name_servers | jq -r '.[]'
 ```
 
-Trong Cloudflare (DNS đang phục vụ domain): **DNS** → **Records** của `<domain>`, bốn bản ghi **Type** `NS`, **Name** `aws`, mỗi bản ghi
-**Nameserver** một trong bốn tên vừa in (không dấu chấm cuối), **TTL** Auto. Đã có bốn bản ghi `NS` `aws` thì sửa **Nameserver** của chúng,
-không thêm bản ghi thứ năm. Không đổi gì khác của domain (không đổi name server của domain, không xoá bản ghi nào khác).
+Giữ tay vì Cloudflare chỉ nhận thay đổi DNS qua API token mà lab không giữ (token quyền ghi DNS của zone cha là quyền lớn hơn việc bốn bản
+ghi một lần). Hai cách làm: trang web (dưới) hoặc API Cloudflare `POST /zones/{zone_id}/dns_records` với token có quyền **DNS Edit**
+([Create DNS record](https://developers.cloudflare.com/api/resources/dns/subresources/records/methods/create/)): chỉ khi đã có token sẵn,
+không tạo token chỉ cho việc này. Trong Cloudflare (DNS đang phục vụ domain): **DNS** → **Records** của `<domain>`, bốn bản ghi **Type**
+`NS`, **Name** `aws`, mỗi bản ghi **Nameserver** một trong bốn tên vừa in (không dấu chấm cuối), **TTL** Auto. Đã có bốn bản ghi `NS` `aws`
+thì sửa **Nameserver** của chúng, không thêm bản ghi thứ năm. Không đổi gì khác của domain (không đổi name server của domain, không xoá bản
+ghi nào khác). Bẫy: bản ghi **Proxied** không áp dụng cho `NS`; gõ nhầm một tên thì chỉ một phần lượt tra cứu qua, nên kiểm bằng cả hai
+resolver dưới đây.
 
 Kiểm lan truyền (lặp lại tới khi qua; thường vài phút, có thể tới 48 giờ do cache):
 
@@ -173,25 +188,23 @@ cd infra/aws/accounts/stg
 AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform output -json name_servers | jq -r '.[]'
 ```
 
-Thêm vào `aws/accounts/prd/prd.auto.tfvars` (git bỏ qua; dạng ở `prd.auto.tfvars.example`), tên zone kết thúc bằng `.<zone_name của prd>`,
-đúng bốn name server:
-
-```hcl
-delegated_subdomains = {
-  "stg.aws.<domain>" = ["<ns 1>", "<ns 2>", "<ns 3>", "<ns 4>"]
-}
-```
-
-Rồi với profile prd:
+Ghi `delegated_subdomains` của `aws/accounts/prd/prd.auto.tfvars` (git bỏ qua; dạng ở `prd.auto.tfvars.example`) bằng script, rồi
+với profile prd:
 
 ```sh
-cd ../prd
-AWS_PROFILE=anhnv-prd aws sts get-caller-identity --region ap-southeast-1 --query '{Account:Account,Arn:Arn}' --output table   # Account = $SVP_AWS_PRD_ACCOUNT_ID
+cd ../../..
+aws/scripts/tfvars.sh delegation
+cd aws/accounts/prd
+../../scripts/check-account.sh prd
 AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform plan -out=prd.tfplan
 ```
 
-Đọc plan: `Plan: 1 to add, 0 to change, 0 to destroy`, đúng `module.baseline.aws_route53_record.delegation["stg.aws.<domain>"]`, không gì
-khác. Validation của biến chỉ chạy lúc `plan`: tên không phải con của zone prd hay số name server khác bốn thì dừng ở đó. Rồi:
+`tfvars.sh delegation` đọc zone stg từ `zone_name` của `aws/accounts/stg/stg.auto.tfvars`, bốn name server từ output
+`name_servers` của `aws/accounts/stg`, và đặt lại cả biến `delegated_subdomains` của file prd thành đúng mục đó, không
+đổi dòng khác (`ok    … delegated_subdomains: zone of stg, 4 name servers written`). Output không đúng bốn tên DNS thì `FAIL  output
+name_servers of aws/accounts/stg has N names, not 4` và không ghi gì. Đọc plan: `Plan: 1 to add, 0 to change, 0 to
+destroy`, đúng `module.baseline.aws_route53_record.delegation["stg.aws.<domain>"]`, không gì khác. Validation của biến
+chỉ chạy lúc `plan`: tên không phải con của zone prd hay số name server khác bốn thì dừng ở đó. Rồi:
 
 ```sh
 AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform apply prd.tfplan && rm prd.tfplan
@@ -204,37 +217,40 @@ done
 Zone stg bị thay (gỡ rồi dựng lại baseline stg) thì có bốn name server mới. Bản ghi `NS` ở zone prd không bao giờ được trỏ tới zone stg đã
 xoá, nên thứ tự là:
 
-1. Bỏ mục `stg.aws.<domain>` khỏi `delegated_subdomains` trong `prd.auto.tfvars`, plan và apply prd như bước 1 của mục
+1. Bỏ mục `stg.aws.<domain>` khỏi `delegated_subdomains` trong `prd.auto.tfvars` (sửa trong editor: `tfvars.sh
+   delegation` đặt lại cả biến thành đúng mục của zone stg, không bỏ được mục), plan và apply prd như bước 1 của mục
    [Gỡ baseline](#gỡ-baseline-có-chủ-đích) (mong đợi `0 to add, 0 to change, 1 to destroy`, đúng
    `module.baseline.aws_route53_record.delegation["stg.aws.<domain>"]`).
 2. Gỡ baseline stg theo các bước còn lại của mục đó, rồi dựng lại từ [Dựng baseline](#dựng-baseline).
-3. Thêm lại mục `stg.aws.<domain>` với bốn name server mới (output `name_servers` của `aws/accounts/stg`) và làm lại các lệnh trên với
+3. Thêm lại mục `stg.aws.<domain>` với bốn name server mới bằng `aws/scripts/tfvars.sh delegation` và làm lại các lệnh trên với
    profile prd (plan mong đợi `1 to add, 0 to change, 0 to destroy`, đúng bản ghi `delegation` đó).
 
 Từ bước 1 tới khi apply ở bước 3 xong, `stg.aws.<domain>` không phân giải.
 
 ### 6. Alarm và DNSSEC của prd
 
-Apply của prd tạo subscription email của topic `svp-prd-dns-alarms` ở trạng thái chờ: mở link trong thư "AWS Notification - Subscription
-Confirmation" gửi tới `alarm_email`, rồi kiểm (`SubscriptionArn` là ARN thật, không còn `PendingConfirmation`):
+Apply của prd tạo subscription email của topic `svp-prd-dns-alarms` ở trạng thái chờ. Bấm xác nhận giữ tay vì token nằm trong thư: mở link
+**Confirm subscription** của thư "AWS Notification - Subscription Confirmation" gửi tới `alarm_email` (xem cả thư rác; token của
+link chỉ dùng được trong hai ngày và SNS xoá subscription chưa xác nhận sau 48 giờ: quá hạn thì apply lại để AWS gửi thư mới).
+Rồi kiểm:
 
 ```sh
-AWS_PROFILE=anhnv-prd aws sns list-subscriptions --region us-east-1 \
-  --query "Subscriptions[?ends_with(TopicArn, ':svp-prd-dns-alarms')].[Protocol,SubscriptionArn]" --output text
+../../scripts/verify.sh subscriptions prd
 ```
+
+Mong `ok    topic svp-prd-dns-alarms: every subscription is confirmed`. `FAIL  topic svp-prd-dns-alarms: a subscription is still
+PendingConfirmation` là chưa bấm link: dán dòng đó nếu đã bấm mà vẫn thế.
 
 Zone prd ký ngay sau apply, nhưng chuỗi tin cậy chỉ nối khi DNS cha của `<domain>` có bản ghi `DS` tên `aws`. Xem trạng thái ký, KSK và bản ghi
 `DS` của nó:
 
 ```sh
-cd infra/aws/accounts/prd
-AWS_PROFILE=anhnv-prd aws route53 get-dnssec --region us-east-1 \
-  --hosted-zone-id "$(AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform output -raw zone_id)" \
-  --query '{Signing:Status.ServeSignature,KSK:KeySigningKeys[].[Name,Status,DSRecord]}' --output json
+../../scripts/verify.sh dnssec
 ```
 
-Mong đợi `Signing` là `SIGNING`, KSK `svp_prd_ksk` ở `ACTIVE`; `DSRecord` là giá trị bản ghi `DS` cần đặt ở DNS cha. Thứ tự đặt `DS` (domain cha ký
-trước, TTL, kiểm `dig +dnssec`, `delv`) và đường lui ở runbook `docs/runbooks/edge-setup.md` của repo này; tắt ký và gỡ DNSSEC ở mục
+Mong đợi `ok    zone <zone> is SIGNING and its KSK svp_prd_ksk is ACTIVE`; dòng `note  registrar: DS of <domain> is key tag …, algorithm …,
+digest type …, digest …` là bốn giá trị cần đặt ở DNS cha. Thứ tự đặt `DS` (domain cha ký trước, TTL, kiểm `dig +dnssec`, `delv`) và đường
+lui ở runbook `docs/runbooks/edge-setup.md` của repo này; tắt ký và gỡ DNSSEC ở mục
 [Tắt ký DNSSEC](../modules/account-baseline/README.md#tắt-ký-dnssec) của module.
 
 Account đã dựng baseline từ một bản trước của root này (chưa có `CAA`, DNSSEC, query log, registry, observability hay
@@ -420,20 +436,19 @@ Mọi biến của root không có `default` đều bắt buộc, kể cả bi�
 - `aws/org` và `aws/security` đã apply bản có Inspector và nhóm nền tảng
   ([`aws/org`](../org/README.md#thêm-inspector-và-nhóm-nền-tảng-vào-tổ-chức-đã-áp)), `aws/org` đã tạo account `svp-backup`
   ([`aws/org`](../org/README.md#thêm-account-backup-và-backup-policy-vào-tổ-chức-đã-áp));
-- `stg.auto.tfvars` có `platform_admin_group_id`, `platform_viewer_group_id` (dạng ở `stg.auto.tfvars.example`); `prd.auto.tfvars` có
+- `stg.auto.tfvars` có `platform_admin_group_id`, `platform_viewer_group_id` (`aws/scripts/tfvars.sh groups stg`); `prd.auto.tfvars` có
   thêm `alarm_email`;
 - terminal có `SVP_AWS_STG_ACCOUNT_ID` và `SVP_AWS_BACKUP_ACCOUNT_ID` như mục [Dựng baseline](#dựng-baseline).
 
 ```sh
 cd infra/aws/accounts/stg
-AWS_PROFILE=anhnv-stg aws sts get-caller-identity --region ap-southeast-1 --query '{Account:Account,Arn:Arn}' --output table
-echo "$SVP_AWS_STG_ACCOUNT_ID $SVP_AWS_BACKUP_ACCOUNT_ID"
+../../scripts/check-account.sh stg
 AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform init -backend-config=../../backend-stg.hcl
 AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform plan -out=stg.tfplan
 ```
 
-`Account` phải bằng `$SVP_AWS_STG_ACCOUNT_ID`, `Arn` chứa `assumed-role/AWSReservedSSO_SvpAdmin_`; dòng `echo` in hai số
-12 chữ số khác nhau. Plan chỉ thêm (`0 to destroy`); mọi tài nguyên của plan thuộc một phần của bảng; phần
+`check-account.sh` phải in `ok    account … of stg, …AWSReservedSSO_SvpAdmin_…`; `SVP_AWS_BACKUP_ACCOUNT_ID` đặt bởi
+`eval "$(aws/scripts/accounts.sh)"`. Plan chỉ thêm (`0 to destroy`); mọi tài nguyên của plan thuộc một phần của bảng; phần
 nào có trong plan thì có đủ số tài nguyên ở cột của env; số `to add` bằng tổng các phần đó. Thay đổi duy nhất được phép là
 `1 to change` khi phần role plan của CI có trong plan: `module.baseline.aws_kms_key.state` sửa tại chỗ, chỉ `policy` thêm statement
 `CiPlanReadsState`. Ví dụ: account chỉ có baseline (cùng `CAA` và, ở prd, DNSSEC, query log) thì stg
@@ -455,11 +470,12 @@ AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_
 Sau apply, việc của từng phần vừa thêm:
 
 - DNSSEC, query log: bước [6. Alarm và DNSSEC của prd](#6-alarm-và-dnssec-của-prd) (xác nhận subscription, bản ghi `DS`).
-- Registry, observability: lệnh `output` dưới đây in đúng tên role của `ci_roles` của env. Rồi ba việc tay theo README module: ghi giá
-  trị hai secret `ecr-pullthroughcache/ghcr`, `ecr-pullthroughcache/docker-hub` (module chỉ tạo vỏ;
-  [Pull-through cache](../modules/registry/README.md#pull-through-cache)); sau buổi đầu có span, chạy lệnh của output
-  `spans_retention_command` ([Bước tay](../modules/observability/README.md#bước-tay-retention-của-awsspans)); gán người vào hai nhóm
-  nền tảng ([`aws/org`](../org/README.md#nhóm-nền-tảng)) để đăng nhập `grafana_url`.
+- Registry, observability: lệnh `output` dưới đây in đúng tên role của `ci_roles` của env. Rồi ba việc theo README module: ghi giá
+  trị hai secret `ecr-pullthroughcache/ghcr`, `ecr-pullthroughcache/docker-hub` bằng `aws/scripts/cache-secrets.sh <env> ghcr|dockerhub`
+  (module chỉ tạo vỏ; [`platform-setup.md`](../../docs/runbooks/platform-setup.md#bước-6-credential-của-pull-through-cache)); sau buổi đầu
+  có span, chạy lệnh của output `spans_retention_command`
+  ([Bước tay](../modules/observability/README.md#bước-tay-retention-của-awsspans)); gán người vào hai nhóm nền tảng bằng
+  `aws/scripts/platform-member.sh add admins|viewers <user-name>` ([`aws/org`](../org/README.md#nhóm-nền-tảng)) để đăng nhập `grafana_url`.
 - Backup: lệnh `describe-region-settings` dưới đây in `RDS` và `S3` là `True`.
 
 ```sh
