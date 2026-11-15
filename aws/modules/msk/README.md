@@ -21,9 +21,9 @@ Tạo:
 - Một KMS key customer managed (symmetric, xoay vòng bật, deletion window 7 ngày, alias `alias/<name>-msk-scram`) cho secret SCRAM và volume
   broker: MSK từ chối secret mã hoá bằng key AWS quản lý của Secrets Manager; secret trỏ key bằng ARN, không bằng alias.
 - Mỗi user một secret `AmazonMSK_<name>-<user>` (JSON `username`, `password`; `recovery_window_in_days = 0`) và một
-  `aws_msk_scram_secret_association` cho cả tám secret.
+  `aws_msk_scram_secret_association` cho mọi secret.
 - Giá trị của hai entry External Secrets do module `external-secrets` tạo vỏ: `svp/<env>/kafka-admin` (khoá `SVP_KAFKA_ADMIN_PASSWORD`),
-  `svp/<env>/kafka-users` (khoá `SVP_KAFKA_<USER>_PASSWORD` của bảy user còn lại).
+  `svp/<env>/kafka-users` (khoá `SVP_KAFKA_<USER>_PASSWORD` của mọi user còn lại).
 - Log group `/aws/msk/<name>` với retention `broker_logs_retention_days`, chỉ khi `broker_logs_enabled` (MSK không tự tạo đích log; tạo ở
   đây thì `destroy` gỡ được).
 - Storage autoscaling: `aws_appautoscaling_target` (`kafka:broker-storage:VolumeSize`, từ `broker_volume_size` tới `broker_volume_max_size`)
@@ -31,16 +31,16 @@ Tạo:
 - Alarm CloudWatch `<name>-<alarm>` của bảng ADR-0058 §2 (các dòng `msk-*`): tag `Severity`, alarm `page` có URL runbook
   `docs/runbooks/<alarm>.md` của repo code trong `alarm_description`, `alarm_actions` và `ok_actions` tới `alarm_topic_arn`.
 
-User: `svp-admin`, `svp-user-service`, `svp-video-service`, `svp-engagement-service`, `svp-feed-service`, `svp-media-worker`, `svp-keda`,
-`svp-otelcol`; khoá trong entry là tên user bỏ `svp-`, viết hoa, `-` thành `_`, kẹp giữa `SVP_KAFKA_` và `_PASSWORD`, cùng tên biến của `.env`
-local.
+User: `svp-admin`, `svp-user-service`, `svp-video-service`, `svp-engagement-service`, `svp-feed-service`,
+`svp-media-worker`, `svp-dlq-replay` (lệnh phát lại DLQ), `svp-keda`, `svp-otelcol`; khoá trong entry là tên user bỏ
+`svp-`, viết hoa, `-` thành `_`, kẹp giữa `SVP_KAFKA_` và `_PASSWORD`, cùng tên biến của `.env` local.
 
 ## Mật khẩu
 
 - Ephemeral `random_password` (32 ký tự, chỉ chữ và số: mật khẩu chèn thẳng, không thoát, vào `password="…"` của JAAS, aclfile và URL) sinh
   mỗi lần plan, apply, không lưu ở đâu; chỉ ghi qua đối số write-only `secret_string_wo` của `aws_secretsmanager_secret_version`, nên không
   nằm trong plan hay state. Output không có mật khẩu nào.
-- Mỗi lần apply mật khẩu sinh lại, nhưng version write-only chỉ ghi khi `secret_string_wo_version` đổi. Mọi lần ghi (tám secret
+- Mỗi lần apply mật khẩu sinh lại, nhưng version write-only chỉ ghi khi `secret_string_wo_version` đổi. Mọi lần ghi (mọi secret
   `AmazonMSK_*`, hai entry) dùng cùng `password_version` và cùng lần mở ephemeral, nên sau một apply trọn, secret SCRAM và entry cùng giá trị.
 - Các lần ghi lệch nhau khi apply dừng giữa chừng (một `PutSecretValue` lỗi, Ctrl-C) hay khi thêm user vào `local.users` trên env đang
   sống: secret của user đó nhận giá trị của lần mở mới, còn `kafka-users`/`kafka-admin` đã ghi ở version cũ nên giữ giá trị cũ; user đó

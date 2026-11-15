@@ -62,8 +62,20 @@ run "stg_values" {
   }
 
   assert {
-    condition     = length(aws_secretsmanager_secret.scram) == 8 && alltrue([for u, s in aws_secretsmanager_secret.scram : s.name == "AmazonMSK_svp-stg-${u}" && startswith(s.name, "AmazonMSK_")])
+    condition     = length(aws_secretsmanager_secret.scram) == 9 && alltrue([for u, s in aws_secretsmanager_secret.scram : s.name == "AmazonMSK_svp-stg-${u}" && startswith(s.name, "AmazonMSK_")])
     error_message = "Every Kafka user must have a secret named AmazonMSK_<name>-<user>."
+  }
+
+  # The replay user of DLQ records: a SCRAM secret written with the others and its password under the key its release
+  # reads from kafka-users. The association names every secret of local.users; their ARNs are unknown in a plan.
+  assert {
+    condition = (
+      aws_secretsmanager_secret.scram["svp-dlq-replay"].name == "AmazonMSK_svp-stg-svp-dlq-replay" &&
+      aws_secretsmanager_secret_version.scram["svp-dlq-replay"].secret_string_wo_version == 1 &&
+      contains(local.users, "svp-dlq-replay") &&
+      local.password_keys["svp-dlq-replay"] == "SVP_KAFKA_DLQ_REPLAY_PASSWORD"
+    )
+    error_message = "svp-dlq-replay must be a Kafka user with its SCRAM secret and the key SVP_KAFKA_DLQ_REPLAY_PASSWORD."
   }
 
   # MSK refuses a secret under the AWS managed key of Secrets Manager or an asymmetric key. Which key each secret names
