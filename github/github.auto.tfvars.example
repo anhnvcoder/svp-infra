@@ -7,3 +7,10 @@ svp_gitops_app_client_id = "Iv23liEXAMPLE0000000"
 
 # GitHub App svp-web-promoter: variable SVP_WEB_APP_CLIENT_ID of environment promote of svp-frontend.
 svp_web_app_client_id = "Iv23liEXAMPLE0000001"
+
+# GitHub App svp-release-please: variable SVP_RELEASE_APP_CLIENT_ID of environment release of svp-backend.
+svp_release_app_client_id = "Iv23liEXAMPLE0000002"
+
+# Envs that plan.yml of svp-infra plans: add one only once its plan role and secrets exist
+# (docs/runbooks/github-setup.md).
+terraform_plan_envs = []

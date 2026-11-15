@@ -1,0 +1,21 @@
+# Usage of the resources priced by volume, for make infracost (--usage-file). Infracost prices a month of 730 hours;
+# the volumes below are those of one session of 4 hours, the unit the cost tables of the design use, so a line's
+# hourly part is a whole month and its volume part one session. Usage left out shows as "depends on usage".
+# Design notes: README.md.
+version: 0.1
+
+resource_type_default_usage:
+  # A prd session pulls 15 GB through NAT (images for three nodes, updates) over one gateway per zone: 5 GB each.
+  # stg's single gateway carries all of its own pulls, so stg shows less than it pays.
+  aws_nat_gateway:
+    monthly_data_processed_gb: 5
+  # Two users in a month with a session: the learner and the service account of Grafana Operator, billed as a user.
+  aws_grafana_workspace:
+    editors_administrator_licenses: 2
+
+resource_usage:
+  # Requests of a session, 10 000 PUT and 100 000 GET, set on the bucket CloudFront serves the videos from.
+  'module.media.aws_s3_bucket.this["media"]':
+    standard:
+      monthly_tier_1_requests: 10000
+      monthly_tier_2_requests: 100000

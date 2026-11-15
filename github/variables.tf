@@ -24,3 +24,27 @@ variable "svp_web_app_client_id" {
     error_message = "svp_web_app_client_id must not be empty: write it from the variable on GitHub (gh api repos/anhnvcoder/svp-frontend/environments/promote/variables/SVP_WEB_APP_CLIENT_ID --jq .value)."
   }
 }
+
+variable "svp_release_app_client_id" {
+  description = "Client ID of the GitHub App svp-release-please, read by the release job of svp-backend as variable SVP_RELEASE_APP_CLIENT_ID of environment release."
+  type        = string
+  sensitive   = true
+
+  validation {
+    condition     = trimspace(var.svp_release_app_client_id) != ""
+    error_message = "svp_release_app_client_id must not be empty: make github-app APP=svp-release-please writes it, or write it from the variable on GitHub (gh api repos/anhnvcoder/svp-backend/environments/release/variables/SVP_RELEASE_APP_CLIENT_ID --jq .value)."
+  }
+}
+
+variable "terraform_plan_envs" {
+  description = "Environments whose accounts plan.yml of svp-infra plans on pull requests (Actions variable SVP_TF_PLAN_ENVS, a JSON array). Add an environment only once its plan role is applied and its secrets of environment terraform-plan are set."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition = alltrue([for env in var.terraform_plan_envs : contains(["stg", "prd"], env)]) && (
+      length(distinct(var.terraform_plan_envs)) == length(var.terraform_plan_envs)
+    )
+    error_message = "terraform_plan_envs holds only stg and prd, each at most once."
+  }
+}

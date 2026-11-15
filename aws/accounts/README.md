@@ -4,7 +4,9 @@ Mỗi account thành viên của org (`svp-stg`, `svp-prd`) có một root ở �
 [`account-baseline`](../modules/account-baseline/README.md): bucket state và KMS key của nó, zone DNS của env với bản
 ghi `CAA` ở đỉnh, budget tháng; cùng module [`registry`](../modules/registry/README.md) và
 [`observability`](../modules/observability/README.md) (mục [Registry và observability](#registry-và-observability)) với
-phần tốn tiền theo cờ (mục [Cờ chi phí](#cờ-chi-phí)), và vault AWS Backup `svp-<env>` cùng key, opt-in, role của nó
+phần tốn tiền theo cờ (mục [Cờ chi phí](#cờ-chi-phí)), role chỉ đọc của `terraform plan` trong CI (module
+[`ci-plan-role`](../modules/ci-plan-role/README.md), mục [Role plan của CI](#role-plan-của-ci)), và vault AWS Backup
+`svp-<env>` cùng key, opt-in, role của nó
 (mục [Backup](#backup)). Root prd bật thêm DNSSEC (key KMS, KSK, hai alarm `page`) và query log cho zone prd, cùng topic
 SNS `svp-prd-dns-alarms` ở `us-east-1` (module [`alarms`](../modules/alarms/README.md)) nhận hai alarm đó. Mọi thứ sống
 giữa các buổi AWS, mang tag `Stack=baseline` (script quét sót của buổi giữ lại tag này).
@@ -103,12 +105,13 @@ AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_
 ```
 
 Đọc plan (số ứng với cờ `managed_grafana` của stg là `session`, của prd là `always`, không buổi nào mở; mục [Cờ chi
-phí](#cờ-chi-phí)): ở stg `Plan: 63 to add, 0 to change, 0 to destroy`: 11 của `module.baseline` (KMS key và alias,
+phí](#cờ-chi-phí)): ở stg `Plan: 67 to add, 0 to change, 0 to destroy`: 11 của `module.baseline` (KMS key và alias,
 bucket cùng 5 cấu hình của nó, hosted zone, bản ghi `caa`, budget; không bản ghi `delegation` nào), 43 của
 `module.registry`, `module.observability` (danh sách ở [Thêm vào account đã có
-baseline](#thêm-vào-account-đã-có-baseline); không phần AMG vì không buổi nào mở) và 9 của `backup.tf` (danh sách ở
-[Backup](#backup)). Ở prd `Plan: 82 to add, 0 to change, 0 to destroy`: 48 của hai module đó, 11 của `module.baseline`
-và 9 của `backup.tf` như stg, thêm 6 của DNSSEC (`aws_kms_key.dnssec` và alias ở `us-east-1`,
+baseline](#thêm-vào-account-đã-có-baseline); không phần AMG vì không buổi nào mở), 9 của `backup.tf` (danh sách ở
+[Backup](#backup)) và 4 của `module.ci_plan_role` ([Role plan của CI](#role-plan-của-ci)). Ở prd
+`Plan: 86 to add, 0 to change, 0 to destroy`: 48 của hai module đó, 11 của `module.baseline`, 9 của `backup.tf` và 4 của
+`module.ci_plan_role` như stg, thêm 6 của DNSSEC (`aws_kms_key.dnssec` và alias ở `us-east-1`,
 `aws_route53_key_signing_key.this`, `aws_route53_hosted_zone_dnssec.this`, hai `aws_cloudwatch_metric_alarm.dnssec`), 3
 của query log (log group, resource policy, `aws_route53_query_log.this`) và 5 của `module.alarms` (key KMS, alias,
 topic, topic policy, subscription email). Rồi:
@@ -287,6 +290,49 @@ flowchart LR
 Inspector cho ECR của mọi account thành viên có cờ `inspector_ecr` là `always`, nên registry của account đó quét
 `ENHANCED` ngay khi tạo. Root `aws/envs/<env>` cần tài nguyên của root này có sẵn.
 
+## Role plan của CI
+
+Module [`ci-plan-role`](../modules/ci-plan-role/README.md) tạo role `svp-ci-terraform-plan` mà workflow `plan.yml` của `svp-infra`
+assume qua OIDC để chạy `terraform plan` trên PR: `ReadOnlyAccess`, policy inline đọc state qua S3 và Deny dữ liệu workload, ghi bucket state.
+Thiết kế: [ADR-0076](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0076-terraform-plan-infracost-pr.md) §4–§6. Root truyền:
+
+- `subject`: `${local.github_infra}:environment:terraform-plan`; `github_infra` trong `locals` giữ phần đầu dạng bất biến của `svp-infra`
+  như `github_backend`, `github_frontend`. Chỉ job nêu environment `terraform-plan` (người học duyệt từng lượt) nhận role.
+- `oidc_provider_arn`: output `github_oidc_provider_arn` của `module.registry` (provider OIDC duy nhất của account).
+- `state_bucket`, `state_kms_key_arn`: output của `module.baseline`. Key policy của khoá state có statement `CiPlanReadsState` cho đúng
+  role này ([`account-baseline`](../modules/account-baseline/README.md)): thiếu nó thì role không giải mã được state.
+
+Role sống giữa các buổi, không tốn phí (IAM không tính tiền role). Output `ci_plan_role_arn` là ARN của role.
+
+### Apply và kiểm
+
+**Người học chạy mọi lệnh dưới đây**, theo [Thêm vào account đã có baseline](#thêm-vào-account-đã-có-baseline): role là một phần của root,
+`plan` của root tạo bốn tài nguyên `module.ci_plan_role` và sửa tại chỗ key policy `module.baseline.aws_kms_key.state`. Apply ngoài buổi bằng
+`terraform plan`, `apply` của mục đó (cả hai env). Trong buổi stg, root chỉ apply qua `aws/scripts/tf.sh stg account plan --open` rồi
+`aws/scripts/tf.sh stg account apply`: plan mở buổi có cùng phần role. prd không có cờ `session`, `tf.sh prd account` không làm gì.
+
+Sau apply (ví dụ stg; prd thay `stg`, `anhnv-stg`, `SVP_AWS_STG_ACCOUNT_ID` như trên):
+
+```sh
+cd infra/aws/accounts/stg
+AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform output -raw ci_plan_role_arn
+AWS_PROFILE=anhnv-stg aws iam get-role --role-name svp-ci-terraform-plan --region us-east-1 \
+  --query 'Role.{Max:MaxSessionDuration,Sub:AssumeRolePolicyDocument.Statement[0].Condition.StringEquals}' --output json
+AWS_PROFILE=anhnv-stg aws iam list-attached-role-policies --role-name svp-ci-terraform-plan --region us-east-1 \
+  --query 'AttachedPolicies[].PolicyName' --output text
+AWS_PROFILE=anhnv-stg aws iam list-role-policies --role-name svp-ci-terraform-plan --region us-east-1 --query PolicyNames --output text
+key=$(AWS_PROFILE=anhnv-stg aws kms describe-key --key-id alias/svp-tfstate --region ap-southeast-1 --query KeyMetadata.KeyId --output text)
+AWS_PROFILE=anhnv-stg aws kms get-key-policy --key-id "$key" --region ap-southeast-1 --output text --query Policy \
+  | jq -r '.Statement[].Sid'
+```
+
+Kết quả đúng: ARN `arn:aws:iam::<account>:role/svp-ci-terraform-plan` với account của env; `Max` là `3600`, `Sub` có đúng hai
+khoá `token.actions.githubusercontent.com:aud` = `sts.amazonaws.com` và `token.actions.githubusercontent.com:sub` bằng
+`subject` của lời gọi module (`local.github_infra` + `:environment:terraform-plan`); policy gắn là `ReadOnlyAccess`; hai policy inline
+`svp-ci-terraform-plan-deny`, `svp-ci-terraform-plan-read`; Sid của key policy có `CiPlanReadsState` cạnh `AccountAdministersKey`,
+`SvpAdminUsesKey`. Khác thì dừng và dán lại output. Lượt plan thật đầu tiên trên PR (sau khi đặt secret và **Biến bật plan**
+`SVP_TF_PLAN_ENVS` ở `svp-infra`) là phép kiểm cuối: refresh qua mà không `AccessDenied`.
+
 ## Cờ chi phí
 
 Root gọi module [`paid-features`](../modules/paid-features/README.md) với file commit `aws/paid-features.json` và đọc
@@ -356,6 +402,7 @@ Các phần của root và số tài nguyên `plan` thêm cho phần account ch�
 | DNSSEC, query log của zone prd | 6 của DNSSEC, 3 của query log, 5 của `module.alarms` ([bước 3](#3-apply-lần-đầu-state-local)) | — | 14 |
 | Registry, observability | `module.registry`, `module.observability` (danh sách dưới bảng) | 43 | 48 |
 | Backup | 9 của `backup.tf` (danh sách ở mục [Backup](#backup)) | 9 | 9 |
+| Role plan của CI | `module.ci_plan_role`: `aws_iam_role.this`, `aws_iam_role_policy_attachment.read_only`, `aws_iam_role_policy.read`, `aws_iam_role_policy.deny` ([Role plan của CI](#role-plan-của-ci)) | 4 | 4 |
 
 - `module.registry` (stg 34, prd 32): key KMS và alias, 8 `aws_ecr_repository.release` (`local.release_repositories`),
   `aws_ecr_registry_scanning_configuration.this`, 5 `aws_ecr_pull_through_cache_rule.this`, 2
@@ -386,11 +433,13 @@ AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_
 ```
 
 `Account` phải bằng `$SVP_AWS_STG_ACCOUNT_ID`, `Arn` chứa `assumed-role/AWSReservedSSO_SvpAdmin_`; dòng `echo` in hai số
-12 chữ số khác nhau. Plan chỉ thêm (`0 to change, 0 to destroy`); mọi tài nguyên của plan thuộc một phần của bảng; phần
-nào có trong plan thì có đủ số tài nguyên ở cột của env; số `to add` bằng tổng các phần đó. Ví dụ: account chỉ có
-baseline (cùng `CAA` và, ở prd, DNSSEC, query log) thì stg `Plan: 52 to add, 0 to change, 0 to destroy`, prd
-`Plan: 57 to add, 0 to change, 0 to destroy`; account đã có registry, observability thì
-`Plan: 9 to add, 0 to change, 0 to destroy` ở cả hai env, đúng phần backup. Account có registry từ trước khi
+12 chữ số khác nhau. Plan chỉ thêm (`0 to destroy`); mọi tài nguyên của plan thuộc một phần của bảng; phần
+nào có trong plan thì có đủ số tài nguyên ở cột của env; số `to add` bằng tổng các phần đó. Thay đổi duy nhất được phép là
+`1 to change` khi phần role plan của CI có trong plan: `module.baseline.aws_kms_key.state` sửa tại chỗ, chỉ `policy` thêm statement
+`CiPlanReadsState`. Ví dụ: account chỉ có baseline (cùng `CAA` và, ở prd, DNSSEC, query log) thì stg
+`Plan: 56 to add, 1 to change, 0 to destroy`, prd `Plan: 61 to add, 1 to change, 0 to destroy`; account đã có registry,
+observability thì `Plan: 13 to add, 1 to change, 0 to destroy` ở cả hai env (backup và role plan); đã có cả backup thì
+`Plan: 4 to add, 1 to change, 0 to destroy`, đúng phần role plan. Account có registry từ trước khi
 `local.release_repositories` của module `registry` thêm repo thì phần registry chỉ thiếu một `aws_ecr_repository.release`
 mỗi repo mới. Dừng (không apply, dán plan lại) nếu có
 `change`, `destroy`, tài nguyên ngoài bảng hay phần thiếu tài nguyên; trừ khi account đã có observability với AMG từ

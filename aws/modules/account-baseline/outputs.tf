@@ -3,6 +3,11 @@ output "state_bucket" {
   value       = aws_s3_bucket.state.bucket
 }
 
+output "state_kms_key_arn" {
+  description = "ARN of the KMS key alias/svp-tfstate that encrypts the state bucket, in the key form arn:aws:kms:<region>:<account>:key/<key-id> that IAM policies match."
+  value       = aws_kms_key.state.arn
+}
+
 output "backend_hcl" {
   description = "Content of aws/backend-<env>.hcl, the partial backend configuration every root of this account reads with -backend-config: bucket, region, encryption with the KMS key of the state and the S3 lock file. It holds no key argument: each root sets the key of its own state."
   value       = <<-EOT

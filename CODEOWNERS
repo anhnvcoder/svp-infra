@@ -1,11 +1,15 @@
 # Only the paths below have an owner, who must approve a pull request that changes them (ruleset owners): the workflows,
-# the Makefile with its pinned tools, the Renovate config, trivy's ignore file, the GitHub settings of every repository
-# (github/), the AWS infrastructure (aws/), the tflint rules (.tflint.hcl) and this file. Every other file has no owner. The last matching line wins.
+# the Makefile with its pinned tools, the Renovate and Infracost files, trivy's ignore file, the GitHub settings of all
+# repositories (github/), the AWS infrastructure (aws/), the scripts of CI (ci/: the plan job runs them with a role of
+# the accounts), the tflint rules (.tflint.hcl) and this file. No other file has an owner. The last matching line wins.
 /CODEOWNERS         @anhnvcoder
 /.github/           @anhnvcoder
 /renovate.json      @anhnvcoder
+/infracost.yml      @anhnvcoder
+/infracost-usage.yml @anhnvcoder
 /Makefile           @anhnvcoder
 /.tflint.hcl        @anhnvcoder
 /.trivyignore.yaml  @anhnvcoder
 /github/            @anhnvcoder
 /aws/               @anhnvcoder
+/ci/                @anhnvcoder

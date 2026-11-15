@@ -1,6 +1,7 @@
-# Static checks of the Terraform of this repository. `make help` lists the targets. No target reaches an AWS account:
-# init runs with -backend=false, nothing calls apply or the AWS CLI, and the only plans are those of terraform test,
-# against a mock AWS provider, in a container without network or credentials.
+# Static checks of the Terraform of this repository. `make help` lists the targets. No target but ci-plan reaches an
+# AWS account: init runs with -backend=false, nothing calls apply or the AWS CLI, and the other plans are those of
+# terraform test, against a mock AWS provider, in a container without network or credentials. ci-plan runs in the
+# plan job of GitHub Actions alone, with a read-only role, and refuses to run anywhere else.
 
 # Every tool runs from its official image pinned by digest, the same reference on a dev machine and in CI; only
 # session-test runs on the host. Docker runs with DOCKER_DEFAULT_PLATFORM unset: the dev machine's shell sets it to
@@ -35,6 +36,9 @@ ZIZMOR_IMAGE     := ghcr.io/zizmorcore/zizmor:1.31.1@sha256:42d409dbb851d4c5d35a
 MARKDOWNLINT_IMAGE := davidanson/markdownlint-cli2:v0.24.0@sha256:70ead7c0352d22d04bbe612cd96b54ec591538d8f4626cafe391bb2ecf3639ca
 # renovate: datasource=docker depName=lycheeverse/lychee
 LYCHEE_IMAGE     := lycheeverse/lychee:0.24.2@sha256:e2d19e57cf6ab037026f20b8e449a1f30d9d7f81eef4194763aab2eab20bd28d
+# The CI tag of the Infracost CLI: the CLI with bash, git and jq beside it, published for linux/amd64 alone.
+# renovate: datasource=docker depName=infracost/infracost
+INFRACOST_IMAGE  := infracost/infracost:ci-0.10.49@sha256:78ce091ec7324caa46b8fbc15d7053ea27f4e383c3258779a4746fd5411ed6a1
 
 # Platforms whose provider hashes `make lock` writes into the lock file of a root: the Mac that runs plan and apply,
 # and the two Linux architectures of CI and of the images.
@@ -74,12 +78,12 @@ IS_MODULE = case "/$$d/" in (*/modules/*) true;; (*) false;; esac
 .DEFAULT_GOAL := help
 
 .PHONY: help check fmt-check fmt validate tflint tfdocs tfdocs-check trivy shellcheck zizmor docs-check session-test test-guard test lock \
-	github-app-test github-check github-app github-app-key
+	github-app-test github-check github-app github-app-key ci-plan ci-plan-test infracost infracost-comment infracost-test
 
 help: ## List the targets
 	@grep -hE '^[a-zA-Z0-9_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-11s %s\n", $$1, $$2}'
 
-check: fmt-check validate tflint tfdocs-check trivy shellcheck zizmor docs-check session-test test-guard test github-app-test ## Every static check (narrow the Terraform ones with DIRS=<dir> ...)
+check: fmt-check validate tflint tfdocs-check trivy shellcheck zizmor docs-check session-test test-guard test github-app-test ci-plan-test infracost-test ## Every static check (narrow the Terraform ones with DIRS=<dir> ...)
 
 fmt-check: ## terraform fmt -check on the checked directories
 	@dirs=$$($(LIST_DIRS)) || exit 1; [ -n "$$dirs" ] || { echo "fmt-check: no Terraform directory"; exit 0; }; \
@@ -211,6 +215,29 @@ github-app-key: ## Write PEM=<file> as key KEY=<stg|prd|local> of App APP=<name>
 session-test: ## Self-test of the session scripts of aws/scripts with fake commands (no account, cluster or network)
 	@echo "session-test aws/scripts"; \
 	bash aws/scripts/session-test.sh >/dev/null || { echo "FAIL: session-test (bash aws/scripts/session-test.sh prints every check)" >&2; exit 1; }
+
+# terraform plan of a pull request, for job plan of .github/workflows/plan.yml alone: the script reaches the account of
+# ENV with the job's OIDC token, so it refuses to run outside GitHub Actions. ENV reaches it through the environment,
+# never through the recipe's text. Its self-test puts fake docker, curl and gh first on PATH.
+ci-plan: ## terraform plan of the roots of ENV=<stg|prd> for plan.yml (GitHub Actions only: refuses anywhere else)
+	@TERRAFORM_IMAGE='$(TERRAFORM_IMAGE)' bash ci/terraform-plan.sh plan "$${ENV:-}"
+
+ci-plan-test: ## Self-test of ci/terraform-plan.sh with fake docker, curl and gh (no container, account, token or network)
+	@echo "ci-plan-test"; \
+	bash ci/terraform-plan-test.sh >/dev/null || { echo "FAIL: ci-plan-test (bash ci/terraform-plan-test.sh prints every check)" >&2; exit 1; }
+
+# Cost estimate of a pull request for .github/workflows/cost.yml, from the HCL of the roots in infracost.yml: no plan,
+# state or AWS credential. It needs the learner's free key in INFRACOST_API_KEY, which reaches the container by name
+# alone; BASE reaches the script through the environment, never through the recipe's text.
+infracost: ## Infracost of BASE=<base tree> and of this tree, then their diff (needs INFRACOST_API_KEY)
+	@INFRACOST_IMAGE='$(INFRACOST_IMAGE)' bash ci/infracost.sh estimate "$${BASE:-}"
+
+infracost-comment: ## Post the diff of make infracost to pull request PR of REPO (cost.yml; needs INFRACOST_API_KEY, GITHUB_TOKEN)
+	@INFRACOST_IMAGE='$(INFRACOST_IMAGE)' bash ci/infracost.sh comment
+
+infracost-test: ## Self-test of ci/infracost.sh with a fake docker (no container, key, token or network)
+	@echo "infracost-test"; \
+	bash ci/infracost-test.sh >/dev/null || { echo "FAIL: infracost-test (bash ci/infracost-test.sh prints every check)" >&2; exit 1; }
 
 # terraform test of each module (tests/*.tftest.hcl). The recipe holds the tests to three rules itself instead of
 # trusting whoever wrote them: terraform runs from TERRAFORM_IMAGE, pinned by digest, with --network none (only init,

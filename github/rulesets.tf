@@ -187,6 +187,35 @@ resource "github_repository_ruleset" "frontend_owners" {
   }
 }
 
+# svp-backend checker tags: a released gitops-check-v* tag never moves or goes away, since svp-gitops pins the checker
+# by that tag and its commit. Creating one stays open: the App svp-release-please tags each release. An admin may
+# bypass, as for gitops_tags.
+resource "github_repository_ruleset" "backend_checker_tags" {
+  repository  = github_repository.this["svp-backend"].name
+  name        = "gitops-check-tags"
+  target      = "tag"
+  enforcement = "active"
+
+  bypass_actors {
+    actor_id    = 5 # RepositoryRole admin
+    actor_type  = "RepositoryRole"
+    bypass_mode = "always"
+  }
+
+  conditions {
+    ref_name {
+      include = ["refs/tags/gitops-check-v*"]
+      exclude = []
+    }
+  }
+
+  rules {
+    creation = false
+    update   = true
+    deletion = true
+  }
+}
+
 # svp-gitops main: pull request, gitops-ok and pr-title, no one bypasses. Together with owners below, a bot pull
 # request that changes only envs/stg/ (no code owner) merges itself once gitops-ok and pr-title are green.
 resource "github_repository_ruleset" "gitops_main" {

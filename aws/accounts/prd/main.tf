@@ -4,6 +4,7 @@ locals {
   # The immutable OIDC sub prefix of each source repository: public GitHub ids that a rename or transfer keeps.
   github_backend  = "repo:anhnvcoder@96784839/svp-backend@1404091754"
   github_frontend = "repo:anhnvcoder@96784839/svp-frontend@1439816405"
+  github_infra    = "repo:anhnvcoder@96784839/svp-infra@1440574580"
 
   ci_roles = {
     svp-ci-ecr-promote = {
@@ -70,6 +71,17 @@ module "registry" {
   env               = local.env
   ci_roles          = local.ci_roles
   enhanced_scanning = module.paid_features.flags[local.env].inspector_ecr == "always"
+}
+
+# The role terraform plan assumes on the pull requests of svp-infra, approved in its environment terraform-plan.
+module "ci_plan_role" {
+  source = "../../modules/ci-plan-role"
+
+  env               = local.env
+  oidc_provider_arn = module.registry.github_oidc_provider_arn
+  subject           = "${local.github_infra}:environment:terraform-plan"
+  state_bucket      = module.baseline.state_bucket
+  state_kms_key_arn = module.baseline.state_kms_key_arn
 }
 
 module "observability" {

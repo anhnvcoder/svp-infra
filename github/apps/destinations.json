@@ -14,6 +14,13 @@
       "stg": { "type": "environment-secret", "repo": "svp-frontend", "environment": "promote", "name": "SVP_WEB_APP_PRIVATE_KEY" }
     }
   },
+  "svp-release-please": {
+    "install_on": ["svp-backend"],
+    "client_id_tfvar": "svp_release_app_client_id",
+    "keys": {
+      "release": { "type": "environment-secret", "repo": "svp-backend", "environment": "release", "name": "SVP_RELEASE_APP_PRIVATE_KEY" }
+    }
+  },
   "svp-argocd-notifier": {
     "install_on": ["svp-gitops"],
     "keys": {

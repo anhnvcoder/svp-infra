@@ -14,6 +14,11 @@ Tạo:
   [IAM Identity Center](https://docs.aws.amazon.com/singlesignon/latest/userguide/referencingpermissionsets.html). Đường dẫn của role không
   có đoạn region khi instance Identity Center ở `us-east-1`, và có đoạn region khi ở region khác; policy liệt kê cả hai dạng nên không phụ
   thuộc instance nằm đâu. Chỉ IAM Identity Center tạo được role dưới `/aws-reserved/`. Không statement nào có principal `*`. Hệ quả: role chỉ được đọc hay liệt kê bucket không đọc được state (state chứa output, thuộc tính tài nguyên).
+  Ngoại lệ duy nhất là statement `CiPlanReadsState`: role `svp-ci-terraform-plan` của module [`ci-plan-role`](../ci-plan-role/README.md)
+  (khớp `ArnEquals` `aws:PrincipalArn`, ARN dựng từ account và tên cố định nên key policy không chờ role) chỉ được `kms:Decrypt`, chỉ khi
+  `kms:ViaService` là S3 của region và encryption context `aws:s3:arn` là ARN bucket state (S3 Bucket Key dùng ARN bucket), tức chỉ khi S3
+  giải mã object của bucket này cho role. Lý do:
+  [ADR-0076](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0076-terraform-plan-infracost-pr.md) §4.
 - **Bucket `svp-tfstate-<account>-<region>`**: versioning, mã hoá mặc định SSE-KMS bằng key trên (S3 Bucket Key bật để giảm request KMS),
   chặn public, `BucketOwnerEnforced`, policy từ chối request không TLS, `prevent_destroy`.
 - **Hosted zone `zone_name`** của env: `aws.<domain>` ở prd (zone gốc của lab, DNS của domain cha uỷ quyền bằng bốn bản ghi `NS` tên
@@ -61,7 +66,8 @@ hợp lệ (resolver kiểm DNSSEC trả lời không cờ `ad`, không lỗi). 
 [ADR-0061](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0061-edge-cloudfront-waf-acm.md) §11.
 
 Output `backend_hcl` là nội dung file `aws/backend-<env>.hcl` (git bỏ qua) mà mọi root của account đọc bằng `-backend-config`: `bucket`,
-`region`, `encrypt`, `kms_key_id`, `use_lockfile`; không có `key`, mỗi root tự đặt key state của mình.
+`region`, `encrypt`, `kms_key_id`, `use_lockfile`; không có `key`, mỗi root tự đặt key state của mình. Output `state_bucket` và
+`state_kms_key_arn` (ARN dạng `key/<id>`, dạng duy nhất policy IAM khớp) là giá trị root truyền cho module `ci-plan-role`.
 
 ## Tắt ký DNSSEC
 
@@ -166,5 +172,6 @@ Không bao giờ đặt `dnssec_enabled = false` khi key còn trong state: `prev
 | backend\_hcl | Content of aws/backend-<env>.hcl, the partial backend configuration every root of this account reads with -backend-config: bucket, region, encryption with the KMS key of the state and the S3 lock file. It holds no key argument: each root sets the key of its own state. |
 | name\_servers | The four name servers of the environment's zone, which the zone above it delegates with NS records: the zone of prd for stg (delegated\_subdomains of aws/accounts/prd), the NS records aws at the parent domain's DNS for prd. |
 | state\_bucket | Bucket of the remote state of every root of this account. |
+| state\_kms\_key\_arn | ARN of the KMS key alias/svp-tfstate that encrypts the state bucket, in the key form arn:aws:kms:<region>:<account>:key/<key-id> that IAM policies match. |
 | zone\_id | Id of the hosted zone of the environment, zone\_name. |
 <!-- END_TF_DOCS -->

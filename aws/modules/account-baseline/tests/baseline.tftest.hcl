@@ -31,14 +31,16 @@ variables {
   # Topic of the DNSSEC alarms, in us-east-1 as the Route 53 metrics.
   dns_topic = "arn:aws:sns:us-east-1:222222222222:svp-prd-dns-alarms"
 
-  # Every action that reads or writes data with a KMS key; none may reach anyone but the SvpAdmin roles.
+  # Every action that reads or writes data with a KMS key; none may reach anyone but the SvpAdmin roles, except
+  # kms:Decrypt of the CI plan role through S3.
   crypto_actions = ["kms:Encrypt", "kms:Decrypt", "kms:ReEncrypt*", "kms:ReEncryptFrom", "kms:ReEncryptTo", "kms:GenerateDataKey", "kms:GenerateDataKey*", "kms:GenerateDataKeyWithoutPlaintext", "kms:*"]
 }
 
 run "stg" {
   command = plan
 
-  # Key policy: no principal "*", the account administers without using the key, only the SvpAdmin roles use it.
+  # Key policy: no principal "*", the account administers without using the key, only the SvpAdmin roles use it, and
+  # the CI plan role decrypts through S3 on the state bucket alone.
   assert {
     condition = alltrue(flatten([for s in data.aws_iam_policy_document.state_key.statement : [
       for p in s.principals : p.type == "AWS" && toset(p.identifiers) == toset(["arn:aws:iam::111111111111:root"])
@@ -48,7 +50,7 @@ run "stg" {
 
   assert {
     condition = alltrue([for s in data.aws_iam_policy_document.state_key.statement :
-      length(setintersection(toset(s.actions), toset(var.crypto_actions))) == 0 || (
+      length(setintersection(toset(s.actions), toset(var.crypto_actions))) == 0 || s.sid == "CiPlanReadsState" || (
         length(s.condition) == 1 &&
         one(s.condition).test == "ArnLike" &&
         one(s.condition).variable == "aws:PrincipalArn" &&
@@ -60,6 +62,20 @@ run "stg" {
       )
     ])
     error_message = "A key policy statement that allows encrypting or decrypting must be limited by ArnLike aws:PrincipalArn to the SvpAdmin roles."
+  }
+
+  assert {
+    condition = length([for s in data.aws_iam_policy_document.state_key.statement : s if s.sid == "CiPlanReadsState"]) == 1 && alltrue([
+      for s in data.aws_iam_policy_document.state_key.statement :
+      s.effect == "Allow" && toset(s.actions) == toset(["kms:Decrypt"]) &&
+      toset([for c in s.condition : jsonencode([c.test, c.variable, c.values])]) == toset([
+        jsonencode(["ArnEquals", "aws:PrincipalArn", ["arn:aws:iam::111111111111:role/svp-ci-terraform-plan"]]),
+        jsonencode(["StringEquals", "kms:ViaService", ["s3.ap-southeast-1.amazonaws.com"]]),
+        jsonencode(["StringEquals", "kms:EncryptionContext:aws:s3:arn", ["arn:aws:s3:::svp-tfstate-111111111111-ap-southeast-1"]]),
+      ])
+      if s.sid == "CiPlanReadsState"
+    ])
+    error_message = "CiPlanReadsState must allow only kms:Decrypt, only to the role svp-ci-terraform-plan, only through S3 on the state bucket."
   }
 
   assert {
@@ -203,9 +219,15 @@ run "prd" {
   assert {
     condition = alltrue(flatten([for s in data.aws_iam_policy_document.state_key.statement : concat(
       [for p in s.principals : toset(p.identifiers) == toset(["arn:aws:iam::222222222222:root"])],
-      [for c in s.condition : alltrue([for v in c.values : startswith(v, "arn:aws:iam::222222222222:role/aws-reserved/sso.amazonaws.com/")])],
+      [for c in s.condition : (
+        c.variable == "aws:PrincipalArn" ? alltrue([for v in c.values : startswith(v, (
+          s.sid == "CiPlanReadsState" ? "arn:aws:iam::222222222222:role/svp-ci-terraform-plan" : "arn:aws:iam::222222222222:role/aws-reserved/sso.amazonaws.com/"
+        ))]) :
+        c.variable == "kms:EncryptionContext:aws:s3:arn" ? toset(c.values) == toset(["arn:aws:s3:::svp-tfstate-222222222222-ap-southeast-1"]) :
+        c.variable == "kms:ViaService"
+      )],
     )]))
-    error_message = "The key policy must name only the account of the baseline."
+    error_message = "The key policy must name only the account of the baseline: its SvpAdmin roles, its CI plan role and its state bucket."
   }
 
   assert {
