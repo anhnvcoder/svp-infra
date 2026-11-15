@@ -369,14 +369,17 @@ def env_page(env: Env) -> Page:
     waf_api = p.icon(f"WAF web ACL<br>svp-{env.name}-api", "waf", GLOBAL_X, a + 560, SEC, cid="waf_api", label_top=True)
     cf_api = p.icon(f"CloudFront svp-{env.name}-api<br>api.{env.zone}", "cloudfront", GLOBAL_X, a + 720, NET, cid="cf_api")
     waf = p.icon(f"WAF web ACL<br>svp-{env.name}-media", "waf", GLOBAL_X, row - 200, SEC, cid="waf", label_top=True)
-    cf = p.icon(f"CloudFront svp-{env.name}-media<br>media.{env.zone}", "cloudfront", GLOBAL_X, row, NET, cid="cf")
+    cf = p.icon(f"CloudFront svp-{env.name}-media<br>media.{env.zone}<br>default: key group", "cloudfront", GLOBAL_X, row,
+                NET, cid="cf")
     igw = p.flat("Internet gateway", "internet_gateway", IGW_X, a + 40, VPC_PURPLE, cid="igw")
     cp = p.icon("EKS control plane · AWS managed", "eks", CP_X, CP_Y, COMP, cid="cp", label_top=True)
     alb = p.icon(f"ALB svp-{env.name}-edge<br>internal, HTTPS 443", "application_load_balancer", ALB_X, alb_y, NET, cid="alb", label_top=True)
     p.text("Web and API: viewer → CloudFront (web ACL, ACM certificate in us-east-1) → CloudFront VPC origin → internal ALB in the "
            "edge subnets, which only CloudFront may reach (security group on the CloudFront origin-facing prefix list); the ALB "
            "targets Envoy's pods directly (target group svp-" + env.name + "-envoy, filled by the TargetGroupBinding), Envoy "
-           "routes by Host to web and gateway · Media: CloudFront → S3 media through origin access control, " +
+           "routes by Host to web and gateway · Media: CloudFront → S3 media through origin access control; media/ and preview/ "
+           "are public, every other path (premium/) needs a URL signed by a key of the key group (default behavior), checked by "
+           "CloudFront before the cache, " +
            ("flat-rate Free plan, no access log" if env.media_free else "pay-as-you-go") + " · Route 53 aliases to the three "
            "distributions · access logs of " + ("web and API (media has none)" if env.media_free else "the three distributions") +
            " and logs of the three web ACLs go to the log archive account", REGION_X + 240, 280, 1640, 120, color=MUTED,
@@ -409,6 +412,9 @@ def env_page(env: Env) -> Page:
     brokers = [p.icon("MSK broker", "managed_streaming_for_kafka", MSK_X, sub[k] + 40, ANA, cid=f"msk{k}") for k in range(n)]
 
     media = p.icon("S3 media", "s3", 600, row, STO, cid="media", label_top=True)
+    # Beside the OAC line: a third label line above the bucket would sit on the band's title.
+    p.text("S3 media prefixes<br>media/, preview/: public<br>premium/: signed URL", REGION_X, row + 80, 160, 80, color=MUTED, align="right",
+           valign="top")
     # entered from below by the browser
     uploads = p.icon("S3 uploads<br>GuardDuty malware scan", "s3", 760, row, STO, cid="uploads", label_top=True)
     p.icon(f"Secrets Manager<br>RDS master, svp/{env.name}/*,<br>AmazonMSK_*, ecr-pullthroughcache/*", "secrets_manager", 1000, row, SEC,
@@ -455,7 +461,7 @@ def env_page(env: Env) -> Page:
 
     # transcode (modules/transcode): MediaConvert reads uploads and writes media with its role; the job-state rule fills
     # the events queue that media-worker polls; the DLQ alarm goes to the alarms topic
-    role = p.flat(f"Role svp-{env.name}-mediaconvert<br>GetObject uploads/*, PutObject media/*", "role", 600, row_t, SEC[0], cid="mcrole")
+    role = p.flat(f"Role svp-{env.name}-mediaconvert<br>GetObject uploads/*, PutObject media/*, premium/*", "role", 600, row_t, SEC[0], cid="mcrole")
     mc = p.icon(f"MediaConvert queue svp-{env.name}<br>on-demand", "elemental_mediaconvert", 960, row_t, COMP, cid="mc")
     rule = p.icon(f"EventBridge rule<br>svp-{env.name}-mediaconvert-job-state", "eventbridge", 1240, row_t, INTEG, cid="mcrule")
     events_q = p.icon(f"SQS svp-{env.name}-transcode-events<br>read by media-worker", "sqs", 1520, row_t, INTEG, cid="evq")
@@ -591,7 +597,7 @@ def env_page(env: Env) -> Page:
     p.edge(eni[0], events_q, STROKE["vpc"], dashed=True, label="ReceiveMessage", exit_=(1, 0.75), entry=(0.5, 0),
            points=trunk[1:] + [(1560, row + 200)], label_pos=along(trunk + [(1560, row + 200), (1560, row_t)], (1520, row + 200)))
     p.edge(mc, role, COMP[0], dashed=True, label="assumes", exit_=(0, 0.75), entry=(1, 0.75), label_pos=0.5)
-    p.edge(role, media, STROKE["sto"], label="PutObject media/*", exit_=(0.5, 0), entry=(0.5, 1))
+    p.edge(role, media, STROKE["sto"], label="PutObject media/*, premium/*", exit_=(0.5, 0), entry=(0.5, 1))
     p.edge(role, uploads, STROKE["sto"], label="GetObject", exit_=(1, 0.25), entry=(0.25, 1), points=[(780, row_t + 20)])
     p.edge(mc, rule, STROKE["integ"], label="job state change")
     p.edge(rule, events_q, STROKE["integ"], label="COMPLETE, ERROR")
@@ -776,8 +782,10 @@ def flows(region: str) -> Page:
     u, r, t = 880, 1240, 1840              # tops of the upload, request and telemetry blocks
     yb = t + 2040                          # tops of the backup and restore blocks, under the transcode block
     yr = yb + 1000
-    p = Page("flows", 1880, yr + 960)
-    p.text("Flows — image release, upload to playback, request to the web and API, telemetry, transcode, backup, restore", 40, 0, 1400, 40,
+    yp = yr + 1000                         # top of the premium playback block, under the restore drills
+    p = Page("flows", 1880, yp + 1080)
+    p.text("Flows — image release, upload to playback, request to the web and API, telemetry, transcode, backup, restore, premium "
+           "playback", 40, 0, 1600, 40,
            size=17, bold=1)
     p.text("Release: commit → signed image → ECR (same digest) → svp-gitops → Argo CD", 40, 120, 880, 40, size=13, bold=1)
     p.text("Upload to playback", 40, u, 880, 40, size=13, bold=1)
@@ -920,7 +928,7 @@ def flows(region: str) -> Page:
     p.edge(bridge, mc, STROKE["vpc"], dashed=True, label="Probe, CreateJob, GetJob", exit_=(1, 0.5), entry=(0, 0.5))
     p.edge(mc, role, COMP[0], dashed=True, label="assumes", exit_=(0.5, 1), entry=(0.5, 0))
     p.edge(role, up, STROKE["sto"], label="GetObject uploads/*", exit_=(0, 0.5), entry=(1, 0.5))
-    p.edge(role, media, STROKE["sto"], label="PutObject media/*", exit_=(1, 0.5), entry=(0, 0.5))
+    p.edge(role, media, STROKE["sto"], label="PutObject media/*, premium/*", exit_=(1, 0.5), entry=(0, 0.5))
     p.edge(mc, rule, STROKE["integ"], label="job state change")
     p.edge(rule, evq, STROKE["integ"], label="COMPLETE, ERROR")
     p.edge(evq, dlq, STROKE["integ"], label="redrive")
@@ -1008,6 +1016,47 @@ def flows(region: str) -> Page:
         "The instance svp-&lt;env&gt;-pitr is deleted when the drill ends; the application is not cut over to it in the drill",
         "The restored object has a new ETag (AWS Backup does not keep it): the drill compares length and SHA-256 of the content"),
         240, yr + 680, 1520, 160, valign="top")
+
+    # Premium playback: the playlist path (web → gateway → video-service, which reads premium/ and signs segment URLs)
+    # and the segment path (browser → CloudFront, signed default behavior → S3 through OAC). The key reaches
+    # video-service through Secrets Manager and External Secrets. Row a: playlists, row b: key, row c: segments;
+    # both paths share S3 media.
+    a, b, c = yp + 200, yp + 440, yp + 680
+    p.text("Premium playback: playlists filtered by tier and signed by video-service, segments checked by CloudFront", 40, yp, 1600, 40,
+           size=13, bold=1)
+    p.group(f"AWS Cloud · {region}", 280, yp + 80, 1560, 760, **CLOUD)
+    p.group("EKS cluster svp-&lt;env&gt;", 360, yp + 120, 920, 480, gr="eks", stroke="#D05C17", font="#D05C17")
+    player = p.flat("Browser<br>player", "users", 40, a, cid="pplayer")
+    web = p.k8s("web<br>BFF", "deploy", 440, a, size=80, cid="pweb")
+    gw = p.k8s("gateway<br>playback/{file}", "deploy", 720, a, size=80, cid="pgw")
+    # name above the icon: the External Secrets edge enters from below, where a label would be cut
+    vs = p.k8s("", "deploy", 1000, a, size=80, cid="pvs")
+    p.text("video-service<br>MEDIA_SIGNER=cloudfront", 920, a - 40, 240, 40, align="center")
+    es = p.k8s("External Secrets<br>video-service-env", "secret", 1000, b - 40, size=80, cid="pes")
+    sm = p.icon("Secrets Manager<br>svp/&lt;env&gt;/media-signing", "secrets_manager", 1360, b - 40, SEC, cid="psm")
+    s3 = p.icon("S3 media<br>premium/, preview/, media/", "s3", 1560, a, STO, cid="ps3", label_top=True)
+    viewer = p.flat("Browser<br>player", "users", 40, c, cid="pviewer")
+    cdn = p.icon("CloudFront svp-&lt;env&gt;-media<br>default: key group svp-&lt;env&gt;-media<br>media/*, preview/*: public",
+                 "cloudfront", 1560, c, NET, cid="pcdn")
+    p.edge(player, web, STROKE["net"], label="cookie", label_pos=-0.5)
+    p.edge(web, gw, STROKE["net"], label="Bearer")
+    p.edge(gw, vs, STROKE["net"], label="gRPC")
+    p.edge(vs, s3, STROKE["sto"], label="GetObject premium/*")
+    route = [(1360, b), (1040, b)]
+    p.edge(sm, es, STROKE["sec"], dashed=True, label="ExternalSecret", exit_=(0, 0.5), entry=(1, 0.5), label_pos=along(route, (1150, b)))
+    p.edge(es, vs, STROKE["sec"], dashed=True, label="env, Reloader", exit_=(0.5, 0), entry=(0.5, 1))
+    p.edge(viewer, cdn, STROKE["net"], label="GET index_&lt;rendition&gt;_N.ts?Policy=…&amp;Signature=…&amp;Key-Pair-Id=…")
+    p.edge(cdn, s3, STROKE["sto"], label="OAC", exit_=(0.5, 0), entry=(0.5, 1))
+    p.text(bullets(
+        "The master playlist lists only the renditions of the viewer's tier; a rendition playlist comes back with every segment URL "
+        "signed for that rendition, to the video's duration plus 5 minutes rounded up to a 15-minute window",
+        "CloudFront checks the signature against the public keys of the key group (slots a, b) before it looks in the cache; query "
+        "string, cookies and headers stay out of the cache key, so viewers of a window share one cached copy",
+        "The preview (first segments of the lowest rendition, master, thumbnail under preview/) is read with no signature through the "
+        "preview/* behavior; any path outside media/* and preview/* needs a signature; S3 media answers CloudFront only (OAC)",
+        "The private key lives in Secrets Manager only: External Secrets writes it into the Secret of video-service, and Reloader "
+        "restarts the pods when it changes"),
+        80, yp + 880, 1720, 160, valign="top")
     return p
 
 

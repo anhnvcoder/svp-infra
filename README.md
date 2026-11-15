@@ -45,6 +45,8 @@ make help                             # liệt kê target
 
 Dựng, đo và gỡ một env theo runbook [`docs/runbooks/session-stg.md`](docs/runbooks/session-stg.md) hay
 [`docs/runbooks/session-prd.md`](docs/runbooks/session-prd.md) (mục [Plan và apply](#plan-và-apply)).
+Dựng mỗi buổi, xoay và thay khi lộ khoá ký URL media premium theo runbook
+[`docs/runbooks/media-signing-keys.md`](docs/runbooks/media-signing-keys.md).
 Nâng minor EKS của cả hai env theo runbook [`docs/runbooks/eks-upgrade.md`](docs/runbooks/eks-upgrade.md).
 Áp nền bảo mật của tổ chức lần đầu (account Log Archive, Security Tooling, policy, dịch vụ phát hiện, baseline) theo runbook
 [`docs/runbooks/org-security-setup.md`](docs/runbooks/org-security-setup.md); đường vào khẩn cấp ở
@@ -95,7 +97,7 @@ aws/
   envs/<env>/                 cấu hình gốc của mỗi env (stg, prd: cùng *.tf kể cả bastion SSM, khác ở <env>.tfvars; prd thêm teardown.tfvars)
   gitops/<env>/               bootstrap GitOps của cluster EKS của env (GitOps Bridge): namespace, Argo CD, AppProject, cluster Secret, ApplicationSet svp-bootstrap
   modules/                    module nội bộ; lock file không commit
-    network, eks, rds, media  nền của mỗi env (network: bốn tầng subnet mỗi AZ, public chỉ NAT, private, database, edge chỉ ALB edge, NACL không mở 22, 3389, flow log về Log Archive, endpoint guardduty-data, endpoint interface có private DNS cho API AWS (cả mediaconvert, sqs); eks: nhóm node hệ thống, IAM, SQS, EventBridge của Karpenter, add-on agent GuardDuty, role Pod Identity của controller nền tảng và telemetry; media: bucket, distribution media.<domain>, Malware Protection cho uploads, lifecycle transcode-jobs/)
+    network, eks, rds, media  nền của mỗi env (network: bốn tầng subnet mỗi AZ, public chỉ NAT, private, database, edge chỉ ALB edge, NACL không mở 22, 3389, flow log về Log Archive, endpoint guardduty-data, endpoint interface có private DNS cho API AWS (cả mediaconvert, sqs); eks: nhóm node hệ thống, IAM, SQS, EventBridge của Karpenter, add-on agent GuardDuty, role Pod Identity của controller nền tảng và telemetry; media: bucket, distribution media.<domain> công khai media/*, preview/*, mọi path khác chỉ nhận URL ký bằng key group hai ô a, b, Malware Protection cho uploads, lifecycle transcode-jobs/)
     transcode                 transcode của env bằng AWS Elemental MediaConvert: queue svp-<env>, role svp-<env>-mediaconvert, rule EventBridge svp-<env>-mediaconvert-job-state, SQS svp-<env>-transcode-events và DLQ, alarm DLQ; JSON policy của bridge cho role Pod Identity media-worker
     edge                      đường vào của web và API: distribution svp-<env>-web, svp-<env>-api, VPC origin, ALB internal svp-<env>-edge ở tầng edge, target group của Envoy, cert ACM, response headers policy, log chuẩn v2, bản ghi DNS
     msk                       Kafka của env: Amazon MSK provisioned, một broker mỗi AZ ở subnet database, SASL/SCRAM-SHA-512 trên TLS 9096
@@ -368,7 +370,8 @@ Các luồng của một buổi; tên tài nguyên khớp code (trong sơ đồ,
 
 **Đường vào của người xem.** Web, API và media chỉ vào từ internet qua CloudFront, mỗi tên một distribution có web ACL riêng và cert ACM ở
 `us-east-1`; không load balancer nào internet-facing. Web và API đi qua VPC origin tới ALB internal ở tầng edge, rồi tới pod Envoy mà
-`TargetGroupBinding` của chart đăng ký vào target group; media đọc bucket qua OAC. Chi tiết từng chặng: README module
+`TargetGroupBinding` của chart đăng ký vào target group; media đọc bucket qua OAC. Segment của video premium (`premium/*`) chỉ trả cho URL
+video-service ký bằng khoá của key group `svp-<env>-media`; `media/*`, `preview/*` công khai, mọi path khác cần chữ ký. Chi tiết từng chặng: README module
 [`edge`](aws/modules/edge/README.md), [`media`](aws/modules/media/README.md).
 
 ```mermaid
@@ -419,7 +422,8 @@ flowchart LR
 
 **Đường transcode.** Ở stg, prd release `media-worker` chạy lệnh con `mediaconvert` (bridge): mỗi `video.uploaded` thành một
 `Probe` rồi một job trên queue `svp-<env>` của module [`transcode`](aws/modules/transcode/README.md), gọi qua endpoint interface
-`mediaconvert`. Job chạy với role `svp-<env>-mediaconvert`: đọc `uploads/*` của bucket uploads, ghi `media/*` của bucket media. Trạng thái
+`mediaconvert`. Job chạy với role `svp-<env>-mediaconvert`: đọc `uploads/*` của bucket uploads, ghi `media/*` (video premium: `premium/*`)
+của bucket media. Trạng thái
 cuối của job (`COMPLETE`, `ERROR`) đi qua rule EventBridge vào SQS `svp-<env>-transcode-events`; bridge đọc hàng đợi qua endpoint `sqs`,
 đặt header của output, tạo master và phát `transcode.*`. Message bridge không hành động được, hay event EventBridge không giao được, vào
 `svp-<env>-transcode-events-dlq`, nơi alarm mức page gửi topic `svp-<env>-alarms`. Mọi tài nguyên này ở root `aws/envs/<env>`, gỡ cùng buổi.
@@ -430,7 +434,7 @@ Luồng của bridge (Probe, bản ghi job, quyết định kết quả): `docs/
 flowchart LR
     B["Pod media-worker mediaconvert"] -->|"Probe, CreateJob, GetJob qua endpoint mediaconvert"| MC["MediaConvert, queue svp-ENV"]
     MC -->|"role svp-ENV-mediaconvert đọc uploads/*"| U[("Bucket uploads")]
-    MC -->|"role svp-ENV-mediaconvert ghi media/*"| M[("Bucket media")]
+    MC -->|"role svp-ENV-mediaconvert ghi media/*, premium/*"| M[("Bucket media")]
     MC -->|"COMPLETE, ERROR"| R["Rule svp-ENV-mediaconvert-job-state"]
     R --> Q["SQS svp-ENV-transcode-events"]
     Q -->|"long polling qua endpoint sqs"| B
