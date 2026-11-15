@@ -445,6 +445,24 @@ run "node_ecr_cache" {
   }
 }
 
+# The control plane reaches istiod's webhooks on the pod port only, from the cluster security group, never from a CIDR.
+run "istiod_webhook_rule" {
+  command = plan
+
+  assert {
+    condition     = toset(keys(local.node_security_group_additional_rules)) == toset(["ingress_cluster_istiod_webhook"])
+    error_message = "The node security group must get one additional rule, for the istiod webhooks, and no other."
+  }
+
+  assert {
+    condition = alltrue([
+      for r in values(local.node_security_group_additional_rules) : r.type == "ingress" && r.protocol == "tcp" && r.from_port == 15017 &&
+      r.to_port == 15017 && r.source_cluster_security_group == true && length(setsubtract(keys(r), ["description", "type", "protocol", "from_port", "to_port", "source_cluster_security_group"])) == 0
+    ])
+    error_message = "The istiod webhook rule must allow TCP 15017 in, from the cluster security group only (no CIDR, prefix list or other source)."
+  }
+}
+
 run "name_uppercase" {
   command = plan
 
