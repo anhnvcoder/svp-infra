@@ -239,7 +239,7 @@ env_zone() {
 # The paid features of each account, the file the Terraform roots read through modules/paid-features; each flag with
 # the values its validation allows, the first being the one of an absent key.
 paid_features_file=$infra_root/aws/paid-features.json
-paid_flags='managed_grafana always,session
+paid_flags='managed_grafana always,session,off
 inspector_ecr always,off
 security_hub always,off
 config_recording always,off'

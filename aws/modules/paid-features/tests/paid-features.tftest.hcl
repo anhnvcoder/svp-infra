@@ -48,16 +48,16 @@ run "lean_file" {
       backup        = { security_hub = "off", config_recording = "off" }
       "log-archive" = { security_hub = "off", config_recording = "off" }
       mgmt          = { security_hub = "off", config_recording = "off" }
-      prd           = { managed_grafana = "session", inspector_ecr = "off", security_hub = "off", config_recording = "off" }
-      stg           = { managed_grafana = "session", inspector_ecr = "off", security_hub = "off", config_recording = "off" }
+      prd           = { managed_grafana = "off", inspector_ecr = "off", security_hub = "off", config_recording = "off" }
+      stg           = { managed_grafana = "off", inspector_ecr = "off", security_hub = "off", config_recording = "off" }
     }
   }
 
   assert {
     condition = alltrue([for a in ["prd", "stg"] : output.flags[a] == {
-      config_recording = "off", inspector_ecr = "off", managed_grafana = "session", security_hub = "off"
+      config_recording = "off", inspector_ecr = "off", managed_grafana = "off", security_hub = "off"
     }])
-    error_message = "prd and stg must have managed_grafana session and inspector_ecr, security_hub, config_recording off."
+    error_message = "prd and stg must have every flag off."
   }
 
   assert {
@@ -77,14 +77,14 @@ run "lean_file" {
       output.off_accounts["security_hub"] == tolist(["backup", "log-archive", "mgmt", "prd", "stg"]) &&
       output.off_accounts["config_recording"] == tolist(["backup", "log-archive", "mgmt", "prd", "stg"]) &&
       output.off_accounts["inspector_ecr"] == tolist(["prd", "stg"]) &&
-      length(output.off_accounts["managed_grafana"]) == 0
+      output.off_accounts["managed_grafana"] == tolist(["prd", "stg"])
     )
-    error_message = "off_accounts must list every account but security for security_hub and config_recording, prd and stg for inspector_ecr, none for managed_grafana."
+    error_message = "off_accounts must list every account but security for security_hub and config_recording, prd and stg for inspector_ecr and managed_grafana."
   }
 
   assert {
-    condition     = output.session_accounts["managed_grafana"] == tolist(["prd", "stg"]) && alltrue([for f, a in output.session_accounts : length(a) == 0 if f != "managed_grafana"])
-    error_message = "session_accounts must list prd and stg for managed_grafana only."
+    condition     = alltrue([for f, a in output.session_accounts : length(a) == 0])
+    error_message = "session_accounts must be empty for every flag: no account opens anything with a session."
   }
 }
 
@@ -103,6 +103,25 @@ run "managed_grafana_session" {
   assert {
     condition     = output.session_accounts["managed_grafana"] == tolist(["prd", "stg"]) && length(output.off_accounts["managed_grafana"]) == 0
     error_message = "session_accounts must list prd and stg, sorted, for managed_grafana, and off_accounts none."
+  }
+}
+
+# off and session differ only in whether a session may open the workspace: off lists the env in off_accounts alone.
+run "managed_grafana_off" {
+  command = plan
+
+  variables {
+    features = { prd = { managed_grafana = "off" }, stg = { managed_grafana = "session" } }
+  }
+
+  assert {
+    condition     = output.flags["prd"].managed_grafana == "off" && output.flags["stg"].managed_grafana == "session"
+    error_message = "managed_grafana off and session must reach flags."
+  }
+
+  assert {
+    condition     = output.off_accounts["managed_grafana"] == tolist(["prd"]) && output.session_accounts["managed_grafana"] == tolist(["stg"])
+    error_message = "off_accounts must list prd alone and session_accounts stg alone for managed_grafana."
   }
 }
 
@@ -198,7 +217,7 @@ run "managed_grafana_value_unknown" {
   command = plan
 
   variables {
-    features = { stg = { managed_grafana = "off" } }
+    features = { stg = { managed_grafana = "never" } }
   }
 
   expect_failures = [var.features]
@@ -239,6 +258,16 @@ run "managed_grafana_shared_account" {
 
   variables {
     features = { backup = { managed_grafana = "always" } }
+  }
+
+  expect_failures = [var.features]
+}
+
+run "managed_grafana_off_shared_account" {
+  command = plan
+
+  variables {
+    features = { security = { managed_grafana = "off" } }
   }
 
   expect_failures = [var.features]

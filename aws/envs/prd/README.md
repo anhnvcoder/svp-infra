@@ -29,8 +29,8 @@ Root chạy được khi baseline `aws/accounts/prd` đã apply, uỷ quyền DN
 WAF, log CloudFront và delivery destination `svp-cloudfront-prd`,
 [`aws/log-archive/README.md`](../../log-archive/README.md)). Registry, workspace AMP, log group `/svp/prd/otel`, khoá
 KMS và workspace AMG của `aws/accounts/prd` (có sau bước mở của lệnh `account` của `aws/scripts/tf.sh` khi cờ
-`managed_grafana` là `session`) được `baseline.tf` đọc theo tên suy từ `svp-prd`; thiếu một cái thì `plan` dừng ở đúng
-data source đó ([mục "Tài nguyên sống lâu của account" của
+`managed_grafana` là `session`, không đọc khi cờ là `off`) được `baseline.tf` đọc theo tên suy từ `svp-prd`; thiếu một cái thì `plan`
+dừng ở đúng data source đó ([mục "Tài nguyên sống lâu của account" của
 stg](../stg/README.md#tài-nguyên-sống-lâu-của-account)).
 
 ## Cái gì khác với stg

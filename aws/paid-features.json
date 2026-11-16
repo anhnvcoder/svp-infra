@@ -12,13 +12,13 @@
     "config_recording": "off"
   },
   "prd": {
-    "managed_grafana": "session",
+    "managed_grafana": "off",
     "inspector_ecr": "off",
     "security_hub": "off",
     "config_recording": "off"
   },
   "stg": {
-    "managed_grafana": "session",
+    "managed_grafana": "off",
     "inspector_ecr": "off",
     "security_hub": "off",
     "config_recording": "off"

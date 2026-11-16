@@ -29,8 +29,9 @@ resource hay data source của provider nào: nó chỉ tính những gì root [
   `svp-obs`, `keda`, `argocd`; `kafkaBrokers` là một chuỗi `host:9096,host:9096,…` như MSK trả, không phải danh sách. Các khoá có luật
   dạng trong `variables.tf` (biểu thức chính quy khớp cả chuỗi) còn phải đúng dạng: `ecrRegistry` là host registry ECR private
   `<account>.dkr.ecr.<region>.amazonaws.com`, `ampWorkspaceId` là `ws-<id>`, `ampEndpoint` là `prometheus_endpoint` của workspace AMP (kết thúc
-  bằng `/`), `logGroup` là `/svp/<env>/otel`, `grafanaUrl` là `https://` + endpoint của workspace AMG (không `/` cuối), `alarmTopicArn` là ARN
-  topic `svp-<env>-alarms`, `mediaconvertQueueArn` là ARN queue `svp-<env>` của MediaConvert, `mediaconvertRoleArn` là ARN role
+  bằng `/`), `logGroup` là `/svp/<env>/otel`, `grafanaUrl` là `https://` + endpoint của workspace AMG (không `/` cuối) hay
+  chuỗi rỗng khi cờ `managed_grafana` của env là `off`, `alarmTopicArn` là ARN topic `svp-<env>-alarms`, `mediaconvertQueueArn`
+  là ARN queue `svp-<env>` của MediaConvert, `mediaconvertRoleArn` là ARN role
   `svp-<env>-mediaconvert`, `transcodeEventsQueueUrl` là URL hàng đợi SQS `svp-<env>-transcode-events`. Giá trị sai dạng dừng
   plan, thay vì chỉ lộ ra trong cluster thành lỗi kéo image, ghi metric hay gửi cảnh báo.
   Biến không khai kiểu object: đổi sang kiểu object sẽ âm thầm bỏ khoá thừa và báo khoá thiếu bằng lỗi kiểu thay vì luật kiểm.

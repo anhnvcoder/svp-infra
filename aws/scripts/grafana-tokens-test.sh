@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Self-test of grafana-tokens.sh against the fake aws and terraform: list prints each token's id and expiry, revoke
 # deletes each of them with the account checked right before each delete and lists again; no token means no delete,
-# no workspace of an environment with managed_grafana session is a skip; --print reaches nothing.
+# no workspace of an environment with managed_grafana session is a skip, managed_grafana off a skip before any call;
+# --print reaches nothing.
 
 # Usage: aws/scripts/grafana-tokens-test.sh
 #
@@ -125,6 +126,17 @@ expect "stg without a workspace: no Grafana call" sh -c '! grep -q "^aws grafana
 expect "prd without a workspace (managed_grafana always): FAIL naming the apply" \
   sh -c '! bash "$1" prd list >"$2" 2>&1 && grep -q "^FAIL  output grafana_url of aws/accounts/prd is null though managed_grafana of prd is always" "$2"' _ "$here/grafana-tokens.sh" "$out"
 printf '"https://g-fake0123.grafana-workspace.ap-southeast-1.amazonaws.com"\n' >"$answers/grafana_url"
+
+# --- managed_grafana off -----------------------------------------------------------------------------------------
+printf '{"stg": {"managed_grafana": "off"}}\n' >"$paid"
+for a in list revoke; do
+  : >"$log"
+  expect "stg $a (managed_grafana off): exits 0 with a skip giving the reason" \
+    sh -c 'bash "$1" stg "$2" >"$3" 2>&1 && grep -qx "skip  managed_grafana of stg is off in aws/paid-features.json: no Grafana workspace, so no token of svp-grafana-operator" "$3"' \
+    _ "$here/grafana-tokens.sh" "$a" "$out"
+  expect "stg $a (managed_grafana off): no call at all" test ! -s "$log"
+done
+printf '{"stg": {"managed_grafana": "session"}}\n' >"$paid"
 
 # --- what stops it -----------------------------------------------------------------------------------------------
 printf '{"serviceAccounts": [{"id": "9", "name": "other"}]}\n' >"$answers/grafana_list-workspace-service-accounts"

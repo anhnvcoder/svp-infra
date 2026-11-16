@@ -15,7 +15,8 @@ locals {
     keda     = ["kafka-users"]
     svp      = ["glitchtip-runtime", "jwt-signing", "jwt-verify", "kafka-users", "media-signing", "pg-roles", "valkey-users", "web"]
     svp-data = ["kafka-admin", "pg-roles", "pg-superuser", "valkey-users"]
-    svp-obs  = ["glitchtip-runtime", "grafana-operator", "kafka-users", "obs", "pg-roles"]
+    # Without a Grafana workspace the chart renders no ExternalSecret for Grafana Operator: no entry, no ARN to read.
+    svp-obs = concat(["glitchtip-runtime"], var.grafana_operator ? ["grafana-operator"] : [], ["kafka-users", "obs", "pg-roles"])
   }
   entries = toset(flatten(values(local.namespace_entries)))
 

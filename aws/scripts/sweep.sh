@@ -663,15 +663,16 @@ amp_rule_groups() {
 }
 
 # Amazon Managed Grafana workspaces svp-<env>: aws/accounts/<env> keeps its own between sessions when flag
-# managed_grafana of the account is always, and makes it for a session alone (a leftover after it) when it is session.
+# managed_grafana of the account is always, makes it for a session alone (a leftover after it) when it is session, and
+# never when it is off (a leftover whenever it is there).
 grafana_workspaces() {
   local lines id name stack
   lines=$(q '.workspaces[]? | select((.name // "") | startswith("svp-")) | "\(.id)\t\(.name)\t\(.tags.Stack // "")"' \
     grafana list-workspaces) || return 1
   while IFS=$'\t' read -r id name stack; do
     [ -n "$id" ] || continue
-    if [ "$name" = "svp-$env_name" ] && [ "$grafana" = session ]; then
-      echo "$id $name (managed_grafana is session: made for a session alone)"
+    if [ "$name" = "svp-$env_name" ] && [ "$grafana" != always ]; then
+      echo "$id $name (managed_grafana is $grafana: kept between sessions only at always)"
     elif is_kept "$stack"; then
       keep "kept  Grafana workspace $id $name (Stack=$stack)"
     else
@@ -685,7 +686,7 @@ grafana_parameters() {
   local name=/svp/$env_name/grafana-workspace-id lines
   lines=$(q '.Parameters[]?.Name' ssm describe-parameters --parameter-filters "Key=Name,Values=$name") || return 1
   [ -n "$lines" ] || return 0
-  if [ "$grafana" = session ]; then
+  if [ "$grafana" != always ]; then
     echo "$lines"
   else
     keep "kept  SSM parameter $lines (managed_grafana is $grafana)"

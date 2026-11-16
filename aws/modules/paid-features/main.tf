@@ -8,7 +8,7 @@ locals {
   values = {
     config_recording = ["always", "off"]
     inspector_ecr    = ["always", "off"]
-    managed_grafana  = ["always", "session"]
+    managed_grafana  = ["always", "session", "off"]
     security_hub     = ["always", "off"]
   }
 

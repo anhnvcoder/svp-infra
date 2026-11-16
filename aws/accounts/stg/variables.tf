@@ -52,7 +52,7 @@ variable "backup_account_id" {
 }
 
 variable "session_open" {
-  description = "Whether a session of the env is open: with the flag managed_grafana at session in aws/paid-features.json, the Grafana workspace svp-<env> and its parameter /svp/<env>/grafana-workspace-id exist only while it is true. No file sets it: only the account commands of aws/scripts/tf.sh do (plan --open, plan --close). With managed_grafana at always it changes nothing."
+  description = "Whether a session of the env is open: with the flag managed_grafana at session in aws/paid-features.json, the Grafana workspace svp-<env> and its parameter /svp/<env>/grafana-workspace-id exist only while it is true. No file sets it: only the account commands of aws/scripts/tf.sh do (plan --open, plan --close). With managed_grafana at always or off it changes nothing."
   type        = bool
   default     = false
 }

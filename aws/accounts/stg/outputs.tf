@@ -39,7 +39,7 @@ output "amp_workspace_id" {
 }
 
 output "grafana_url" {
-  description = "URL of the Grafana workspace svp-<env>, where the platform groups sign in: key grafanaUrl of the cluster values. Null while the workspace does not exist (managed_grafana at session and no session open)."
+  description = "URL of the Grafana workspace svp-<env>, where the platform groups sign in: key grafanaUrl of the cluster values. Null while the workspace does not exist (managed_grafana at off, or at session and no session open)."
   value       = module.observability.grafana_url
 }
 

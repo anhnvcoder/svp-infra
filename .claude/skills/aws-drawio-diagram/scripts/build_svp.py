@@ -130,7 +130,7 @@ class Env:
     media_free: bool       # media distribution on the flat-rate Free plan (no access log); every other distribution pays as you go
     dnssec: bool           # the zone is DNSSEC signed and has a query log (the same two root variables of aws/accounts/<env>)
     endpoint_azs: int      # AZs whose private subnet holds the ENIs of the interface endpoints (stg 1, prd az_count)
-    grafana_session: bool = False   # managed_grafana = session: AMG exists only between session open and close
+    grafana: str = "always"         # managed_grafana: session, AMG only while a session is open; off, no AMG at all
     inspector: bool = True          # inspector_ecr = always: Inspector enhanced scanning; else ECR basic scanning
 
     @property
@@ -170,7 +170,7 @@ def envs() -> list[Env]:
         out.append(Env(name, v("region"), cidr, v("az_count"), v("single_nat_gateway"), NODEPOOL[name], v("rds_multi_az"),
                        v("valkey_node_count"), logs, v("eks_secrets_kms_encryption"), zone_label(name), v("media_flat_rate_free"),
                        zone_flag(name, "dnssec_enabled"), v("interface_endpoint_az_count"),
-                       paid_feature(name, "managed_grafana") == "session", paid_feature(name, "inspector_ecr") == "always"))
+                       paid_feature(name, "managed_grafana"), paid_feature(name, "inspector_ecr") == "always"))
     return out
 
 
@@ -212,7 +212,8 @@ def expected(env: Env) -> dict[str, int]:
             # backup: the vault of the env and its copy in svp-backup; keys of uploads, of the vault and of the copy
             # account-level services that outlive the session: ECR, Inspector (scans the cache repositories), AMP, AMG,
             # the application log group (cloudwatch_2 below counts the alarm icon too), X-Ray
-            "ecr": 1, "inspector": int(env.inspector), "managed_service_for_prometheus": 1, "managed_service_for_grafana": 1, "xray": 1,
+            "ecr": 1, "inspector": int(env.inspector), "managed_service_for_prometheus": 1,
+            "managed_service_for_grafana": int(env.grafana != "off"), "xray": 1,
             "backup": 2, "account": 3, "region": 1, "az": n, "subnet": 4 * n,
             # Kubernetes: a ns icon per frame; a workload icon per svp service, per svp-data workload, and Envoy's
             # proxy Deployment and its ClusterIP Service
@@ -228,7 +229,7 @@ def org_expected() -> dict[str, int]:
     return {"account": 6, "organizations": 1, "single_sign_on": 1, "cloudtrail": 1, "eventbridge": 4, "s3": 6, "key_management_service": 2,
             "backup": 4,
             "flow_logs": 2, "waf": 2, "cloudfront": 2, "config": 1, "guardduty": 1, "security_hub": 1, "access_analyzer": 1, "sns": 1, "users": 1,
-            "inspector": 1, "managed_service_for_grafana": 2}
+            "inspector": 1, "managed_service_for_grafana": sum(paid_feature(e, "managed_grafana") != "off" for e in ("stg", "prd"))}
 
 
 # ---------------------------------------------------------------- geometry of an env page
@@ -458,12 +459,19 @@ def env_page(env: Env) -> Page:
         scan = p.box("ECR basic scanning<br>cache repositories<br>(inspector_ecr off)", 920, row2, 240, 80, "#F7F7F7", MUTED,
                      color=MUTED, cid="basicscan")
     amp = p.icon(f"AMP workspace svp-{env.name}<br>metrics, rules, alerts", "managed_service_for_prometheus", 1200, row2, SEC, cid="amp")
-    amg_note = "only during a session" if env.grafana_session else "IAM Identity Center sign-in"
-    amg = p.icon(f"AMG svp-{env.name}<br>{amg_note}", "managed_service_for_grafana", 1480, row2, SEC, cid="amg")
-    outlive = "ECR, AMP, the application log group and the X-Ray settings" if env.grafana_session else \
-        "ECR, AMP, AMG, the application log group and the X-Ray settings"
-    amg_life = [f"AMG svp-{env.name} and its grafana-workspace-id parameter exist only between session open and close "
-                "(session_open)"] if env.grafana_session else []
+    if env.grafana == "off":
+        amg = p.box("No Grafana<br>(managed_grafana off)", 1480, row2, 240, 80, "#F7F7F7", MUTED, color=MUTED, cid="nografana")
+    else:
+        amg_note = "only during a session" if env.grafana == "session" else "IAM Identity Center sign-in"
+        amg = p.icon(f"AMG svp-{env.name}<br>{amg_note}", "managed_service_for_grafana", 1480, row2, SEC, cid="amg")
+    outlive = "ECR, AMP, AMG, the application log group and the X-Ray settings" if env.grafana == "always" else \
+        "ECR, AMP, the application log group and the X-Ray settings"
+    amg_life = {
+        "session": [f"AMG svp-{env.name} and its grafana-workspace-id parameter exist only between session open and close "
+                    "(session_open)"],
+        "off": [f"managed_grafana off: no AMG workspace, parameter or entry svp/{env.name}/grafana-operator; grafanaUrl is "
+                "empty, alerts still go AMP to SNS"],
+    }.get(env.grafana, [])
     app_logs = p.icon(f"CloudWatch Logs<br>/svp/{env.name}/otel, aws/spans", "cloudwatch_2", 1760, row2, SEC, cid="applogs")
     xray = p.icon("X-Ray<br>Transaction Search", "xray", 2040, row2, SEC, cid="xray")
     p.text(bullets(
@@ -475,7 +483,8 @@ def env_page(env: Env) -> Page:
         "pull-through cache",
         f"Interface endpoints: private DNS, 443 from the VPC, ENIs in the private subnets of the first {env.endpoint_azs} AZ(s); "
         "GitHub, Sigstore, Telegram, upstream registries, the Pricing API, OpenCost's price file, the blackbox probes of the three "
-        "distributions (web, api, media/uptime-probe.txt in S3 media) and AMG still go through NAT"),
+        "distributions (web, api, media/uptime-probe.txt in S3 media)" + ("" if env.grafana == "off" else " and AMG")
+        + " still go through NAT"),
         2320, row2, 1160, 160 if amg_life else 120, valign="top")
     p.icon(f"ACM · ALB certificate, {env.region}<br>viewer certificates in us-east-1", "certificate_manager_2", 2960, row, SEC, cid="acm")
 
@@ -606,8 +615,9 @@ def env_page(env: Env) -> Page:
     p.edge(events, queue, STROKE["integ"])
     p.edge(scan, ecr, STROKE["sec"], dashed=True, label="scan" if env.inspector else "scan on push", exit_=(0, 0.5),
            entry=(1, 0.5), label_pos=0.5)
-    p.edge(amg, amp, STROKE["sec"], label="PromQL", exit_=(0, 0.5), entry=(1, 0.5))
-    p.edge(amg, app_logs, STROKE["sec"], label="Logs Insights", exit_=(1, 0.5), entry=(0, 0.5))
+    if env.grafana != "off":
+        p.edge(amg, amp, STROKE["sec"], label="PromQL", exit_=(0, 0.5), entry=(1, 0.5))
+        p.edge(amg, app_logs, STROKE["sec"], label="Logs Insights", exit_=(1, 0.5), entry=(0, 0.5))
     p.edge(xray, app_logs, STROKE["sec"], label="spans", exit_=(0, 0.5), entry=(1, 0.5))
     # transcode: media-worker's calls leave the first AZ's endpoint ENIs down the corridor at x 1480 (between the KMS
     # and CloudWatch labels) and enter the top of their target; the role reads uploads and writes media
@@ -747,15 +757,18 @@ def org_page() -> Page:
             p.icon("WAF web ACL logging<br>aws-waf-logs-svp", "waf", 2160, top + 160, SEC, cid=f"{env}_waf"),
             p.icon("CloudFront standard logging<br>svp-cloudfront-" + env, "cloudfront", 2160, top + 320, NET, cid=f"{env}_cf"),
             p.icon("EventBridge svp-security-* rules<br>forwarder role", "eventbridge", 2160, top + 480, INTEG, cid=f"{env}_fwd", label_top=True))
-        session = paid_feature(env, "managed_grafana") == "session"
-        p.icon(f"AMG svp-{env}{'<br>only during a session' if session else ''}<br>ADMIN svp-platform-admins<br>VIEWER svp-platform-viewers",
-               "managed_service_for_grafana", 2440, top, SEC, cid=f"{env}_amg")
+        grafana = paid_feature(env, "managed_grafana")
+        if grafana != "off":
+            session = "<br>only during a session" if grafana == "session" else ""
+            p.icon(f"AMG svp-{env}{session}<br>ADMIN svp-platform-admins<br>VIEWER svp-platform-viewers",
+                   "managed_service_for_grafana", 2440, top, SEC, cid=f"{env}_amg")
         # services the cost flags turn off here; GuardDuty and CloudTrail never switch off, so they are not listed
         off = [name for name, flag in (("Security Hub", "security_hub"), ("Config recorder", "config_recording"),
-                                       ("Inspector ECR", "inspector_ecr")) if paid_feature(env, flag) == "off"]
+                                       ("Inspector ECR", "inspector_ecr"), ("Managed Grafana", "managed_grafana"))
+               if paid_feature(env, flag) == "off"]
         if off:
             p.text(f"<b>Off in svp-{env}</b> (aws/paid-features.json):{bullets(*off)}GuardDuty and CloudTrail run in every account",
-                   2400, top + 320, 240, 160, color=MUTED, valign="top")
+                   2400, top + 320, 240, 200, color=MUTED, valign="top")
         vaults[env] = p.icon(f"AWS Backup vault svp-{env}<br>key alias/svp-{env}-backup<br>role svp-{env}-backup", "backup", 2440, top + 160, STO,
                              cid=f"{env}_vault")
 
@@ -904,8 +917,9 @@ def flows(region: str) -> Page:
     spans = p.icon("CloudWatch Logs aws/spans<br>Transaction Search", "cloudwatch_2", 1360, r1, SEC, cid="tspans", label_top=True)
     logs = p.icon("CloudWatch Logs<br>/svp/&lt;env&gt;/otel", "cloudwatch_2", 960, r2, SEC, cid="tlogs")
     amp = p.icon("AMP workspace svp-&lt;env&gt;<br>rules, alert manager", "managed_service_for_prometheus", 960, r3, SEC, cid="tamp", label_top=True)
-    grafana_session = [e for e in ("stg", "prd") if paid_feature(e, "managed_grafana") == "session"]
-    amg_note = f"dashboards; {', '.join(grafana_session)}: session only" if grafana_session else "dashboards"
+    notes = [f"{', '.join(es)}: {label}" for value, label in (("session", "session only"), ("off", "off"))
+             if (es := [e for e in ("stg", "prd") if paid_feature(e, "managed_grafana") == value])]
+    amg_note = "; ".join(["dashboards", *notes])
     amg = p.icon(f"AMG svp-&lt;env&gt;<br>{amg_note}", "managed_service_for_grafana", 1360, r3, SEC, cid="tamg")
     sns = p.icon("SNS svp-&lt;env&gt;-alarms<br>page, ticket", "sns", 960, r4, INTEG, cid="tsns")
     learner = p.flat("Learner<br>email", "users", 1360, r4, cid="tlearner")

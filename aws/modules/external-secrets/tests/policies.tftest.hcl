@@ -32,8 +32,9 @@ mock_provider "aws" {
 }
 
 variables {
-  env          = "stg"
-  cluster_name = "svp-stg"
+  env              = "stg"
+  cluster_name     = "svp-stg"
+  grafana_operator = true
 
   expected_entries = {
     argocd   = ["argocd-notifications"]
@@ -199,6 +200,39 @@ run "prd" {
   assert {
     condition     = aws_eks_pod_identity_association.controller.cluster_name == "svp-prd" && contains([for c in data.aws_iam_policy_document.controller_trust.statement[0].condition : join(",", c.values)], "svp-prd")
     error_message = "The prd controller role must be bound to cluster svp-prd."
+  }
+}
+
+# managed_grafana off: no Grafana workspace, so no entry for Grafana Operator's token and no role may read one; every
+# other entry and namespace stays.
+run "grafana_off" {
+  command = plan
+
+  variables {
+    grafana_operator = false
+  }
+
+  assert {
+    condition = toset([for s in aws_secretsmanager_secret.this : s.name]) == toset([
+      for e in flatten(values(var.expected_entries)) : "svp/stg/${e}" if e != "grafana-operator"
+    ])
+    error_message = "Without Grafana the entries must be those of the map but svp/stg/grafana-operator."
+  }
+
+  assert {
+    condition = alltrue([for ns, entries in var.expected_entries :
+      toset(data.aws_iam_policy_document.namespace[ns].statement[0].resources) == toset([
+        for e in entries : "arn:aws:secretsmanager:ap-southeast-1:111111111111:secret:svp/stg/${e}-??????" if e != "grafana-operator"
+      ])
+    ]) && toset(keys(aws_iam_role.namespace)) == toset(keys(var.expected_entries))
+    error_message = "Without Grafana every namespace role must stay and read its entries but grafana-operator."
+  }
+
+  assert {
+    condition = alltrue(flatten([for d in data.aws_iam_policy_document.namespace : [
+      for st in d.statement : [for r in st.resources : !strcontains(r, "grafana")]
+    ]]))
+    error_message = "Without Grafana no namespace policy may name a Grafana entry."
   }
 }
 

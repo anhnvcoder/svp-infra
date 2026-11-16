@@ -38,7 +38,7 @@ tài nguyên thiếu; apply `aws/accounts/stg` trước rồi plan lại.
 | Khoá KMS `alias/svp-stg-observability`, `alias/svp-stg-ecr` | alias | `module.eks` (Collector ghi log mã hoá; node giải mã image qua ECR) |
 | Repo phát hành `svp-backend/*`, `svp-frontend/*` | mọi repo của registry có tên bắt đầu bằng hai tiền tố đó | `module.eks` (role admission controller Kyverno) |
 | Rule pull-through cache `ghcr`, `docker-hub`, `quay`, `k8s`, `ecr-public` | tiền tố, một data source mỗi rule | `module.eks` (quyền cache của role node) |
-| Workspace AMG `svp-stg` | id đọc từ tham số SSM `/svp/stg/grafana-workspace-id` mà `aws/accounts/stg` ghi cùng workspace (AMG không tìm được theo tên); postcondition kiểm tên là `svp-stg` | `grafanaUrl` |
+| Workspace AMG `svp-stg` (cờ `managed_grafana` khác `off`) | id đọc từ tham số SSM `/svp/stg/grafana-workspace-id` mà `aws/accounts/stg` ghi cùng workspace (AMG không tìm được theo tên); postcondition kiểm tên là `svp-stg` | `grafanaUrl` |
 
 Host registry (`ecrRegistry`) dựng từ `account_id` và `region`, không đọc API.
 
@@ -46,7 +46,9 @@ Workspace AMG và tham số của nó theo cờ `managed_grafana` của env tron
 phí](../../accounts/README.md#cờ-chi-phí) của `aws/accounts`): với `session`, cả hai chỉ có trong buổi, sau bước mở của
 lệnh `account` của `aws/scripts/tf.sh`. Thiếu tham số thì `plan` dừng ở `data.aws_ssm_parameter.grafana_workspace`
 (`ParameterNotFound`): chạy bước mở đó rồi plan lại. Root đọc tham số bằng profile ghi của account env, cùng account với
-tham số.
+tham số. Với `off` không có workspace nào: `baseline.tf` đọc cờ qua module
+[`paid-features`](../../modules/paid-features/README.md), không đọc tham số hay workspace, `grafanaUrl` là chuỗi rỗng và
+module `external-secrets` không tạo entry `grafana-operator` (`grafana_operator = false`).
 
 ## Cái gì khác giữa các env
 
@@ -307,7 +309,7 @@ Khoá của `cluster_values`:
 | `ampWorkspaceId` | id `ws-<uuid>` của workspace AMP `svp-stg` (`baseline.tf`): luật và Alertmanager của ACK đặt trên workspace này |
 | `ampEndpoint` | `prometheus_endpoint` của workspace, kết thúc bằng `/`: `api/v1/remote_write`, `api/v1/query` nối sau |
 | `logGroup` | `/svp/stg/otel`: Collector ghi log OTLP của service và web vào đây |
-| `grafanaUrl` | `https://` + endpoint của workspace AMG, không `/` cuối: Grafana Operator đẩy dashboard và data source tới đây |
+| `grafanaUrl` | `https://` + endpoint của workspace AMG, không `/` cuối: Grafana Operator đẩy dashboard và data source tới đây; chuỗi rỗng `""` khi cờ `managed_grafana` là `off` (chart không dựng phần Grafana nào) |
 | `alarmTopicArn` | `module.alarms.topic_arn` (topic `svp-stg-alarms`): Alertmanager của AMP gửi cảnh báo tới đây |
 | `mediaconvertQueueArn` | `module.transcode.queue_arn` (queue MediaConvert `svp-stg`): bridge tạo job trên queue này |
 | `mediaconvertRoleArn` | `module.transcode.role_arn` (role `svp-stg-mediaconvert`): role mà job chạy với, bridge truyền nó bằng `iam:PassRole` |
@@ -347,8 +349,9 @@ hành mà `baseline.tf` đọc (quyền của role `svp-stg-opencost` ở [READM
 
 Secret của cluster: module `external-secrets` tạo vỏ entry `svp/stg/<entry>` (giá trị của `kafka-admin`, `kafka-users`,
 `valkey-users` do module `msk`, `elasticache` ghi, mục dưới; `grafana-operator`, token của service account AMG, do
-script buổi ghi mỗi buổi; `media-signing` do `aws/scripts/media-signing-key.sh stg activate <ô>` ghi, mục [Khoá ký
-media](#khoá-ký-media); entry khác người học ghi bằng `make eks-secrets`), role `svp-stg-external-secrets` của
+script buổi ghi mỗi buổi, không có khi cờ `managed_grafana` là `off`; `media-signing` do
+`aws/scripts/media-signing-key.sh stg activate <ô>` ghi, mục [Khoá ký media](#khoá-ký-media); entry khác người học ghi bằng
+`make eks-secrets`), role `svp-stg-external-secrets` của
 controller External Secrets (Pod Identity, ServiceAccount `external-secrets/external-secrets`) chỉ được assume năm role
 `svp-stg-external-secrets-<namespace>`, mỗi role chỉ đọc entry mà namespace đó dùng (README của module).
 

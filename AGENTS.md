@@ -39,7 +39,7 @@ quyết định chung của lab nằm ở `docs/` của repo code (bản clone `
   | `svp-log-archive` | — | `anhnv-log-ro` | `SVP_AWS_LOG_ACCOUNT_ID` | — |
   | `svp-security` | — | `anhnv-security-ro` | `SVP_AWS_SECURITY_ACCOUNT_ID` | — |
   | `svp-backup` | — | `anhnv-backup-ro` | `SVP_AWS_BACKUP_ACCOUNT_ID` | — |
-  | `svp-stg`, `svp-prd` | `anhnv-<env>` | `anhnv-<env>-ro` | `SVP_AWS_STG_ACCOUNT_ID`, `SVP_AWS_PRD_ACCOUNT_ID` | `aws/accounts/<env>` (sống giữa các buổi: baseline, registry ECR và role CI, observability AMP, CloudWatch Logs, X-Ray; AMG theo cờ `managed_grafana` của `aws/paid-features.json`: với file của repo stg và prd chỉ trong buổi), `aws/envs/<env>`, `aws/gitops/<env>` |
+  | `svp-stg`, `svp-prd` | `anhnv-<env>` | `anhnv-<env>-ro` | `SVP_AWS_STG_ACCOUNT_ID`, `SVP_AWS_PRD_ACCOUNT_ID` | `aws/accounts/<env>` (sống giữa các buổi: baseline, registry ECR và role CI, observability AMP, CloudWatch Logs, X-Ray; AMG theo cờ `managed_grafana` của `aws/paid-features.json`: với file của repo stg và prd không có), `aws/envs/<env>`, `aws/gitops/<env>` |
 
   Lệnh viết sẵn ghi profile của đúng account đó ngay trong lệnh, `TF_VAR_account_id` từ biến của account đó, và `--region` (`ap-southeast-1`
   cho dịch vụ theo region và STS, `us-east-1` cho Organizations, IAM, Cost Explorer, WAF, cert ACM và log chuẩn của CloudFront (delivery

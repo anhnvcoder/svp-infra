@@ -5,7 +5,7 @@
 # that leaked, or the one left after a session. No token's key is ever read: the API returns it only on creation.
 
 # The workspace is the one of output grafana_url of aws/accounts/<env>; that output is null while no workspace exists
-# (managed_grafana session in aws/paid-features.json, outside a session), and then there is no token either.
+# (managed_grafana off, or session outside a session, in aws/paid-features.json), and then there is no token either.
 # Steps: docs/runbooks/platform-setup.md, "Xoay credential".
 
 # Usage: aws/scripts/grafana-tokens.sh [--print] stg|prd list|revoke
@@ -38,6 +38,11 @@ list_tokens() {
 }
 
 step "$me $action: the tokens of $sa_name in the Grafana workspace of $env_name"
+grafana=$(paid_feature "$env_name" managed_grafana) || exit 1
+if [ "$grafana" = off ]; then
+  skip "managed_grafana of $env_name is off in aws/paid-features.json: no Grafana workspace, so no token of $sa_name"
+  exit 0
+fi
 check_account
 url=$(tf_ "$account_root" output -json grafana_url) ||
   fail "terraform output grafana_url of aws/accounts/$env_name: init it once (aws/accounts/README.md), then this again"
@@ -46,7 +51,7 @@ if printing; then
 else
   url=$(jq -r 'strings' <<<"$url" 2>/dev/null) || fail "output grafana_url of aws/accounts/$env_name is not a string or null"
   if [ -z "$url" ]; then
-    [ "$(paid_feature "$env_name" managed_grafana)" = session ] ||
+    [ "$grafana" = session ] ||
       fail "output grafana_url of aws/accounts/$env_name is null though managed_grafana of $env_name is always: apply aws/accounts/$env_name (docs/runbooks/platform-setup.md, step (5))"
     skip "no Grafana workspace in $env_name (managed_grafana session in aws/paid-features.json, no session open), so no token of $sa_name"
     exit 0

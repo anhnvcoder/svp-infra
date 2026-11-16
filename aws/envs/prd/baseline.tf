@@ -31,14 +31,30 @@ data "aws_kms_alias" "observability" {
   name = "alias/${local.name}-observability"
 }
 
+# The flag managed_grafana decides whether aws/accounts/<env> makes a Grafana workspace at all: at off there is none to
+# read, and the cluster values hand the charts an empty grafanaUrl. Design notes: aws/modules/paid-features/README.md.
+module "paid_features" {
+  source = "../../modules/paid-features"
+
+  features = jsondecode(file("${path.root}/../../paid-features.json"))
+}
+
+locals {
+  grafana = module.paid_features.flags[local.env].managed_grafana != "off"
+}
+
 # AMG has no lookup by name, so aws/accounts/<env> writes the id of the workspace it makes into a parameter; the name
 # check stops a workspace of another env or account from reaching the cluster values.
 data "aws_ssm_parameter" "grafana_workspace" {
+  count = local.grafana ? 1 : 0
+
   name = "/svp/${local.env}/grafana-workspace-id"
 }
 
 data "aws_grafana_workspace" "env" {
-  workspace_id = data.aws_ssm_parameter.grafana_workspace.insecure_value
+  count = local.grafana ? 1 : 0
+
+  workspace_id = data.aws_ssm_parameter.grafana_workspace[0].insecure_value
 
   lifecycle {
     postcondition {

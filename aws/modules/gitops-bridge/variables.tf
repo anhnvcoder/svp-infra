@@ -72,14 +72,14 @@ variable "cluster_values" {
       ampWorkspaceId = "^ws-[0-9a-f-]+$"
       ampEndpoint    = "^https://aps-workspaces\\.[a-z]{2}(-[a-z]+)+-[0-9]+\\.amazonaws\\.com/workspaces/ws-[0-9a-f-]+/$"
       logGroup       = "^/svp/[a-z]+/otel$"
-      grafanaUrl     = "^https://g-[0-9a-z]+\\.grafana-workspace\\.[a-z]{2}(-[a-z]+)+-[0-9]+\\.amazonaws\\.com$"
+      grafanaUrl     = "^(https://g-[0-9a-z]+\\.grafana-workspace\\.[a-z]{2}(-[a-z]+)+-[0-9]+\\.amazonaws\\.com)?$"
       alarmTopicArn  = "^arn:aws:sns:[a-z]{2}(-[a-z]+)+-[0-9]+:[0-9]{12}:svp-[a-z]+-alarms$"
 
       mediaconvertQueueArn    = "^arn:aws:mediaconvert:[a-z]{2}(-[a-z]+)+-[0-9]+:[0-9]{12}:queues/svp-[a-z]+$"
       mediaconvertRoleArn     = "^arn:aws:iam::[0-9]{12}:role/svp-[a-z]+-mediaconvert$"
       transcodeEventsQueueUrl = "^https://sqs\\.[a-z]{2}(-[a-z]+)+-[0-9]+\\.amazonaws\\.com/[0-9]{12}/svp-[a-z]+-transcode-events$"
     } : can(regex(re, var.cluster_values[k]))]), false)
-    error_message = "cluster_values: ecrRegistry must be <account>.dkr.ecr.<region>.amazonaws.com, ampWorkspaceId ws-<id>, ampEndpoint https://aps-workspaces.<region>.amazonaws.com/workspaces/ws-<id>/, logGroup /svp/<env>/otel, grafanaUrl https://g-<id>.grafana-workspace.<region>.amazonaws.com without a trailing slash, alarmTopicArn arn:aws:sns:<region>:<account>:svp-<env>-alarms, mediaconvertQueueArn arn:aws:mediaconvert:<region>:<account>:queues/svp-<env>, mediaconvertRoleArn arn:aws:iam::<account>:role/svp-<env>-mediaconvert, transcodeEventsQueueUrl https://sqs.<region>.amazonaws.com/<account>/svp-<env>-transcode-events."
+    error_message = "cluster_values: ecrRegistry must be <account>.dkr.ecr.<region>.amazonaws.com, ampWorkspaceId ws-<id>, ampEndpoint https://aps-workspaces.<region>.amazonaws.com/workspaces/ws-<id>/, logGroup /svp/<env>/otel, grafanaUrl https://g-<id>.grafana-workspace.<region>.amazonaws.com without a trailing slash or empty (managed_grafana off), alarmTopicArn arn:aws:sns:<region>:<account>:svp-<env>-alarms, mediaconvertQueueArn arn:aws:mediaconvert:<region>:<account>:queues/svp-<env>, mediaconvertRoleArn arn:aws:iam::<account>:role/svp-<env>-mediaconvert, transcodeEventsQueueUrl https://sqs.<region>.amazonaws.com/<account>/svp-<env>-transcode-events."
   }
 }
 

@@ -1427,11 +1427,11 @@ expect "paid_feature: a key absent from the file is always (prd, log-archive)" \
 expect "paid_feature: the values of stg in the sample" \
   sh -c '[ "$1 $2 $3 $4" = "session off off off" ]' _ "$(flag '' stg managed_grafana)" "$(flag '' stg inspector_ecr)" \
   "$(flag '' stg security_hub)" "$(flag '' stg config_recording)"
-printf '{"stg": {"managed_grafana": "off", "security_hub": "always"}}\n' >"$work/flags.json"
+printf '{"stg": {"managed_grafana": "never", "security_hub": "always"}}\n' >"$work/flags.json"
 bad_value() {
   local out
   ! out=$(flag "$work/flags.json" stg managed_grafana 2>"$work/out") && [ -z "$out" ] &&
-    grep -q "^FAIL  stg.managed_grafana of $work/flags.json is .off., not one of always,session$" "$work/out"
+    grep -q "^FAIL  stg.managed_grafana of $work/flags.json is .never., not one of always,session,off$" "$work/out"
 }
 expect "paid_feature fails on a value outside the flag's set, naming the file and the values" bad_value
 expect "paid_feature: a valid value beside a bad one in the same account" test "$(flag "$work/flags.json" stg security_hub)" = always
@@ -1446,6 +1446,13 @@ no_sessions() {
   out=$(sessions '' prd) && [ -z "$out" ]
 }
 expect "session_features prd: none" no_sessions
+printf '{"prd": {"managed_grafana": "off"}}\n' >"$work/off.json"
+expect "paid_feature: managed_grafana off is a value of its own" test "$(flag "$work/off.json" prd managed_grafana)" = off
+off_sessions() {
+  local out
+  out=$(sessions "$work/off.json" prd) && [ -z "$out" ]
+}
+expect "session_features prd with managed_grafana off: none" off_sessions
 bad_sessions() { ! sessions "$work/flags.json" stg >/dev/null 2>&1; }
 expect "session_features fails on a bad value of the env" bad_sessions
 # The real file: valid, whatever its values. Keys are the accounts and flags the validation of modules/paid-features
@@ -1534,14 +1541,16 @@ mv "$work/tfvars.aside" "$accounts/stg/stg.auto.tfvars"
 for c in show destroy 'plan' 'plan --destroy' 'apply --teardown' 'state-rm x'; do
   expect "tf.sh stg account refuses $c" sh -c '! bash "$1/tf.sh" stg account $2 >/dev/null 2>&1' _ "$here" "$c"
 done
-# managed_grafana of stg always: nothing to open or close, as for prd.
-set_flags '{"stg": {"managed_grafana": "always"}}'
-new_session
-for c in init 'plan --open' 'plan --close' apply; do
-  clear_log
-  expect "tf.sh stg account $c (managed_grafana always): no session feature, says so, exits 0, calls nothing" \
-    sh -c 'bash "$1/tf.sh" stg account $2 >"$3" 2>&1 && grep -qx "ok    no session feature of stg in aws/paid-features.json: root account has nothing to open or close" "$3" &&
-      [ ! -s "$4" ]' _ "$here" "$c" "$work/out" "$log"
+# managed_grafana of stg always or off: nothing to open or close, as for prd.
+for g in off always; do
+  set_flags "{\"stg\": {\"managed_grafana\": \"$g\"}}"
+  new_session
+  for c in init 'plan --open' 'plan --close' apply; do
+    clear_log
+    expect "tf.sh stg account $c (managed_grafana $g): no session feature, says so, exits 0, calls nothing" \
+      sh -c 'bash "$1/tf.sh" stg account $2 >"$3" 2>&1 && grep -qx "ok    no session feature of stg in aws/paid-features.json: root account has nothing to open or close" "$3" &&
+        [ ! -s "$4" ]' _ "$here" "$c" "$work/out" "$log"
+  done
 done
 expect "tf.sh stg env plan (managed_grafana always) needs no account step" \
   sh -c 'bash "$1/tf.sh" stg env plan >/dev/null 2>&1 && grep -q "^terraform -chdir=.*/aws/envs/stg plan -input=false -var-file=stg.tfvars -out=stg.tfplan$" "$2"' _ "$here" "$log"
@@ -2085,6 +2094,15 @@ expect "bootstrap.sh secrets fails without service account svp-grafana-operator,
     ! grep -qE "create-workspace-service-account-token|delete-workspace-service-account-token|put-secret-value" "$3"' _ "$here" "$work/out" "$log"
 expect "bootstrap.sh secrets without the token marks no secrets-written" \
   sh -c '! grep -qs secrets-written "$1/timeline.tsv"' _ "$SVP_SESSION_DIR"
+set_flags '{"stg": {"managed_grafana": "off"}}'
+new_session
+clear_log
+expect "bootstrap.sh stg secrets (managed_grafana off) skips the token: no Grafana call, no entry svp/stg/grafana-operator" \
+  sh -c 'bash "$1/bootstrap.sh" stg secrets >"$2" 2>&1 &&
+    grep -qx "skip  managed_grafana of stg is off in aws/paid-features.json: no Grafana workspace, so no token of svp-grafana-operator" "$2" &&
+    ! grep -qE "^aws grafana |grafana-operator" "$3"' _ "$here" "$work/out" "$log"
+expect "bootstrap.sh stg secrets (managed_grafana off) still marks secrets-written" has_mark secrets-written
+set_flags "$stg_session"
 new_session
 bash "$here/bootstrap.sh" stg secrets >/dev/null 2>&1 || true
 expect "bootstrap.sh stg secrets points the context at its own tunnel port" \
@@ -2684,13 +2702,23 @@ expect "sweep.sh stg (managed_grafana session) passes with no Grafana workspace 
 clear_log
 expect "sweep.sh stg (managed_grafana session) fails on the workspace svp-stg and its parameter left by a session, with their delete commands" \
   sh -c '! FAKE_LEFTOVER=grafana bash "$1/sweep.sh" stg >"$2" 2>&1 && grep -q "^FAIL  Managed Grafana workspaces: 1 left$" "$2" &&
-    grep -q "^        g-0fake svp-stg (managed_grafana is session: made for a session alone)$" "$2" &&
+    grep -q "^        g-0fake svp-stg (managed_grafana is session: kept between sessions only at always)$" "$2" &&
     grep -q "delete: AWS_PROFILE=anhnv-stg aws grafana delete-workspace --workspace-id g-0fake --region ap-southeast-1$" "$2" &&
     grep -q "^FAIL  SSM parameters of the Grafana workspace: 1 left$" "$2" && grep -q "^        /svp/stg/grafana-workspace-id$" "$2" &&
     grep -q "delete: AWS_PROFILE=anhnv-stg aws ssm delete-parameter --name /svp/stg/grafana-workspace-id --region ap-southeast-1$" "$2" &&
     ! grep -q "^kept  .*Grafana\|^kept  SSM" "$2"' _ "$here" "$work/sweep.out"
 expect "sweep.sh stg reads the parameter of its own workspace alone" \
   grep -qF 'aws ssm describe-parameters --parameter-filters Key=Name,Values=/svp/stg/grafana-workspace-id --output json --region ap-southeast-1' "$log"
+set_flags '{"stg": {"managed_grafana": "off"}}'
+expect "sweep.sh stg (managed_grafana off) passes with no Grafana workspace or parameter" \
+  sh -c 'bash "$1/sweep.sh" stg >"$2" 2>&1 && grep -q "^ok    Managed Grafana workspaces: none$" "$2" &&
+    grep -q "^ok    SSM parameters of the Grafana workspace: none$" "$2"' _ "$here" "$work/sweep.out"
+expect "sweep.sh stg (managed_grafana off) fails on any workspace svp-stg and its parameter, with their delete commands" \
+  sh -c '! FAKE_LEFTOVER=grafana bash "$1/sweep.sh" stg >"$2" 2>&1 && grep -q "^FAIL  Managed Grafana workspaces: 1 left$" "$2" &&
+    grep -q "^        g-0fake svp-stg (managed_grafana is off: kept between sessions only at always)$" "$2" &&
+    grep -q "delete: AWS_PROFILE=anhnv-stg aws grafana delete-workspace --workspace-id g-0fake --region ap-southeast-1$" "$2" &&
+    grep -q "^FAIL  SSM parameters of the Grafana workspace: 1 left$" "$2" && grep -q "^        /svp/stg/grafana-workspace-id$" "$2" &&
+    ! grep -q "^kept  .*Grafana\|^kept  SSM" "$2"' _ "$here" "$work/sweep.out"
 set_flags '{"stg": {"managed_grafana": "always"}}'
 expect "sweep.sh stg (managed_grafana always) keeps the Grafana workspace svp-stg and its parameter" \
   sh -c 'FAKE_LEFTOVER=grafana bash "$1/sweep.sh" stg >"$2" 2>&1 && grep -q "^kept  Grafana workspace g-0fake svp-stg (Stack=baseline)$" "$2" &&

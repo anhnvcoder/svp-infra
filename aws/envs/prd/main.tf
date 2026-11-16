@@ -218,8 +218,9 @@ module "edge" {
 module "external_secrets" {
   source = "../../modules/external-secrets"
 
-  env          = local.env
-  cluster_name = module.eks.cluster_name
+  env              = local.env
+  cluster_name     = module.eks.cluster_name
+  grafana_operator = local.grafana
 }
 
 # Read to check that domain is the env's zone or lies inside it: the edge and media modules write their records and
