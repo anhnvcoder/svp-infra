@@ -2479,6 +2479,20 @@ clear_log
 expect "measure.sh stops on another account before any other command" \
   sh -c '! FAKE_ACCOUNT=000000000000 bash "$1/measure.sh" stg >/dev/null 2>&1 && [ -s "$2" ] && ! grep -qv "^aws sts get-caller-identity " "$2"' _ "$here" "$log"
 
+start_measure stg
+expect "measure.sh stg --smoke runs the smoke alone" bash "$here/measure.sh" stg --smoke >"$work/measure.out" 2>&1
+expect "measure.sh stg --smoke: smoke through its domain, no seed, no k6" \
+  sh -c 'grep -q "make .* eks-smoke CONTEXT=svp-stg DOMAIN=stg.aws.svp.example " "$1" && ! grep -qE "eks-seed|eks-rl-reset|run\.sh" "$1"' _ "$log"
+expect "measure.sh stg --smoke: smoke-ok marked, no k6 level" \
+  sh -c 'grep -q "smoke-ok" "$1/timeline.tsv" && [ ! -e "$1/k6-levels.tsv" ]' _ "$SVP_SESSION_DIR"
+expect "measure.sh --smoke takes no --from" sh -c '! bash "$1/measure.sh" stg --smoke --from 2 >/dev/null 2>&1' _ "$here"
+start_measure stg
+expect "measure.sh stg --smoke stops on another account before any other command" \
+  sh -c '! FAKE_ACCOUNT=000000000000 bash "$1/measure.sh" stg --smoke >/dev/null 2>&1 && [ -s "$2" ] && ! grep -qv "^aws sts get-caller-identity " "$2"' _ "$here" "$log"
+start_measure stg
+expect "measure.sh stg --smoke refuses while the tunnel is closed, before the smoke" \
+  sh -c '! FAKE_TUNNEL=closed bash "$1/measure.sh" stg --smoke >/dev/null 2>&1 && ! grep -q "^make " "$2"' _ "$here" "$log"
+
 start_measure prd
 expect "measure.sh prd runs the smoke alone" bash "$here/measure.sh" prd >"$work/measure.out" 2>&1
 expect "measure.sh prd: smoke through its domain, no seed, no k6" \

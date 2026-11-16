@@ -28,17 +28,22 @@
 # Results: k6-levels.tsv (level, result, reason) and the timeline; exit 0 once the ladder has ended (a failed level is a
 # result), 1 when the smoke, the seed or a level's tooling failed (error), 3 on a level interrupted.
 
-# Usage: aws/scripts/measure.sh [--print] stg|prd [--from 1|2|4|8]
+# --smoke: the same account and tunnel checks, then the smoke alone, no seed and no ladder: the core path of a
+# session. The seed and the ladder are opt-in.
+
+# Usage: aws/scripts/measure.sh [--print] stg|prd [--from 1|2|4|8 | --smoke]
 set -euo pipefail
 
 # shellcheck source=aws/scripts/lib.sh
 . "$(dirname "$0")/lib.sh"
 printing && shift
-usage="usage: $(basename "$0") [--print] $(env_names session) [--from 1|2|4|8]"
+usage="usage: $(basename "$0") [--print] $(env_names session) [--from 1|2|4|8 | --smoke]"
 env_arg "${1:-}"
 from=
+smoke_only=
 case "${2:-} ${3:-}" in
   ' ') ;;
+  '--smoke ') smoke_only=1 ;;
   '--from 1' | '--from 2' | '--from 4' | '--from 8') from=$3 ;;
   *) fail "$usage" ;;
 esac
@@ -195,6 +200,10 @@ if [ -z "$from" ]; then
   make_ eks-smoke "CONTEXT=$context" "DOMAIN=$domain" || fail "make eks-smoke"
   mark smoke-ok
   ok "smoke passed through https://api.$domain"
+  if [ -n "$smoke_only" ]; then
+    printing || ok "--smoke: no seed, no k6 ladder"
+    exit 0
+  fi
   if [ -z "$ladder" ]; then
     printing || ok "no k6 ladder for $env_name: its measurements are the drills of its session runbook"
     exit 0

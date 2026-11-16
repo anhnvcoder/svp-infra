@@ -54,11 +54,21 @@ theo một hướng: cần cả tắt lẫn bật thì hai PR, áp xong PR trư�
 1. **Không buổi nào đang chạy**: buổi trước đã xong tới hai lượt `sweep.sh`. Root `aws/accounts/<env>` trong buổi chỉ apply qua
    `aws/scripts/tf.sh <env> account` (mục 3–5 của [`session-stg.md`](session-stg.md#35-root-account-mở-tính-năng-của-buổi)); lệnh trần dưới
    đây tính trạng thái giữa buổi (`session_open = false`) và sẽ xoá workspace AMG của buổi đang mở.
-2. **Buổi cần dashboard**: `managed_grafana` `off` không có Grafana nào; phép kiểm cần dashboard là phép kiểm chọn bật
-   ([ADR-0078](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0078-paid-features-lean-defaults.md) §5, §6). Trước buổi đó
-   đổi cờ của env sang `session` (workspace chỉ có trong buổi), hay `always` khi tháng có từ hai buổi cần nó (`session` đắt hơn `always` từ
-   buổi thứ hai, [ADR-0071 §3](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0071-paid-features.md#3-managed_grafana));
-   sau buổi cuối đổi về `off`.
+2. **Buổi chọn bật phép kiểm `chuẩn ngành`**: đường mặc định của buổi chỉ chạy phép kiểm `lõi`, với giá trị của file
+   ([ADR-0078](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0078-paid-features-lean-defaults.md) §6).
+   Phép `chuẩn ngành` nào cần cờ nào: bảng của mục [Phép kiểm lõi và chuẩn
+   ngành](session-stg.md#phép-kiểm-lõi-và-chuẩn-ngành); phần thêm vào buổi ở dòng `Loại:` của từng phép. Giá trị buổi
+   stg cần:
+
+   | Phép kiểm `chuẩn ngành` | Giá trị của `stg` | Root áp, hướng bật |
+   | --- | --- | --- |
+   | Dashboard (SLO, lag Kafka, Explore, Grafana Operator) | `managed_grafana` `session`; `always` khi tháng có từ hai buổi cần nó (`session` đắt hơn `always` từ buổi thứ hai, [ADR-0071 §3](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0071-paid-features.md#3-managed_grafana)) | `aws/accounts/stg` (`off` → `session`: `No changes.`, bước 3–5 của buổi tạo workspace; PR đổi cờ thêm lại project `accounts-stg-session` vào `infracost.yml` như mục Infracost của `README.md`, để comment giá thấy workspace) |
+   | Inspector quét repo cache | `inspector_ecr` `always` | `aws/security`, rồi `aws/accounts/stg` |
+   | Control Security Hub của buổi | `security_hub` và `config_recording` `always` | `aws/baseline`, rồi `aws/security` |
+   | Phép `chuẩn ngành` khác (thang k6, diễn tập, edge, kiểm sâu nền tảng managed) | không cần cờ | — |
+
+   Sau buổi cuối cần giá trị đó, đổi về giá trị của file theo hướng tắt. Buổi prd không cần mục này: nó chạy với giá trị
+   production (điều 3).
 3. **Buổi prd**: prd giữa các buổi có cùng giá trị rẻ như stg; buổi prd chạy với giá trị production
    ([ADR-0078](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0078-paid-features-lean-defaults.md) §3).
    Trước buổi, một PR xoá khoá `prd` khỏi file (mọi cờ `always`) và áp theo hướng bật: `aws/baseline`, `aws/security`,

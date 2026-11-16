@@ -682,7 +682,17 @@ def org_page() -> Page:
            40, 40, 2760, 40, color=MUTED)
     p.text("Green: logs to the log archive account and backup copies to the backup account · red: detection and events to the "
            "security account, then SNS and email · "
-           "policies on the root reach every member account (SCP, RCP) or every account (declarative, tag)", 40, 80, 2760, 40, color=MUTED)
+           "policies on the root reach every member account (SCP, RCP) or every account (declarative, tag) · a note \"Off in\" lists the "
+           "services the cost flags of aws/paid-features.json turn off in that account; GuardDuty and CloudTrail run in every account",
+           40, 80, 2760, 40, color=MUTED)
+
+    def off_note(account: str, title: str, x: int, y: int, w: int, h: int) -> None:
+        """The services the cost flags turn off in `account` (a key of aws/paid-features.json); nothing when none is off."""
+        off = [name for name, flag in (("Security Hub", "security_hub"), ("Config recorder", "config_recording"),
+                                       ("Inspector ECR", "inspector_ecr"), ("Managed Grafana", "managed_grafana"))
+               if paid_feature(account, flag) == "off"]
+        if off:
+            p.text(f"<b>Off in {title}</b> (aws/paid-features.json):{bullets(*off)}", x, y, w, h, color=MUTED, valign="top")
 
     p.group("AWS Organization · root", 40, 160, 2760, 2520, **ORG)
     p.box("<b>On the root: service control policies</b>" + bullets(*scp), 80, 240, 840, 200, "#F7F7F7", MUTED, valign="top")
@@ -737,6 +747,14 @@ def org_page() -> Page:
     bus = p.icon("EventBridge bus<br>svp-security-events", "eventbridge", 1320, 1880, INTEG, cid="bus", label_top=True)
     sns = p.icon("SNS svp-security-alarms", "sns", 1480, 1880, INTEG, cid="sns")
     learner = p.flat("Learner<br>email", "users", 1680, 1880, cid="learner")
+    # GuardDuty findings of an account whose Security Hub is off never reach Security Hub: a rule per region of
+    # svp-security (aws/security/alerts.tf) matches them by account id, and the second region goes through the bus
+    hub_off = [k for k in ("mgmt", "log-archive", "security", "backup", "stg", "prd") if paid_feature(k, "security_hub") == "off"]
+    if hub_off:
+        p.text("<b>GuardDuty findings of accounts with Security Hub off</b> (" + ", ".join(hub_off) + "): rule svp-security-guardduty-"
+               "findings, severity 7 or more, in both regions; the second region goes through the bus" + bullets(
+                   "Findings of svp-security and of Access Analyzer: Security Hub, rule svp-security-findings"),
+               840, 1800, 320, 200, color=MUTED, valign="top")
 
     # backup account: the copy vaults of stg and prd and their key. Reached only from the management account through
     # OrganizationAccountAccessRole; the vaults accept copies from the one env account each
@@ -748,6 +766,9 @@ def org_page() -> Page:
                       "backup", 1160, 2360, STO, cid="copy_stg", label_top=True)
     copy_prd = p.icon(f"AWS Backup vault svp-prd-copy<br>governance lock {copy_lock['prd']['lock_min']}–{copy_lock['prd']['lock_max']} days",
                       "backup", 1400, 2360, STO, cid="copy_prd")
+    off_note("mgmt", "the management account", 120, 1480, 520, 80)
+    off_note("log-archive", "svp-log-archive", 840, 1400, 120, 120)
+    off_note("backup", "svp-backup", 840, 2520, 320, 80)
 
     # workload accounts: the log sources of an env and its event forwarder
     sources, vaults = {}, {}
@@ -762,13 +783,7 @@ def org_page() -> Page:
             session = "<br>only during a session" if grafana == "session" else ""
             p.icon(f"AMG svp-{env}{session}<br>ADMIN svp-platform-admins<br>VIEWER svp-platform-viewers",
                    "managed_service_for_grafana", 2440, top, SEC, cid=f"{env}_amg")
-        # services the cost flags turn off here; GuardDuty and CloudTrail never switch off, so they are not listed
-        off = [name for name, flag in (("Security Hub", "security_hub"), ("Config recorder", "config_recording"),
-                                       ("Inspector ECR", "inspector_ecr"), ("Managed Grafana", "managed_grafana"))
-               if paid_feature(env, flag) == "off"]
-        if off:
-            p.text(f"<b>Off in svp-{env}</b> (aws/paid-features.json):{bullets(*off)}GuardDuty and CloudTrail run in every account",
-                   2400, top + 320, 240, 200, color=MUTED, valign="top")
+        off_note(env, f"svp-{env}", 2400, top + 320, 240, 200)
         vaults[env] = p.icon(f"AWS Backup vault svp-{env}<br>key alias/svp-{env}-backup<br>role svp-{env}-backup", "backup", 2440, top + 160, STO,
                              cid=f"{env}_vault")
 

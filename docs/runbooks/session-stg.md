@@ -1,30 +1,43 @@
 # Runbook: một buổi AWS stg
 
-Một buổi dựng env stg trong account `svp-stg` (`aws/envs/stg`), cài Argo CD và root GitOps lên EKS bằng Terraform (`aws/gitops/stg`, mẫu
-GitOps Bridge), đo (smoke, seed, k6 bậc 1, 2, 4, 8), diễn tập khôi phục (backup on-demand và copy sang account `svp-backup`, PITR của RDS,
-một object S3 từ AWS Backup), rồi gỡ sạch trong cùng buổi và quét cả account stg lẫn account management. Thiết kế:
-[ADR-0034](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0034-aws-stage7.md) §13 (tài nguyên ngoài state), §14 (buổi AWS);
-[ADR-0048](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0048-prd-aws.md) §1–§2 (account, state), §5 (secret), §6 (bootstrap
-EKS), §9 (kết thúc buổi); [ADR-0051](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0051-dns-prd-apex.md) (zone của mỗi env);
-[ADR-0052](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0052-cloudfront-flat-rate-free.md) (gói CloudFront flat-rate Free, web ACL WAF);
-[ADR-0053](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0053-msk-elasticache-valkey.md) (Kafka là Amazon MSK, Valkey là
-ElastiCache, dựng cùng apply với EKS, mật khẩu do Terraform sinh); [ADR-0055](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0055-environment-matrix.md) (stg chạy cùng
-cấu hình, xác thực, mã hoá và giám sát với prd, kể cả API qua tunnel SSM); [ADR-0056](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0056-eks-platform-ha.md) (Karpenter trên nhóm
-node hệ thống, Envoy và Kyverno HA); [ADR-0057](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0057-postgres17-verify-full.md) (PostgreSQL 17, `verify-full`);
-[ADR-0058](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0058-managed-data-operations.md) (CloudWatch alarm tới email qua SNS);
-[ADR-0061](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0061-edge-cloudfront-waf-acm.md) (edge: CloudFront trước web, API, media,
-VPC origin tới ALB internal, ba web ACL, cert ACM, log CloudFront, DNS của buổi);
-[ADR-0062](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0062-ecr-registry-ci-oidc.md) (image kéo từ ECR của account, pull-through
-cache làm nóng mỗi buổi, Inspector); [ADR-0063](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0063-managed-observability.md)
-(metric vào AMP, log vào CloudWatch Logs, trace vào X-Ray, luật trên AMP tới SNS, dashboard trên Amazon Managed Grafana, canary hỏi AMP);
-[ADR-0064](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0064-interface-endpoints.md) (API AWS qua endpoint interface có private
-DNS); [ADR-0066](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0066-mediaconvert-transcode.md) (transcode bằng AWS Elemental
-MediaConvert: queue, role, rule EventBridge, SQS và DLQ của root env, endpoint `mediaconvert`);
-[ADR-0067](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0067-backup-dr.md) (backup và DR: Backup policy, vault copy ở account
-`svp-backup`, mục tiêu RTO/RPO, diễn tập, xoá recovery point cuối buổi);
-[ADR-0071](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0071-paid-features.md) (cờ chi phí theo account: AMG của stg chỉ có
-trong buổi, Inspector ECR, Security Hub CSPM, AWS Config tắt ở stg).
-Buổi prd theo [`session-prd.md`](session-prd.md), dùng chung mọi mục chung của file này.
+Một buổi dựng env stg trong account `svp-stg` (`aws/envs/stg`), cài Argo CD và root GitOps lên EKS bằng Terraform
+(`aws/gitops/stg`, mẫu GitOps Bridge), chạy phép kiểm `lõi` (smoke, phát video, commit status, đường cảnh báo, finding
+GuardDuty), rồi gỡ sạch trong cùng buổi và quét cả account stg lẫn account management. Phép kiểm `chuẩn ngành` (seed, k6
+bậc 1, 2, 4, 8, dashboard, diễn tập khôi phục, kiểm sâu nền tảng managed…) chọn bật từng buổi: mục [Phép kiểm lõi và
+chuẩn ngành](#phép-kiểm-lõi-và-chuẩn-ngành). Thiết kế:
+[ADR-0034](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0034-aws-stage7.md) §13 (tài nguyên ngoài
+state), §14 (buổi AWS); [ADR-0048](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0048-prd-aws.md) §1–§2
+(account, state), §5 (secret), §6 (bootstrap EKS), §9 (kết thúc buổi);
+[ADR-0051](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0051-dns-prd-apex.md) (zone của mỗi env);
+[ADR-0052](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0052-cloudfront-flat-rate-free.md) (gói
+CloudFront flat-rate Free, web ACL WAF);
+[ADR-0053](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0053-msk-elasticache-valkey.md) (Kafka là Amazon
+MSK, Valkey là ElastiCache, dựng cùng apply với EKS, mật khẩu do Terraform sinh);
+[ADR-0055](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0055-environment-matrix.md) (stg chạy cùng cấu
+hình, xác thực, mã hoá và giám sát với prd, kể cả API qua tunnel SSM);
+[ADR-0056](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0056-eks-platform-ha.md) (Karpenter trên nhóm
+node hệ thống, Envoy và Kyverno HA);
+[ADR-0057](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0057-postgres17-verify-full.md) (PostgreSQL 17,
+`verify-full`); [ADR-0058](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0058-managed-data-operations.md)
+(CloudWatch alarm tới email qua SNS);
+[ADR-0061](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0061-edge-cloudfront-waf-acm.md) (edge:
+CloudFront trước web, API, media, VPC origin tới ALB internal, ba web ACL, cert ACM, log CloudFront, DNS của buổi);
+[ADR-0062](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0062-ecr-registry-ci-oidc.md) (image kéo từ ECR
+của account, pull-through cache làm nóng mỗi buổi, Inspector);
+[ADR-0063](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0063-managed-observability.md) (metric vào AMP,
+log vào CloudWatch Logs, trace vào X-Ray, luật trên AMP tới SNS, dashboard trên Amazon Managed Grafana khi cờ của nó
+không `off`, canary hỏi AMP);
+[ADR-0064](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0064-interface-endpoints.md) (API AWS qua
+endpoint interface có private DNS);
+[ADR-0066](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0066-mediaconvert-transcode.md) (transcode bằng
+AWS Elemental MediaConvert: queue, role, rule EventBridge, SQS và DLQ của root env, endpoint `mediaconvert`);
+[ADR-0067](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0067-backup-dr.md) (backup và DR: Backup policy,
+vault copy ở account `svp-backup`, mục tiêu RTO/RPO, diễn tập, xoá recovery point cuối buổi);
+[ADR-0071](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0071-paid-features.md) (cờ chi phí theo account:
+AMG, Inspector ECR, Security Hub CSPM, AWS Config);
+[ADR-0078](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0078-paid-features-lean-defaults.md) (giá trị rẻ
+nhất của cờ, phép kiểm `lõi` và `chuẩn ngành`). Buổi prd theo [`session-prd.md`](session-prd.md), dùng chung mọi mục
+chung của file này.
 
 **Người học chạy mọi lệnh ở đây.** AI không chạy lệnh nào chạm account hay cluster EKS, kể cả lệnh chỉ đọc; AI đọc output người học dán
 lại và nhắc tới khi destroy hai root và hai lượt `sweep.sh` (stg, mgmt) đều đã chạy. Mọi lệnh chạy từ gốc repo này (`infra/`). Mỗi account một
@@ -136,8 +149,9 @@ aws/scripts/session.sh --print stg
    Mong `ok    aws/backend-stg.hcl: output backend_hcl of aws/accounts/stg written (… lines, mode 600)`; không in giá trị.
    Baseline chưa apply hay output không có bucket thì `FAIL` và file giữ nguyên.
 
-5. `aws/envs/stg/stg.auto.tfvars` (git bỏ qua) ghi bằng script, chỉ đọc output của baseline. File không có id workspace AMG: root env đọc
-   nó từ tham số SSM `/svp/stg/grafana-workspace-id` mà bước 3–5 của buổi tạo cùng workspace:
+5. `aws/envs/stg/stg.auto.tfvars` (git bỏ qua) ghi bằng script, chỉ đọc output của baseline. File không có id workspace
+   AMG: khi cờ `managed_grafana` khác `off`, root env đọc nó từ tham số SSM `/svp/stg/grafana-workspace-id` (`session`:
+   bước 3–5 của buổi tạo cùng workspace); với `off` root env không đọc gì về Grafana:
 
    ```sh
    aws/scripts/tfvars.sh env stg
@@ -241,7 +255,8 @@ Dịch vụ tốn tiền mà hệ thống không cần để chạy có cờ the
 [ADR-0071](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0071-paid-features.md); giá trị của file (rẻ
 nhất mà validation cho phép ở mọi account, stg và prd như nhau, prd đổi về giá trị production chỉ cho buổi prd) ở
 [ADR-0078](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0078-paid-features-lean-defaults.md). Đọc cờ của
-stg trước bước 3 (không gọi AWS; khoá vắng là `always`):
+stg trước bước 3 (không gọi AWS; khoá vắng là `always`). Giá trị của file là đường mặc định của buổi; phép kiểm `chuẩn
+ngành` cần giá trị khác thì đổi cờ giữa hai buổi (mục [Phép kiểm lõi và chuẩn ngành](#phép-kiểm-lõi-và-chuẩn-ngành)):
 
 ```sh
 jq -r '.stg // {} | to_entries[] | "\(.key) \(.value)"' aws/paid-features.json
@@ -249,71 +264,104 @@ jq -r '.stg // {} | to_entries[] | "\(.key) \(.value)"' aws/paid-features.json
 
 Cờ đổi bước nào, phép kiểm nào của buổi:
 
-| Cờ | `always` | Giá trị kia | Phần của buổi đổi theo cờ |
+| Cờ | Giá trị của file (mặc định) | Giá trị chọn bật | Phần của buổi đổi theo cờ |
 | --- | --- | --- | --- |
-| `managed_grafana` | workspace AMG `svp-stg` sống giữa các buổi | `session`: bước 3–5 tạo workspace và tham số SSM của nó, bước 28–29 xoá | bước 3–5, 28–29 làm việc thật (`always`: in `ok no session feature …`); `sweep.sh stg` coi workspace, tham số còn lại là sót |
-| `inspector_ecr` | Inspector quét liên tục repo cache | `off`: quét cơ bản khi push, không Inspector | đoạn Inspector của [Phép kiểm nền tảng managed](#phép-kiểm-nền-tảng-managed) (a) |
-| `security_hub` | control FSBP, CIS và finding ở Security Hub | `off`: không control; finding GuardDuty HIGH, CRITICAL tới email qua rule `svp-security-guardduty-findings` | [Finding bảo mật của buổi](#finding-bảo-mật-của-buổi-sau-bước-19-trước-bước-20) |
-| `config_recording` | recorder Config ghi ở hai region | `off`: không recorder | không phép kiểm nào của buổi đọc Config |
+| `managed_grafana` | `off`: không workspace AMG, không tham số SSM, `grafanaUrl` rỗng, không entry `svp/stg/grafana-operator`, không dashboard | `session`: bước 3–5 tạo workspace `svp-stg` và tham số SSM của nó, bước 28–29 xoá; `always`: workspace sống giữa các buổi | `off`, `always`: bước 3–5, 28–29 in `ok no session feature …`, không chạy gì; `off`: bước 11 in `skip managed_grafana of stg is off …` (không token); `session`, `always`: token Grafana Operator ở bước 11 và phép kiểm dashboard; `sweep.sh stg` coi workspace, tham số còn lại là sót khi cờ khác `always` |
+| `inspector_ecr` | `off`: quét cơ bản khi push, không Inspector | `always`: Inspector quét liên tục repo cache | đoạn Inspector của [Nền tảng managed (a)](#nền-tảng-managed-a-image-từ-ecr) |
+| `security_hub` | `off`: không control; finding GuardDuty HIGH, CRITICAL tới email qua rule `svp-security-guardduty-findings` | `always` (cần `config_recording` `always` cùng account): control FSBP, CIS và finding ở Security Hub | [Finding bảo mật của buổi](#finding-bảo-mật-của-buổi-sau-bước-19-trước-bước-20), [Control Security Hub của buổi](#control-security-hub-của-buổi) |
+| `config_recording` | `off`: không recorder | `always`: recorder ghi ở hai region | không phép kiểm nào của buổi đọc Config; đi cùng `security_hub` `always` |
 
 Không đổi cờ giữa buổi: đổi cờ theo [`paid-features.md`](paid-features.md), giữa hai buổi.
 
+## Phép kiểm lõi và chuẩn ngành
+
+Mỗi mục bước và phép kiểm của runbook mở bằng một dòng `Loại:`
+([ADR-0078](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0078-paid-features-lean-defaults.md) §6). `lõi`
+là phép chứng minh upload, transcode, feed, phát, xác thực, triển khai qua Argo CD (cả commit status `argocd/stg` mà
+promote cần) và đường cảnh báo (luật ở AMP, Alertmanager tới topic SNS của env, email alarm đã xác nhận); bước tạo,
+kiểm, gỡ env; và phép đọc an toàn không tốn tiền (finding GuardDuty). Mọi phép khác là `chuẩn ngành`: dòng `Loại:` của
+nó nêu cờ cần bật và phần thêm vào buổi (thời gian, chi phí, có nguồn).
+
+**Đường mặc định của buổi chỉ chạy `lõi`**, với cờ của file: bước 1–15; ở bước 16 `measure.sh stg --smoke` (mục [Smoke](#smoke)) thay
+cho `measure.sh stg`, rồi các mục `lõi` của bước 16; bỏ bước 17–19; finding bảo mật; bước 20–31. Buổi muốn chạy thêm
+phép `chuẩn ngành` chọn trước buổi, đổi cờ nó cần theo [`paid-features.md`](paid-features.md#trước-khi-bắt-đầu) giữa hai
+buổi, rồi chạy mục đó ở chỗ của nó:
+
+| Phép kiểm `chuẩn ngành` | Cờ của `stg` cần |
+| --- | --- |
+| [Seed và thang k6](#seed-và-thang-k6) (`measure.sh stg` của bảng Thứ tự) | không cần cờ |
+| [Bucket media không liệt kê được](#bucket-media-không-liệt-kê-được) | không cần cờ |
+| [Dashboard SLO khi giữ tải](#dashboard-slo-khi-giữ-tải) | `managed_grafana` `session` |
+| [Nền tảng EKS và TLS Postgres](#nền-tảng-eks-và-tls-postgres) | không cần cờ |
+| [Gói Free của media](#gói-free-của-media) | không cần cờ |
+| [Phép kiểm edge](#phép-kiểm-edge), [edge premium](#phép-kiểm-edge-premium) | không cần cờ |
+| [Kafka và Valkey managed](#kafka-và-valkey-managed) | không cần cờ; (e) cần `managed_grafana` `session` |
+| [Nền tảng managed (a)](#nền-tảng-managed-a-image-từ-ecr) | không cần cờ; đoạn Inspector cần `inspector_ecr` `always` |
+| [Nền tảng managed (b)](#nền-tảng-managed-b-mạng-riêng), [(e)](#nền-tảng-managed-e-dữ-liệu-còn-sau-destroy) | không cần cờ |
+| [Nền tảng managed (c)](#nền-tảng-managed-c-telemetry) | không cần cờ; phần AMG cần `managed_grafana` `session` |
+| [Canary và cảnh báo `page`](#nền-tảng-managed-d-canary-và-cảnh-báo-page) | không cần cờ; cần thang k6 đang giữ tải |
+| [Transcode (b)–(e)](#transcode-be-đo-hai-đường-header-ff-9-lớp-cắt) | không cần cờ |
+| [Diễn tập khôi phục](#1719-diễn-tập-khôi-phục) (bước 17–19) | không cần cờ |
+| [Control Security Hub của buổi](#control-security-hub-của-buổi) | `security_hub` và `config_recording` `always` |
+
 ## Thứ tự
 
-| # | Lệnh | Hạn | Dán lại cho AI |
-| --- | --- | --- | --- |
-| 1 | `aws/scripts/check-account.sh stg` | 2 phút | dòng `ok account …` (account, ARN) |
-| 2 | `aws/scripts/check-dns.sh stg` | 2 phút | ba dòng `ok` hay dòng `FAIL` |
-| 3 | `aws/scripts/tf.sh stg account init` | 2 phút | dòng cuối |
-| 4 | `aws/scripts/tf.sh stg account plan --open` | 5 phút | dòng `Plan: N to add, …` và đường dẫn file text của plan |
-| 5 | `aws/scripts/tf.sh stg account apply` | 10 phút | dòng `Apply complete! …`, mốc `account-open-applied` |
-| 6 | `aws/scripts/tf.sh stg env init` | 5 phút | dòng cuối |
-| 7 | `aws/scripts/media-signing-key.sh stg new a` | 1 phút | dòng `ok slot a: …` và mọi dòng `warn`/`note` |
-| 8 | `aws/scripts/tf.sh stg env plan` | 5 phút | dòng `Plan: N to add, 0 to change, 0 to destroy` và đường dẫn file text của plan |
-| 9 | `aws/scripts/tf.sh stg env apply` | 65 phút | dòng `Apply complete! …`, hai dòng `mark` và hai dòng `Creation complete after …` của `module.msk.aws_msk_cluster.this`, `module.elasticache.aws_elasticache_replication_group.this` |
-| 10 | `aws/scripts/media-signing-key.sh stg activate a` | 2 phút | dòng `ok entry …` (không có khoá) |
-| 11 | `aws/scripts/bootstrap.sh stg secrets` | 5 phút | mọi dòng `ok`/`FAIL` |
-| 12 | `aws/scripts/tf.sh stg gitops init` | 2 phút | dòng cuối |
-| 13 | `aws/scripts/tf.sh stg gitops plan` | 5 phút | dòng `ok chart svp-cluster at …`, dòng `Plan: …` và đường dẫn file text của plan |
-| 14 | `aws/scripts/tf.sh stg gitops apply` | 15 phút | dòng `Apply complete! …`, output `bootstrap_revision` |
-| 15 | `aws/scripts/bootstrap.sh stg wait` | 45 phút | mọi dòng `ok`/`FAIL` |
-| 16 | `aws/scripts/measure.sh stg` | tới mốc 3 giờ | `k6-levels.tsv`, dòng `ok highest level …` |
-| 17 | `aws/scripts/restore-drill.sh stg backup` | 60 phút | mọi dòng `ok`/`FAIL`, dòng `PASS backup …` |
-| 18 | `aws/scripts/restore-drill.sh stg rds` | 75 phút | mọi dòng `ok`/`FAIL`, dòng `PASS rds …` hay `FAIL rds …` |
-| 19 | `aws/scripts/restore-drill.sh stg s3` | 30 phút | mọi dòng `ok`/`FAIL`, dòng `PASS s3 …` hay `FAIL s3 …` |
-| 20 | `aws/scripts/pre-destroy.sh stg` | 30 phút | mọi dòng `ok`/`FAIL`/`note` |
-| 21 | `aws/scripts/tf.sh stg gitops plan --destroy` | 5 phút | dòng `Plan: 0 to add, 0 to change, N to destroy` |
-| 22 | `aws/scripts/tf.sh stg gitops destroy` | 10 phút | dòng `Apply complete! Resources: 0 added, 0 changed, N destroyed.` |
-| 23 | `aws/scripts/tf.sh stg env plan --teardown` | 1 phút | dòng `skip` (stg không có bảo vệ cần nhấc) |
-| 24 | `aws/scripts/tf.sh stg env apply --teardown` | 1 phút | dòng `skip` |
-| 25 | `aws/scripts/restore-drill.sh stg cleanup` | 30 phút | mọi dòng `ok`/`FAIL`/`skip`, mốc `backup-drained` |
-| 26 | `aws/scripts/tf.sh stg env plan --destroy` | 5 phút | dòng `Plan: 0 to add, 0 to change, N to destroy` và đường dẫn file text của plan |
-| 27 | `aws/scripts/tf.sh stg env destroy` | 50 phút | dòng `Apply complete! Resources: 0 added, 0 changed, N destroyed.` và hai dòng `Destruction complete after …` của cluster MSK, replication group ElastiCache |
-| 28 | `aws/scripts/tf.sh stg account plan --close` | 5 phút | dòng `Plan: 0 to add, 0 to change, N to destroy` và đường dẫn file text của plan |
-| 29 | `aws/scripts/tf.sh stg account apply` | 10 phút | dòng `Apply complete! …`, mốc `account-close-applied` |
-| 30 | `aws/scripts/sweep.sh stg` | 5 phút | toàn bộ output |
-| 31 | `aws/scripts/sweep.sh mgmt` | 5 phút | toàn bộ output |
+| # | Lệnh | Hạn | Dán lại cho AI | Loại |
+| --- | --- | --- | --- | --- |
+| 1 | `aws/scripts/check-account.sh stg` | 2 phút | dòng `ok account …` (account, ARN) | `lõi` |
+| 2 | `aws/scripts/check-dns.sh stg` | 2 phút | ba dòng `ok` hay dòng `FAIL` | `lõi` |
+| 3 | `aws/scripts/tf.sh stg account init` | 2 phút | dòng cuối | `lõi` |
+| 4 | `aws/scripts/tf.sh stg account plan --open` | 5 phút | dòng `Plan: N to add, …` và đường dẫn file text của plan | `lõi` |
+| 5 | `aws/scripts/tf.sh stg account apply` | 10 phút | dòng `Apply complete! …`, mốc `account-open-applied` | `lõi` |
+| 6 | `aws/scripts/tf.sh stg env init` | 5 phút | dòng cuối | `lõi` |
+| 7 | `aws/scripts/media-signing-key.sh stg new a` | 1 phút | dòng `ok slot a: …` và mọi dòng `warn`/`note` | `lõi` |
+| 8 | `aws/scripts/tf.sh stg env plan` | 5 phút | dòng `Plan: N to add, 0 to change, 0 to destroy` và đường dẫn file text của plan | `lõi` |
+| 9 | `aws/scripts/tf.sh stg env apply` | 65 phút | dòng `Apply complete! …`, hai dòng `mark` và hai dòng `Creation complete after …` của `module.msk.aws_msk_cluster.this`, `module.elasticache.aws_elasticache_replication_group.this` | `lõi` |
+| 10 | `aws/scripts/media-signing-key.sh stg activate a` | 2 phút | dòng `ok entry …` (không có khoá) | `lõi` |
+| 11 | `aws/scripts/bootstrap.sh stg secrets` | 5 phút | mọi dòng `ok`/`FAIL` | `lõi` |
+| 12 | `aws/scripts/tf.sh stg gitops init` | 2 phút | dòng cuối | `lõi` |
+| 13 | `aws/scripts/tf.sh stg gitops plan` | 5 phút | dòng `ok chart svp-cluster at …`, dòng `Plan: …` và đường dẫn file text của plan | `lõi` |
+| 14 | `aws/scripts/tf.sh stg gitops apply` | 15 phút | dòng `Apply complete! …`, output `bootstrap_revision` | `lõi` |
+| 15 | `aws/scripts/bootstrap.sh stg wait` | 45 phút | mọi dòng `ok`/`FAIL` | `lõi` |
+| 16 | `aws/scripts/measure.sh stg` | tới mốc 3 giờ | `k6-levels.tsv`, dòng `ok highest level …` | `lõi`: `measure.sh stg --smoke` (mục 16); `chuẩn ngành`: cả `measure.sh stg` (seed, thang k6) |
+| 17 | `aws/scripts/restore-drill.sh stg backup` | 60 phút | mọi dòng `ok`/`FAIL`, dòng `PASS backup …` | `chuẩn ngành` |
+| 18 | `aws/scripts/restore-drill.sh stg rds` | 75 phút | mọi dòng `ok`/`FAIL`, dòng `PASS rds …` hay `FAIL rds …` | `chuẩn ngành` |
+| 19 | `aws/scripts/restore-drill.sh stg s3` | 30 phút | mọi dòng `ok`/`FAIL`, dòng `PASS s3 …` hay `FAIL s3 …` | `chuẩn ngành` |
+| 20 | `aws/scripts/pre-destroy.sh stg` | 30 phút | mọi dòng `ok`/`FAIL`/`note` | `lõi` |
+| 21 | `aws/scripts/tf.sh stg gitops plan --destroy` | 5 phút | dòng `Plan: 0 to add, 0 to change, N to destroy` | `lõi` |
+| 22 | `aws/scripts/tf.sh stg gitops destroy` | 10 phút | dòng `Apply complete! Resources: 0 added, 0 changed, N destroyed.` | `lõi` |
+| 23 | `aws/scripts/tf.sh stg env plan --teardown` | 1 phút | dòng `skip` (stg không có bảo vệ cần nhấc) | `lõi` |
+| 24 | `aws/scripts/tf.sh stg env apply --teardown` | 1 phút | dòng `skip` | `lõi` |
+| 25 | `aws/scripts/restore-drill.sh stg cleanup` | 30 phút | mọi dòng `ok`/`FAIL`/`skip`, mốc `backup-drained` | `lõi` |
+| 26 | `aws/scripts/tf.sh stg env plan --destroy` | 5 phút | dòng `Plan: 0 to add, 0 to change, N to destroy` và đường dẫn file text của plan | `lõi` |
+| 27 | `aws/scripts/tf.sh stg env destroy` | 50 phút | dòng `Apply complete! Resources: 0 added, 0 changed, N destroyed.` và hai dòng `Destruction complete after …` của cluster MSK, replication group ElastiCache | `lõi` |
+| 28 | `aws/scripts/tf.sh stg account plan --close` | 5 phút | dòng `Plan: 0 to add, 0 to change, N to destroy` và đường dẫn file text của plan | `lõi` |
+| 29 | `aws/scripts/tf.sh stg account apply` | 10 phút | dòng `Apply complete! …`, mốc `account-close-applied` | `lõi` |
+| 30 | `aws/scripts/sweep.sh stg` | 5 phút | toàn bộ output | `lõi` |
+| 31 | `aws/scripts/sweep.sh mgmt` | 5 phút | toàn bộ output | `lõi` |
 
-Bước tay chen giữa các bước script: đọc cờ của buổi trước bước 3 (mục **Cờ chi phí của buổi**), xác nhận email của alarm sau bước 9
-(mục 6–10), tunnel tới API sau bước 9 và trước bước 11 (mục
-**Tunnel tới API**, giữ chạy tới hết bước 22), làm nóng cache sau bước 11 và trước bước 12 (mục **Làm nóng cache**), phép kiểm của bước 16 (cả
-mục **Phép kiểm nền tảng managed**, **Phép kiểm edge premium** và **Phép kiểm transcode**, clip của nó sinh trong lúc chờ
-bước 9),
-đọc bản copy ở `svp-backup` sau bước 17 (mục **17–19**), đọc finding bảo mật sau bước 19 và trước bước 20 (mục **Finding bảo mật của
-buổi**), chạy lại truy vấn dữ liệu sau bước 31 (mục **Kết thúc buổi**).
+Bước tay chen giữa các bước script: đọc cờ của buổi trước bước 3 (mục **Cờ chi phí của buổi**), xác nhận email của alarm
+sau bước 9 (mục 6–10), tunnel tới API sau bước 9 và trước bước 11 (mục **Tunnel tới API**, giữ chạy tới hết bước 22),
+làm nóng cache sau bước 11 và trước bước 12 (mục **Làm nóng cache**), phép kiểm của bước 16 (mục con của **16. Đo**:
+`lõi` theo đường mặc định, `chuẩn ngành` khi buổi bật; clip của phép transcode chuẩn ngành sinh trong lúc chờ bước 9),
+đọc bản copy ở `svp-backup` sau bước 17 (mục **17–19**, khi buổi bật diễn tập), đọc finding bảo mật trước bước 20 (mục
+**Finding bảo mật của buổi**), chạy lại truy vấn dữ liệu sau bước 31 (mục **Kết thúc buổi**, khi buổi đã ghi nó).
 
-Dự trù: apply root env xong ~T+70 phút (MSK là phần dài nhất), mọi Application Healthy ~T+1 giờ 55, đo tới muộn nhất T+3 giờ, gỡ và quét
-xong trước T+4 giờ khi gỡ đúng số giả định của ADR-0053 §16; buổi stg đầu tiên đo hai mốc đó và ghi vào phụ lục của ADR. Hạn của bước 17–19,
-25 là ước (AWS không công bố thời gian của job backup, copy hay restore); buổi stg đầu đo số thật (`t0`, `t1` của `restore-drill.tsv`, mốc
-`backup-drained`) và ghi vào phụ lục ADR-0067.
-Một bước đỏ: đọc dòng `FAIL`, sửa nguyên nhân, chạy lại **đúng bước đó** (mọi script chạy lại được). Không đi tiếp qua một bước đỏ, trừ
-bước 16 (đo): đo hỏng thì vẫn sang bước 17; và bước 18, 19 khi dòng kết quả là `FAIL` của phép đo (mục **17–19**): đó là số đo, sang bước kế.
-Bước 23, 24 không làm gì ở stg (không có `teardown.tfvars`); chúng nằm trong bảng để stg và prd chạy cùng một chuỗi bước. Bước 3–5 và
-28–29 chỉ làm việc khi stg có cờ `session` (mục **Cờ chi phí của buổi**); ở prd chúng in `ok no session feature …`, vì
-trước buổi prd khoá `prd` đã xoá khỏi file (điều kiện 12 của [`session-prd.md`](session-prd.md#điều-kiện-trước-buổi))
-nên không cờ nào của prd là `session`.
+Dự trù: apply root env xong ~T+70 phút (MSK là phần dài nhất), mọi Application Healthy ~T+1 giờ 55, đo tới muộn nhất T+3
+giờ, gỡ và quét xong trước T+4 giờ khi gỡ đúng số giả định của ADR-0053 §16; buổi stg đầu tiên đo hai mốc đó và ghi vào
+phụ lục của ADR. Hạn của bước 17–19, 25 là ước (AWS không công bố thời gian của job backup, copy hay restore); buổi stg
+đầu đo số thật (`t0`, `t1` của `restore-drill.tsv`, mốc `backup-drained`) và ghi vào phụ lục ADR-0067. Một bước đỏ: đọc
+dòng `FAIL`, sửa nguyên nhân, chạy lại **đúng bước đó** (mọi script chạy lại được). Không đi tiếp qua một bước đỏ, trừ
+bước 16 (đo): đo hỏng thì vẫn sang bước 17; và bước 18, 19 khi dòng kết quả là `FAIL` của phép đo (mục **17–19**): đó là
+số đo, sang bước kế. Bước 23, 24 không làm gì ở stg (không có `teardown.tfvars`); chúng nằm trong bảng để stg và prd
+chạy cùng một chuỗi bước. Bước 3–5 và 28–29 chỉ làm việc khi cờ `managed_grafana` của env là `session` (mục **Cờ chi phí
+của buổi**). Với giá trị của file (`off`) chúng in `ok no session feature …`, và ở prd cũng vậy: trước buổi prd khoá
+`prd` đã xoá khỏi file (điều kiện 12 của [`session-prd.md`](session-prd.md#điều-kiện-trước-buổi)) nên không cờ nào của
+prd là `session`.
 
 ### 1. Kiểm account
+
+Loại: `lõi`.
 
 ```sh
 aws/scripts/check-account.sh stg
@@ -325,6 +373,8 @@ kiểm lại điều này trước lệnh đầu tiên của nó, nên `tf.sh` k
 env đó trước một lệnh ghi bằng tay.
 
 ### 2. Kiểm DNS
+
+Loại: `lõi`.
 
 ```sh
 aws/scripts/check-dns.sh stg
@@ -338,6 +388,9 @@ DNS của cert ACM và ba tên của buổi sẽ hỏng). Lời của script là
 hai: sửa nấc sai, **không bắt đầu buổi**.
 
 ### 3–5. Root account: mở tính năng của buổi
+
+Loại: `lõi`. Với giá trị của file (`managed_grafana` `off`) ba lệnh in `ok no session feature of stg …` và không chạy
+gì; phần dưới là của buổi bật `session` cho phép kiểm dashboard.
 
 ```sh
 aws/scripts/tf.sh stg account init
@@ -368,6 +421,8 @@ nên `terraform plan`, `apply` trần ở root đó (lệnh của [README `aws/a
 thêm `-var session_open=true` vào lệnh `plan` và đọc plan: không dòng `destroy` nào dưới `module.observability`.
 
 ### 6–10. Root env: init, khoá ký, plan lưu file, đọc, apply file đó, kích hoạt khoá ký
+
+Loại: `lõi`.
 
 ```sh
 aws/scripts/tf.sh stg env init
@@ -451,6 +506,8 @@ Lỗi apply đã biết, không sửa bằng `plan` lại:
 
 ### Tunnel tới API (sau bước 9, trước bước 11)
 
+Loại: `lõi`.
+
 Endpoint công khai của API tắt ở cả hai env (ADR-0055 §2): máy tới endpoint private qua phiên port forwarding của Session Manager tới bastion
 `t4g.nano` trong subnet private (module `ssm-bastion`), cổng local `127.0.0.1:6444` (prd `6443`, cột `tunnel` của `env_table`: một lệnh nhầm
 context không bao giờ tới cluster kia). Mở ở **một terminal riêng** từ gốc repo, giữ chạy tới hết bước 22 (Ctrl-C để đóng):
@@ -469,25 +526,34 @@ tunnel mở.
 
 ### 11. Giá trị secret
 
+Loại: `lõi`.
+
 ```sh
 aws/scripts/bootstrap.sh stg secrets
 ```
 
-Theo thứ tự: kiểm account; repo code ở `main` = `origin/main`, sạch; `aws eks update-kubeconfig --alias svp-stg`; ghi `cluster-values.json`;
-đọc **mật khẩu** master của RDS (trường `password` của secret mà RDS giữ, username luôn `postgres`) vào môi trường của đúng lệnh `make`
-(không ra file, không in), rồi `make -C ../backend eks-secrets CONTEXT=svp-stg` với `AWS_PROFILE=anhnv-stg`: ghi các entry `svp/stg/*` từ
-`.env` (mỗi entry một `put-secret-value --secret-string file://…`, giá trị không qua đối số hay output); `glitchtip-runtime` ba key rỗng chỉ
-khi chưa có giá trị. Ba entry của Kafka và Valkey (`kafka-admin`, `kafka-users`, `valkey-users`) Terraform đã ghi ở bước 9: `make eks-secrets`
-chỉ kiểm chúng có, không ghi, không đọc mật khẩu Kafka, Valkey của `.env` (mật khẩu của stack local). Rồi token của Grafana Operator: tìm
-service account `svp-grafana-operator` của workspace AMG (id từ `grafanaUrl` của `cluster-values.json`), xoá mọi token cũ của nó (quota 100 token
-mỗi workspace, kể cả token hết hạn), tạo token sống 24 giờ và ghi thẳng vào entry `svp/stg/grafana-operator` qua pipe (token không qua đối số,
-file hay output). Nguồn của mọi Secret trên EKS có trước Argo CD. Tìm: `ok a token of svp-grafana-operator valid 24 h in entry
-svp/stg/grafana-operator (not shown)`, `ok entries svp/stg/* written (kafka-admin, kafka-users, valkey-users by the apply of aws/envs/stg); next:
-aws/scripts/ecr-warm.sh stg <image list>, …` và mốc `secrets-written`. Đỏ: dán ~30 dòng cuối của `$SVP_SESSION_DIR/eks-secrets.log` (script
-nêu tên biến thiếu, không in giá trị), hay dòng `FAIL` của phần Grafana (thiếu `grafanaUrl`, thiếu service account: `aws/accounts/stg` chưa có
-bước (5) của [`platform-setup.md`](platform-setup.md#bước-5-awsaccountsenv), hay cờ `managed_grafana` là `session` mà bước 3–5 chưa apply).
+Theo thứ tự: kiểm account; repo code ở `main` = `origin/main`, sạch; `aws eks update-kubeconfig --alias svp-stg`; ghi
+`cluster-values.json`; đọc **mật khẩu** master của RDS (trường `password` của secret mà RDS giữ, username luôn
+`postgres`) vào môi trường của đúng lệnh `make` (không ra file, không in), rồi `make -C ../backend eks-secrets
+CONTEXT=svp-stg` với `AWS_PROFILE=anhnv-stg`: ghi các entry `svp/stg/*` từ `.env` (mỗi entry một `put-secret-value
+--secret-string file://…`, giá trị không qua đối số hay output); `glitchtip-runtime` ba key rỗng chỉ khi chưa có giá
+trị. Ba entry của Kafka và Valkey (`kafka-admin`, `kafka-users`, `valkey-users`) Terraform đã ghi ở bước 9: `make
+eks-secrets` chỉ kiểm chúng có, không ghi, không đọc mật khẩu Kafka, Valkey của `.env` (mật khẩu của stack local). Rồi
+token của Grafana Operator, chỉ khi cờ `managed_grafana` khác `off` (`off`: dòng `skip managed_grafana of stg is off …`,
+không workspace nên không token): tìm service account `svp-grafana-operator` của workspace AMG (id từ `grafanaUrl` của
+`cluster-values.json`), xoá mọi token cũ của nó (quota 100 token mỗi workspace, kể cả token hết hạn), tạo token sống 24
+giờ và ghi thẳng vào entry `svp/stg/grafana-operator` qua pipe (token không qua đối số, file hay output). Nguồn của mọi
+Secret trên EKS có trước Argo CD. Tìm: `ok a token of svp-grafana-operator valid 24 h in entry svp/stg/grafana-operator
+(not shown)` (cờ khác `off`), `ok entries svp/stg/* written (kafka-admin, kafka-users, valkey-users by the apply of
+aws/envs/stg); next: aws/scripts/ecr-warm.sh stg <image list>, …` và mốc `secrets-written`. Đỏ: dán ~30 dòng cuối của
+`$SVP_SESSION_DIR/eks-secrets.log` (script nêu tên biến thiếu, không in giá trị), hay dòng `FAIL` của phần Grafana
+(thiếu `grafanaUrl`, thiếu service account: `aws/accounts/stg` chưa có bước (5) của
+[`platform-setup.md`](platform-setup.md#bước-5-awsaccountsenv), hay cờ `managed_grafana` là `session` mà bước 3–5 chưa
+apply).
 
 ### Làm nóng cache (sau bước 11, trước bước 12)
+
+Loại: `lõi`.
 
 Mọi image của cluster ghim digest, mà ECR không kéo được theo digest một image pull-through cache chưa từng thấy
 ([ADR-0062](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0062-ecr-registry-ci-oidc.md) §7). Nên trước khi Argo CD cài gì,
@@ -512,6 +578,8 @@ buổi thì lập lại danh sách và chạy lại script trước khi Argo CD 
 
 ### 12–14. Root gitops: Argo CD và root GitOps
 
+Loại: `lõi`.
+
 ```sh
 aws/scripts/tf.sh stg gitops init
 aws/scripts/tf.sh stg gitops plan
@@ -528,6 +596,8 @@ lấy `SVP_ALERT_TELEGRAM_CHAT_ID` của `.env` repo code (`TF_VAR_telegram_chat
 (raw file, REST API của `svp-gitops`).
 
 ### 15. Chờ Argo CD
+
+Loại: `lõi`.
 
 ```sh
 aws/scripts/bootstrap.sh stg wait
@@ -556,12 +626,40 @@ chờ, không điều tra. Khi ba đích đã xanh, page hết sau chừng 30 ph
 
 ### 16. Đo
 
+Loại: `lõi`. Đường mặc định chạy smoke (`measure.sh stg --smoke`, mục con **Smoke**) và các mục con `lõi` của bước này.
+`measure.sh stg` của bảng Thứ tự chạy smoke, seed rồi thang k6 trong một lượt, nên chỉ chạy khi buổi bật
+thang đo (mục con **Seed và thang k6**).
+Mỗi mục con có dòng `Loại:` riêng; phép kiểm sau smoke làm trong lúc chờ bậc k6 khi thang đo chạy, hay ngay sau smoke
+khi không.
+
+Các phép kiểm chỉ chứng minh được trên AWS ở mục "Kiểm chứng sau" của ADR-0034 và ADR-0048: ghi kết quả từng phép kiểm
+(đạt hay không, output chính) vào một file trong `$SVP_SESSION_DIR`, để sau buổi điền cột Kết quả của bảng đó.
+
+#### Smoke
+
+Loại: `lõi`. Luồng đầu-cuối qua `https://api.<domain>`, tức CloudFront `svp-stg-api`, VPC origin, ALB edge, Envoy (cert
+ACM): đăng ký, đăng nhập, upload, transcode tới `READY`, phát qua CDN, feed, like và view, luồng premium. Tunnel mở:
+
+```sh
+aws/scripts/measure.sh stg --smoke
+```
+
+Script kiểm account và tunnel như mọi bước của buổi, chạy `make eks-smoke CONTEXT=svp-stg DOMAIN=<domain>` rồi ghi mốc `smoke-ok`
+vào `timeline.tsv`; không seed, không thang k6. Mong dòng cuối `smoke: all steps passed` của `make`, rồi `ok    --smoke: no seed, no k6
+ladder`; dòng `FAIL`: dán ~30 dòng cuối. Buổi bật thang đo không chạy lệnh này: `measure.sh stg` chạy chính smoke đó ở đầu.
+
+#### Seed và thang k6
+
+Loại: `chuẩn ngành`, không cần cờ. Thêm vào buổi: tới mốc 3 giờ của buổi (mỗi bậc lên 2 phút, giữ 10 phút, trần 30 phút
+một bậc), node Spot mà Karpenter dựng cho tải (chưa có số riêng ở phụ lục nào), MediaConvert của ≥ 30 video seed
+([ADR-0066
+§12](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0066-mediaconvert-transcode.md#12-chi-phí)).
+
 ```sh
 aws/scripts/measure.sh stg
 ```
 
-1. `make eks-smoke CONTEXT=svp-stg DOMAIN=<domain>`: luồng đầu-cuối qua `https://api.<domain>`, tức CloudFront `svp-stg-api`, VPC origin, ALB
-   edge, Envoy (cert ACM).
+1. `make eks-smoke CONTEXT=svp-stg DOMAIN=<domain>`: smoke của mục trên.
 2. `make eks-seed`: ≥ 30 video `READY` trong `GET /feed/explore` (k6 profile `cloud` đọc chúng).
 3. k6 (`deploy/k6/cloud/run.sh` của repo code) bậc **1, 2, 4, 8 pod**, mỗi pod một phần tải của thiết kế 20 pod, lên 2 phút, giữ 10 phút;
    **trước mỗi bậc `make eks-rl-reset CONTEXT=svp-stg`** (pod bậc sau có thể nhận lại IP của pod bậc trước, burst đăng ký theo IP sẽ cạn;
@@ -583,8 +681,16 @@ smoke, không seed:
 aws/scripts/measure.sh stg --from <n>
 ```
 
-Sau smoke, một phép tay: bucket `media` không liệt kê được ẩn danh khi gọi thẳng endpoint vùng của S3, không qua CloudFront (smoke chỉ thử
-phép liệt kê qua gốc của CloudFront, không suy được tên bucket). Mong `403`; `200` là bucket liệt kê được, dừng buổi và báo lại:
+Dán lại: `cat $SVP_SESSION_DIR/k6-levels.tsv`, dòng `ok highest level …`, và với mỗi bậc `jq -c .
+$SVP_SESSION_DIR/k6-<n>/summaries/pod-*.json | head`.
+
+#### Bucket media không liệt kê được
+
+Loại: `chuẩn ngành`, không cần cờ. Thêm: một lệnh `curl`, không tốn tiền.
+
+Sau smoke: bucket `media` không liệt kê được ẩn danh khi gọi thẳng endpoint vùng của S3, không qua CloudFront (smoke chỉ
+thử phép liệt kê qua gốc của CloudFront, không suy được tên bucket). Mong `403`; `200` là bucket liệt kê được, dừng buổi
+và báo lại:
 
 ```sh
 curl -s -o /dev/null -w '%{http_code}\n' \
@@ -593,12 +699,21 @@ curl -s -o /dev/null -w '%{http_code}\n' \
 
 Dán lại mã in ra (ghi vào hàng tương ứng của mục "Kiểm chứng sau" của ADR-0034).
 
-Trong lúc giữ tải, đọc phía server ở Amazon Managed Grafana (`AWS_PROFILE=anhnv-stg terraform -chdir=aws/accounts/stg output -raw
-grafana_url`, mở trên trình duyệt, đăng nhập bằng IAM Identity Center với user của nhóm nền tảng; dashboard "SVP — SLO"): p95/p99 của gateway
-theo route. Grafana của eks là AMG: Grafana trong cluster không chạy, trace không có data source Tempo (mục Phép kiểm edge (d)).
-Các phép kiểm chỉ chứng minh được trên AWS ở mục "Kiểm chứng sau" của ADR-0034 và ADR-0048: làm trong lúc chờ bậc k6, ghi kết quả từng phép
-kiểm (đạt hay không, output chính) vào một file trong `$SVP_SESSION_DIR`, để sau buổi điền cột Kết quả của bảng đó. Dán lại: `cat
-$SVP_SESSION_DIR/k6-levels.tsv`, dòng `ok highest level …`, và với mỗi bậc `jq -c . $SVP_SESSION_DIR/k6-<n>/summaries/pod-*.json | head`.
+#### Dashboard SLO khi giữ tải
+
+Loại: `chuẩn ngành`, cần `managed_grafana` `session` của `stg` và thang k6 đang giữ tải. Thêm: AMG $18 mỗi buổi stg
+(dòng `managed_grafana` của [phụ lục ADR-0071,
+Cờ](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0071-paid-features.md#cờ)), bước 3–5, 28–29
+làm việc thật, token ở bước 11.
+
+Trong lúc thang k6 giữ tải, đọc phía server ở Amazon Managed Grafana (`AWS_PROFILE=anhnv-stg terraform
+-chdir=aws/accounts/stg output -raw grafana_url`, mở trên trình duyệt, đăng nhập bằng IAM Identity Center với user của
+nhóm nền tảng; dashboard "SVP — SLO"): p95/p99 của gateway theo route. Grafana của eks là AMG: Grafana trong cluster
+không chạy, trace không có data source Tempo (mục Phép kiểm edge (d)).
+
+#### Commit status argocd/stg
+
+Loại: `lõi`.
 
 Commit status `argocd/stg` (Argo CD Notifications, ADR-0032) phải có trên commit `svp-gitops` cluster vừa sync: đó là **bằng chứng stg** mà
 `promote-prd` đòi trước khi promote commit đó lên prd. Đọc commit (ghi vào `stg-ref.txt` của thư mục buổi), status của nó và
@@ -611,14 +726,18 @@ gh api "repos/anhnvcoder/svp-gitops/commits/$(cat "$SVP_SESSION_DIR/stg-ref.txt"
 git -C ../gitops fetch origin && git -C ../gitops merge-base --is-ancestor "$(cat "$SVP_SESSION_DIR/stg-ref.txt")" origin/main && echo on-main
 ```
 
-Mong 40 hex, `success` và `on-main`; dán lại ba dòng. Commit trong `stg-ref.txt` là `stg_ref` của buổi prd (mục **Cổng promote prd** của
-[`session-prd.md`](session-prd.md#cổng-promote-prd-trước-mọi-lệnh-tốn-tiền)) khi buổi này qua mục **Phép kiểm transcode**.
+Mong 40 hex, `success` và `on-main`; dán lại ba dòng. Commit trong `stg-ref.txt` là `stg_ref` của buổi prd (mục **Cổng
+promote prd** của [`session-prd.md`](session-prd.md#cổng-promote-prd-trước-mọi-lệnh-tốn-tiền)) khi buổi này qua các phép
+`lõi` của mục **Phép kiểm transcode** ((a), (f)).
 
-#### Nền tảng EKS, TLS Postgres và alarm
+#### Nền tảng EKS và TLS Postgres
 
-Phép kiểm buổi stg của mục "Xác nhận" của ADR-0055…0058, làm trong lúc chờ bậc k6 (tunnel mở). Lệnh và output có thời điểm UTC vào một
-file của `$SVP_SESSION_DIR`, một dòng kết luận mỗi phép vào "Xác nhận" của ADR tương ứng. Buổi prd chạy đúng các lệnh này với `anhnv-prd`,
-`--context svp-prd`, tên `svp-prd`.
+Loại: `chuẩn ngành`, không cần cờ. Thêm: chỉ đọc, trừ (b) tắt một instance Spot và chờ node thay; ADR không có số thời
+gian.
+
+Phép kiểm buổi stg của mục "Xác nhận" của ADR-0055…0057, làm sau smoke (trong lúc chờ bậc k6 khi thang đo chạy), tunnel
+mở. Lệnh và output có thời điểm UTC vào một file của `$SVP_SESSION_DIR`, một dòng kết luận mỗi phép vào "Xác nhận" của
+ADR tương ứng. Buổi prd chạy đúng các lệnh này với `anhnv-prd`, `--context svp-prd`, tên `svp-prd`.
 
 (a) Node: nhóm hệ thống on-demand mỗi AZ một node, node Karpenter cho pod còn lại (stg `spot`, ADR-0056 §2), NodeClaim khớp node:
 
@@ -708,8 +827,13 @@ Mong năm loại log `api`, `audit`, `authenticator`, `controllerManager`, `sche
 `KafkaBrokerStorageUtilization` ở mức của ADR-0058 §4 (API từ chối `kafka.t3.small` thì apply đã đỏ ở bước 9: dán lỗi cho AI);
 `slow-log cloudwatch-logs json active`; một log stream (chưa có lệnh chậm nào thì rỗng: ghi lại, không là trượt).
 
-(f) Alarm tới email (ADR-0058 §1): mọi alarm của bảng ở `OK` hay `INSUFFICIENT_DATA`, rồi ép một alarm `page` sang `ALARM`; email tới có URL
-runbook; CloudWatch đưa alarm về trạng thái thật ở lần đánh giá kế (chu kỳ 60 s) và gửi thư `OK`:
+#### Alarm tới email
+
+Loại: `lõi`.
+
+(f) Alarm tới email (ADR-0058 §1), phép kiểm buổi stg của mục "Xác nhận" của ADR-0058, ghi như mục trên: mọi alarm của
+bảng ở `OK` hay `INSUFFICIENT_DATA`, rồi ép một alarm `page` sang `ALARM`; email tới có URL runbook; CloudWatch đưa
+alarm về trạng thái thật ở lần đánh giá kế (chu kỳ 60 s) và gửi thư `OK`:
 
 ```sh
 AWS_PROFILE=anhnv-stg aws cloudwatch describe-alarms --alarm-name-prefix svp-stg- --region ap-southeast-1 --output text \
@@ -726,11 +850,14 @@ Mong một dòng mỗi alarm của bảng ADR-0058 §2 (`svp-stg-<alarm>`), khô
 thư nào: đọc lại subscription (mục 6–10); subscription đã xác nhận mà vẫn không thư: dán output cho AI (key policy của CMK, README của
 `aws/modules/alarms`).
 
-#### Gói Free và CORS của media
+#### Gói Free của media
 
-Hai phép tay sau smoke, (c) và (d) của ADR-0052; lệnh và output có thời điểm UTC vào phụ lục, một dòng kết luận vào mục "Xác nhận" của
-[ADR-0052](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0052-cloudfront-flat-rate-free.md#xác-nhận). Buổi prd chạy đúng các
-lệnh này với `anhnv-prd`, `prd`.
+Loại: `chuẩn ngành`, không cần cờ. Thêm: ba lệnh đọc và một plan của root env (hạn của bước 8 trong bảng Thứ tự).
+
+Hai phép tay sau smoke, (c) ở đây và (d) ở mục dưới, của ADR-0052; lệnh và output có thời điểm UTC vào phụ lục, một dòng
+kết luận vào mục "Xác nhận" của
+[ADR-0052](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0052-cloudfront-flat-rate-free.md#xác-nhận).
+Buổi prd chạy đúng các lệnh này với `anhnv-prd`, `prd`.
 
 (c) Gói đã có hiệu lực trên đúng hai tài nguyên, rồi plan lần hai không còn gì để đổi:
 
@@ -747,7 +874,12 @@ Plan lần hai (sau apply, `aws/envs/stg`) phải cho `No changes`: dòng `ok pl
 gói có hiệu lực, `price_class` khớp). Nó ghi đè `stg-env-plan.txt` của bước 8 và để lại `stg.tfplan` không thay đổi gì, không cần apply. Có
 `change`: không apply, dán file text cho AI. `PENDING_APPROVAL`, `SYNC_IN_PROGRESS`: đọc lại sau vài phút; `FAILED`: dán output cho AI.
 
-(d) CloudFront trả header CORS của policy managed `Managed-SimpleCORS` cho playlist của một video đã seed:
+#### Phát video và CORS của media
+
+Loại: `lõi`.
+
+(d) CloudFront trả header CORS của policy managed `Managed-SimpleCORS` cho playlist của một video (của smoke, hay đã
+seed), rồi trình duyệt phát video; ghi như mục trên:
 
 ```sh
 values=$SVP_SESSION_DIR/cluster-values.json
@@ -760,6 +892,9 @@ Mong `HTTP/2 200` và `access-control-allow-origin: *`; rồi mở `https://<dom
 Thiếu header hay video không phát: dán output và lỗi ở console của trình duyệt cho AI.
 
 #### Phép kiểm edge
+
+Loại: `chuẩn ngành`, không cần cờ. Thêm: request đi trong phần edge đã tính của buổi (bảng "Thêm mỗi buổi" ở phụ lục
+ADR-0061 §13), chờ hai phút cho span ở (d), năm phút cho log ở (e).
 
 Phép kiểm của mục "Xác nhận" của
 [ADR-0061](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0061-edge-cloudfront-waf-acm.md#xác-nhận), sau smoke; lệnh và output có
@@ -883,6 +1018,9 @@ bước (3).
 
 #### Phép kiểm edge premium
 
+Loại: `chuẩn ngành`, không cần cờ. Thêm: lượt `WAIT_EXPIRY=1` chờ dưới thời lượng clip cộng 20 phút; lượt **Xoay khoá
+ký** chạy lại `bootstrap.sh stg secrets` (hạn của bước 11).
+
 Phép kiểm của mục "Xác nhận" của
 [ADR-0073](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0073-premium-playback.md#xác-nhận), sau smoke (smoke đã có luồng
 premium); output có thời điểm UTC vào phụ lục của ADR, một dòng kết luận mỗi env vào "Xác nhận". Script chỉ gọi API và CDN qua HTTPS, không
@@ -904,6 +1042,10 @@ theo [`media-signing-keys.md`](media-signing-keys.md#xoay-khoá-ký), rồi lư�
 động lại video-service, nên lỗi và p99 của bậc đang đo có thể vượt ngưỡng và kết thúc thang k6.
 
 #### Kafka và Valkey managed
+
+Loại: `chuẩn ngành`, không cần cờ; (e) cần `managed_grafana` `session` (AMG $18 mỗi buổi stg, mục **Dashboard SLO khi
+giữ tải**) và thang k6 đang giữ tải. Thêm: lệnh chỉ đọc qua `svp-ops`, một topic thử tạo rồi xoá; ADR không có số thời
+gian.
 
 Phép kiểm (a)–(e) của mục "Xác nhận" của
 [ADR-0053](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0053-msk-elasticache-valkey.md#xác-nhận); (b) là smoke của
@@ -967,9 +1109,10 @@ unset pw
 Mong, theo thứ tự: một dòng `NOPERM …` (`svp-feed-service` không vào db 10) rồi `OK` (db 14 của nó); một dòng `NOPERM …` (`svp-gateway` không
 đọc `svp:feed:*`) rồi một dòng trống (khoá `svp:gw:check` không có, đọc được). `WRONGPASS` hay lỗi TLS: dán cho AI.
 
-(e) Lag hiện trên dashboard: trong lúc giữ tải, AMG (bước 16) dashboard "SVP — Kafka and pipeline", panel "Consumer lag by
-group (max over partitions)" có đường của bốn group `video-service`, `engagement-service`, `feed-service`, `media-worker` (receiver
-`kafkametrics` của Collector, user `svp-otelcol`). Đối chiếu với broker:
+(e) Lag hiện trên dashboard: trong lúc giữ tải, AMG (mục **Dashboard SLO khi giữ tải**) dashboard "SVP — Kafka and
+pipeline", panel "Consumer lag by group (max over partitions)" có đường của bốn group `video-service`,
+`engagement-service`, `feed-service`, `media-worker` (receiver `kafkametrics` của Collector, user `svp-otelcol`). Đối
+chiếu với broker:
 
 ```sh
 AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp-data exec deploy/svp-ops -c kafka -- /opt/svp/bin/svp-kafka consumer-groups --describe --all-groups
@@ -980,10 +1123,17 @@ Mong cột `LAG` của mỗi group cùng cỡ với panel. Panel trống: dán l
 
 #### Phép kiểm nền tảng managed
 
+Loại: `lõi` (biến và hàm dùng chung dưới đây, cần cho [luật cảnh báo trên
+AMP](#nền-tảng-managed-d-luật-cảnh-báo-trên-amp)); mỗi phép (a)–(e) là một mục con có dòng `Loại:` riêng, (f) là bước
+30–31.
+
 Phép kiểm buổi của mục "Xác nhận" của ADR-0062 (registry), ADR-0063 (observability), ADR-0064 (endpoint): image kéo từ ECR, mạng riêng,
 telemetry, cảnh báo, canary, dữ liệu còn sau destroy. Làm trong bước 16, tunnel mở; lệnh và output có thời điểm UTC vào một file của
 `$SVP_SESSION_DIR`, một dòng kết luận mỗi phép vào "Xác nhận" của ADR tương ứng. Buổi prd chạy (a), (b), (c), (e) và phần luật của (d) với
 `anhnv-prd`, `--context svp-prd`, `svp-prd` (mục cùng tên của [`session-prd.md`](session-prd.md#phép-kiểm-nền-tảng-managed)).
+
+(f) Quét sót: `sweep.sh stg` và `sweep.sh mgmt` sạch ở bước 30–31, cùng các loại mới (endpoint interface, rule groups
+namespace của AMP) và dòng `kept` của registry, observability.
 
 Biến và hàm dùng chung, một lần trong terminal của buổi (mở lại terminal thì chạy lại khối này). `amp_get` gọi API Prometheus của workspace AMP
 bằng `curl --aws-sigv4`: credential tạm của profile đi từ `aws configure export-credentials` qua `jq` vào `curl --config -`, đều qua pipe, không
@@ -1028,6 +1178,13 @@ insights() {
   AWS_PROFILE="anhnv-$E" aws logs get-query-results --query-id "$id" --region ap-southeast-1 --query 'results[][].[field,value]' --output text
 }
 ```
+
+#### Nền tảng managed (a): image từ ECR
+
+Loại: `chuẩn ngành`, không cần cờ; đoạn Inspector cần `inspector_ecr` `always` của `stg`. Thêm: Inspector 0 khi không có
+digest bên thứ ba mới, tới $6,8 ở buổi đầu, tới $9 ở buổi cách buổi trước một tháng (dòng `inspector_ecr` của [phụ lục
+ADR-0071, Cờ](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0071-paid-features.md#cờ)); phần còn
+lại chỉ đọc.
 
 (a) Image (ADR-0062): pod kéo image từ ECR của account (policy `svp-registry-mirror` đổi tham chiếu lúc tạo pod, IVP `svp-images` xác minh ở
 ECR bằng Pod Identity của Kyverno); host image theo namespace:
@@ -1083,6 +1240,10 @@ Mong phần lớn image `ACTIVE` (đang được quét liên tục); ít nhất 
 `ecr-public/`, không repo `svp-backend/`, `svp-frontend/`. Rỗng: đọc lại cuối bước 16; vẫn rỗng thì dán cả hai output. Finding cũng vào
 Security Hub của `svp-security` (`ProductName` Inspector), không gửi email.
 
+#### Nền tảng managed (b): mạng riêng
+
+Loại: `chuẩn ngành`, không cần cờ. Thêm: lệnh chỉ đọc; ADR không có số thời gian.
+
 (b) Mạng riêng (ADR-0064): endpoint interface có private DNS ở subnet private (stg một AZ), tên API AWS phân giải ra IP trong VPC từ một pod,
 Kyverno và External Secrets vẫn gọi được API qua đó:
 
@@ -1120,6 +1281,12 @@ module `eks` (`local.pod_identity_roles` ở `aws/modules/eks/iam.tf`) cạnh c�
 Ready hay pod Kyverno không Ready: NetworkPolicy chưa mở 443 tới CIDR của VPC (value `awsEndpointCidrs`); dán output và
 `AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n external-secrets logs deploy/external-secrets --tail=30`.
 
+#### Nền tảng managed (c): telemetry
+
+Loại: `chuẩn ngành`, không cần cờ; đoạn AMG (Explore, dashboard, Grafana Operator) cần `managed_grafana` `session` (AMG
+$18 mỗi buổi stg, mục **Dashboard SLO khi giữ tải**). Thêm: truy vấn AMP và Logs Insights; số đo đầy đủ cần thang k6
+đang giữ tải.
+
 (c) Telemetry (ADR-0063): metric ở AMP (agent và Collector), log ở `/svp/stg/otel`, span ở `aws/spans`, series service graph do Collector
 sinh; trong lúc k6 giữ tải:
 
@@ -1140,9 +1307,11 @@ Trễ remote write của agent (số đo cho ADR-0063 §8, giây; tiêu chí ≤
 promql 'max(max_over_time((prometheus_remote_storage_highest_timestamp_in_seconds - ignoring(remote_name, url) group_right prometheus_remote_storage_queue_highest_sent_timestamp_seconds)[30m:30s]))'
 ```
 
-Trên AMG (bước 16): **Explore** → data source `prometheus` → `up{cluster="svp-stg"}` có kết quả (metric qua AMG); **Dashboards**: năm dashboard
-"SVP — …" của repo code, mỗi cái khung 1 giờ gần nhất, ghi tên mọi panel "No data". Panel của "SVP — Web vitals (RUM)" chỉ có dữ liệu khi
-trình duyệt mở web (phép (d) của mục Gói Free); hai panel Tempo (TraceQL, service map) không có trên eks. Grafana Operator đã đồng bộ:
+Cờ `managed_grafana` khác `off`, trên AMG (mục **Dashboard SLO khi giữ tải**): **Explore** → data source `prometheus` →
+`up{cluster="svp-stg"}` có kết quả (metric qua AMG); **Dashboards**: mọi dashboard "SVP — …" của repo code (mỗi file của
+`deploy/observability/grafana/dashboards` một cái), mỗi cái khung 1 giờ gần nhất, ghi tên mọi panel "No data". Panel của "SVP —
+Web vitals (RUM)" chỉ có dữ liệu khi trình duyệt mở web (phép (d) của mục Gói Free); hai panel Tempo (TraceQL, service map)
+không có trên eks. Grafana Operator đã đồng bộ:
 
 ```sh
 AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp-obs get \
@@ -1150,8 +1319,12 @@ AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp-obs get \
   jq -r '.items[] | "\(.kind) \(.metadata.name) \(.status.stage // "") \([.status.conditions[]? | "\(.type)=\(.status)"] | join(","))"'
 ```
 
-Mong một `Grafana` (`stage` hoàn tất), hai `GrafanaDatasource`, năm `GrafanaDashboard`, mọi điều kiện `…=True`. Dán danh sách panel trống
-theo dashboard (rỗng là đạt).
+Mong một `Grafana` (`stage` hoàn tất), hai `GrafanaDatasource`, mỗi dashboard một `GrafanaDashboard`, mọi điều kiện `…=True`.
+Dán danh sách panel trống theo dashboard (rỗng là đạt).
+
+#### Nền tảng managed (d): luật cảnh báo trên AMP
+
+Loại: `lõi`.
 
 (d) Cảnh báo và canary (ADR-0063 §5, §8). Luật của chart ở AMP, chu kỳ 15 s (quota của bước (8) của
 [`platform-setup.md`](platform-setup.md#bước-8-quota-chu-kỳ-luật-amp)), Alertmanager của AMP gửi SNS:
@@ -1167,6 +1340,11 @@ amp_get api/v1/rules | jq -r '.data.groups[] | "\(.name) \(.interval) \(.rules |
 Mong hai namespace `svp-alerts`, `slo-generated` `ACTIVE`; `ACTIVE`; mỗi nhóm luật một dòng chu kỳ `15`. Namespace `CREATION_FAILED` (chu kỳ dưới
 quota) hay thiếu: dán output và
 `AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp-obs describe rulegroupsnamespaces.prometheusservice.services.k8s.aws`.
+
+#### Nền tảng managed (d): canary và cảnh báo page
+
+Loại: `chuẩn ngành`, không cần cờ; cần PR ở `svp-gitops` mở trước buổi và thang k6 đang giữ tải (mục **Seed và thang
+k6**). Thêm: chờ cảnh báo khoảng 12 phút sau abort, canary chạy lại khoảng 3–4 phút (số của mục này).
 
 Canary thật của gateway và một cảnh báo `page` dùng chung một revision mới: một PR ở `svp-gitops` thêm vào `envs/stg/gateway.yaml` một annotation
 của pod template (cùng image, revision mới, nên Argo Rollouts chạy canary; cách diễn tập canary của lab), mở và chờ check xanh **trước buổi**,
@@ -1258,6 +1436,11 @@ AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp delete analysisruns.argop
 
 Mong `session-check-failed-… Failed Failed <số ≥ -1>` và `session-check-error-… Error Error … 404` (hay thông điệp không tìm thấy workspace).
 
+#### Nền tảng managed (e): dữ liệu còn sau destroy
+
+Loại: `chuẩn ngành`, không cần cờ. Thêm: khoảng ghi ít nhất 10 phút trước bước 20, truy vấn AMP và Logs Insights chạy
+lại sau bước 31 và ở buổi kế.
+
 (e) Dữ liệu còn sau destroy (ADR-0063, "Xác nhận"): metric, log và trace của buổi nằm ở account, không ở cluster. Ghi lại **trước bước 20**,
 sau khi k6 xong, một khoảng thời gian tuyệt đối trong buổi và một trace của khoảng đó; rồi chạy lại đúng các truy vấn sau bước 31 (cùng ngày)
 và ở buổi kế. Kết quả nằm ở `.session/persist-stg/` (git bỏ qua, không commit; giữ qua các buổi, như thư mục buổi). `end` cách lúc ghi ít nhất 10
@@ -1299,19 +1482,72 @@ còn trong retention của workspace AMP, nhưng log ứng dụng và `aws/spans
 Dòng `query failed` là truy vấn hỏng, không phải dữ liệu mất: lỗi nằm trên terminal (stderr không vào file); sửa nguyên nhân (như
 `AWS_PROFILE=anhnv-sso aws sso login --region us-east-1` khi phiên SSO hết hạn) rồi chạy lại `persist`.
 
-(f) Quét sót: `sweep.sh stg` và `sweep.sh mgmt` sạch ở bước 30–31, cùng các loại mới (endpoint interface, rule groups namespace của AMP) và
-dòng `kept` của registry, observability.
-
 #### Phép kiểm transcode
 
+Loại: `lõi` (biến và hàm dùng chung, (a) dưới đây); (b)–(e) và (f) là hai mục con có dòng `Loại:` riêng.
+
 Phép kiểm buổi của mục "Xác nhận" của
-[ADR-0066](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0066-mediaconvert-transcode.md#xác-nhận): `media-worker` chạy
-lệnh con `mediaconvert` và video đi qua MediaConvert, header của output qua CloudFront, FF-9 của threat model, lớp cắt đầu vào, hàng đợi sự
-kiện rỗng, và đường MediaConvert của phép đo hai đường. Làm trong lúc bậc k6 đầu tiên (1 pod) giữ tải, tunnel mở: k6 chỉ gọi
-`POST /videos`, không tải file, nên không job nào khác chen vào số đo. Lệnh và output có thời điểm UTC vào một file của `$SVP_SESSION_DIR`, một
-dòng kết luận mỗi phép vào "Xác nhận" của ADR-0066, số thô của (b) vào bảng "Kết quả" ở phụ lục của nó. Buổi prd chạy (a) và (f) với
-`anhnv-prd`, `--context svp-prd`, tên `svp-prd` ([`session-prd.md`](session-prd.md#phép-kiểm-transcode)). Chi phí của mục này nằm trong phần
-chi phí của transcode ở [ADR-0066 §12](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0066-mediaconvert-transcode.md#12-chi-phí).
+[ADR-0066](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0066-mediaconvert-transcode.md#xác-nhận):
+`media-worker` chạy lệnh con `mediaconvert` và video đi qua MediaConvert, header của output qua CloudFront, FF-9 của
+threat model, lớp cắt đầu vào, hàng đợi sự kiện rỗng, và đường MediaConvert của phép đo hai đường. Làm sau smoke, tunnel
+mở. Lệnh và output có thời điểm UTC vào một file của `$SVP_SESSION_DIR`, một dòng kết luận mỗi phép vào "Xác nhận" của
+ADR-0066, số thô của (b) vào bảng "Kết quả" ở phụ lục của nó. Buổi prd chạy (a) và (f) với `anhnv-prd`, `--context
+svp-prd`, tên `svp-prd` ([`session-prd.md`](session-prd.md#phép-kiểm-transcode)). Chi phí của mục này nằm trong phần chi
+phí của transcode ở [ADR-0066
+§12](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0066-mediaconvert-transcode.md#12-chi-phí).
+
+Biến và hàm dùng chung, một lần trong terminal của buổi (mở lại terminal thì chạy lại khối này). Bản ghi job
+(`transcode-jobs/<video_id>/<version>.json` của bucket media) là nguồn duy nhất của kết quả mỗi version: job của version
+hay lý do hỏng trước khi có job (`docs/explanation/transcode.md` của repo code):
+
+```sh
+values=$SVP_SESSION_DIR/cluster-values.json
+media=$(jq -r .mediaBucket "$values"); dom=$(jq -r .domain "$values"); cdn=https://$(jq -r .mediaDomain "$values")
+record_key() {          # job record key of video $1
+  AWS_PROFILE=anhnv-stg aws s3api list-objects-v2 --bucket "$media" --prefix "transcode-jobs/$1/" --region ap-southeast-1 \
+    --query 'Contents[0].Key' --output text
+}
+last_key() {            # newest job record: the video just uploaded
+  AWS_PROFILE=anhnv-stg aws s3api list-objects-v2 --bucket "$media" --prefix transcode-jobs/ --region ap-southeast-1 \
+    --query 'sort_by(Contents, &LastModified)[-1].Key' --output text
+}
+show() { AWS_PROFILE=anhnv-stg aws s3 cp "s3://$media/$1" - --region ap-southeast-1; }
+```
+
+(a) Smoke đi qua MediaConvert: Deployment `media-worker` chạy lệnh con `mediaconvert`, và job trong bản ghi của mỗi
+video smoke (và seed, khi thang đo chạy) là `COMPLETE` trên queue `svp-stg`. Một video có thể có thêm job lạc:
+`CreateJob` mất response, bridge thử lại và tạo job thứ hai; job đó chạy tới `COMPLETE` hay `ERROR` nhưng không có tên
+trong bản ghi, nên không quyết kết quả. Khối dưới chép mọi bản ghi về thư mục buổi, rồi đếm mỗi bản ghi theo trạng thái
+job của nó (`record-job`) hay lý do của nó (`reason`), và mỗi job khác của cùng video (`orphan-job`):
+
+```sh
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp get deploy media-worker \
+  -o jsonpath='{.spec.template.spec.containers[?(@.name=="media-worker")].args}{"\n"}'
+AWS_PROFILE=anhnv-stg aws mediaconvert list-jobs --queue svp-stg --region ap-southeast-1 --output json > "$SVP_SESSION_DIR/mediaconvert-jobs.json"
+AWS_PROFILE=anhnv-stg aws s3 sync "s3://$media/transcode-jobs/" "$SVP_SESSION_DIR/transcode-jobs/" --region ap-southeast-1 --only-show-errors
+find "$SVP_SESSION_DIR/transcode-jobs" -name '*.json' -exec jq -c '{video: (input_filename | split("/")[-2]), job: .job_id, reason}' {} + |
+  jq -rs --slurpfile all "$SVP_SESSION_DIR/mediaconvert-jobs.json" '($all[0].Jobs | map({key: .Id, value: .Status}) | from_entries) as $st
+    | map(.job | select(.)) as $own | map(.video) as $videos
+    | (.[] | if .reason then "reason \(.reason)" else "record-job \($st[.job] // "MISSING")" end),
+      ($all[0].Jobs[] | select((.UserMetadata.video_id | IN($videos[])) and (.Id | IN($own[]) | not)) | "orphan-job \(.Status)")' |
+  sort | uniq -c
+```
+
+Mong `["mediaconvert"]`, rồi dòng `record-job COMPLETE` với số đếm bằng số video smoke (và seed) đã `READY`, không dòng
+`record-job` nào khác, không dòng `reason`. Dòng `orphan-job <trạng thái>` được chấp nhận (job lạc, như trên); ghi số
+của nó vào dòng kết luận. `record-job` khác `COMPLETE` (`MISSING`: job của bản ghi không có trên queue) hay có dòng
+`reason`: dán bảng đếm và output của `jq -c '.Jobs[] | select(.Status != "COMPLETE") | {Id, Status, ErrorCode,
+ErrorMessage, UserMetadata}' "$SVP_SESSION_DIR/mediaconvert-jobs.json"` cho AI.
+
+#### Transcode (b)–(e): đo hai đường, header, FF-9, lớp cắt
+
+Loại: `chuẩn ngành`, không cần cờ. Thêm: job MediaConvert của năm clip 60 s ở (b) và của clip khai 60 s ở (e) (clip 200
+s của (d) không thành job), theo phần transcode của [ADR-0066
+§12](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0066-mediaconvert-transcode.md#12-chi-phí); vài phút
+CPU trên máy cho clip.
+
+Khi thang đo chạy, làm trong lúc bậc k6 đầu tiên (1 pod) giữ tải: k6 chỉ gọi `POST /videos`, không tải file, nên không
+job nào khác chen vào số đo. Dùng biến và hàm dùng chung của mục trên.
 
 Ba clip sinh trên máy một lần, trong lúc chờ bước 9 (vài phút CPU): clip tham chiếu 60 s và 200 s (lệnh của mục "Phép đo hai đường:
 phương pháp" ở [phụ lục ADR-0066](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0066-mediaconvert-transcode.md#phép-đo-hai-đường-phương-pháp)),
@@ -1356,48 +1592,6 @@ ffmpeg -v error -i "$c/clip-200s-says-60s.mp4" -map 0:v -f null - -stats 2>&1 | 
 ```
 
 Mong dòng đầu ~`60` (header khai 60 s) và dòng sau có `time=00:03:20` (giải mã thật 200 s). Khác: dán hai dòng cho AI, không dùng file đó.
-
-Biến và hàm dùng chung, một lần trong terminal của buổi (mở lại terminal thì chạy lại khối này). Bản ghi job
-(`transcode-jobs/<video_id>/<version>.json` của bucket media) là nguồn duy nhất của kết quả mỗi version: job của version hay lý do hỏng
-trước khi có job (`docs/explanation/transcode.md` của repo code):
-
-```sh
-values=$SVP_SESSION_DIR/cluster-values.json
-media=$(jq -r .mediaBucket "$values"); dom=$(jq -r .domain "$values"); cdn=https://$(jq -r .mediaDomain "$values")
-record_key() {          # job record key of video $1
-  AWS_PROFILE=anhnv-stg aws s3api list-objects-v2 --bucket "$media" --prefix "transcode-jobs/$1/" --region ap-southeast-1 \
-    --query 'Contents[0].Key' --output text
-}
-last_key() {            # newest job record: the video just uploaded
-  AWS_PROFILE=anhnv-stg aws s3api list-objects-v2 --bucket "$media" --prefix transcode-jobs/ --region ap-southeast-1 \
-    --query 'sort_by(Contents, &LastModified)[-1].Key' --output text
-}
-show() { AWS_PROFILE=anhnv-stg aws s3 cp "s3://$media/$1" - --region ap-southeast-1; }
-```
-
-(a) Smoke đi qua MediaConvert: Deployment `media-worker` chạy lệnh con `mediaconvert`, và job trong bản ghi của mỗi video smoke, seed của
-`measure.sh` là `COMPLETE` trên queue `svp-stg`. Một video có thể có thêm job lạc: `CreateJob` mất response, bridge thử lại và tạo job thứ
-hai; job đó chạy tới `COMPLETE` hay `ERROR` nhưng không có tên trong bản ghi, nên không quyết kết quả. Khối dưới chép mọi bản ghi về thư mục
-buổi, rồi đếm mỗi bản ghi theo trạng thái job của nó (`record-job`) hay lý do của nó (`reason`), và mỗi job khác của cùng video (`orphan-job`):
-
-```sh
-AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp get deploy media-worker \
-  -o jsonpath='{.spec.template.spec.containers[?(@.name=="media-worker")].args}{"\n"}'
-AWS_PROFILE=anhnv-stg aws mediaconvert list-jobs --queue svp-stg --region ap-southeast-1 --output json > "$SVP_SESSION_DIR/mediaconvert-jobs.json"
-AWS_PROFILE=anhnv-stg aws s3 sync "s3://$media/transcode-jobs/" "$SVP_SESSION_DIR/transcode-jobs/" --region ap-southeast-1 --only-show-errors
-find "$SVP_SESSION_DIR/transcode-jobs" -name '*.json' -exec jq -c '{video: (input_filename | split("/")[-2]), job: .job_id, reason}' {} + |
-  jq -rs --slurpfile all "$SVP_SESSION_DIR/mediaconvert-jobs.json" '($all[0].Jobs | map({key: .Id, value: .Status}) | from_entries) as $st
-    | map(.job | select(.)) as $own | map(.video) as $videos
-    | (.[] | if .reason then "reason \(.reason)" else "record-job \($st[.job] // "MISSING")" end),
-      ($all[0].Jobs[] | select((.UserMetadata.video_id | IN($videos[])) and (.Id | IN($own[]) | not)) | "orphan-job \(.Status)")' |
-  sort | uniq -c
-```
-
-Mong `["mediaconvert"]`, rồi dòng `record-job COMPLETE` với số đếm bằng số video smoke và seed đã `READY`, không dòng `record-job` nào khác,
-không dòng `reason`. Dòng `orphan-job <trạng thái>` được chấp nhận (job lạc, như trên); ghi số của nó vào dòng kết luận. `record-job` khác
-`COMPLETE` (`MISSING`: job của bản ghi không có trên queue) hay có dòng `reason`: dán bảng đếm và output của
-`jq -c '.Jobs[] | select(.Status != "COMPLETE") | {Id, Status, ErrorCode, ErrorMessage, UserMetadata}' "$SVP_SESSION_DIR/mediaconvert-jobs.json"`
-cho AI.
 
 (b) Phép đo hai đường, đường MediaConvert: script đo thời gian tới `READY` (`deploy/compose/transcode-timing.sh`) qua
 `make eks-transcode-timing` của repo code, 5 lần clip 60 s, rồi `GetJob` của 5 job (job ID ở bản ghi job) cho phút output theo loại:
@@ -1462,6 +1656,10 @@ quanh 60 000 (cắt tại thời lượng Probe báo: lớp cắt chạy); hay `
 output); hay `{"reason":"DURATION_EXCEEDED"}` (Probe không tin header, lớp cắt không được thử tới). Có output trên 180 000 ms: trần chi phí
 hỏng, dừng mục này và dán output cho AI.
 
+#### Transcode (f): hàng đợi rỗng
+
+Loại: `lõi`.
+
 (f) Hàng đợi sự kiện rỗng, alarm DLQ không báo, bridge không bỏ message nào. Chạy sau cùng, khi mọi job của mục này đã xong:
 
 ```sh
@@ -1477,14 +1675,21 @@ AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp logs deploy/media-worker 
   grep -c -E 'transcode event (ignored|interrupted)|transcode result undecided'
 ```
 
-Mong hai dòng kết thúc bằng hai số `0` (hàng đợi nguồn còn số khác 0 thì đọc lại sau một phút), alarm `OK` hay `INSUFFICIENT_DATA`, và `0`.
-DLQ có message hay alarm `ALARM`: theo runbook
-[`transcode-events-dlq.md`](https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks/transcode-events-dlq.md) của repo code, dán
-output cho AI. Rồi chạy lại ba lệnh cuối của (a) (`list-jobs`, `s3 sync`, bảng đếm). Mong `record-job` chỉ `COMPLETE` (thêm `ERROR` khi (e)
-gặp job `ERROR`), `reason` chỉ `DURATION_EXCEEDED` của (d) và lý do (e) đã ghi; `orphan-job` như ở (a); khác: dán bảng đếm cho AI.
-`mediaconvert-jobs.json` khi đó giữ mọi job của buổi cùng thời lượng từng output, đầu vào đối chiếu chi phí ở mục **Kết thúc buổi**.
+Mong hai dòng kết thúc bằng hai số `0` (hàng đợi nguồn còn số khác 0 thì đọc lại sau một phút), alarm `OK` hay
+`INSUFFICIENT_DATA`, và `0`. DLQ có message hay alarm `ALARM`: theo runbook
+[`transcode-events-dlq.md`](https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks/transcode-events-dlq.md)
+của repo code, dán output cho AI. Rồi chạy lại ba lệnh cuối của (a) (`list-jobs`, `s3 sync`, bảng đếm). Mong
+`record-job` chỉ `COMPLETE` (thêm `ERROR` khi (e) gặp job `ERROR`), không `reason` (khi (b)–(e) đã chạy: chỉ
+`DURATION_EXCEEDED` của (d) và lý do (e) đã ghi); `orphan-job` như ở (a); khác: dán bảng đếm cho AI.
+`mediaconvert-jobs.json` khi đó giữ mọi job của buổi cùng thời lượng từng output, đầu vào đối chiếu chi phí ở mục **Kết
+thúc buổi**.
 
 ### 17–19. Diễn tập khôi phục
+
+Loại: `chuẩn ngành`, không cần cờ. Thêm: hạn 60, 75, 30 phút của bước 17, 18, 19 (bảng Thứ tự); instance `svp-stg-pitr`,
+request và restore S3 (bảng "Mỗi buổi" ở mục "Chi phí" của [phụ lục
+ADR-0067](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0067-backup-dr.md#mỗi-buổi)). Bỏ chúng
+không đổi bước 25: nó chạy ở mọi đường.
 
 ```sh
 aws/scripts/restore-drill.sh stg backup
@@ -1573,8 +1778,8 @@ giữ ETag). Tìm `ok s3://svp-stg-media-…/<key>: N bytes, SHA-256 …; deleti
 recovery point đã dùng, chỉ ghi lại: RPO của S3 là giới hạn cấu hình (ADR-0067 §2). Dòng `FAIL`:
 
 - `no line of arn:aws:s3:::… in …restore-drill-points.tsv`: bước 17 chưa xong cho bucket media; chạy bước 17, rồi bước 19.
-- `no .m3u8 under media/ … older than its recovery point`: bucket media chưa có video nào trước lúc backup (smoke, seed của bước 16 chưa
-  chạy); không diễn tập được ở buổi này, ghi lại.
+- `no .m3u8 under media/ … older than its recovery point`: bucket media chưa có video nào trước lúc backup (smoke của
+  bước 16 chưa chạy); không diễn tập được ở buổi này, ghi lại.
 - `restore job … ended …` hay `… after … s`: key vẫn bị xoá, version cũ còn (bucket có versioning). Khôi phục bằng cách xoá delete marker
   (lệnh dưới; key là key script in), dán `StatusMessage` của job cho AI.
 
@@ -1589,10 +1794,14 @@ AWS_PROFILE=anhnv-stg aws s3api delete-object --bucket "$b" --key <key> --versio
 
 ### Finding bảo mật của buổi (sau bước 19, trước bước 20)
 
-Chỉ đọc, profile `anhnv-security-ro` của account Security Tooling, khi tài nguyên của buổi **còn sống**: tài nguyên bị xoá thì finding control
-của nó chuyển `NOT_AVAILABLE` và `ARCHIVED` (Security Hub CSPM User Guide, "Generating and updating control findings"), nên lượt đọc định kỳ
-của `security-alert.md` không bao giờ thấy tài nguyên chỉ sống trong buổi. Buổi dừng sớm rồi đi thẳng tới gỡ: vẫn đọc mục này trước bước 20
-(đường `--no-cluster` của mục **23–27**: trước `plan --destroy`).
+Loại: `lõi` (đọc finding GuardDuty, không tốn tiền); phần control Security Hub là mục con **Control Security Hub của
+buổi**. Đường mặc định không chạy bước 17–19: đọc mục này sau các phép của bước 16, trước bước 20.
+
+Chỉ đọc, profile `anhnv-security-ro` của account Security Tooling, khi tài nguyên của buổi **còn sống**: finding của
+buổi đọc trước khi gỡ, và tài nguyên bị xoá thì finding control của nó chuyển `NOT_AVAILABLE` và `ARCHIVED` (Security
+Hub CSPM User Guide, "Generating and updating control findings"), nên lượt đọc định kỳ của `security-alert.md` không bao
+giờ thấy tài nguyên chỉ sống trong buổi. Buổi dừng sớm rồi đi thẳng tới gỡ: vẫn đọc mục này trước bước 20 (đường
+`--no-cluster` của mục **23–27**: trước `plan --destroy`).
 
 Mục này cần bước (4), (5) của [`org-security-setup.md`](org-security-setup.md#thứ-tự-áp-lần-đầu): profile `anhnv-security-ro` và Security
 Hub ở `svp-security`. Org mới áp tới bước (3) (đủ cho buổi, điều kiện 6) thì chưa có gì để đọc: bỏ qua mục này (script sẽ
@@ -1603,30 +1812,48 @@ Hub ở `svp-security`. Org mới áp tới bước (3) (đủ cho buổi, đi�
 aws/scripts/preflight.sh findings stg      # prd session: findings prd
 ```
 
-Script lấy giờ bắt đầu buổi từ dòng đầu của `$SVP_SESSION_DIR/timeline.tsv` và lọc theo account của env (`SVP_AWS_STG_ACCOUNT_ID`), rồi đọc
-theo cờ `security_hub` của env (mục **Cờ chi phí của buổi**):
+Script lấy giờ bắt đầu buổi từ dòng đầu của `$SVP_SESSION_DIR/timeline.tsv` và lọc theo account của env
+(`SVP_AWS_STG_ACCOUNT_ID`), rồi đọc theo cờ `security_hub` của env (mục **Cờ chi phí của buổi**). Với giá trị của file
+(`off`) account không có control và GuardDuty của account không gửi finding vào Security Hub, nên script in
+`note  security_hub of stg is off …`, đọc phần Access Analyzer ở Security Hub, và đọc finding GuardDuty thẳng ở
+delegated admin GuardDuty, mỗi region một lần (`ap-southeast-1` và `us-east-1`, nơi nằm finding toàn cục: IAM,
+CloudFront, WAF): `ok    GuardDuty <region>: no finding for the account since …` hay mỗi finding một dòng
+`note  GuardDuty <region> severity <số> (HIGH from 7, CRITICAL from 9): <loại>, <tiêu đề>`.
 
-- cờ `always`: control FAILED của account (kể cả control của baseline đã có trong danh sách ban đầu, mục 7a của
-  [`org-security-setup.md`](org-security-setup.md#7a-dịch-vụ-bật), lẫn của tài nguyên buổi) thành mỗi loại một dòng `note  Security Hub
-  FAILED control x<n>: <control> <mức>
-  <loại>`; id tài nguyên ghi vào `$SVP_SESSION_DIR/controls-failed.tsv` (mode 600), không in. Rồi finding
-  GuardDuty và Access Analyzer cập nhật từ đầu buổi, mọi mức: `note  finding x<n> since the start: …`; không có thì `ok    Security Hub: no
-  GuardDuty or Access Analyzer finding since …`;
-- cờ `off`: account không có control và GuardDuty của account không gửi finding vào Security Hub, nên script in `note  security_hub of stg
-  is off …`, đọc phần Access Analyzer ở Security Hub, và đọc finding GuardDuty thẳng ở delegated admin GuardDuty, mỗi region một lần
-  (`ap-southeast-1` và `us-east-1`, nơi nằm finding toàn cục: IAM, CloudFront, WAF): `ok    GuardDuty <region>: no finding for the account
-  since …` hay mỗi finding một dòng `note  GuardDuty <region> severity <số> (HIGH from 7, CRITICAL from 9): <loại>, <tiêu đề>`.
+Dòng của bản copy (profile `anhnv-backup-ro`, điều kiện 10) đứng trước phần security. Đường mặc định không chạy bước 17,
+nên dòng `FAIL  no recovery point in svp-stg-copy created after … (step 17 of the session runbook not done, …)` là đúng
+như mong đợi: lệnh vẫn đọc phần security, rồi thoát mã 1 vì riêng dòng đó. Lịch backup hằng ngày (18:00 UTC) chạy trong
+buổi, hay buổi đã chạy bước 17: dòng của bản copy đọc như đoạn **Đọc bản copy** của mục **17–19**.
 
-Dán toàn bộ output, cùng `controls-failed.tsv` khi AI hỏi tới tài nguyên. Mỗi control FAILED, của tài nguyên buổi cũng như
-tài nguyên lâu dài, xử lý theo mục "Đọc bảng Security Hub định kỳ" của runbook
-[`security-alert.md`](https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks/security-alert.md#đọc-bảng-security-hub-định-kỳ):
-buổi sau tạo lại tài nguyên từ cùng code, nên lỗi không sửa trong Terraform sẽ quay lại. Của finding, chỉ mức HIGH, CRITICAL
-tới email (cả finding phát sinh trong lúc gỡ), qua rule `svp-security-guardduty-findings` (dòng chung
-`svp-security: GuardDuty Finding …` cho finding ở `us-east-1`); mức thấp hơn (ngoài `[SAMPLE]`) đối chiếu thời điểm với
-`timeline.tsv` (diễn tập, đo) rồi xử lý theo cùng runbook. `FAIL` nêu lệnh `aws` lỗi và profile của nó: sửa nguyên nhân
-(phiên SSO hết hạn: mục **Mở terminal của buổi**) rồi chạy lại.
+Dán toàn bộ output. Của finding, chỉ mức HIGH, CRITICAL tới email (cả finding phát sinh trong lúc gỡ), qua rule
+`svp-security-guardduty-findings` (dòng chung `svp-security: GuardDuty Finding …` cho finding ở `us-east-1`); mức thấp
+hơn (ngoài `[SAMPLE]`) đối chiếu thời điểm với `timeline.tsv` (diễn tập, đo) rồi xử lý theo mục "Đọc bảng Security Hub
+định kỳ" của runbook
+[`security-alert.md`](https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks/security-alert.md#đọc-bảng-security-hub-định-kỳ).
+Dòng `FAIL` khác nêu lệnh `aws` lỗi và profile của nó: sửa nguyên nhân (phiên SSO hết hạn: mục **Mở terminal của
+buổi**) rồi chạy lại.
+
+#### Control Security Hub của buổi
+
+Loại: `chuẩn ngành`, cần `security_hub` và `config_recording` `always` của `stg` (Security Hub cần Config ở cùng
+account). Thêm: Security Hub $1–3, Config $2–4,5 mỗi buổi (dòng `security_hub`, `config_recording` của [phụ lục
+ADR-0071, Cờ](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0071-paid-features.md#cờ)); hai lượt
+áp `aws/baseline`, `aws/security` theo [`paid-features.md`](paid-features.md) trước và sau buổi.
+
+Cùng lệnh `preflight.sh findings stg` của mục trên. Với cờ `always`: control FAILED của account (kể cả control của
+baseline đã có trong danh sách ban đầu, mục 7a của [`org-security-setup.md`](org-security-setup.md#7a-dịch-vụ-bật), lẫn
+của tài nguyên buổi) thành mỗi loại một dòng `note  Security Hub FAILED control x<n>: <control> <mức> <loại>`; id tài
+nguyên ghi vào `$SVP_SESSION_DIR/controls-failed.tsv` (mode 600), không in. Rồi finding GuardDuty và Access Analyzer cập
+nhật từ đầu buổi, mọi mức: `note  finding x<n> since the start: …`; không có thì `ok    Security Hub: no GuardDuty or
+Access Analyzer finding since …`.
+
+Dán toàn bộ output, cùng `controls-failed.tsv` khi AI hỏi tới tài nguyên. Mỗi control FAILED, của tài nguyên buổi cũng
+như tài nguyên lâu dài, xử lý theo mục "Đọc bảng Security Hub định kỳ" của runbook `security-alert.md` (link ở mục
+trên): buổi sau tạo lại tài nguyên từ cùng code, nên lỗi không sửa trong Terraform sẽ quay lại.
 
 ### 20. Gỡ trong cluster trước destroy
+
+Loại: `lõi`.
 
 ```sh
 aws/scripts/pre-destroy.sh stg
@@ -1679,6 +1906,8 @@ sửa rồi chạy lại script, hay huỷ tay theo mục **Lệnh xoá tay theo
 
 ### 21–22. Gỡ root gitops
 
+Loại: `lõi`.
+
 ```sh
 aws/scripts/tf.sh stg gitops plan --destroy
 aws/scripts/tf.sh stg gitops destroy
@@ -1705,6 +1934,8 @@ mốc `pre-destroy-skipped`. Tiếp: bước 22, rồi các bước sau (destroy
 kê xoá bằng lệnh nó in, rồi chạy lại `sweep.sh` tới khi sạch.
 
 ### 23–27. Gỡ root env
+
+Loại: `lõi`.
 
 ```sh
 aws/scripts/tf.sh stg env plan --teardown
@@ -1737,6 +1968,8 @@ Apply đỏ trước khi tạo cluster EKS (chưa gì chạy trên cluster, root
 
 #### Bước 25: xoá backup của buổi
 
+Loại: `lõi`.
+
 `restore-drill.sh stg cleanup` (**Xoá cuối buổi** của ADR-0067 §11) chạy sau lần ghi Terraform cuối vào root env (mọi apply gắn lại tag
 `Backup`) và ngay trước `plan --destroy`, theo thứ tự: xoá `svp-stg-pitr` nếu còn; gỡ tag `Backup` khỏi instance `svp-stg` và hai bucket (lịch
 không chọn chúng nữa); chờ mọi job backup, copy, restore của account kết thúc (có hạn); với mỗi recovery point của vault `svp-stg`: có copy job
@@ -1766,6 +1999,8 @@ tạo gì; khi chưa có instance hay bucket, nó in `skip` cho phần đó.
 
 ### 28–29. Root account: đóng tính năng của buổi
 
+Loại: `lõi`. Như bước 3–5: với `managed_grafana` `off` hai lệnh in `ok no session feature of stg …`.
+
 ```sh
 aws/scripts/tf.sh stg account plan --close
 aws/scripts/tf.sh stg account apply
@@ -1784,6 +2019,8 @@ workspace bỏ quên tính tiền mỗi tháng nó còn
 in nó cùng tham số SSM là sót.
 
 ### 30–31. Quét sót
+
+Loại: `lõi`.
 
 ```sh
 aws/scripts/sweep.sh stg
@@ -1804,12 +2041,14 @@ EKS, RDS tự tạo ngoài state và log broker `/aws/msk/svp-*`), Secrets Manag
 key, bản ghi của zone của account ngoài `NS`, `SOA`, `CAA` ở đỉnh và ngoài mọi `NS` dưới đỉnh (uỷ quyền zone con của baseline). Mỗi loại in theo thứ
 tự AWS cho xoá (cluster trước configuration, replication group trước user group, user group trước user).
 
-Nền tảng managed thêm các loại: endpoint interface `svp-<env>-<dịch vụ>` và security group `svp-<env>-endpoints` (của root env, sót là
-lỗi); rule groups namespace của AMP (ACK tạo mỗi buổi, `pre-destroy.sh` xoá; sót là ruler còn đánh giá và tính tiền); workspace AMP, workspace
-Grafana, repo ECR, rule pull-through cache cùng repo do cache tạo (không tag), IAM OIDC provider và role `svp-ci-*` của root
-`aws/accounts/<env>`: in là `kept` khi account giữ `Stack=baseline`. Workspace Grafana `svp-<env>` và tham số SSM
-`/svp/<env>/grafana-workspace-id` theo cờ `managed_grafana` của env (`sweep.sh` đọc `aws/paid-features.json`): `always` thì `kept`, `session`
-thì sót (bước 28–29 chưa chạy hay đỏ: chạy lại hai bước đó thay cho lệnh `delete:`, để state của root khớp account).
+Nền tảng managed thêm các loại: endpoint interface `svp-<env>-<dịch vụ>` và security group `svp-<env>-endpoints` (của
+root env, sót là lỗi); rule groups namespace của AMP (ACK tạo mỗi buổi, `pre-destroy.sh` xoá; sót là ruler còn đánh giá
+và tính tiền); workspace AMP, workspace Grafana, repo ECR, rule pull-through cache cùng repo do cache tạo (không tag),
+IAM OIDC provider và role `svp-ci-*` của root `aws/accounts/<env>`: in là `kept` khi account giữ `Stack=baseline`.
+Workspace Grafana `svp-<env>` và tham số SSM `/svp/<env>/grafana-workspace-id` theo cờ `managed_grafana` của env
+(`sweep.sh` đọc `aws/paid-features.json`): `always` thì `kept`, `session` thì sót (bước 28–29 chưa chạy hay đỏ: chạy lại
+hai bước đó thay cho lệnh `delete:`, để state của root khớp account), `off` thì sót (cờ đổi về `off` mà
+`aws/accounts/<env>` chưa áp: áp theo [`paid-features.md`](paid-features.md#awsaccountsenv)).
 
 Transcode thêm các loại: queue MediaConvert `svp-<env>` (queue `Default` của account không tính); hàng đợi SQS
 `svp-<env>-transcode-events` và `-dlq` (loại SQS có sẵn); rule EventBridge `svp-<env>-mediaconvert-job-state`: loại `EventBridge rule targets`
@@ -2156,28 +2395,32 @@ Không sửa entry hay Secret bằng tay, không ghi mật khẩu Kafka, Valkey 
 
 ## Kết thúc buổi
 
-1. Thứ tự gỡ, mỗi bước xong mới sang bước sau: destroy root `aws/gitops/stg`, xoá backup của buổi, destroy `aws/envs/stg`, rồi đóng
-   tính năng của buổi ở `aws/accounts/stg` (bước 21–29); `sweep.sh stg`; `sweep.sh mgmt`.
-   Hai lượt cùng exit 0 (dán output cho AI). AI nhắc tới khi người học xác nhận đã chạy cả hai destroy và hai lượt sweep. Phép kiểm (e) của
-   ADR-0052 (output vào phụ lục của nó, kết luận vào "Xác nhận"): sau destroy, gói của account rỗng (mong `[]`), cùng lượt `sweep.sh stg` sạch:
+1. Thứ tự gỡ, mỗi bước xong mới sang bước sau: destroy root `aws/gitops/stg`, xoá backup của buổi, destroy
+   `aws/envs/stg`, rồi đóng tính năng của buổi ở `aws/accounts/stg` (bước 21–29); `sweep.sh stg`; `sweep.sh mgmt`. Hai
+   lượt cùng exit 0 (dán output cho AI). AI nhắc tới khi người học xác nhận đã chạy cả hai destroy và hai lượt sweep.
+   Phép kiểm sau đây đọc kết quả của chính hai lượt sweep đó (`lõi`, cùng bước 30–31), trừ chỗ ghi `chuẩn ngành`. Phép
+   kiểm (e) của ADR-0052 (output vào phụ lục của nó, kết luận vào "Xác nhận"): sau destroy, gói của account rỗng (mong
+   `[]`), cùng lượt `sweep.sh stg` sạch:
 
    ```sh
    AWS_PROFILE=anhnv-stg aws pricing-plan-manager list-subscriptions --region us-east-1 --query 'subscriptionSummaries[].[arn,planTier,status]' --output json
    ```
 
-   Phép kiểm (f) của ADR-0053 là cùng hai lượt sweep sạch: không còn dòng MSK, ElastiCache, `AmazonMSK_*` nào; KMS key của root env chỉ ở
-   `pending deletion`. Phép kiểm `pre-destroy.sh` của ADR-0056: cùng lượt đó không còn instance, launch template, instance profile, hàng đợi
-   SQS hay rule EventBridge nào của Karpenter. Phép kiểm gỡ của ADR-0066: cùng lượt đó không còn queue `svp-stg`, role
-   `svp-stg-mediaconvert`, hàng đợi `svp-stg-transcode-events*`, rule `svp-stg-mediaconvert-job-state`, endpoint `svp-stg-mediaconvert`. Phép
-   kiểm gỡ của ADR-0067: cùng lượt đó không còn recovery point, job AWS Backup chưa kết thúc hay instance `svp-stg-pitr`; vault `svp-stg`, role
-   `svp-stg-backup` là `kept`; bản copy của buổi vẫn ở `svp-stg-copy` (lệnh **Đọc bản copy** của mục **17–19**, mong cùng ba dòng). Phép kiểm gỡ của
-   ADR-0073: cùng lượt đó không còn key group `svp-stg-media`, public key `svp-stg-media-*`, entry `svp/stg/media-signing`. Ngày sau
-   buổi, tổng MediaConvert của ngày buổi ở Cost Explorer (lệnh ở mục "Chi phí mỗi phút video" của
-   [phụ lục ADR-0066](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0066-mediaconvert-transcode.md#chi-phí-mỗi-phút-video)),
-   đối chiếu với tổng tính theo output của mọi job trong `mediaconvert-jobs.json` (lượt cuối của mục **Phép kiểm transcode** (f)) mà video có
-   bản ghi ở `$SVP_SESSION_DIR/transcode-jobs/`, job lạc gồm; dán output.
-   Rồi chạy lại truy vấn dữ liệu đã ghi trước bước 20 (mục Phép kiểm nền tảng managed (e), `after-destroy.txt`), cùng ngày; dán `diff`.
-   Buổi đầu có span của account: retention của `aws/spans` theo bước (10) của
+   Phép kiểm (f) của ADR-0053 là cùng hai lượt sweep sạch: không còn dòng MSK, ElastiCache, `AmazonMSK_*` nào; KMS key
+   của root env chỉ ở `pending deletion`. Phép kiểm `pre-destroy.sh` của ADR-0056: cùng lượt đó không còn instance,
+   launch template, instance profile, hàng đợi SQS hay rule EventBridge nào của Karpenter. Phép kiểm gỡ của ADR-0066:
+   cùng lượt đó không còn queue `svp-stg`, role `svp-stg-mediaconvert`, hàng đợi `svp-stg-transcode-events*`, rule
+   `svp-stg-mediaconvert-job-state`, endpoint `svp-stg-mediaconvert`. Phép kiểm gỡ của ADR-0067: cùng lượt đó không còn
+   recovery point, job AWS Backup chưa kết thúc hay instance `svp-stg-pitr`; vault `svp-stg`, role `svp-stg-backup` là
+   `kept`; buổi đã chạy bước 17 (`chuẩn ngành`): bản copy của buổi vẫn ở `svp-stg-copy` (lệnh **Đọc bản copy** của mục
+   **17–19**, mong cùng ba dòng). Phép kiểm gỡ của ADR-0073: cùng lượt đó không còn key group `svp-stg-media`, public
+   key `svp-stg-media-*`, entry `svp/stg/media-signing`. Ngày sau buổi (`chuẩn ngành`, không cần cờ), tổng MediaConvert
+   của ngày buổi ở Cost Explorer (lệnh ở mục "Chi phí mỗi phút video" của [phụ lục
+   ADR-0066](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0066-mediaconvert-transcode.md#chi-phí-mỗi-phút-video)),
+   đối chiếu với tổng tính theo output của mọi job trong `mediaconvert-jobs.json` (lượt cuối của mục **Phép kiểm
+   transcode** (f)) mà video có bản ghi ở `$SVP_SESSION_DIR/transcode-jobs/`, job lạc gồm; dán output. Buổi đã ghi truy
+   vấn dữ liệu trước bước 20 (`chuẩn ngành`, mục **Nền tảng managed (e)**): chạy lại nó cùng ngày (`after-destroy.txt`);
+   dán `diff`. Buổi đầu có span của account: retention của `aws/spans` theo bước (10) của
    [`platform-setup.md`](platform-setup.md#bước-10-retention-của-awsspans).
 2. Cái ở lại giữa các buổi: ở account stg là baseline (`Stack=baseline`: bucket state, KMS key state, zone `stg.aws.<domain>` với `CAA`;
    registry ECR cùng repo phát hành, rule và repo của pull-through cache, OIDC provider, role CI; workspace AMP, log group `/svp/stg/otel`,

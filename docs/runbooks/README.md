@@ -15,10 +15,10 @@ Người học chạy mọi lệnh chạm AWS hay cài đặt GitHub. AI chỉ v
 | [`backup-setup.md`](backup-setup.md) | Backup lần đầu: account `svp-backup`, Backup policy, vault copy và vault env |
 | [`edge-setup.md`](edge-setup.md) | Edge lần đầu: log CloudFront, `CAA`, DNSSEC của zone prd, chuỗi tin cậy ở DNS cha |
 | [`platform-setup.md`](platform-setup.md) | Nền tảng managed lần đầu: registry ECR, observability, Inspector, nhóm nền tảng, credential của cache; xoay PAT và token |
-| [`session-stg.md`](session-stg.md) | Một buổi AWS stg: dựng, đo, diễn tập khôi phục, gỡ, quét sót |
-| [`session-prd.md`](session-prd.md) | Một buổi AWS prd: cổng promote, dựng, đo, gỡ; khác stg ở chỗ nào |
+| [`session-stg.md`](session-stg.md) | Một buổi AWS stg: dựng, phép kiểm `lõi` (mặc định) và `chuẩn ngành` (chọn bật), gỡ, quét sót |
+| [`session-prd.md`](session-prd.md) | Buổi prd duy nhất (capstone): đổi cờ prd về giá trị production, cổng promote, dựng, đo, gỡ, trả cờ; khác stg ở chỗ nào |
 | [`media-signing-keys.md`](media-signing-keys.md) | Khoá ký URL media premium: dựng, xoay, thay khi lộ, dọn |
-| [`paid-features.md`](paid-features.md) | Đổi cờ chi phí của một account |
+| [`paid-features.md`](paid-features.md) | Đổi cờ chi phí của một account, cả cờ mà phép kiểm `chuẩn ngành` của buổi cần |
 | [`eks-upgrade.md`](eks-upgrade.md) | Nâng một minor EKS, stg trước prd |
 | [`break-glass.md`](break-glass.md) | Đường vào khẩn cấp: Identity Center hỏng, việc chỉ root làm được |
 | [`backup-sandbox-probe.md`](backup-sandbox-probe.md) | Thử AWS Backup ở account sandbox: bằng chứng cho thiết kế backup |
@@ -97,7 +97,7 @@ flowchart TD
   H["platform-setup: nhóm nền tảng, registry, observability, credential cache, quota AMP"] --> J
   J["github-setup: secret ECR, khoá Infracost, environment terraform-plan, package GHCR"] --> K
   K["session-stg: điều kiện trước buổi, rồi một buổi stg"] --> L
-  L["session-prd: cổng promote, rồi một buổi prd"]
+  L["session-prd: đổi cờ prd, cổng promote, buổi prd duy nhất, trả cờ"]
 ```
 
 Runbook ngoài đường này dùng khi cần: [`paid-features.md`](paid-features.md) đổi cờ chi phí,
