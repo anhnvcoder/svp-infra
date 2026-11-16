@@ -153,10 +153,13 @@ AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" TF_VAR_log_ar
   TF_VAR_stg_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_prd_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform plan -out=baseline.tfplan
 ```
 
-Mong đợi với `aws/paid-features.json` chỉ tắt `config_recording` của stg `Plan: 252 to add, 0 to change, 0 to destroy`: 54 ở `module.mgmt`, 42
-ở mỗi `module.log_archive`, `module.security`, `module.backup`, 37 ở `module.prd` (thêm `aws_ebs_default_kms_key`), 31 ở `module.stg` (37 trừ
-recorder, delivery channel, recorder status của hai region), 4 key và alias EBS. Mỗi account `off` khác bớt 6 ở module của nó. Root đã áp
-trước khi có account mới thì plan chỉ thêm module của account đó: `Plan: 42 to add, 0 to change, 0 to destroy`, toàn bộ ở `module.backup`.
+Mong đợi với `aws/paid-features.json` của repo (`config_recording` tắt ở mọi account trừ `svp-security`) `Plan: 228 to
+add, 0 to change, 0 to destroy`: 48 ở `module.mgmt`, 36 ở mỗi `module.log_archive`, `module.backup`, 42 ở
+`module.security`, 31 ở mỗi `module.prd`, `module.stg`, 4 key và alias EBS. Mỗi account có `config_recording` `always`
+thêm 6 ở module của nó (recorder, delivery channel, recorder status của hai region): 54 ở `module.mgmt`, 42 ở mỗi
+account dùng chung, 37 ở `module.prd`, `module.stg` (có `aws_ebs_default_kms_key`). Root đã áp trước khi có account mới
+thì plan chỉ thêm module của account đó, với file của repo `Plan: 36 to add, 0 to change, 0 to destroy`, toàn bộ ở
+`module.backup`.
 Đọc: `aws_ebs_default_kms_key` chỉ ở stg, prd, `key_arn` là key `svp-ebs` của chính account đó; `svp-security-root-signin` của management ở ba
 region; `s3_kms_key_arn` của mọi delivery channel dạng `key/<id>`. Lỗi `AccessDenied` khi assume role là account hay profile sai; lỗi đọc
 alias `alias/svp-log-archive` là `aws/log-archive` chưa áp. Dừng và dán output nếu có dòng `change` hay `destroy`.

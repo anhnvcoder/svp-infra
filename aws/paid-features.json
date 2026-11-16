@@ -1,4 +1,22 @@
 {
+  "backup": {
+    "security_hub": "off",
+    "config_recording": "off"
+  },
+  "log-archive": {
+    "security_hub": "off",
+    "config_recording": "off"
+  },
+  "mgmt": {
+    "security_hub": "off",
+    "config_recording": "off"
+  },
+  "prd": {
+    "managed_grafana": "session",
+    "inspector_ecr": "off",
+    "security_hub": "off",
+    "config_recording": "off"
+  },
   "stg": {
     "managed_grafana": "session",
     "inspector_ecr": "off",

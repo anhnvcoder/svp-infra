@@ -219,14 +219,16 @@ AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" TF_VAR_securi
   TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" terraform plan -out=security.tfplan
 ```
 
-Mong đợi với `aws/paid-features.json` chỉ tắt Security Hub và Inspector của stg
-`Plan: 1 to import, 53 to add, 1 to change, 0 to destroy`:
+Mong đợi với `aws/paid-features.json` của repo (Security Hub tắt ở mọi account trừ `svp-security`, Inspector tắt ở stg
+và prd) `Plan: 1 to import, 56 to add, 1 to change, 0 to destroy`:
 mỗi region của hai region một cấu hình tổ chức, sáu protection plan, một publishing destination, một detector management, một member, một
-analyzer, một rule `svp-security-guardduty-findings`; bốn tài nguyên Security Hub, policy `svp-security-off` và association của `svp-stg`; cấu
-hình tổ chức Inspector, ba liên kết thành viên (`svp-prd`, `svp-log-archive`, `svp-backup`), enabler `members`; role, policy attachment và aggregator
-Config; bus, policy bus, hai rule, hai target; target topic và target bus của rule GuardDuty, role `svp-security-guardduty-forwarder` và
-policy của nó; năm tài nguyên của module `alarms`. Mỗi account `off` khác của `security_hub` thêm một association, của `inspector_ecr` bớt một
-liên kết. Import và đổi là enabler `security` (mục [Inspector](#inspector)). Dừng và dán plan lại nếu có dòng `destroy`,
+analyzer, một rule `svp-security-guardduty-findings`; bốn tài nguyên Security Hub, policy `svp-security-off` và năm
+association (management, `svp-log-archive`, `svp-backup`, `svp-stg`, `svp-prd`); cấu hình tổ chức Inspector, hai liên
+kết thành viên (`svp-log-archive`, `svp-backup`), enabler `members`; role, policy attachment và aggregator Config; bus,
+policy bus, hai rule, hai target; target topic và target bus của rule GuardDuty, role `svp-security-guardduty-forwarder`
+và policy của nó; năm tài nguyên của module `alarms`. File khác thì tính lại: mỗi account `off` của `security_hub` một
+association, mỗi account thành viên có `inspector_ecr` khác `off` một liên kết. Import và đổi là enabler `security` (mục
+[Inspector](#inspector)). Dừng và dán plan lại nếu có dòng `destroy`,
 `aws_guardduty_detector` nào khác `aws_guardduty_detector.management`, hay nếu enabler `security` không đúng như mục [Kiểm plan
 Inspector](#kiểm-plan-inspector).
 
@@ -236,7 +238,8 @@ Inspector](#kiểm-plan-inspector).
   bỏ các loại khác `"ECR"` (`EC2`, `LAMBDA`, `LAMBDA_CODE`…) và giữ `"ECR"`. `account_ids` cũ rỗng là Inspector chưa bật ở `svp-security`:
   `aws/org` chưa chỉ định delegated admin, dừng.
 - `aws_inspector2_member_association.members` và `account_ids` của `aws_inspector2_enabler.members` đúng id của các account thành viên khác
-  `svp-security` có `inspector_ecr` khác `off` (`svp-prd`, `svp-log-archive`, `svp-backup` khi chỉ stg `off`).
+  `svp-security` có `inspector_ecr` khác `off` (`svp-log-archive`, `svp-backup` với file của repo; thêm `svp-prd` khi
+  prd vắng khỏi file).
 
 ### 4. Apply
 
@@ -287,10 +290,11 @@ Phần của root này:
   có recorder nên aggregator không nhận dữ liệu mới của nó, và nguồn ấy không `SUCCEEDED` thì không phải lỗi.
 - `7a: Inspector scans only ECR in …`: chỉ ECR bật; thành viên là account có `inspector_ecr` khác `off`.
 
-Lần dựng đầu, lệnh chạy ở đây trước bước (6): các kiểm cần `aws/baseline` báo `FAIL` và đó là mong đợi, không phải lỗi
-của root này. Đó là dòng `FAIL  <profile> <region>: no Config recorder with CONTINUOUS recording` (hay `… is not recording
-…`) của mỗi profile, `FAIL  7a: Config aggregator sources not SUCCEEDED: …` và `FAIL  7a: rule svp-security-admin-sso not
-found …`. Đọc các dòng còn lại; bước (7) của runbook chạy lại `verify.sh org` sau bước (6), khi các dòng đó phải `ok`.
+Lần dựng đầu, lệnh chạy ở đây trước bước (6): các kiểm cần `aws/baseline` báo `FAIL` và đó là mong đợi, không phải lỗi của root
+này. Đó là dòng `FAIL  <profile> <region>: no Config recorder with CONTINUOUS recording` (hay `… is not recording …`) của
+`anhnv-security-ro` (account có `config_recording` `off` in `note … config_recording is off`), `FAIL  7a: Config aggregator
+sources not SUCCEEDED: …` và `FAIL  7a: rule svp-security-admin-sso not found …`. Đọc các dòng còn lại; bước (7) của runbook chạy
+lại `verify.sh org` sau bước (6), khi các dòng đó phải `ok`.
 
 Account mới có thể cần tới 24 giờ mới hiện đủ member (`PENDING` ở association cũng vậy): `FAIL` ở các dòng đó trong ngày
 đầu thì chạy lại sau, không phải lỗi. Dán lại mọi dòng `FAIL` và `note`. Dòng `note  7a: Security score` chỉ bảng điều

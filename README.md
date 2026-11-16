@@ -67,12 +67,16 @@ Cài đặt GitHub của các repo (Terraform `github/`, GitHub App từ manifes
 [`docs/runbooks/paid-features.md`](docs/runbooks/paid-features.md).
 
 **Cờ chi phí.** Khác biệt về dịch vụ tốn tiền giữa các account là dữ liệu của một file commit,
-[`aws/paid-features.json`](aws/paid-features.json): mỗi account một object cờ, chỉ ghi giá trị khác `always`, nên prd và các account dùng
-chung giữ chuẩn production khi file không nhắc tới chúng. Module [`paid-features`](aws/modules/paid-features/README.md) kiểm giá trị; root
+[`aws/paid-features.json`](aws/paid-features.json): mỗi account một object cờ, chỉ ghi giá trị khác `always`. Giữa các
+buổi mọi account giữ giá trị rẻ nhất mà validation của module cho phép; chỉ `svp-security` (delegated administrator) giữ
+Security Hub và Config, và account vắng khỏi file là chuẩn production (mọi cờ `always`). Module
+[`paid-features`](aws/modules/paid-features/README.md) kiểm giá trị; root
 `aws/security` (Security Hub CSPM, Inspector ECR), `aws/baseline` (AWS Config recorder) và `aws/accounts/<env>` (Amazon Managed Grafana, kiểu
 quét ECR) đọc cờ qua nó, script buổi đọc cùng file. Cờ `managed_grafana` là `session` thì workspace AMG của env chỉ có trong buổi, mở và đóng
 bằng `aws/scripts/tf.sh <env> account`. Thiết kế, giá trị mỗi account và chi phí:
-[ADR-0071](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0071-paid-features.md).
+[ADR-0071](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0071-paid-features.md) và
+[ADR-0078](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0078-paid-features-lean-defaults.md) (giá trị rẻ
+giữa các buổi).
 
 ## Bố cục
 
@@ -539,9 +543,10 @@ secret `INFRACOST_API_KEY` chưa đặt. Lỗi khác (HCL không đọc được
 [Khoá Infracost](docs/runbooks/github-setup.md#khoá-infracost) của runbook `github-setup.md`.
 
 **Project** (`infracost.yml`): mỗi root mà CI plan một project, `aws/envs/<env>` với `<env>.tfvars`, `aws/accounts/<env>` không file tfvars
-nào (mọi giá trị của root account nằm ở `<env>.auto.tfvars`); thêm `accounts-stg-session`, chính `aws/accounts/stg` với `session_open=true`.
-Cờ của `aws/paid-features.json` hiện qua chính HCL: module `paid-features` đọc file, nên PR đổi cờ có chênh ở project của root đọc cờ đó. Cờ
-`session` của stg chỉ có giá ở `accounts-stg-session` (như khi buổi mở); `accounts-stg` là account giữa các buổi.
+nào (mọi giá trị của root account nằm ở `<env>.auto.tfvars`); thêm `accounts-stg-session` và `accounts-prd-session`,
+chính `aws/accounts/<env>` với `session_open=true`. Cờ của `aws/paid-features.json` hiện qua chính HCL: module
+`paid-features` đọc file, nên PR đổi cờ có chênh ở project của root đọc cờ đó. Cờ `session` của mỗi env chỉ có giá ở
+`accounts-<env>-session` (như khi buổi mở); `accounts-<env>` là account giữa các buổi.
 
 **Đọc comment:** bảng mỗi project (chi phí tháng trước, sau, chênh), dưới đó danh sách resource đổi giá. Bảng tổng mỗi project của cả hai cây
 nằm ở job summary của lượt. Infracost tính một tháng 730 giờ; phần theo lượng dùng chỉ có các giả định của `infracost-usage.yml`, phần

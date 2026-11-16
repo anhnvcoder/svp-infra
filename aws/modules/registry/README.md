@@ -58,7 +58,8 @@ key qua grant nó tạo cho mỗi repo, nên role đẩy, kéo không cần quy�
 
 `aws_ecr_registry_scanning_configuration` có một rule với filter `<tiền tố>/*` cho năm tiền tố cache; biến `enhanced_scanning` chọn kiểu quét:
 
-- `true` (mặc định, prd): `ENHANCED` (Amazon Inspector), `CONTINUOUS_SCAN`. Inspector bật cho account qua delegated admin ở
+- `true` (mặc định; env có `inspector_ecr` `always`, như prd trong buổi prd): `ENHANCED` (Amazon Inspector),
+  `CONTINUOUS_SCAN`. Inspector bật cho account qua delegated admin ở
   `aws/security/inspector.tf`; finding vào Security Hub (§10).
 - `false`: quét cơ bản của ECR, `BASIC` với `SCAN_ON_PUSH`, miễn phí, cho account tắt quét ECR của Inspector. Root `aws/accounts/<env>`
   truyền `false` khi cờ `inspector_ecr` của env là `off` trong `aws/paid-features.json`. Thứ tự áp khi đổi cờ và cái giá (finding Inspector

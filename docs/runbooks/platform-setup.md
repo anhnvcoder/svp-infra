@@ -187,7 +187,8 @@ AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_
 
 Mong chỉ thêm đúng các dòng của danh sách ở [README `aws/accounts`, Thêm vào account đã có
 baseline](../../aws/accounts/README.md#thêm-vào-account-đã-có-baseline) (cột của env này, theo `aws/paid-features.json`
-của repo: stg không có AMG, prd có) trừ hai secret đã có; dòng cuối của plan có dạng `Plan: <n> to add, 0 to change, 0
+của repo: cả stg lẫn prd không có AMG giữa các buổi) trừ hai secret đã có; dòng cuối của plan có dạng `Plan: <n> to add,
+0 to change, 0
 to destroy`. Có `change`, `destroy` hay tài nguyên của `module.baseline`, `module.alarms`: dừng, dán plan. Rồi:
 
 ```sh
@@ -291,12 +292,13 @@ mới, không chạy với 30 s). Buổi stg đầu kiểm chu kỳ thật ở p
 Root `aws/envs/<env>` đọc id workspace AMG từ tham số SSM `/svp/<env>/grafana-workspace-id` mà `aws/accounts/<env>` ghi cùng workspace (AMG
 không có data source tìm theo tên), nên không có id nào phải chép vào `<env>.auto.tfvars`. Theo cờ `managed_grafana` của env:
 
-- `always` (prd theo file của repo): workspace có từ bước (5). Đăng nhập: mở `grafana_url` của account
+- `always` (env vắng khỏi file, như prd trong buổi prd): workspace có từ lúc áp cờ đó. Đăng nhập: mở `grafana_url` của account
   (`AWS_PROFILE=anhnv-prd terraform -chdir=aws/accounts/prd output -raw grafana_url`) trên trình duyệt, **Sign in with AWS IAM Identity
   Center** bằng user của bước (4). Mong vào được, user nhóm admin thấy mục **Administration**, user nhóm viewer chỉ xem. Dashboard và data source
   chưa có: Grafana Operator tạo chúng trong buổi. Dán vai trò thấy được (không dán URL).
-- `session` (stg theo file của repo): không có workspace giữa các buổi, output `grafana_url` là `null`. Đăng nhập lần đầu ở buổi stg đầu,
-  sau bước 5 của [`session-stg.md`](session-stg.md#35-root-account-mở-tính-năng-của-buổi), cùng cách và cùng mong đợi.
+- `session` (stg và prd theo file của repo): không có workspace giữa các buổi, output `grafana_url` là `null`. Đăng
+  nhập lần đầu ở buổi stg đầu (prd: ở buổi prd, sau khi đổi cờ), sau bước 5 của
+  [`session-stg.md`](session-stg.md#35-root-account-mở-tính-năng-của-buổi), cùng cách và cùng mong đợi.
 
 ## Bước (10): retention của `aws/spans`
 
@@ -329,7 +331,8 @@ Docker Hub. Một PAT hay token lộ: thu hồi nó trên GitHub, Docker Hub tr�
 `validate` của bước (5), rồi thu hồi bản cũ.
 
 Token AMG lộ giữa buổi: chạy lại `aws/scripts/bootstrap.sh <env> secrets` (xoá mọi token cũ, ghi token mới). Ngoài buổi, xoá token còn lại
-(env có `managed_grafana` `session` thì ngoài buổi không có workspace, cũng không token nào). Terminal có các biến của
+(env có `managed_grafana` `session`, stg và prd với file của repo, thì ngoài buổi không có workspace, cũng không token
+nào). Terminal có các biến của
 [Mở terminal](#mở-terminal) (`grafana-tokens.sh` đối chiếu account của profile với biến account của env). Ví dụ là stg;
 với prd thay như bước (5). Đọc trước:
 

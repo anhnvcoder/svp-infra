@@ -7,7 +7,9 @@ Thiết kế và lý do: [ADR-0071](https://github.com/anhnvcoder/svp-backend/bl
 mỗi buổi của từng giá trị:
 [bảng tháng không buổi](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0071-paid-features.md#bảng-tháng-không-buổi);
 plan xoá, sửa gì khi đổi từng cờ, mất gì và giá lúc bật lại:
-[Đổi cờ](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0071-paid-features.md#đổi-cờ) của phụ lục.
+[Đổi cờ](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0071-paid-features.md#đổi-cờ) của phụ
+lục. Giá trị của file giữa các buổi (rẻ nhất mà `validation` cho phép ở mọi account) và tháng không buổi với chúng:
+[ADR-0078](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0078-paid-features-lean-defaults.md) §1, §8.
 
 **Người học chạy mọi lệnh ở đây.** AI không chạy lệnh nào chạm account, kể cả lệnh chỉ đọc; AI đọc output dán lại. Mọi lệnh chạy từ gốc repo
 này (`infra/`) trừ chỗ ghi `cd`. Bước nào đỏ thì dừng ở đó, dán output, không đi tiếp. Cũng là runbook áp lần đầu file của repo lên tổ chức
@@ -54,11 +56,18 @@ theo một hướng: cần cả tắt lẫn bật thì hai PR, áp xong PR trư�
 2. **Tháng có từ hai buổi stg**: `managed_grafana` của stg là `session` đắt hơn `always` từ buổi thứ hai
    ([ADR-0071 §3](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0071-paid-features.md#3-managed_grafana)): đổi về `always`
    theo runbook này trước buổi đầu của tháng đó, và về `session` sau buổi cuối.
-3. **Sửa file qua PR**: đổi giá trị trong `aws/paid-features.json` (chỉ ghi giá trị khác `always`; cờ về `always` thì xoá khoá đó), mở PR,
+3. **Buổi prd**: prd giữa các buổi có cùng giá trị rẻ như stg; buổi prd chạy với giá trị production
+   ([ADR-0078](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0078-paid-features-lean-defaults.md) §3).
+   Trước buổi, một PR xoá khoá `prd` khỏi file (mọi cờ `always`) và áp theo hướng bật: `aws/baseline`, `aws/security`,
+   `aws/accounts/prd`. Sau buổi (hai lượt `sweep.sh` đã xong), một PR ghi lại khoá `prd` như trước (`managed_grafana`
+   `session`, ba cờ kia `off`) và áp theo hướng tắt: `aws/security`, `aws/baseline`, `aws/accounts/prd`. Khoá của
+   account dùng chung giữ nguyên ở cả hai PR.
+4. **Sửa file qua PR**: đổi giá trị trong `aws/paid-features.json` (chỉ ghi giá trị khác `always`; cờ về `always` thì
+   xoá khoá đó), mở PR,
    chờ `infra-ok` xanh, merge. Giá trị sai luật (`security_hub` `always` mà `config_recording` `off` ở cùng account, cờ của account env đặt ở
    account khác…) làm mọi plan dừng ở `validation` của module, nên đọc lại luật ở
    [README module `paid-features`](../../aws/modules/paid-features/README.md#kiểm) trước khi mở PR.
-4. **Code trên `main`**: `git switch main && git pull --ff-only` trong bản clone này.
+5. **Code trên `main`**: `git switch main && git pull --ff-only` trong bản clone này.
 
 ## Mở terminal
 
