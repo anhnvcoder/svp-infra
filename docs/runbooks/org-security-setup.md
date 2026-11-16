@@ -26,24 +26,28 @@ trừ chỗ ghi `cd`. Bước nào đỏ thì dừng ở đó, dán output, khô
 ```mermaid
 flowchart TD
   B1["(1) aws/bootstrap: key state, Cost Anomaly Detection, tag phân bổ; init -reconfigure mọi root"] --> B2
-  B2["(2) aws/org -target: OU, account svp-log-archive, svp-security, chuyển OU của stg, prd"] -->|đặt SVP_AWS_LOG_ACCOUNT_ID, SVP_AWS_SECURITY_ACCOUNT_ID| B3
+  B2["(2) aws/org -target: OU, hai account mới, chuyển OU của stg, prd"] -->|đặt SVP_AWS_LOG_ACCOUNT_ID, SVP_AWS_SECURITY_ACCOUNT_ID| B3
   B3["(3) aws/log-archive: bucket log, hai key alias/svp-log-archive"] --> B4
-  B4["(4) aws/org đủ: account svp-backup, trusted access, delegated admin (cả Inspector), policy (cả Backup policy), root tập trung, permission set, nhóm nền tảng, liên hệ, trail đổi đích"] -->|tạo bốn profile chỉ đọc| B5
-  B5["(5) aws/security: GuardDuty, Security Hub CSPM, Config aggregator, Access Analyzer, Inspector ECR theo cờ, bus, SNS; xác nhận email"] --> B6
+  B4["(4) aws/org đủ: account svp-backup, policy, root tập trung, permission set, trail"] -->|tạo bốn profile chỉ đọc| B5
+  B5["(5) aws/security: dịch vụ phát hiện, Inspector ECR theo cờ, bus, SNS; xác nhận email"] --> B6
   B6["(6) aws/baseline: BPA, EBS mặc định, Config recorder theo cờ, rule svp-security-*, CMK EBS"] --> B7
   B7["(7) kiểm sau áp: dịch vụ, root tập trung, trail, phép thử guardrail, cảnh báo thử, chi phí"]
 ```
 
 - **(1)** `aws/bootstrap`; [README mục 5](../../aws/bootstrap/README.md#5-áp-thay-đổi-khi-state-đã-ở-bucket). Dán lại:
   dòng `Plan:`, `Apply complete!`, `No changes.` của plan cuối.
-- **(2)** `aws/org` (`-target`); [README, Bước (2)](../../aws/org/README.md#bước-2-tổ-chức-ou-account). Dán lại: **plan
-  đủ** (điểm dừng), `Apply complete!`, hai id đã che bớt.
+- **(2)** `aws/org` (`-target`): OU, hai account `svp-log-archive` và `svp-security`, chuyển OU của stg, prd;
+  [README, Bước (2)](../../aws/org/README.md#bước-2-tổ-chức-ou-account). Dán lại: **plan đủ** (điểm dừng),
+  `Apply complete!`, hai id đã che bớt.
 - **(3)** `aws/log-archive`; [README, Apply lần đầu](../../aws/log-archive/README.md#apply-lần-đầu). Dán lại: dòng
   `Plan:`, `Apply complete!`, số bucket và key của output.
-- **(4)** `aws/org` (đủ); [README, Bước (4)](../../aws/org/README.md#bước-4-đủ-root). Dán lại: **plan đủ** (điểm dừng),
-  `Apply complete!`, `No changes.`, `get-trail-status`.
-- **(5)** `aws/security`; [README, Apply](../../aws/security/README.md#apply-bước-5-của-thứ-tự-áp-lần-đầu). Dán lại: dòng
-  `Plan:`, `Apply complete!`, output mục "Kiểm nhanh".
+- **(4)** `aws/org` (đủ): account `svp-backup`, trusted access, delegated admin (cả Inspector), policy (cả Backup
+  policy), root tập trung, permission set, nhóm nền tảng, liên hệ, trail đổi đích;
+  [README, Bước (4)](../../aws/org/README.md#bước-4-đủ-root). Dán lại: **plan đủ** (điểm dừng), `Apply complete!`,
+  `No changes.`, `get-trail-status`.
+- **(5)** `aws/security`: GuardDuty, Security Hub CSPM, Config aggregator, Access Analyzer, Inspector ECR theo cờ,
+  bus, SNS; xác nhận email; [README, Apply](../../aws/security/README.md#apply-bước-5-của-thứ-tự-áp-lần-đầu). Dán lại:
+  dòng `Plan:`, `Apply complete!`, output mục "Kiểm nhanh".
 - **(6)** `aws/baseline`; [README, Apply lần đầu](../../aws/baseline/README.md#apply-lần-đầu). Dán lại: output mục "Kiểm
   cái đã có", dòng `Plan:`, `Apply complete!`.
 - **(7)** —; [Bước (7)](#bước-7-kiểm-sau-áp). Dán lại: output từng mục.
