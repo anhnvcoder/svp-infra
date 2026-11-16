@@ -81,5 +81,8 @@ module "observability" {
   span_retention_days      = local.span_retention_days
   platform_admin_group_id  = var.platform_admin_group_id
   platform_viewer_group_id = var.platform_viewer_group_id
-  grafana_enabled          = module.paid_features.flags[local.env].managed_grafana == "always" || var.session_open
+  grafana_enabled = (
+    module.paid_features.flags[local.env].managed_grafana == "always" ||
+    (module.paid_features.flags[local.env].managed_grafana == "session" && var.session_open)
+  )
 }

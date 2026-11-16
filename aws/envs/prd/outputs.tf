@@ -25,12 +25,12 @@ output "cluster_values" {
     # IAM role of the SecretStore of each namespace that reads Secrets Manager.
     externalSecretsRoles = module.external_secrets.roles
     # Long-lived resources of the account (baseline.tf): the registry the images are pulled from, where telemetry
-    # goes, the Grafana the dashboards go to, and the topic of the alerts of the rules on the workspace.
+    # goes, the Grafana the dashboards go to ("" when managed_grafana is off), and the topic of the alerts.
     ecrRegistry    = "${var.account_id}.dkr.ecr.${var.region}.amazonaws.com"
     ampWorkspaceId = data.aws_prometheus_workspace.env.workspace_id
     ampEndpoint    = data.aws_prometheus_workspace.env.prometheus_endpoint
     logGroup       = data.aws_cloudwatch_log_group.otel.name
-    grafanaUrl     = "https://${data.aws_grafana_workspace.env.endpoint}"
+    grafanaUrl     = local.grafana ? "https://${data.aws_grafana_workspace.env[0].endpoint}" : ""
     alarmTopicArn  = module.alarms.topic_arn
     # Queue and role the jobs of the MediaConvert bridge run on, and the queue their final states arrive in.
     mediaconvertQueueArn    = module.transcode.queue_arn

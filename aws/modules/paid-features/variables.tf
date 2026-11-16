@@ -19,7 +19,7 @@ variable "features" {
     condition = alltrue(flatten([for v in values(var.features) : [
       for f, x in v : try(contains(local.values[f], x), false) if contains(keys(local.values), f)
     ]]))
-    error_message = "managed_grafana must be always or session; inspector_ecr, security_hub and config_recording must be always or off."
+    error_message = "managed_grafana must be always, session or off; inspector_ecr, security_hub and config_recording must be always or off."
   }
 
   # Absent, not always, is what an account outside stg and prd must hold: these two flags have nothing to switch there.

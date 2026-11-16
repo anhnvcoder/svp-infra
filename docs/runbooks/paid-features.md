@@ -19,12 +19,13 @@ này (`infra/`) trừ chỗ ghi `cd`. Bước nào đỏ thì dừng ở đó, d
 
 | Cờ | Root đọc cờ | Tài nguyên đổi khi đổi cờ |
 | --- | --- | --- |
-| `managed_grafana` | `aws/accounts/<env>` | workspace AMG `svp-<env>`, role `svp-<env>-grafana` và policy, hai gán nhóm, service account `svp-grafana-operator`, tham số SSM `/svp/<env>/grafana-workspace-id` |
+| `managed_grafana` | `aws/accounts/<env>`; `aws/envs/<env>` ở plan của buổi kế | bảy tài nguyên AMG: workspace `svp-<env>`, role `svp-<env>-grafana` và policy, hai gán nhóm, service account `svp-grafana-operator`, tham số SSM `/svp/<env>/grafana-workspace-id`; ở root env (`off`): `grafanaUrl` rỗng, không entry `svp/<env>/grafana-operator` |
 | `inspector_ecr` | `aws/security`, `aws/accounts/<env>` | liên kết thành viên và enabler `members` của Inspector; cấu hình quét của registry (`ENHANCED`, `CONTINUOUS_SCAN` hay `BASIC`, `SCAN_ON_PUSH`) |
 | `security_hub` | `aws/security` | policy `svp-security-off` và association của account, rule `svp-security-guardduty-findings` hai region và đích của nó, role `svp-security-guardduty-forwarder` |
 | `config_recording` | `aws/baseline` | recorder, delivery channel, recorder status ở hai region trong module của account |
 
-Không cờ nào chạm KMS key, bucket, vault, recovery point hay log group. Guardrail lõi (CloudTrail, GuardDuty, Access Analyzer, policy của tổ
+Root `aws/envs/<env>` chỉ sống trong buổi nên không áp ở runbook này: plan của buổi kế đọc cờ mới. Không cờ nào chạm KMS key, bucket,
+vault, recovery point hay log group. Guardrail lõi (CloudTrail, GuardDuty, Access Analyzer, policy của tổ
 chức, budget, AWS Backup) không có cờ: [ADR-0071 §8](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0071-paid-features.md#8-không-bao-giờ-tắt).
 
 ## Thứ tự apply cờ
@@ -32,10 +33,10 @@ chức, budget, AWS Backup) không có cờ: [ADR-0071 §8](https://github.com/a
 ```mermaid
 flowchart TD
   pr["PR sửa aws/paid-features.json, merge vào main"] --> dir{"Hướng đổi"}
-  dir -->|"tắt: always thành off, session"| t1["aws/security: Security Hub, Inspector"]
+  dir -->|"tắt: always thành off, session; session thành off"| t1["aws/security: Security Hub, Inspector"]
   t1 --> t2["aws/baseline: Config"]
   t2 --> t3["aws/accounts/ENV: quét cơ bản, AMG"]
-  dir -->|"bật: off, session thành always"| b1["aws/baseline: Config"]
+  dir -->|"bật: off, session thành always; off thành session"| b1["aws/baseline: Config"]
   b1 --> b2["aws/security: Security Hub, Inspector"]
   b2 --> b3["aws/accounts/ENV: quét Enhanced, AMG"]
   t3 --> chk["Kiểm sau áp: plan lần hai No changes."]
@@ -53,14 +54,26 @@ theo một hướng: cần cả tắt lẫn bật thì hai PR, áp xong PR trư�
 1. **Không buổi nào đang chạy**: buổi trước đã xong tới hai lượt `sweep.sh`. Root `aws/accounts/<env>` trong buổi chỉ apply qua
    `aws/scripts/tf.sh <env> account` (mục 3–5 của [`session-stg.md`](session-stg.md#35-root-account-mở-tính-năng-của-buổi)); lệnh trần dưới
    đây tính trạng thái giữa buổi (`session_open = false`) và sẽ xoá workspace AMG của buổi đang mở.
-2. **Tháng có từ hai buổi stg**: `managed_grafana` của stg là `session` đắt hơn `always` từ buổi thứ hai
-   ([ADR-0071 §3](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0071-paid-features.md#3-managed_grafana)): đổi về `always`
-   theo runbook này trước buổi đầu của tháng đó, và về `session` sau buổi cuối.
+2. **Buổi chọn bật phép kiểm `chuẩn ngành`**: đường mặc định của buổi chỉ chạy phép kiểm `lõi`, với giá trị của file
+   ([ADR-0078](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0078-paid-features-lean-defaults.md) §6).
+   Phép `chuẩn ngành` nào cần cờ nào: bảng của mục [Phép kiểm lõi và chuẩn
+   ngành](session-stg.md#phép-kiểm-lõi-và-chuẩn-ngành); phần thêm vào buổi ở dòng `Loại:` của từng phép. Giá trị buổi
+   stg cần:
+
+   | Phép kiểm `chuẩn ngành` | Giá trị của `stg` | Root áp, hướng bật |
+   | --- | --- | --- |
+   | Dashboard (SLO, lag Kafka, Explore, Grafana Operator) | `managed_grafana` `session`; `always` khi tháng có từ hai buổi cần nó (`session` đắt hơn `always` từ buổi thứ hai, [ADR-0071 §3](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0071-paid-features.md#3-managed_grafana)) | `aws/accounts/stg` (`off` → `session`: `No changes.`, bước 3–5 của buổi tạo workspace; PR đổi cờ thêm lại project `accounts-stg-session` vào `infracost.yml` như mục Infracost của `README.md`, để comment giá thấy workspace) |
+   | Inspector quét repo cache | `inspector_ecr` `always` | `aws/security`, rồi `aws/accounts/stg` |
+   | Control Security Hub của buổi | `security_hub` và `config_recording` `always` | `aws/baseline`, rồi `aws/security` |
+   | Phép `chuẩn ngành` khác (thang k6, diễn tập, edge, kiểm sâu nền tảng managed) | không cần cờ | — |
+
+   Sau buổi cuối cần giá trị đó, đổi về giá trị của file theo hướng tắt. Buổi prd không cần mục này: nó chạy với giá trị
+   production (điều 3).
 3. **Buổi prd**: prd giữa các buổi có cùng giá trị rẻ như stg; buổi prd chạy với giá trị production
    ([ADR-0078](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0078-paid-features-lean-defaults.md) §3).
    Trước buổi, một PR xoá khoá `prd` khỏi file (mọi cờ `always`) và áp theo hướng bật: `aws/baseline`, `aws/security`,
-   `aws/accounts/prd`. Sau buổi (hai lượt `sweep.sh` đã xong), một PR ghi lại khoá `prd` như trước (`managed_grafana`
-   `session`, ba cờ kia `off`) và áp theo hướng tắt: `aws/security`, `aws/baseline`, `aws/accounts/prd`. Khoá của
+   `aws/accounts/prd`. Sau buổi (hai lượt `sweep.sh` đã xong), một PR ghi lại khoá `prd` như trước (cả bốn cờ `off`) và
+   áp theo hướng tắt: `aws/security`, `aws/baseline`, `aws/accounts/prd`. Khoá của
    account dùng chung giữ nguyên ở cả hai PR.
 4. **Sửa file qua PR**: đổi giá trị trong `aws/paid-features.json` (chỉ ghi giá trị khác `always`; cờ về `always` thì
    xoá khoá đó), mở PR,
@@ -168,8 +181,17 @@ AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_
 Đọc plan:
 
 - `inspector_ecr`: `module.registry.aws_ecr_registry_scanning_configuration.this` sửa tại chỗ (`1 to change`).
-- `managed_grafana` thành `session`: `7 to destroy`, đúng bảy tài nguyên AMG của bảng trên dưới `module.observability` (`[0]`); về `always`:
-  `7 to add` cùng bảy tài nguyên. Data source, dashboard trong workspace mất cùng nó; Grafana Operator dựng lại ở buổi sau.
+- `managed_grafana`: bảy tài nguyên AMG của bảng trên dưới `module.observability` (`[0]`), không buổi nào mở (`session_open = false`):
+
+  | Từ | Sang | Plan |
+  | --- | --- | --- |
+  | `always` | `session`, `off` | `7 to destroy` |
+  | `session` | `always` | `7 to add` |
+  | `session` | `off` | `No changes.` (ngoài buổi không có workspace) |
+  | `off` | `always` | `7 to add` |
+  | `off` | `session` | `No changes.`; buổi kế thêm 7 ở bước mở `tf.sh <env> account plan --open` |
+
+  Data source, dashboard trong workspace mất cùng nó; Grafana Operator dựng lại ở buổi có workspace.
 
 Dừng (không apply, dán plan) nếu plan chạm tài nguyên khác (baseline, key, workspace AMP, log group, vault, repo ECR). Rồi:
 
@@ -182,7 +204,7 @@ AWS_PROFILE=anhnv-stg aws grafana list-workspaces --region ap-southeast-1 --quer
 ```
 
 Mong `ENHANCED CONTINUOUS_SCAN` khi `inspector_ecr` là `always`, `BASIC SCAN_ON_PUSH` khi `off`; workspace `ACTIVE` khi `managed_grafana` là
-`always`, không dòng nào khi `session`. Rồi plan lần hai bằng lệnh `plan` trên (trong `aws/accounts/stg`): mong `No changes.`.
+`always`, không dòng nào khi `session` hay `off`. Rồi plan lần hai bằng lệnh `plan` trên (trong `aws/accounts/stg`): mong `No changes.`.
 
 ## Sau khi áp
 

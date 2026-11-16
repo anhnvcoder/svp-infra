@@ -172,7 +172,13 @@ inventory thì đặt `cid` của icon là id tài nguyên và `cid` của box s
     Luồng log (xanh) từ mọi account vào bucket của `svp-log-archive`, mỗi loại log một bucket trong một cột để nguồn từ hai phía tới được;
     luồng phát hiện (đỏ): GuardDuty, Access Analyzer → Security Hub → bus `svp-security-events` ← rule `svp-security-*` của mọi account →
     SNS → email. Đường từ nguồn ngoài vào đi theo hành lang dọc (waypoint chung x) để không xuyên icon; chỗ hai đường cắt nhau chấp nhận.
-    Số icon mỗi loại ở `org_expected()`, `check_svp_counts.py` so với file. Account bảo mật có thêm Inspector (delegated admin, chỉ ECR; đường tới Security Hub đi dưới hàng icon, vào đáy hub); mỗi account env có icon AMG ghi hai vai trò `svp-platform-admins`, `svp-platform-viewers`; nhóm nền tảng ghi ở nhãn Identity Center.
+    Số icon mỗi loại ở `org_expected()`, `check_svp_counts.py` so với file. Account bảo mật có thêm Inspector (delegated admin, chỉ ECR;
+    đường tới Security Hub đi dưới hàng icon, vào đáy hub). Account env có icon AMG ghi hai vai trò `svp-platform-admins`,
+    `svp-platform-viewers` khi cờ `managed_grafana` của nó không phải `off` (ở `off` không có AMG, và `org_expected()` đếm đúng số đó);
+    nhóm nền tảng ghi ở nhãn Identity Center. Mỗi account có cờ `off` trong `aws/paid-features.json` (cả `mgmt`, `svp-log-archive`,
+    `svp-backup`) có ghi chú `Off in …` liệt kê dịch vụ bị tắt, đọc từ file cờ. Ghi chú trong account bảo mật nêu các account có
+    `security_hub` `off` (đọc từ file cờ) và rule `svp-security-guardduty-findings` (`aws/security/alerts.tf`) đưa finding GuardDuty
+    của chúng tới bus/SNS, trong khi finding của `svp-security` và Access Analyzer đi qua Security Hub.
 15b. **Trang env vẽ phần account `svp-log-archive` chỉ cho bucket mà env ghi vào** (flow log, log WAF, log
     CloudFront), dưới account của env, trong Cloud; mỗi web ACL một đường log, ba đường chung hành lang x 360 (giữa cột
     toàn cục và Region; bên trái là đường của users), đường VPC đi hành lang giữa Region và Account bên phải. Endpoint

@@ -558,6 +558,30 @@ run "cluster_value_grafana_url_trailing_slash" {
   expect_failures = [var.cluster_values]
 }
 
+# managed_grafana off: no workspace, the key stays with the empty string, and it reaches the cluster Secret as is.
+run "cluster_value_grafana_url_empty" {
+  command = plan
+
+  variables {
+    cluster_values = merge(var.cluster_values, { grafanaUrl = "" })
+  }
+
+  assert {
+    condition     = jsondecode(output.cluster_secret_annotations["svp.io/cluster-values"]).grafanaUrl == ""
+    error_message = "An empty grafanaUrl must be accepted and reach annotation svp.io/cluster-values unchanged."
+  }
+}
+
+run "cluster_value_grafana_url_blank" {
+  command = plan
+
+  variables {
+    cluster_values = merge(var.cluster_values, { grafanaUrl = " " })
+  }
+
+  expect_failures = [var.cluster_values]
+}
+
 run "cluster_value_alarm_topic_arn_missing" {
   command = plan
 

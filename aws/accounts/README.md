@@ -9,9 +9,9 @@ phần tốn tiền theo cờ (mục [Cờ chi phí](#cờ-chi-phí)), role ch�
 `svp-<env>` cùng key, opt-in, role của nó
 (mục [Backup](#backup)). Root prd bật thêm DNSSEC (key KMS, KSK, hai alarm `page`) và query log cho zone prd, cùng topic
 SNS `svp-prd-dns-alarms` ở `us-east-1` (module [`alarms`](../modules/alarms/README.md)) nhận hai alarm đó.
-Mọi thứ sống giữa các buổi AWS, mang tag `Stack=baseline` (script quét sót của buổi giữ lại tag này), trừ phần theo cờ
-`session` của [`aws/paid-features.json`](../paid-features.json) (workspace AMG và tham số SSM của env): chỉ có trong
-buổi, `sweep.sh` báo nó là sót.
+Mọi thứ sống giữa các buổi AWS, mang tag `Stack=baseline` (script quét sót của buổi giữ lại tag này), trừ workspace AMG
+và tham số SSM của env khi cờ `managed_grafana` của [`aws/paid-features.json`](../paid-features.json) không là `always`:
+với `session` chúng chỉ có trong buổi, với `off` không bao giờ có; ngoài lúc đó `sweep.sh` báo chúng là sót.
 
 Zone của prd là zone gốc của lab, `aws.<domain>` (web prd ở đỉnh zone, API `api.aws.<domain>`), được DNS của domain cha (Cloudflare) uỷ
 quyền bằng bốn bản ghi `NS` tên `aws`. Zone của stg là `stg.aws.<domain>`, zone con mà zone prd uỷ quyền bằng bản ghi `NS` của biến
@@ -116,12 +116,12 @@ AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform init
 AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform plan -out=stg.tfplan
 ```
 
-Đọc plan (số ứng với `aws/paid-features.json` của repo: cờ `managed_grafana` của stg và prd là `session`, không buổi nào
-mở; mục [Cờ chi phí](#cờ-chi-phí)): ở stg `Plan: 67 to add, 0 to change, 0 to destroy`: 11 của `module.baseline` (KMS
+Đọc plan (số ứng với `aws/paid-features.json` của repo: cờ `managed_grafana` của stg và prd là `off`; mục
+[Cờ chi phí](#cờ-chi-phí)): ở stg `Plan: 67 to add, 0 to change, 0 to destroy`: 11 của `module.baseline` (KMS
 key và alias,
 bucket cùng 5 cấu hình của nó, hosted zone, bản ghi `caa`, budget; không bản ghi `delegation` nào), 43 của
 `module.registry`, `module.observability` (danh sách ở [Thêm vào account đã có
-baseline](#thêm-vào-account-đã-có-baseline); không phần AMG vì không buổi nào mở), 9 của `backup.tf` (danh sách ở
+baseline](#thêm-vào-account-đã-có-baseline); không phần AMG vì cờ là `off`), 9 của `backup.tf` (danh sách ở
 [Backup](#backup)) và 4 của `module.ci_plan_role` ([Role plan của CI](#role-plan-của-ci)). Ở prd
 `Plan: 79 to add, 0 to change, 0 to destroy`: 41 của hai module đó, 11 của `module.baseline`, 9 của `backup.tf` và 4 của
 `module.ci_plan_role` như stg, thêm 6 của DNSSEC (`aws_kms_key.dnssec` và alias ở `us-east-1`,
@@ -330,9 +330,9 @@ Role sống giữa các buổi, không tốn phí (IAM không tính tiền role)
 
 **Người học chạy mọi lệnh dưới đây**, theo [Thêm vào account đã có baseline](#thêm-vào-account-đã-có-baseline): role là một phần của root,
 `plan` của root tạo bốn tài nguyên `module.ci_plan_role` và sửa tại chỗ key policy `module.baseline.aws_kms_key.state`. Apply ngoài buổi bằng
-`terraform plan`, `apply` của mục đó (cả hai env). Trong buổi stg, root chỉ apply qua `aws/scripts/tf.sh stg account plan --open` rồi
-`aws/scripts/tf.sh stg account apply`: plan mở buổi có cùng phần role. Buổi prd chạy với giá trị production (không cờ
-`session`), nên `tf.sh prd account` không làm gì; apply root prd ngoài buổi.
+`terraform plan`, `apply` của mục đó (cả hai env). Với file của repo không env nào có cờ `session`, nên `tf.sh <env> account` không
+làm gì; buổi prd với giá trị production cũng vậy. Env có cờ `session` thì trong buổi root chỉ apply qua
+`aws/scripts/tf.sh <env> account plan --open` rồi `aws/scripts/tf.sh <env> account apply`: plan mở buổi có cùng phần role.
 
 Sau apply (ví dụ stg; prd thay `stg`, `anhnv-stg`, `SVP_AWS_STG_ACCOUNT_ID` như trên):
 
@@ -362,25 +362,27 @@ Root gọi module [`paid-features`](../modules/paid-features/README.md) với fi
 hai cờ của env mình; thiết kế, giá trị của từng env và chi phí:
 [ADR-0071](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0071-paid-features.md) và
 [ADR-0078](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0078-paid-features-lean-defaults.md). Với file
-của repo stg và prd cùng giá trị (`managed_grafana` `session`, `inspector_ecr` `off`); prd lấy giá trị production
+của repo stg và prd cùng giá trị (`managed_grafana` `off`, `inspector_ecr` `off`); prd lấy giá trị production
 (`always`) chỉ cho buổi prd, theo [`docs/runbooks/paid-features.md`](../../docs/runbooks/paid-features.md).
 
 | Cờ | Truyền vào | `always` | Giá trị kia |
 | --- | --- | --- | --- |
 | `inspector_ecr` | `enhanced_scanning` của `module.registry` | `ENHANCED`, `CONTINUOUS_SCAN` | `off`: `BASIC`, `SCAN_ON_PUSH`, cùng filter repo cache |
-| `managed_grafana` | `grafana_enabled` của `module.observability`: cờ là `always` hay `session_open` là `true` | workspace AMG và tham số sống giữa các buổi | `session`: chỉ có khi `session_open = true` |
+| `managed_grafana` | `grafana_enabled` của `module.observability`: cờ là `always`, hay `session` và `session_open` là `true` | workspace AMG và tham số sống giữa các buổi | `session`: chỉ có khi `session_open = true`; `off`: không bao giờ có |
 
 Biến `session_open` (bool, mặc định `false`) không nằm trong file nào: chỉ lệnh `account` của
 [`aws/scripts/tf.sh`](../scripts/tf.sh) đặt nó (`plan --open` là `true`, `plan --close` là `false`), nên
-`terraform plan` trần không có `-var` luôn tính trạng thái giữa buổi. Với cờ `always`, `session_open` không đổi gì: điều
-kiện của `grafana_enabled` đã đúng, plan với `true` và `false` như nhau. Output `session_features` liệt kê cờ `session`
+`terraform plan` trần không có `-var` luôn tính trạng thái giữa buổi. Với cờ `always` hay `off`, `session_open` không đổi
+gì: plan với `true` và `false` như nhau. Output `session_features` liệt kê cờ `session`
 của env; lệnh `account` của `tf.sh` đọc cùng danh sách từ file JSON.
 
 Đổi cờ thì `plan` đổi đúng phần tài nguyên ở bảng trên: `inspector_ecr` sửa tại chỗ
 `module.registry.aws_ecr_registry_scanning_configuration.this`; `managed_grafana` từ `always` sang `session` (giữa buổi)
 xoá workspace, role `svp-<env>-grafana` và policy, hai `aws_grafana_role_association`, service account
 `svp-grafana-operator` và tham số SSM, mất dashboard trong workspace (Grafana Operator dựng lại trong buổi), không chạm
-key, workspace AMP, log group. Thứ tự apply giữa các root khi đổi cờ: ADR-0071.
+key, workspace AMP, log group; sang `off` từ `always` hay từ `session` lúc buổi mở xoá đúng 7 tài nguyên đó, từ `session` ngoài
+buổi không đổi gì. Thứ tự apply giữa các root khi đổi cờ: ADR-0071; các bước và số tài nguyên của mỗi cách đổi:
+[`docs/runbooks/paid-features.md`](../../docs/runbooks/paid-features.md).
 
 ## Backup
 
@@ -439,7 +441,7 @@ Các phần của root và số tài nguyên `plan` thêm cho phần account ch�
   `aws_prometheus_workspace_configuration`,
   log group `/svp/<env>/otel` và stream `otel-collector`, `aws_cloudwatch_log_resource_policy.xray_spans`,
   `aws_xray_trace_segment_destination.this`, `aws_xray_indexing_rule.default`; khi cờ `managed_grafana` của env là
-  `always` (env vắng khỏi file) hay buổi đang mở thêm 7 của AMG: role `svp-<env>-grafana` và policy, workspace Grafana,
+  `always` (env vắng khỏi file), hay `session` và buổi đang mở, thêm 7 của AMG: role `svp-<env>-grafana` và policy, workspace Grafana,
   hai `aws_grafana_role_association`,
   service account `svp-grafana-operator`, tham số SSM `/svp/<env>/grafana-workspace-id`.
 
@@ -470,7 +472,7 @@ observability thì `Plan: 13 to add, 1 to change, 0 to destroy` ở cả hai env
 `local.release_repositories` của module `registry` thêm repo thì phần registry chỉ thiếu một `aws_ecr_repository.release`
 mỗi repo mới. Dừng (không apply, dán plan lại) nếu có
 `change`, `destroy`, tài nguyên ngoài bảng hay phần thiếu tài nguyên; trừ khi account đã có observability với AMG từ
-trước mà cờ `managed_grafana` của env là `session`, hay đã quét `ENHANCED` mà cờ `inspector_ecr` là `off`: plan còn xoá,
+trước mà cờ `managed_grafana` của env là `session` hay `off`, hay đã quét `ENHANCED` mà cờ `inspector_ecr` là `off`: plan còn xoá,
 sửa đúng phần đổi cờ của mục [Cờ chi phí](#cờ-chi-phí), và áp theo thứ tự của ADR-0071. Rồi:
 
 ```sh

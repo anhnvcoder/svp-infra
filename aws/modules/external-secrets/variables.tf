@@ -17,3 +17,9 @@ variable "cluster_name" {
     error_message = "cluster_name must be 3 to 29 lowercase letters, digits or dashes, starting with a letter."
   }
 }
+
+variable "grafana_operator" {
+  description = "Whether the env has a Grafana workspace (flag managed_grafana of aws/paid-features.json not off): the entry grafana-operator, the token of Grafana Operator, and its read by the SecretStore role of svp-obs exist only then."
+  type        = bool
+  nullable    = false
+}

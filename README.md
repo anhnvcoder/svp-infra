@@ -72,8 +72,9 @@ buổi mọi account giữ giá trị rẻ nhất mà validation của module ch
 Security Hub và Config, và account vắng khỏi file là chuẩn production (mọi cờ `always`). Module
 [`paid-features`](aws/modules/paid-features/README.md) kiểm giá trị; root
 `aws/security` (Security Hub CSPM, Inspector ECR), `aws/baseline` (AWS Config recorder) và `aws/accounts/<env>` (Amazon Managed Grafana, kiểu
-quét ECR) đọc cờ qua nó, script buổi đọc cùng file. Cờ `managed_grafana` là `session` thì workspace AMG của env chỉ có trong buổi, mở và đóng
-bằng `aws/scripts/tf.sh <env> account`. Thiết kế, giá trị mỗi account và chi phí:
+quét ECR) đọc cờ qua nó, root `aws/envs/<env>` đọc cờ `managed_grafana` để biết có workspace AMG để đọc không, script buổi đọc cùng file.
+Cờ `managed_grafana` là `session` thì workspace AMG của env chỉ có trong buổi, mở và đóng bằng `aws/scripts/tf.sh <env> account`; là `off`
+thì không bao giờ có, và cluster nhận `grafanaUrl` rỗng. Thiết kế, giá trị mỗi account và chi phí:
 [ADR-0071](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0071-paid-features.md) và
 [ADR-0078](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0078-paid-features-lean-defaults.md) (giá trị rẻ
 giữa các buổi).
@@ -392,8 +393,9 @@ cùng một giá trị vào secret SCRAM `AmazonMSK_svp-<env>-<user>` (module `m
 user ElastiCache và entry `valkey-users` (module `elasticache`); đổi bằng cách tăng `msk_password_version`, `valkey_password_version` rồi
 apply. Mọi entry khác `bootstrap.sh <env> secrets` ghi từ `.env` của repo code (`make eks-secrets`, chỉ kiểm ba entry kia có), trừ
 `grafana-operator`: cùng lệnh đó xoá token cũ của service account `svp-grafana-operator` ở Amazon Managed Grafana, tạo token sống một ngày và
-ghi thẳng vào entry qua pipe, mỗi buổi một token. External
-Secrets Operator dựng Secret trong cluster từ entry; Reloader restart pod khi Secret đổi. Bước, lệnh và cách đổi một secret: runbook
+ghi thẳng vào entry qua pipe, mỗi buổi một token; cờ `managed_grafana` của env là `off` thì không có entry đó, lệnh bỏ qua bước token.
+External Secrets Operator dựng Secret trong cluster từ entry; Reloader restart pod khi Secret đổi. Bước, lệnh và cách đổi một
+secret: runbook
 [`session-stg.md`](docs/runbooks/session-stg.md#đổi-một-secret-của-env-đang-chạy). `pre-destroy.sh` để lại tới bước cuối các Application nền tảng,
 vì finalizer và webhook của chúng cần cho việc xoá object của workload.
 
@@ -543,10 +545,10 @@ secret `INFRACOST_API_KEY` chưa đặt. Lỗi khác (HCL không đọc được
 [Khoá Infracost](docs/runbooks/github-setup.md#khoá-infracost) của runbook `github-setup.md`.
 
 **Project** (`infracost.yml`): mỗi root mà CI plan một project, `aws/envs/<env>` với `<env>.tfvars`, `aws/accounts/<env>` không file tfvars
-nào (mọi giá trị của root account nằm ở `<env>.auto.tfvars`); thêm `accounts-stg-session` và `accounts-prd-session`,
-chính `aws/accounts/<env>` với `session_open=true`. Cờ của `aws/paid-features.json` hiện qua chính HCL: module
-`paid-features` đọc file, nên PR đổi cờ có chênh ở project của root đọc cờ đó. Cờ `session` của mỗi env chỉ có giá ở
-`accounts-<env>-session` (như khi buổi mở); `accounts-<env>` là account giữa các buổi.
+nào (mọi giá trị của root account nằm ở `<env>.auto.tfvars`). Cờ của `aws/paid-features.json` hiện qua chính HCL: module
+`paid-features` đọc file, nên PR đổi cờ có chênh ở project của root đọc cờ đó. File không đặt cờ nào là `session`, nên buổi không
+mở gì ở root account và `accounts-<env>` có cùng giá trong và ngoài buổi. Env đặt lại một cờ `session` thì thêm project
+`accounts-<env>-session`: cùng `path`, `terraform_vars` là `session_open: true`, để phần chỉ có trong buổi hiện giá.
 
 **Đọc comment:** bảng mỗi project (chi phí tháng trước, sau, chênh), dưới đó danh sách resource đổi giá. Bảng tổng mỗi project của cả hai cây
 nằm ở job summary của lượt. Infracost tính một tháng 730 giờ; phần theo lượng dùng chỉ có các giả định của `infracost-usage.yml`, phần

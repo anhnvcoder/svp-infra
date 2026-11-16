@@ -9,7 +9,8 @@ resource_type_default_usage:
   # stg's single gateway carries all of its own pulls, so stg shows less than it pays.
   aws_nat_gateway:
     monthly_data_processed_gb: 5
-  # Two users in a month with a session: the learner and the service account of Grafana Operator, billed as a user.
+  # Two users of a workspace (managed_grafana not off): the learner and the service account of Grafana Operator,
+  # billed as a user.
   aws_grafana_workspace:
     editors_administrator_licenses: 2
 

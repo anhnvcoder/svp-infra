@@ -296,9 +296,11 @@ không có data source tìm theo tên), nên không có id nào phải chép và
   (`AWS_PROFILE=anhnv-prd terraform -chdir=aws/accounts/prd output -raw grafana_url`) trên trình duyệt, **Sign in with AWS IAM Identity
   Center** bằng user của bước (4). Mong vào được, user nhóm admin thấy mục **Administration**, user nhóm viewer chỉ xem. Dashboard và data source
   chưa có: Grafana Operator tạo chúng trong buổi. Dán vai trò thấy được (không dán URL).
-- `session` (stg và prd theo file của repo): không có workspace giữa các buổi, output `grafana_url` là `null`. Đăng
-  nhập lần đầu ở buổi stg đầu (prd: ở buổi prd, sau khi đổi cờ), sau bước 5 của
-  [`session-stg.md`](session-stg.md#35-root-account-mở-tính-năng-của-buổi), cùng cách và cùng mong đợi.
+- `session`: không có workspace giữa các buổi, output `grafana_url` là `null`. Đăng nhập lần đầu ở buổi đầu có cờ này, sau
+  bước 5 của [`session-stg.md`](session-stg.md#35-root-account-mở-tính-năng-của-buổi), cùng cách và cùng mong đợi.
+- `off` (stg và prd theo file của repo): không bao giờ có workspace, `grafana_url` là `null`, root env đưa `grafanaUrl` rỗng vào
+  cluster: bước này không có gì để làm. Đăng nhập lần đầu ở buổi đầu đổi cờ sang giá trị khác (prd: buổi prd, sau khi đổi cờ;
+  [`paid-features.md`](paid-features.md)).
 
 ## Bước (10): retention của `aws/spans`
 
@@ -331,8 +333,8 @@ Docker Hub. Một PAT hay token lộ: thu hồi nó trên GitHub, Docker Hub tr�
 `validate` của bước (5), rồi thu hồi bản cũ.
 
 Token AMG lộ giữa buổi: chạy lại `aws/scripts/bootstrap.sh <env> secrets` (xoá mọi token cũ, ghi token mới). Ngoài buổi, xoá token còn lại
-(env có `managed_grafana` `session`, stg và prd với file của repo, thì ngoài buổi không có workspace, cũng không token
-nào). Terminal có các biến của
+(env có `managed_grafana` `session` thì ngoài buổi không có workspace, cũng không token nào; env có `off`, stg và prd với file
+của repo, không bao giờ có). Terminal có các biến của
 [Mở terminal](#mở-terminal) (`grafana-tokens.sh` đối chiếu account của profile với biến account của env). Ví dụ là stg;
 với prd thay như bước (5). Đọc trước:
 
@@ -341,7 +343,8 @@ aws/scripts/grafana-tokens.sh stg list
 ```
 
 Tìm `ok    svp-grafana-operator of stg: N token(s)` rồi mỗi token một dòng `note  token <id> expires <hạn>`. Không có
-workspace thì `skip  no Grafana workspace in stg …, so no token`: không còn gì để thu hồi. Account sai thì
+workspace thì `skip  no Grafana workspace in stg …, so no token`, cờ `off` thì `skip  managed_grafana of stg is off …` trước mọi lệnh
+gọi AWS: không còn gì để thu hồi. Account sai thì
 `grafana-tokens.sh` in `FAIL  profile anhnv-stg is account …: stop here and check the profile` và dừng: không làm
 tiếp, dán dòng lỗi. Rồi xoá mọi token (script kiểm lại account ngay trước mỗi lần xoá và đọc lại sau khi xoá):
 

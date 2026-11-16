@@ -7,7 +7,8 @@ trị nằm ở ADR đó.
 
 Mọi root bật, tắt dịch vụ theo cờ gọi module này với `features = jsondecode(file("<đường tương đối tới aws/>paid-features.json"))`, không root
 nào tự đọc giá trị trong JSON: `aws/security` (Security Hub, Inspector), `aws/baseline` (AWS Config), `aws/accounts/<env>` (Amazon Managed
-Grafana, quét ECR). Script buổi đọc cùng file qua `paid_feature`, `session_features` của `aws/scripts/lib.sh`.
+Grafana, quét ECR), `aws/envs/<env>` (`managed_grafana`: ở `off` không đọc workspace, `grafanaUrl` của cụm là chuỗi
+rỗng). Script buổi đọc cùng file qua `paid_feature`, `session_features` của `aws/scripts/lib.sh`.
 
 ## Khối cờ
 

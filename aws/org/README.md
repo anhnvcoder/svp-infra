@@ -225,9 +225,9 @@ printf '%s\n' "$SVP_AWS_LOG_ACCOUNT_ID" "$SVP_AWS_SECURITY_ACCOUNT_ID"
 
 Tạo account mất vài phút mỗi account. Hai dòng cuối là hai id 12 số khác nhau; đặt chúng trong terminal của mọi bước sau
 (không ghi vào file commit), như `SVP_AWS_STG_ACCOUNT_ID`, `SVP_AWS_PRD_ACCOUNT_ID`. Lần dựng đầu dùng `terraform
-output` ở đây vì `aws/scripts/accounts.sh` đòi đủ năm account thành viên, kể cả `svp-backup` mà tổ chức chỉ có sau [Thêm
-account backup](#thêm-account-backup-và-backup-policy-vào-tổ-chức-đã-áp): từ đó trở đi một lệnh `eval
-"$(aws/scripts/accounts.sh)"` đặt cả năm biến. Tiếp theo: bước (3), apply [`aws/log-archive`](../log-archive/README.md).
+output` ở đây vì `aws/scripts/accounts.sh` đòi đủ năm account thành viên, kể cả `svp-backup` mà tổ chức chỉ có sau bước (4): từ đó
+trở đi một lệnh `eval "$(aws/scripts/accounts.sh)"` đặt cả năm biến. Tiếp theo: bước (3), apply
+[`aws/log-archive`](../log-archive/README.md).
 
 ### Bước (4): đủ root
 
@@ -237,11 +237,12 @@ Sau khi `aws/log-archive` đã apply (key `alias/svp-log-archive` và bucket `sv
 AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform plan -out=org.tfplan
 ```
 
-Mong đợi `Plan: 41 to add, 2 to change, 3 to destroy`:
+Mong đợi `Plan: 50 to add, 2 to change, 3 to destroy`:
 
-- thêm: delegated admin (2 GuardDuty, 1 Security Hub, 1 Inspector, 3 qua Organizations), `aws_iam_organizations_features.root_access`, 5 liên
-  hệ `SECURITY`, permission set `SvpReadOnly`, `SvpLogReader` với policy và gán (11), hai nhóm nền tảng, policy mới của `module.org_policies` và
-  đích của chúng (12);
+- thêm: account `svp-backup` (`parent_id` là OU `Security`), delegated admin (2 GuardDuty, 1 Security Hub, 1 Inspector, 3 qua
+  Organizations), `aws_iam_organizations_features.root_access`, 6 liên hệ `SECURITY`, permission set `SvpReadOnly`, `SvpLogReader` với
+  policy và gán (12, trong đó gán `read_only["backup"]`), hai nhóm nền tảng, `aws_backup_global_settings.this`,
+  `aws_backup_region_settings.this`, policy mới của `module.org_policies` và đích của chúng (16, trong đó `backup-prd`, `backup-stg`);
 - đổi tại chỗ: `aws_ssoadmin_permission_set.admin` (chỉ `session_duration` `PT4H` → `PT1H`); `aws_cloudtrail.audit` (`s3_bucket_name` sang
   bucket của `svp-log-archive`, `kms_key_id` dạng `arn:aws:kms:ap-southeast-1:<log>:key/<id>`, `event_selector` thay bằng ba
   `advanced_event_selector`);
@@ -258,7 +259,9 @@ rm org.tfplan
 AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform plan
 ```
 
-Plan lần hai phải là `No changes.`; khác thì dán lại. Kiểm trail ghi được vào Log Archive:
+Plan lần hai phải là `No changes.`; khác thì dán lại. Tổ chức giờ có đủ năm account thành viên: `eval "$(../scripts/accounts.sh)"`
+đặt cả năm biến (lệnh của bước 3 mục
+[Thêm account backup](#thêm-account-backup-và-backup-policy-vào-tổ-chức-đã-áp)). Kiểm trail ghi được vào Log Archive:
 
 ```sh
 AWS_PROFILE=anhnv-sso aws cloudtrail get-trail-status --name svp-audit --region ap-southeast-1 --query '[IsLogging,LatestDeliveryError,LatestDigestDeliveryError]'

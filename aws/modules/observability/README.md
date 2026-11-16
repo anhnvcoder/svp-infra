@@ -7,7 +7,7 @@ X-Ray, khoá KMS của chúng và, theo cờ `managed_grafana`, workspace Amazon
 [ADR-0063](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0063-managed-observability.md) và phụ lục của nó (số § dưới đây là §
 của ADR). Output `amp_workspace_id`, `amp_endpoint`, `log_group_name`, `grafana_url` là các khoá `ampWorkspaceId`, `ampEndpoint`, `logGroup`,
 `grafanaUrl` của cluster values; root `aws/envs/<env>` đọc tài nguyên của module bằng data source theo tên, alias, và id workspace AMG
-qua SSM parameter `/svp/<env>/grafana-workspace-id`.
+qua SSM parameter `/svp/<env>/grafana-workspace-id` (cờ `off` thì không đọc, `grafanaUrl` rỗng).
 
 ## Luồng telemetry
 
@@ -113,7 +113,9 @@ Kiểm: `AWS_PROFILE=anhnv-<env>-ro aws logs describe-log-groups --log-group-nam
 account `svp-grafana-operator`, SSM parameter (`count` theo cờ, địa chỉ `[0]`). `false` thì output `grafana_url` là `null`; workspace AMP, key,
 log group, X-Ray và output khác giữ nguyên, không policy nào còn lại trỏ tới tài nguyên AMG. Root `aws/accounts/<env>` đặt giá trị theo cờ
 `managed_grafana` của `aws/paid-features.json` và biến `session_open`
-([ADR-0071](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0071-paid-features.md)): env có cờ `session` chỉ có AMG trong buổi.
+([ADR-0071](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0071-paid-features.md),
+[ADR-0078](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0078-paid-features-lean-defaults.md)): env có cờ `session` chỉ có
+AMG trong buổi, env có cờ `off` không bao giờ có.
 
 ## Vòng đời
 

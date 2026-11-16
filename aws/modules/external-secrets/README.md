@@ -2,7 +2,8 @@
 
 Nguồn Secret của cluster EKS một env trong AWS Secrets Manager và quyền đọc chúng của External Secrets Operator (ESO): vỏ entry
 `svp/<env>/<entry>`, role IAM của controller ESO qua EKS Pod Identity và một role IAM cho SecretStore của mỗi namespace. Hai root env
-(`aws/envs/stg`, `aws/envs/prd`) gọi module với cùng đối số `env`, `cluster_name`.
+(`aws/envs/stg`, `aws/envs/prd`) gọi module với cùng đối số `env`, `cluster_name`, `grafana_operator` (cờ `managed_grafana` của env khác
+`off`, đọc qua module [`paid-features`](../paid-features/README.md)).
 
 ## Entry
 
@@ -35,6 +36,9 @@ Nguồn Secret của cluster EKS một env trong AWS Secrets Manager và quyền
   ```
 
   Thêm Secret vào `files/external-secrets.yaml` của chart thì thêm entry vào map, nếu không ExternalSecret đó bị AWS từ chối.
+- `grafana_operator = false` (env không có workspace Grafana, cờ `managed_grafana` là `off`): map bỏ entry `grafana-operator` của
+  `svp-obs`, nên không có vỏ `svp/<env>/grafana-operator` và role `svp-obs` không đọc ARN đó; chart khi đó render không ExternalSecret
+  nào cho Grafana Operator (`grafanaUrl` rỗng). Mọi entry, namespace khác giữ nguyên.
 - Role controller `svp-<env>-external-secrets`: chỉ EKS Pod Identity assume được (principal `pods.eks.amazonaws.com`), trust đòi session
   tag đúng cluster, namespace `external-secrets` và ServiceAccount `external-secrets` (controller của `base/external-secrets.yaml` trong
   `svp-gitops`); association Pod Identity gắn ServiceAccount đó với role. Role không đọc entry nào, chỉ được `sts:AssumeRole` +
@@ -53,7 +57,8 @@ Nguồn Secret của cluster EKS một env trong AWS Secrets Manager và quyền
 `tests/policies.tftest.hcl` (mock provider, chỉ `plan`) chép lại map namespace → entry và kiểm: tên entry, `recovery_window_in_days`, mỗi
 role namespace chỉ `GetSecretValue` đúng entry của mình (không `*`), trust của role namespace chỉ có role controller, trust của role
 controller chỉ Pod Identity với ba session tag, association và quyền assume của controller, chỉ role namespace `svp` đọc được
-`svp/<env>/media-signing-??????`; một run cho prd và một run mỗi luật validation.
+`svp/<env>/media-signing-??????`; một run cho prd, một run `grafana_operator = false` (không entry, không quyền nào nhắc Grafana) và
+một run mỗi luật validation.
 Map được chép lại ở file test có chủ đích: đổi ai đọc entry nào thì phải đổi cả hai nơi.
 
 <!-- markdownlint-disable MD033 -->
@@ -95,6 +100,7 @@ Map được chép lại ở file test có chủ đích: đổi ai đọc entry 
 | ---- | ----------- | ---- | ------- | :------: |
 | cluster\_name | Name of the EKS cluster (output cluster\_name of the eks module) whose External Secrets controller gets the role through EKS Pod Identity. | `string` | n/a | yes |
 | env | Environment of the entries and roles: entries are svp/<env>/<entry>, roles svp-<env>-external-secrets and svp-<env>-external-secrets-<namespace>. | `string` | n/a | yes |
+| grafana\_operator | Whether the env has a Grafana workspace (flag managed\_grafana of aws/paid-features.json not off): the entry grafana-operator, the token of Grafana Operator, and its read by the SecretStore role of svp-obs exist only then. | `bool` | n/a | yes |
 
 ## Outputs
 
