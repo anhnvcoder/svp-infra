@@ -238,8 +238,10 @@ Rồi chạy tiếp từ bước sau mốc cuối (hay chạy lại bước đan
 
 Dịch vụ tốn tiền mà hệ thống không cần để chạy có cờ theo account trong file commit
 [`aws/paid-features.json`](../../aws/paid-features.json); thiết kế và chi phí ở
-[ADR-0071](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0071-paid-features.md). Đọc cờ của stg trước bước 3 (không gọi AWS;
-khoá vắng là `always`):
+[ADR-0071](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0071-paid-features.md); giá trị của file (rẻ
+nhất mà validation cho phép ở mọi account, stg và prd như nhau, prd đổi về giá trị production chỉ cho buổi prd) ở
+[ADR-0078](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0078-paid-features-lean-defaults.md). Đọc cờ của
+stg trước bước 3 (không gọi AWS; khoá vắng là `always`):
 
 ```sh
 jq -r '.stg // {} | to_entries[] | "\(.key) \(.value)"' aws/paid-features.json
@@ -307,7 +309,9 @@ xong trước T+4 giờ khi gỡ đúng số giả định của ADR-0053 §16; 
 Một bước đỏ: đọc dòng `FAIL`, sửa nguyên nhân, chạy lại **đúng bước đó** (mọi script chạy lại được). Không đi tiếp qua một bước đỏ, trừ
 bước 16 (đo): đo hỏng thì vẫn sang bước 17; và bước 18, 19 khi dòng kết quả là `FAIL` của phép đo (mục **17–19**): đó là số đo, sang bước kế.
 Bước 23, 24 không làm gì ở stg (không có `teardown.tfvars`); chúng nằm trong bảng để stg và prd chạy cùng một chuỗi bước. Bước 3–5 và
-28–29 chỉ làm việc khi stg có cờ `session` (mục **Cờ chi phí của buổi**); ở prd chúng in `ok no session feature …`.
+28–29 chỉ làm việc khi stg có cờ `session` (mục **Cờ chi phí của buổi**); ở prd chúng in `ok no session feature …`, vì
+trước buổi prd khoá `prd` đã xoá khỏi file (điều kiện 12 của [`session-prd.md`](session-prd.md#điều-kiện-trước-buổi))
+nên không cờ nào của prd là `session`.
 
 ### 1. Kiểm account
 
@@ -354,8 +358,9 @@ nhận đúng một plan đã lưu của root này, áp nó, ghi mốc `account-
 dựng baseline) và `SVP_AWS_BACKUP_ACCOUNT_ID` (key của vault `svp-stg`). `apply` đỏ giữa chừng: đọc lỗi, `plan --open` lại, `apply` lại.
 
 `tf.sh stg env plan` từ chối tới khi mốc cuối trong `account-open-applied`, `account-close-applied` của buổi là `account-open-applied`
-(`FAIL the session features of stg (managed_grafana) are not open …`). Env không có cờ `session` (prd) thì ba lệnh in `ok no session
-feature of <env> in aws/paid-features.json: …` và không chạy gì.
+(`FAIL the session features of stg (managed_grafana) are not open …`). Env không có cờ `session` (prd sau khi đổi về giá trị
+production theo điều kiện của `session-prd.md`) thì ba lệnh in `ok no session feature of <env> in aws/paid-features.json: …` và
+không chạy gì.
 
 **Trong buổi, root `aws/accounts/stg` chỉ apply qua `tf.sh stg account`.** Biến `session_open` mặc định `false` và không nằm trong file nào,
 nên `terraform plan`, `apply` trần ở root đó (lệnh của [README `aws/accounts`](../../aws/accounts/README.md), của
@@ -1053,7 +1058,9 @@ rm -rf "$DOCKER_CONFIG"; unset DOCKER_CONFIG
 
 Mong `<account>.dkr.ecr…/svp-backend/gateway@sha256:…` rồi ba dòng `verified`. Thiếu dòng: chạy lại lệnh đó không có `>/dev/null 2>&1`,
 dán lỗi. Cờ `inspector_ecr` của env là `off` (mục **Cờ chi phí của buổi**): registry dùng quét cơ bản khi push, không Inspector; đọc cấu
-hình quét thay cho hai lệnh Inspector dưới, mong `BASIC SCAN_ON_PUSH` (cùng digest ghim được Inspector của prd quét):
+hình quét thay cho hai lệnh Inspector dưới, mong `BASIC SCAN_ON_PUSH` (digest ghim chỉ có quét cơ bản tới buổi prd, khi
+prd chạy với `inspector_ecr` `always` và Inspector của prd quét nó;
+[ADR-0078](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0078-paid-features-lean-defaults.md) §7):
 
 ```sh
 AWS_PROFILE=anhnv-stg aws ecr get-registry-scanning-configuration --region ap-southeast-1 --output text \

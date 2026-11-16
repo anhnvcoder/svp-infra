@@ -381,6 +381,24 @@ ans guardduty_list-members ''
 expect "backup FAIL: GuardDuty without the member says to wait" runs_fail backup
 expect "backup FAIL: it names the region and the 24 hours" failedl '7a: GuardDuty member status of svp-backup in ap-southeast-1 is .none. (a new account takes up to 24 h)'
 
+# security_hub and config_recording off for backup: no member status, no standards and no recorder are expected there.
+flags_before=$(cat "$work/infra/aws/paid-features.json")
+printf '{"backup": {"security_hub": "off", "config_recording": "off"}}\n' >"$work/infra/aws/paid-features.json"
+backup_answers
+ans securityhub_list-members ''
+ans securityhub_get-enabled-standards ''
+ans configservice_describe-configuration-recorders ''
+ans configservice_describe-configuration-recorder-status ''
+expect "backup off: exits 0 with svp-backup not a Security Hub member" run backup
+expect "backup off: the member status is not checked, Inspector still is" \
+  okl '7a: svp-backup is not checked as a Security Hub member (security_hub off in paid-features.json) and Inspector scans only ECR'
+expect "backup off: standards and recorder of anhnv-backup-ro are notes" \
+  sh -c 'grep -q "^note  anhnv-backup-ro us-east-1: security_hub is off" "$1" && grep -q "^note  anhnv-backup-ro us-east-1: config_recording is off" "$1"' _ "$out"
+ans inspector2_batch-get-account-status 'ENABLED\tENABLED\tDISABLED'
+expect "backup off FAIL: Inspector wrong still exits non-zero" runs_fail backup
+expect "backup off FAIL: it names Inspector" failedl '7a: Inspector of svp-backup'
+printf '%s\n' "$flags_before" >"$work/infra/aws/paid-features.json"
+
 # --- subscriptions ---
 
 sub_answers() {

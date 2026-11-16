@@ -498,7 +498,7 @@ backup_detect() {
 }
 
 backup_hub_inspector() {
-  local bk st ins
+  local bk st ins hub="a Security Hub member"
   bk=$(need_id SVP_AWS_BACKUP_ACCOUNT_ID) || return 1
   st=$(aws_ securityhub list-members --output text --query "Members[?AccountId=='$bk'].MemberStatus") ||
     fail "securityhub list-members"
@@ -506,10 +506,14 @@ backup_hub_inspector() {
     --query 'accounts[].[resourceState.ecr.status, resourceState.ec2.status, resourceState.lambda.status]' --output text) ||
     fail "inspector2 batch-get-account-status"
   printing && return 0
-  [ "$st" = Enabled ] || fail "7a: Security Hub member status of svp-backup is '${st:-none}' (a new account takes up to 24 h)"
+  if flag_off "$bk" security_hub; then
+    hub="not checked as a Security Hub member (security_hub off in paid-features.json)"
+  else
+    [ "$st" = Enabled ] || fail "7a: Security Hub member status of svp-backup is '${st:-none}' (a new account takes up to 24 h)"
+  fi
   [ "$(words <<<"$ins")" = "ENABLED DISABLED DISABLED" ] ||
     fail "7a: Inspector of svp-backup is '$ins', not ENABLED DISABLED DISABLED (ecr, ec2, lambda)"
-  ok "7a: svp-backup is a Security Hub member and Inspector scans only ECR"
+  ok "7a: svp-backup is $hub and Inspector scans only ECR"
 }
 
 backup_global() {

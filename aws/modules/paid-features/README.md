@@ -11,8 +11,9 @@ Grafana, quét ECR). Script buổi đọc cùng file qua `paid_feature`, `sessio
 
 ## Khối cờ
 
-File là object `{"<khoá account>": {"<cờ>": "<giá trị>"}}` và chỉ ghi giá trị khác `always`; account vắng, cờ vắng là `always` (mặc định theo
-prd). Khoá account, tên cờ, tập giá trị và account đặt được của từng cờ do `validation` của biến `features` ở
+File là object `{"<khoá account>": {"<cờ>": "<giá trị>"}}` và chỉ ghi giá trị khác `always`; account vắng, cờ vắng là
+`always` (giá trị production). Khoá account, tên cờ, tập giá trị và account đặt được của từng cờ do `validation` của
+biến `features` ở
 [`variables.tf`](variables.tf) giữ; tài nguyên mỗi cờ điều khiển ở
 [ADR-0071](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0071-paid-features.md).
 
@@ -33,8 +34,8 @@ prd). Khoá account, tên cờ, tập giá trị và account đặt được c�
 - `off_accounts`, `session_accounts`: mỗi cờ một danh sách khoá account (sắp xếp) có giá trị `off`, `session`; danh sách rỗng khi không account
   nào.
 
-Test ở `tests/paid-features.tftest.hcl` (`make test`) chạy mỗi giá trị của mỗi cờ, giá trị của `stg` trong file và mỗi luật `validation`.
-`make test` chỉ mount thư mục module nên test chép lại giá trị `stg` thay vì đọc file.
+Test ở `tests/paid-features.tftest.hcl` (`make test`) chạy mỗi giá trị của mỗi cờ, toàn bộ giá trị của file và mỗi luật
+`validation`. `make test` chỉ mount thư mục module nên test chép lại giá trị của file thay vì đọc file.
 
 <!-- markdownlint-disable MD033 -->
 <!-- BEGIN_TF_DOCS -->

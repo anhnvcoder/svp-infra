@@ -6,7 +6,10 @@ Inspector quét ECR của account thành viên), baseline của mọi account c�
 [README `aws/baseline`](../../aws/baseline/README.md#áp-gì-ở-account-nào)); rồi kiểm dịch vụ bật, guardrail chặn đúng và cảnh báo tới email.
 Security Hub CSPM, AWS Config recorder và Inspector ECR của từng account theo cờ của
 [`aws/paid-features.json`](../../aws/paid-features.json) ([ADR-0071](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0071-paid-features.md));
-mong đợi dưới đây tính theo file của repo, nơi chỉ stg tắt ba dịch vụ đó. Đổi cờ sau khi đã áp: [`paid-features.md`](paid-features.md).
+mong đợi dưới đây tính theo file của repo: mọi account trừ `svp-security` (delegated admin) tắt Security Hub và Config,
+stg và prd tắt thêm Inspector ECR
+([ADR-0078](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0078-paid-features-lean-defaults.md) §1). Đổi
+cờ sau khi đã áp: [`paid-features.md`](paid-features.md).
 Thiết kế: [ADR-0059](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0059-org-structure-guardrails.md) (account, OU, policy, root
 tập trung, permission set, baseline), [ADR-0060](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0060-org-detection-logging.md)
 (phát hiện, log, cảnh báo, chi phí) và [ADR-0062](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0062-ecr-registry-ci-oidc.md)
@@ -59,7 +62,10 @@ flowchart TD
    Inspector tính theo digest image được quét ở registry của account env (không có registry thì $0):
    [ADR-0062 §11](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0062-ecr-registry-ci-oidc.md#11-chi-phí-registry).
    Account có cờ `off` không trả phần đó:
-   [bảng tháng không buổi của ADR-0071](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0071-paid-features.md#bảng-tháng-không-buổi).
+   [bảng tháng không buổi của
+   ADR-0071](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0071-paid-features.md#bảng-tháng-không-buổi);
+   tháng không buổi với file của repo ở
+   [ADR-0078](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0078-paid-features-lean-defaults.md) §8.
    Budget tổng của org phải đủ cho khoản đó cộng các buổi: lệnh đọc ở cuối mục [Mở terminal](#mở-terminal) (cần biến và phiên SSO của mục đó).
 4. **Phụ thuộc buổi**: từ khi code này ở `main`, root `aws/envs/stg`, `aws/envs/prd` ghi flow log và log WAF vào bucket của `svp-log-archive`
    và cần `SVP_AWS_LOG_ACCOUNT_ID`. Buổi stg, prd chỉ chạy được sau khi bước (1)–(3) đã áp.
@@ -168,8 +174,8 @@ profile còn lại: đặt biến rồi chạy lại). Dán các dòng `ok    ac
 
 ## Bước (5): `aws/security`
 
-**Điểm dừng chi phí.** Từ apply này GuardDuty, Security Hub CSPM, Config tính tiền mỗi tháng (mục Trước khi bắt đầu, điều 3). Áp khi đã chọn
-thời điểm.
+**Điểm dừng chi phí.** Từ apply này GuardDuty tính tiền mỗi tháng ở mọi account, Security Hub CSPM và Config ở account
+có cờ `always` (với file của repo chỉ `svp-security`; mục Trước khi bắt đầu, điều 3). Áp khi đã chọn thời điểm.
 
 ```sh
 aws/scripts/check-account.sh mgmt

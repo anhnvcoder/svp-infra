@@ -1,6 +1,6 @@
 # What the flag block resolves to: every account and flag always when nothing is set, each value of each flag in
-# flags, off_accounts and session_accounts, the stg values of aws/paid-features.json (repeated here: make test mounts
-# only the module); then one plan per validation rule with a value that only that rule rejects. No resource here, but
+# flags, off_accounts and session_accounts, the values of aws/paid-features.json (repeated here: make test mounts only
+# the module); then one plan per validation rule with a value that only that rule rejects. No resource here, but
 # make test still requires the AWS provider to be a mock.
 
 mock_provider "aws" {}
@@ -40,31 +40,51 @@ run "nothing_set" {
   }
 }
 
-run "stg_values" {
+run "lean_file" {
   command = plan
 
   variables {
-    features = { stg = { managed_grafana = "session", inspector_ecr = "off", security_hub = "off", config_recording = "off" } }
+    features = {
+      backup        = { security_hub = "off", config_recording = "off" }
+      "log-archive" = { security_hub = "off", config_recording = "off" }
+      mgmt          = { security_hub = "off", config_recording = "off" }
+      prd           = { managed_grafana = "session", inspector_ecr = "off", security_hub = "off", config_recording = "off" }
+      stg           = { managed_grafana = "session", inspector_ecr = "off", security_hub = "off", config_recording = "off" }
+    }
   }
 
   assert {
-    condition     = output.flags["stg"] == { config_recording = "off", inspector_ecr = "off", managed_grafana = "session", security_hub = "off" }
-    error_message = "stg must have managed_grafana session and inspector_ecr, security_hub, config_recording off."
+    condition = alltrue([for a in ["prd", "stg"] : output.flags[a] == {
+      config_recording = "off", inspector_ecr = "off", managed_grafana = "session", security_hub = "off"
+    }])
+    error_message = "prd and stg must have managed_grafana session and inspector_ecr, security_hub, config_recording off."
   }
 
   assert {
-    condition     = alltrue([for a, v in output.flags : v == var.all_always if a != "stg"])
-    error_message = "prd and the four shared accounts must keep every flag always."
+    condition = alltrue([for a in ["backup", "log-archive", "mgmt"] : output.flags[a] == {
+      config_recording = "off", inspector_ecr = "always", managed_grafana = "always", security_hub = "off"
+    }])
+    error_message = "backup, log-archive and mgmt must have security_hub and config_recording off, the env-only flags always."
   }
 
   assert {
-    condition     = alltrue([for f in ["config_recording", "inspector_ecr", "security_hub"] : output.off_accounts[f] == tolist(["stg"])]) && length(output.off_accounts["managed_grafana"]) == 0
-    error_message = "off_accounts must list stg for inspector_ecr, security_hub and config_recording, and no account for managed_grafana."
+    condition     = output.flags["security"] == var.all_always
+    error_message = "security, the delegated administrator, must keep every flag always."
   }
 
   assert {
-    condition     = output.session_accounts["managed_grafana"] == tolist(["stg"]) && alltrue([for f, a in output.session_accounts : length(a) == 0 if f != "managed_grafana"])
-    error_message = "session_accounts must list stg for managed_grafana only."
+    condition = (
+      output.off_accounts["security_hub"] == tolist(["backup", "log-archive", "mgmt", "prd", "stg"]) &&
+      output.off_accounts["config_recording"] == tolist(["backup", "log-archive", "mgmt", "prd", "stg"]) &&
+      output.off_accounts["inspector_ecr"] == tolist(["prd", "stg"]) &&
+      length(output.off_accounts["managed_grafana"]) == 0
+    )
+    error_message = "off_accounts must list every account but security for security_hub and config_recording, prd and stg for inspector_ecr, none for managed_grafana."
+  }
+
+  assert {
+    condition     = output.session_accounts["managed_grafana"] == tolist(["prd", "stg"]) && alltrue([for f, a in output.session_accounts : length(a) == 0 if f != "managed_grafana"])
+    error_message = "session_accounts must list prd and stg for managed_grafana only."
   }
 }
 

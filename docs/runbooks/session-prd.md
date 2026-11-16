@@ -46,9 +46,12 @@ aws/scripts/session.sh --print prd                 # mọi lệnh script của b
   [ADR-0063 §12](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0063-managed-observability.md#12-chi-phí-hợp-đồng-cluster-và-adr-cũ)
   và phụ lục của nó); buổi prd đầu đo số thật ở Cost Explorer. **Phí giữ R ≈ $4,6/tháng** giữa các buổi (trail, KMS, bucket state của
   management; bucket state, KMS key, zone của hai baseline), cộng phần edge lúc không buổi (key DNSSEC, topic và alarm DNSSEC, query log: bảng
-  "Lúc không buổi" ở phụ lục ADR-0061 §13) và phần registry, observability lúc không buổi (key KMS, secret của cache, lưu trữ ECR, AMG: cùng
-  bảng của ADR-0063 §12), báo riêng, không cộng vào C. Phần transcode (job MediaConvert của buổi, endpoint `mediaconvert` ở mọi AZ, SQS, request
-  S3; $0 lúc không buổi) ở
+  "Lúc không buổi" ở phụ lục ADR-0061 §13) và phần registry, observability lúc không buổi (key KMS, secret của cache,
+  lưu trữ ECR: cùng bảng của ADR-0063 §12; giữa các buổi prd không có AMG), báo riêng, không cộng vào C; tháng không
+  buổi của cả org với giá trị rẻ của file:
+  [ADR-0078](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0078-paid-features-lean-defaults.md) §8, đổi
+  cờ prd trước và sau buổi: §3, §7. Phần transcode (job MediaConvert của buổi, endpoint `mediaconvert` ở mọi AZ, SQS,
+  request S3; $0 lúc không buổi) ở
   [ADR-0066 §12](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0066-mediaconvert-transcode.md#12-chi-phí) và mục "Chi phí" của
   phụ lục, cộng vào C. Phần backup mỗi buổi (instance `svp-prd-pitr` của diễn tập theo lớp của nguồn, key `uploads`, hai alarm backup, request và
   restore S3) cộng vào C; bản copy ở `svp-backup` và ba key của vault sống giữa các buổi, báo riêng như R: cả hai ở
@@ -120,6 +123,20 @@ aws/scripts/session.sh --print prd                 # mọi lệnh script của b
     `svp-ci-ecr-promote` có, nên `promote-prd` của cổng dưới chép được image vào ECR prd.
 11. **Backup đã áp** theo [`backup-setup.md`](backup-setup.md#thứ-tự-áp-lần-đầu), như `session-stg.md` điều kiện 10, với Backup policy
     `svp-backup-prd` gắn OU `Prod`, vault `svp-prd-copy`, vault `svp-prd` cùng role `svp-prd-backup` và opt-in của `aws/accounts/prd`.
+12. **Cờ prd ở giá trị production**
+    ([ADR-0078](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0078-paid-features-lean-defaults.md) §3):
+    giữa các buổi prd có giá trị rẻ của `aws/paid-features.json` như stg; buổi prd chạy với giá trị production. Trước
+    buổi, khoá `prd` đã xoá khỏi file và đã áp theo hướng bật (`aws/baseline`, `aws/security`, `aws/accounts/prd`, plan
+    lần hai `No changes.`) của [`paid-features.md`](paid-features.md#trước-khi-bắt-đầu), điều 3. Kiểm (chỉ đọc, không
+    chạm account):
+
+    ```sh
+    jq -c '.prd // "absent"' aws/paid-features.json
+    ```
+
+    Mong `"absent"`; in object cờ thì dừng, làm đổi cờ đó trước. Mọi mong đợi của runbook này tính theo giá trị
+    production. Sau buổi, khi hai lượt `sweep.sh` của mục **Kết thúc buổi** đã sạch, ghi lại khoá `prd` và áp theo hướng
+    tắt, cùng điều 3 của `paid-features.md`.
 
 ## Mở terminal của buổi
 
@@ -226,8 +243,11 @@ dán dòng lỗi (`vuln` quá hạn thì dòng đó nêu lệnh rescan).
 
 Như `session-stg.md` bước 1–10, với `prd`. `check-account.sh prd` phải in account `svp-prd`. Bước 7 (`media-signing-key.sh prd new a`) và
 10 (`activate a`) dựng khoá ký URL premium của buổi như stg (`session-stg.md`, mục 6–10; [`media-signing-keys.md`](media-signing-keys.md)). Bước 3–5 in `ok no session feature of prd in
-aws/paid-features.json: …` và không chạy gì: prd không có cờ `session`, AMG `svp-prd` và tham số SSM của nó sống giữa các buổi
-(mục [Cờ chi phí của buổi](session-stg.md#cờ-chi-phí-của-buổi) của stg). `check-dns.sh prd` hỏi `NS aws.<domain>` (tên là
+aws/paid-features.json: …` và không chạy gì, chỉ khi có điều kiện 12: prd vắng khỏi file nên mọi cờ của nó là `always`,
+không cờ nào `session`; AMG `svp-prd` và tham số SSM của nó có từ lần áp `aws/accounts/prd` của bước đổi cờ đó (mục [Cờ
+chi phí của buổi](session-stg.md#cờ-chi-phí-của-buổi) của stg). Không có điều kiện 12 (prd còn `managed_grafana`
+`session`) thì bước 3–5 mở AMG như stg, còn Inspector, Security Hub, Config của prd vẫn tắt: dừng, làm điều kiện 12
+trước. `check-dns.sh prd` hỏi `NS aws.<domain>` (tên là
 `zone_name` của `aws/accounts/prd/prd.auto.tfvars`) ở `1.1.1.1` và `8.8.8.8` và so với output `name_servers` của `aws/accounts/prd`; `FAIL`
 thì bốn bản ghi `NS` `aws` ở DNS cha chưa lan hay sai: sửa theo `aws/accounts/README.md` (mục 5), không bắt đầu buổi. Zone stg nằm dưới zone
 prd nên `check-dns.sh stg` cũng phải xanh trước buổi stg. Plan của root env đọc `prd.tfvars` (mức prd); đọc
@@ -574,7 +594,8 @@ Theo thứ tự, mỗi bước xong mới sang bước sau:
    (`restore-drill.sh prd cleanup`, mục **23–27** của `session-stg.md`) chạy sau nó: xoá `svp-prd-pitr` nếu còn, gỡ tag, chờ job, xoá recovery
    point của vault `svp-prd` đã có bản copy, ghi `backup-drained`; thiếu mốc đó thì `plan --destroy` dừng với `FAIL the backups of prd are not
    drained`. Rồi plan `-destroy` với cả hai file, không `-target`. Destroy vẫn ghi final snapshot của RDS (`skip_final_snapshot` giữ `false`) và
-   giữ backup tự động. Bước 28, 29 (đóng root account) in `ok no session feature of prd …` như bước 3–5.
+   giữ backup tự động. Bước 28, 29 (đóng root account) in `ok no session feature of prd …` như bước 3–5 (cùng
+   điều kiện 12).
 
    Apply của bước 9 đỏ giữa chừng (vd thiếu quota): vẫn làm bước 23, 24, 25 trước `plan --destroy` (với `--no-cluster` khi chưa có cluster
    EKS, điều kiện ở `session-stg.md`, mục 23–27). Plan chỉ nhắm những gì đã được tạo nên không tạo thêm phần còn thiếu và không gặp lại lỗi
@@ -600,7 +621,8 @@ Theo thứ tự, mỗi bước xong mới sang bước sau:
 3. **`aws/scripts/sweep.sh prd`** (profile `anhnv-prd`): chỉ còn dòng `kept` (`Stack=baseline`: bucket state, KMS key state, zone
    `aws.<domain>` cùng `CAA` và bản ghi `NS` uỷ quyền `stg.aws.<domain>` dưới đỉnh của nó, ở `us-east-1` key DNSSEC, hai alarm DNSSEC, log
    group query log, topic `svp-prd-dns-alarms` và key của nó; registry ECR, rule và repo của cache, OIDC provider, role CI, workspace AMP, log
-   group `/svp/prd/otel`, workspace AMG và tham số SSM `/svp/prd/grafana-workspace-id` của nó (cờ `managed_grafana` là `always`), key của
+   group `/svp/prd/otel`, workspace AMG và tham số SSM `/svp/prd/grafana-workspace-id` của nó (cờ `managed_grafana` là
+   `always` theo điều kiện 12; đổi cờ về giá trị rẻ sau buổi xoá chúng), key của
    chúng; vault `svp-prd`, role `svp-prd-backup` và key của vault; `Stack=security-baseline`:
    CMK EBS), không endpoint interface, không rule groups
    namespace của AMP, và `pending deletion` (KMS key của root

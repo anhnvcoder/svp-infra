@@ -22,3 +22,7 @@ projects:
       session_open: true
   - path: aws/accounts/prd
     name: accounts-prd
+  - path: aws/accounts/prd
+    name: accounts-prd-session
+    terraform_vars:
+      session_open: true

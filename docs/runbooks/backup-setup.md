@@ -53,7 +53,9 @@ env không có tài nguyên nào mang tag `Backup`, nên lịch không tạo job
 2. **Giá trị ngoài repo** (không commit): `aws/org/org.auto.tfvars` có khoá `backup` trong `account_emails` trước mọi `plan` của bước (1),
    một email chưa account AWS nào dùng, kể cả account đã đóng hay `SUSPENDED` (README `aws/org`, mục Chuẩn bị). Thiếu khoá thì `plan` dừng ở
    validation của `account_emails`.
-3. **Chi phí liên tục bắt đầu**, kể cả khi không có buổi: từ bước (3) baseline của `svp-backup` (check Security Hub, item Config, GuardDuty);
+3. **Chi phí liên tục bắt đầu**, kể cả khi không có buổi: từ bước (3) baseline của `svp-backup` (GuardDuty; check
+   Security Hub và item Config chỉ khi cờ `security_hub`, `config_recording` của `backup` là `always`, không phải giá
+   trị của file trong repo);
    từ bước (5), (6) ba CMK (`alias/svp-backup-copy`, `alias/svp-stg-backup`, `alias/svp-prd-backup`); từ buổi đầu, bản copy theo retention.
    Bảng giá và ước theo tháng: [ADR-0067 §13](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0067-backup-dr.md#13-chi-phí) và
    mục "Sống giữa buổi" của
@@ -129,8 +131,10 @@ plan. `cd ../..` khi xong.
 ## Bước (4): `aws/security`, áp lại
 
 GuardDuty (`auto_enable_organization_members = "ALL"`) và Security Hub (policy cấu hình gắn ở root) tự nhận account mới. Liên kết thành viên
-Inspector thì đọc danh sách account `ACTIVE` của tổ chức lúc plan, nên root áp lại một lần để `svp-backup` có quét ECR như mọi account thành
-viên ([README `aws/security`, Inspector](../../aws/security/README.md#inspector)).
+Inspector và phần theo cờ `security_hub` (association `off`, `detail.accountId` của rule GuardDuty) thì đọc danh sách
+account `ACTIVE` của tổ chức lúc plan, nên root áp lại một lần để `svp-backup` có quét ECR như mọi account thành viên
+([README `aws/security`, Inspector](../../aws/security/README.md#inspector)) và Security Hub theo cờ của nó (mục [Cờ chi
+phí](../../aws/security/README.md#cờ-chi-phí)).
 
 **Điểm dừng.** Thay `aws_inspector2_enabler.members` là tắt rồi bật lại quét của mọi account thành viên.
 
@@ -141,8 +145,12 @@ AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" TF_VAR_securi
   TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" terraform plan -out=security.tfplan
 ```
 
-Mong đợi `Plan: 1 to add, 1 to change, 0 to destroy`: thêm `aws_inspector2_member_association.members["<id của svp-backup>"]`; đổi tại chỗ
-(`~`) `aws_inspector2_enabler.members`, chỉ thêm id đó vào `account_ids`. Dừng (không apply, dán plan lại) nếu enabler bị thay (`-/+`,
+Mong đợi với `aws/paid-features.json` của repo (`security_hub` của `backup` là `off`) `Plan: 2 to add, 3 to change, 0 to
+destroy`: thêm `aws_inspector2_member_association.members["<id của svp-backup>"]` và
+`aws_securityhub_configuration_policy_association.off["<id của svp-backup>"]`; đổi tại chỗ (`~`)
+`aws_inspector2_enabler.members`, chỉ thêm id đó vào `account_ids`, và `aws_cloudwatch_event_rule.guardduty_findings` ở
+hai region, chỉ thêm id đó vào `detail.accountId` của `event_pattern`. Cờ đó `always` thì `Plan: 1 to add, 1 to change,
+0 to destroy`, chỉ phần Inspector. Dừng (không apply, dán plan lại) nếu enabler bị thay (`-/+`,
 `must be replaced`) hay plan có tài nguyên khác.
 
 ```sh
@@ -196,8 +204,10 @@ kiểm; dòng `FAIL` đó nghĩa là bỏ cả nhóm của profile ấy.
 
 - **7a** `svp-backup is ACTIVE in the OU Security with a SECURITY contact`: account, OU `Security`, liên hệ `SECURITY`.
 - **7a** `<profile> <region>: Security Hub standards and Config recorder as expected`: hai chuẩn `READY` và recorder
-  `True SUCCESS` ở hai region của `anhnv-backup-ro`.
-- **7a** `svp-backup is a GuardDuty member in <region>`, `… a Security Hub member and Inspector scans only ECR`: dịch vụ
+  `True SUCCESS` ở hai region của `anhnv-backup-ro`; với file của repo (`security_hub`, `config_recording` của `backup`
+  `off`) thay bằng hai dòng `note  anhnv-backup-ro <region>: security_hub is off …`, `… config_recording is off …`.
+- **7a** `svp-backup is a GuardDuty member in <region>`, `… a Security Hub member and Inspector scans only ECR` (với
+  file của repo `… not checked as a Security Hub member (security_hub off …) and Inspector scans only ECR`): dịch vụ
   phát hiện nhận account.
 - **7b** `cross-account backup is on, the other global settings off`: `isCrossAccountBackupEnabled` `true`, khoá còn lại
   `false`.
