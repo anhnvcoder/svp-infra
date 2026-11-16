@@ -1,10 +1,11 @@
 # Runbook: một buổi AWS stg
 
 Một buổi dựng env stg trong account `svp-stg` (`aws/envs/stg`), cài Argo CD và root GitOps lên EKS bằng Terraform
-(`aws/gitops/stg`, mẫu GitOps Bridge), chạy phép kiểm `lõi` (smoke, phát video, commit status, đường cảnh báo, finding
-GuardDuty), rồi gỡ sạch trong cùng buổi và quét cả account stg lẫn account management. Phép kiểm `chuẩn ngành` (seed, k6
-bậc 1, 2, 4, 8, dashboard, diễn tập khôi phục, kiểm sâu nền tảng managed…) chọn bật từng buổi: mục [Phép kiểm lõi và
-chuẩn ngành](#phép-kiểm-lõi-và-chuẩn-ngành). Thiết kế:
+(`aws/gitops/stg`, mẫu GitOps Bridge), chạy phép kiểm `lõi` (smoke, phát video, commit status, migration của release,
+xác thực qua CloudFront, image phát hành ở ECR, đường cảnh báo và uptime, service mesh, bảo vệ của account: agent
+GuardDuty, flow log, log WAF, quét malware, finding GuardDuty), rồi gỡ sạch trong cùng buổi và quét cả account stg
+lẫn account management. Phép kiểm `chuẩn ngành` (seed, k6 bậc 1, 2, 4, 8, dashboard, diễn tập khôi phục, kiểm sâu
+nền tảng managed…) chọn bật từng buổi: mục [Phép kiểm lõi và chuẩn ngành](#phép-kiểm-lõi-và-chuẩn-ngành). Thiết kế:
 [ADR-0034](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0034-aws-stage7.md) §13 (tài nguyên ngoài
 state), §14 (buổi AWS); [ADR-0048](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0048-prd-aws.md) §1–§2
 (account, state), §5 (secret), §6 (bootstrap EKS), §9 (kết thúc buổi);
@@ -278,9 +279,10 @@ Không đổi cờ giữa buổi: đổi cờ theo [`paid-features.md`](paid-fea
 Mỗi mục bước và phép kiểm của runbook mở bằng một dòng `Loại:`
 ([ADR-0078](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0078-paid-features-lean-defaults.md) §6). `lõi`
 là phép chứng minh upload, transcode, feed, phát, xác thực, triển khai qua Argo CD (cả commit status `argocd/stg` mà
-promote cần) và đường cảnh báo (luật ở AMP, Alertmanager tới topic SNS của env, email alarm đã xác nhận); bước tạo,
-kiểm, gỡ env; và phép đọc an toàn không tốn tiền (finding GuardDuty). Mọi phép khác là `chuẩn ngành`: dòng `Loại:` của
-nó nêu cờ cần bật và phần thêm vào buổi (thời gian, chi phí, có nguồn).
+promote cần, Job migration của release, image phát hành có ở ECR) và đường cảnh báo (luật ở AMP, Alertmanager tới
+topic SNS của env, email alarm đã xác nhận, probe uptime và cảnh báo của chúng); bước tạo, kiểm, gỡ env; và phép
+đọc an toàn không tốn tiền (finding GuardDuty, trạng thái mesh, flow log, log WAF, tag quét malware). Mọi phép khác
+là `chuẩn ngành`: dòng `Loại:` của nó nêu cờ cần bật và phần thêm vào buổi (thời gian, chi phí, có nguồn).
 
 **Đường mặc định của buổi chỉ chạy `lõi`**, với cờ của file: bước 1–15; ở bước 16 `measure.sh stg --smoke` (mục [Smoke](#smoke)) thay
 cho `measure.sh stg`, rồi các mục `lõi` của bước 16; bỏ bước 17–19; finding bảo mật; bước 20–31. Buổi muốn chạy thêm
@@ -293,6 +295,13 @@ buổi, rồi chạy mục đó ở chỗ của nó:
 | [Bucket media không liệt kê được](#bucket-media-không-liệt-kê-được) | không cần cờ |
 | [Dashboard SLO khi giữ tải](#dashboard-slo-khi-giữ-tải) | `managed_grafana` `session` |
 | [Nền tảng EKS và TLS Postgres](#nền-tảng-eks-và-tls-postgres) | không cần cờ |
+| [Service mesh: danh tính lạ bị từ chối](#service-mesh-danh-tính-lạ-bị-từ-chối) | không cần cờ; tạo rồi xoá pod trong `svp` |
+| [Độ trễ mesh khi giữ tải](#độ-trễ-mesh-khi-giữ-tải) | không cần cờ; cần thang k6 đang giữ tải |
+| [Chi phí theo namespace](#chi-phí-theo-namespace) | không cần cờ; đoạn dashboard cần `managed_grafana` `session` |
+| [Vận hành pod: timeout, grace, zone, DLQ](#vận-hành-pod-timeout-grace-zone-dlq) | không cần cờ |
+| [Trải zone và chạy thử DLQ](#trải-zone-và-chạy-thử-dlq) | không cần cờ; cần `dlq-replay` và `zoneSpread` ở `svp-gitops` |
+| [Chặn quá tải và pool khi giữ tải](#chặn-quá-tải-và-pool-khi-giữ-tải) | không cần cờ; cần thang k6 đã chạy |
+| [Canary gRPC theo request](#canary-grpc-theo-request) | không cần cờ; cần bản phát hành gRPC có canary dưới thang k6 |
 | [Gói Free của media](#gói-free-của-media) | không cần cờ |
 | [Phép kiểm edge](#phép-kiểm-edge), [edge premium](#phép-kiểm-edge-premium) | không cần cờ |
 | [Kafka và Valkey managed](#kafka-và-valkey-managed) | không cần cờ; (e) cần `managed_grafana` `session` |
@@ -343,7 +352,11 @@ buổi, rồi chạy mục đó ở chỗ của nó:
 Bước tay chen giữa các bước script: đọc cờ của buổi trước bước 3 (mục **Cờ chi phí của buổi**), xác nhận email của alarm
 sau bước 9 (mục 6–10), tunnel tới API sau bước 9 và trước bước 11 (mục **Tunnel tới API**, giữ chạy tới hết bước 22),
 làm nóng cache sau bước 11 và trước bước 12 (mục **Làm nóng cache**), phép kiểm của bước 16 (mục con của **16. Đo**:
-`lõi` theo đường mặc định, `chuẩn ngành` khi buổi bật; clip của phép transcode chuẩn ngành sinh trong lúc chờ bước 9),
+`lõi` theo đường mặc định, `chuẩn ngành` khi buổi bật; clip của phép transcode chuẩn ngành sinh trong lúc chờ bước 9;
+mục **Bảo vệ của account** chạy ≥ 15 phút sau bước 15, mục **Uptime** ≥ 30 phút sau mốc `edge-healthy`, (d) của
+mục **Xác thực qua CloudFront** giữ trang web mở hơn 15 phút, mục **Canary gRPC theo request** khi PR promote của
+`svp-gitops` merge dưới thang k6, mục **Trải zone và chạy thử DLQ** sau lượt sync của bản `svp-gitops` có `dlq-replay`
+và `zoneSpread`, mục **Chặn quá tải và pool khi giữ tải** sau thang k6),
 đọc bản copy ở `svp-backup` sau bước 17 (mục **17–19**, khi buổi bật diễn tập), đọc finding bảo mật trước bước 20 (mục
 **Finding bảo mật của buổi**), chạy lại truy vấn dữ liệu sau bước 31 (mục **Kết thúc buổi**, khi buổi đã ghi nó).
 
@@ -730,6 +743,124 @@ Mong 40 hex, `success` và `on-main`; dán lại ba dòng. Commit trong `stg-ref
 promote prd** của [`session-prd.md`](session-prd.md#cổng-promote-prd-trước-mọi-lệnh-tốn-tiền)) khi buổi này qua các phép
 `lõi` của mục **Phép kiểm transcode** ((a), (f)).
 
+#### Migration của release
+
+Loại: `lõi`.
+
+Mỗi release có database chạy Job `<release>-migrate` (hook PreSync của Argo CD, role migrator) trước khi pod mới thay pod
+cũ; runner `internal/dbmigrate` của repo code đặt `lock_timeout` trên mọi kết nối của nó và log lại giá trị đã đặt
+([ADR-0068](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0068-zero-downtime-migrations.md), "Xác
+nhận"). Chỉ đọc, không chạm database, sau bước 15, tunnel mở:
+
+```sh
+for r in user-service video-service engagement-service feed-service; do
+  echo "== $r"
+  AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp logs "job/$r-migrate" |
+    grep -E '"migration settings"|"migrations up to date"'
+done
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n argocd get applications.argoproj.io \
+  user-service video-service engagement-service feed-service \
+  -o custom-columns=NAME:.metadata.name,SYNC:.status.sync.status,HEALTH:.status.health.status
+```
+
+Mong mỗi release hai dòng JSON: `"msg":"migration settings"` có `"lock_timeout":"2s"` (ngưỡng của runner), rồi
+`"msg":"migrations up to date"`; bốn Application `Synced` `Healthy`. Database của env mới rỗng, nên phép này chỉ chứng
+minh runner đặt ngưỡng khoá trên RDS và release đi qua PreSync; số đo khoá trên bảng lớn là `make migration-drill` của
+repo code. Job chạy xong giữ pod và log tới lượt sync kế, lượt đó thay nó bằng Job mới cùng tên: dòng in ra là của lượt
+gần nhất, vẫn đạt. Không đọc được log (`NotFound`, pod đã mất cùng node bị Karpenter gỡ): ghi lại dòng lỗi, không sync
+lại để tạo Job. Dán cả năm output.
+
+#### Xác thực qua CloudFront
+
+Loại: `lõi`; (d) giữ một trang web mở hơn 15 phút.
+
+Phép kiểm buổi của mục "Xác nhận" của
+[ADR-0069](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0069-auth-hardening.md#xác-nhận), qua đường của
+người dùng thật (CloudFront `svp-stg-api`, WAF, ALB edge, Envoy, gateway): header bảo mật, mật khẩu phổ biến bị chặn, hạn
+access token, web refresh trước hạn. Email thử luôn dưới `example.test`; không lệnh nào in token. `register` có rate limit
+theo IP: mã `429` thì chờ số giây của header `Retry-After` rồi chạy lại đúng lệnh đó; không xoá khoá nào ở Valkey của stg.
+
+```sh
+api=https://api.$(jq -r .domain "$SVP_SESSION_DIR/cluster-values.json")
+```
+
+(a) Header và mã `401` (email không có tài khoản, không ghi gì):
+
+```sh
+curl -sS -D - -o /dev/null -X POST "$api/auth/login" -H 'Content-Type: application/json' \
+  -d '{"email":"session-nobody@example.test","password":"not-a-real-password-1"}' |
+  grep -i -E '^(HTTP/|cache-control|x-content-type-options|content-security-policy)'
+```
+
+Mong `HTTP/2 401`, `cache-control: no-store`, `x-content-type-options: nosniff` và `content-security-policy: default-src
+'none'; frame-ancestors 'none'`. Thiếu một header: gọi thẳng gateway qua port-forward (vào network namespace của pod,
+không qua CloudFront) để biết header mất ở gateway hay bị policy header của CloudFront ghi đè; dán cả hai output:
+
+```sh
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp port-forward svc/gateway 18080:8080 >/dev/null & pf=$!
+sleep 3
+curl -sS -D - -o /dev/null -X POST http://127.0.0.1:18080/auth/login -H 'Content-Type: application/json' \
+  -d '{"email":"session-nobody@example.test","password":"not-a-real-password-1"}' |
+  grep -i -E '^(HTTP/|cache-control|x-content-type-options|content-security-policy)'
+kill "$pf"
+```
+
+(b) Mật khẩu phổ biến bị từ chối trước khi tạo user:
+
+```sh
+curl -sS -w '\n%{http_code}\n' -X POST "$api/auth/register" -H 'Content-Type: application/json' \
+  -d '{"email":"session-blocked@example.test","password":"12345678"}'
+```
+
+Mong body problem có `"code":"PASSWORD_BLOCKLISTED"`, rồi `400`.
+
+(c) Hạn access token: tạo một user thử (như smoke vẫn làm), đăng nhập, chỉ in `expires_at`. Mật khẩu ngẫu nhiên đi vào
+`curl` qua stdin:
+
+```sh
+e="session-ttl-$(openssl rand -hex 4)@example.test"; p=$(openssl rand -hex 16)
+body=$(jq -nc --arg e "$e" --arg p "$p" '{email: $e, password: $p}')
+curl -sS -o /dev/null -w '%{http_code}\n' -X POST "$api/auth/register" -H 'Content-Type: application/json' -d @- <<<"$body"
+date -u +%FT%TZ; curl -sS -X POST "$api/auth/login" -H 'Content-Type: application/json' -d @- <<<"$body" | jq -r .expires_at
+```
+
+Mong `201`, rồi `expires_at` cách giờ in ra khoảng 15 phút (TTL access token của ADR-0069). Dán ba dòng.
+
+(d) Web refresh trước hạn, bằng user của (c): mở `https://<domain>/login`, email là `echo "$e"`, mật khẩu chép vào
+clipboard bằng `printf %s "$p" | pbcopy` (không in ra). Đăng nhập, giữ trang feed mở hơn 15 phút, rồi bấm sang `/me`.
+Mong vẫn đăng nhập (BFF đã đổi token trước `expires_at`), không bị đưa về `/login`; ghi giờ đăng nhập và giờ bấm. Xong:
+`unset p body; printf '' | pbcopy`.
+
+#### Image của release dlq-replay ở ECR
+
+Loại: `lõi`.
+
+Image phát hành tới ECR của account qua job `ecr-copy` của CI repo code, không qua mục **Làm nóng cache**
+([ADR-0062](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0062-ecr-registry-ci-oidc.md) §3). Chân
+`dlq-replay` mà `svp-gitops` ghim cho stg phải có ở repo `svp-backend/dlq-replay` của ECR stg (repo do `aws/accounts/stg`
+tạo). Chỉ đọc, bất kỳ lúc nào sau bước 1:
+
+```sh
+git -C ../gitops fetch origin
+dig=$(git -C ../gitops show origin/main:envs/stg/images/dlq-replay.yaml | sed -n 's/^ *digest: *"\(sha256:[0-9a-f]*\)"/\1/p')
+echo "$dig"
+AWS_PROFILE=anhnv-stg aws ecr describe-images --repository-name svp-backend/dlq-replay --image-ids "imageDigest=$dig" \
+  --region ap-southeast-1 --query 'imageDetails[0].[imageDigest,imagePushedAt]' --output text
+```
+
+Mong digest `sha256:…` hai lần, rồi giờ đẩy. `ImageNotFoundException`: job `ecr-copy` của commit đó chưa chạy hay đã lỗi
+(vd repo ECR chưa có lúc CI chạy); chạy lại job đó của lượt `images.yml` trên `main` của repo code, không dùng
+`ecr-warm.sh` (chỉ cho image bên thứ ba). Lượt chạy theo commit của tag ghim (`git -C ../gitops show
+origin/main:envs/stg/images/dlq-replay.yaml` in tag):
+
+```sh
+sha=$(git -C ../backend rev-parse '<tag>^{commit}')
+gh run list -R anhnvcoder/svp-backend --workflow images.yml --commit "$sha" --json databaseId,conclusion --jq '.[]'
+gh run rerun <databaseId> --failed -R anhnvcoder/svp-backend
+```
+
+Rồi chạy lại khối đọc. Lượt chạy quá cũ để chạy lại hay vẫn không có digest: dán output cho AI.
+
 #### Nền tảng EKS và TLS Postgres
 
 Loại: `chuẩn ngành`, không cần cờ. Thêm: chỉ đọc, trừ (b) tắt một instance Spot và chờ node thay; ADR không có số thời
@@ -826,6 +957,228 @@ AWS_PROFILE=anhnv-stg aws logs describe-log-streams --log-group-name /aws/elasti
 Mong năm loại log `api`, `audit`, `authenticator`, `controllerManager`, `scheduler`; `secrets`; `false`, `true`; một policy
 `KafkaBrokerStorageUtilization` ở mức của ADR-0058 §4 (API từ chối `kafka.t3.small` thì apply đã đỏ ở bước 9: dán lỗi cho AI);
 `slow-log cloudwatch-logs json active`; một log stream (chưa có lệnh chậm nào thì rỗng: ghi lại, không là trượt).
+
+#### Service mesh
+
+Loại: `lõi`.
+
+Istio ambient chạy trên mọi node, bắt mọi pod của `svp` và pod Envoy; mỗi release có PeerAuthentication `STRICT` và
+AuthorizationPolicy ([ADR-0075](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0075-service-mesh.md);
+thành phần trên EKS ở `docs/reference/eks.md` của repo code). Chỉ đọc, tunnel mở, sau bước 15, trước thang k6:
+
+```sh
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg get nodes -L topology.kubernetes.io/zone,karpenter.sh/nodepool
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg get nodes \
+  -o jsonpath='{range .items[*]}{.metadata.name} {.spec.taints[*].key}{"\n"}{end}' | grep -c cni.istio.io/not-ready
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n istio-system get deploy,daemonset
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp-mesh get deploy,pdb waypoint
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp get pods --field-selector=status.phase=Running \
+  -o custom-columns=NAME:.metadata.name,REDIRECTION:'.metadata.annotations.ambient\.istio\.io/redirection'
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n envoy-gateway-system get pods \
+  -l gateway.envoyproxy.io/owning-gateway-name=svp \
+  -o custom-columns=NAME:.metadata.name,REDIRECTION:'.metadata.annotations.ambient\.istio\.io/redirection'
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp get peerauthentications.security.istio.io \
+  -o custom-columns=NAME:.metadata.name,MODE:.spec.mtls.mode
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp get authorizationpolicies.security.istio.io
+```
+
+Mong, theo thứ tự: node của nhóm hệ thống (cột `nodepool` trống) và node Karpenter; `0` (istiod gỡ taint khởi động của
+node Karpenter khi istio-cni và ztunnel Ready trên node đó; node còn taint là mesh chưa sẵn sàng ở đó); Deployment
+`istiod` `2/2`, DaemonSet `istio-cni-node` và `ztunnel` có `DESIRED`, `READY` bằng số node của lệnh đầu; waypoint `2/2`
+và PDB `MIN AVAILABLE 1`; mọi pod `Running` của `svp` và hai pod Envoy có `enabled`; mỗi release một PeerAuthentication
+`STRICT`; mỗi release một AuthorizationPolicy, bốn release gRPC thêm `<release>-waypoint`. Dán cả tám output. Khác mong
+đợi: không chạy thang k6, theo runbook
+[`mesh-traffic-denied.md`](https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks/mesh-traffic-denied.md)
+của repo code và dán output cho AI.
+
+#### Service mesh: danh tính lạ bị từ chối
+
+Loại: `chuẩn ngành`, không cần cờ; tạo rồi xoá một ServiceAccount và hai pod trong `svp`. Thêm: khoảng 3 phút, hai pod
+nhỏ trên node có sẵn; chi phí của mesh chưa có số ([phụ lục ADR-0075, Số
+đo](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0075-service-mesh.md#số-đo)).
+
+Ca M-2 của drill mesh (`deploy/k8s/drills/mesh/m-2/` của repo code, Chainsaw chỉ chạy trên k3d) làm tay trên EKS: pod
+mang nhãn của gateway, trong mesh, dưới một ServiceAccount không policy nào nêu, gọi gRPC health của bốn service gRPC qua
+Service; waypoint từ chối. Đối chứng: pod giống hệt dưới ServiceAccount `gateway` được trả lời, nên lời từ chối là của
+danh tính, không của mạng. Hai pod chạy image của một pod web đang chạy, theo digest (Kyverno của `svp` chỉ nhận bản phát
+hành đã ký), không bao giờ Ready (readiness gate không ai đặt, nên Service của gateway không gửi request tới chúng), và
+chạy probe `deploy/k8s/drills/templates/ambient-probe.js` của bản clone repo code (điều kiện 2). Khối dưới xoá mọi thứ nó
+tạo khi kết thúc, cả khi một lệnh lỗi hay bị Ctrl-C:
+
+```sh
+js=$(cat ../backend/deploy/k8s/drills/templates/ambient-probe.js)
+img=$(AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp get pods -l app.kubernetes.io/name=web,app.kubernetes.io/component=server \
+  --field-selector=status.phase=Running -o jsonpath='{.items[0].spec.containers[?(@.name=="web")].image}')
+echo "$img" | sed "s/$SVP_AWS_STG_ACCOUNT_ID/<account>/"
+mesh_pod() {          # pod $1 under ServiceAccount $2, labelled as the gateway so its NetworkPolicies apply
+  cat <<EOF
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: $1
+  namespace: svp
+  labels:
+    app.kubernetes.io/name: gateway
+    app.kubernetes.io/component: server
+    app.kubernetes.io/managed-by: svp-session-mesh
+    istio.io/dataplane-mode: ambient
+spec:
+  serviceAccountName: $2
+  automountServiceAccountToken: false
+  restartPolicy: Never
+  terminationGracePeriodSeconds: 1
+  activeDeadlineSeconds: 900
+  readinessGates:
+    - conditionType: session.svp/not-a-backend
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: probe
+      image: $img
+      command: [/nodejs/bin/node, -e, "setTimeout(() => {}, 900000)"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: [ALL]
+      resources:
+        requests: {cpu: 10m, memory: 32Mi}
+        limits: {cpu: 200m, memory: 128Mi}
+EOF
+}
+(
+  trap 'AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp delete pods,serviceaccounts \
+    -l app.kubernetes.io/managed-by=svp-session-mesh --grace-period=1' EXIT
+  trap 'exit 130' INT TERM
+  { printf '%s\n' 'apiVersion: v1' 'kind: ServiceAccount' 'metadata:' '  name: session-mesh-stranger' '  namespace: svp' \
+      '  labels:' '    app.kubernetes.io/managed-by: svp-session-mesh' 'automountServiceAccountToken: false'
+    mesh_pod session-mesh-stranger session-mesh-stranger
+    mesh_pod session-mesh-gateway gateway
+  } | AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp create -f - || exit 1
+  AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp wait pods -l app.kubernetes.io/managed-by=svp-session-mesh \
+    --for=condition=ContainersReady --timeout=120s || exit 1
+  sleep 5
+  AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp get pods -l app.kubernetes.io/managed-by=svp-session-mesh \
+    -o custom-columns=NAME:.metadata.name,SA:.spec.serviceAccountName,REDIRECTION:'.metadata.annotations.ambient\.istio\.io/redirection'
+  for from in session-mesh-stranger session-mesh-gateway; do
+    for t in user-service:9101 video-service:9102 engagement-service:9103 feed-service:9104; do
+      printf '%s %s: ' "$from" "${t%%:*}"
+      AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp exec "pod/$from" -c probe -- \
+        /nodejs/bin/node -e "$js" grpc "${t%%:*}.svp.svc.cluster.local:${t##*:}" </dev/null
+    done
+  done
+)
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp get pods,serviceaccounts -l app.kubernetes.io/managed-by=svp-session-mesh
+```
+
+Mong: một ref `<account>.dkr.ecr…@sha256:…`; hai pod cột `REDIRECTION` `enabled`; bốn dòng
+`session-mesh-stranger …: dns answered http=200 grpc=7` (`PERMISSION_DENIED`, lời từ chối RBAC của waypoint cho request
+gRPC; `http=403 grpc=` cũng đạt); bốn dòng `session-mesh-gateway …: dns answered http=200 grpc=0`; dòng cuối `No
+resources found in svp namespace.` Pod lạ được trả lời `grpc=0`: AuthorizationPolicy `<release>-waypoint` không chặn,
+dừng, dán output cho AI. Pod `gateway` nhận `refused` hay `silent`: đường mesh hỏng, theo runbook
+`mesh-traffic-denied.md` (mục trên). `create` bị từ chối (Kyverno nêu `image not allowed …`, hay `AlreadyExists` của
+một lượt bị ngắt): dán dòng lỗi; khối đã xoá thứ nó tạo, chạy lại khối. Dòng cuối còn tài nguyên: chạy lại đúng lệnh
+`delete` của `trap` rồi lệnh cuối, để bước 20 không gặp chúng.
+
+#### Bảo vệ của account: GuardDuty, flow log, log WAF, quét malware
+
+Loại: `lõi`; chạy ≥ 15 phút sau bước 15 (GuardDuty báo coverage EKS vài phút sau khi add-on `ACTIVE`).
+
+Bảo vệ cơ bản của account env ([ADR-0060](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0060-org-detection-logging.md)
+§5, §6; bucket của Log Archive ở điều kiện 6): agent GuardDuty trên mọi node và coverage EKS, flow log của VPC, log WAF
+che header đăng nhập, quét Malware Protection for S3 trên `uploads`. Chỉ đọc, cộng một request tới media; dòng "Log WAF,
+Malware Protection S3, data event prd" và "Flow log" của bảng "Thêm mỗi buổi" ở [phụ lục ADR-0060
+§12](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0060-org-detection-logging.md#thêm-mỗi-buổi)
+đã gồm phần dùng thêm. Biến của mục, một lần:
+
+```sh
+values=$SVP_SESSION_DIR/cluster-values.json
+L=$SVP_AWS_LOG_ACCOUNT_ID A=$SVP_AWS_STG_ACCOUNT_ID
+```
+
+(a) Add-on `aws-guardduty-agent`, DaemonSet của nó trên mọi node (cả node Karpenter), coverage EKS của cluster:
+
+```sh
+AWS_PROFILE=anhnv-stg aws eks describe-addon --cluster-name svp-stg --addon-name aws-guardduty-agent --region ap-southeast-1 \
+  --query 'addon.[status,addonVersion]' --output text
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg get nodes --no-headers | wc -l
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n amazon-guardduty get daemonset aws-guardduty-agent
+det=$(AWS_PROFILE=anhnv-stg aws guardduty list-detectors --region ap-southeast-1 --query 'DetectorIds[0]' --output text)
+AWS_PROFILE=anhnv-stg aws guardduty list-coverage --detector-id "$det" --region ap-southeast-1 --output text \
+  --query "Resources[?ResourceDetails.EksClusterDetails.ClusterName=='svp-stg'].[CoverageStatus,Issue]"
+```
+
+Mong `ACTIVE` với version ghim ở `aws/modules/eks/addons.tf`; `DESIRED`, `READY` của DaemonSet bằng số node; `HEALTHY
+None`. `UNHEALTHY` hay không dòng nào: chờ 10 phút, chạy lại lệnh cuối một lần; vẫn vậy thì dán output (cột `Issue` nêu
+lý do) cho AI.
+
+(b) Flow log của VPC vào bucket `svp-flowlogs-<log>-ap-southeast-1` dưới tiền tố của account env (Parquet, gom mỗi 60 s,
+object tới trễ tới ~10 phút):
+
+```sh
+AWS_PROFILE=anhnv-stg aws ec2 describe-flow-logs --region ap-southeast-1 \
+  --filter "Name=resource-id,Values=$(jq -r .vpcId "$values")" \
+  --query 'FlowLogs[].[FlowLogStatus,DeliverLogsStatus,LogDestinationType,TrafficType]' --output text
+p="AWSLogs/aws-account-id=$A/aws-service=vpcflowlogs/aws-region=ap-southeast-1/$(date -u +year=%Y/month=%m/day=%d)/"
+AWS_PROFILE=anhnv-log-ro aws s3 ls "s3://svp-flowlogs-$L-ap-southeast-1/$p" --recursive --region ap-southeast-1 | tail -n 3 |
+  sed "s/$A/<account>/g"
+```
+
+Mong `ACTIVE SUCCESS s3 ALL`; ba object `.parquet` mới nhất, cái cuối trong 10 phút gần đây. Rỗng: đọc lại sau 10 phút
+(ngay sau 00:00 UTC thư mục ngày mới còn rỗng: đọc lại sau 10 phút); vẫn rỗng mà dòng đầu đúng thì dán cả hai output.
+
+(c) Log WAF của media che `authorization`, `cookie`: một request mang hai header giả tới object probe của media (web ACL
+`svp-stg-media`), rồi đọc bản ghi của đúng request đó ở bucket log WAF. Lệnh đọc chỉ in tên header và giá trị của hai header
+đó, không in cả bản ghi (bản ghi có IP người xem, URI, account):
+
+```sh
+since=$(date -u +%Y-%m-%dT%H:%M:%S)
+curl -4 -s -o /dev/null -w '%{http_code}\n' -H 'Authorization: Bearer session-redaction-check' \
+  -H 'Cookie: svp_session_check=1' "https://$(jq -r .mediaDomain "$values")/media/uptime-probe.txt"
+```
+
+Mong `200`. Mười phút sau (WAF giao file mỗi năm phút):
+
+```sh
+b=aws-waf-logs-svp-$L-us-east-1
+AWS_PROFILE=anhnv-log-ro aws s3api list-objects-v2 --bucket "$b" --prefix "AWSLogs/$A/WAFLogs/" --region us-east-1 \
+  --query 'Contents[].[Key,LastModified]' --output json |
+  jq -r --arg s "$since" '(. // [])[] | select((.[0] | contains("/svp-stg-media/")) and .[1] >= $s) | .[0]' |
+  while read -r k; do AWS_PROFILE=anhnv-log-ro aws s3 cp "s3://$b/$k" - --region us-east-1 | gunzip -c; done |
+  jq -c 'select(any(.httpRequest.headers[]?; (.name | ascii_downcase) == "authorization"))
+    | [.httpRequest.headers[]? | .name as $n
+      | if ($n | ascii_downcase | IN("authorization", "cookie")) then "\($n)=\(.value)" else $n end]' | head -n 3
+```
+
+Mong một dòng (probe uptime không gửi `Authorization`, nên chỉ request trên khớp): danh sách tên header, trong đó
+`authorization=REDACTED` và `cookie=REDACTED`. Hai header mang giá trị gửi đi: logging của web ACL mất `redacted_fields`
+(`aws/modules/waf/main.tf`), dán dòng đó cho AI. Không dòng nào: đọc lại sau năm phút; vẫn không thì dán output của lệnh
+`list-objects-v2` (chỉ số key) cho AI.
+
+(d) Malware Protection for S3: plan của `uploads` `ACTIVE`, và object video mới nhất mà smoke tải lên mang tag kết quả
+quét (luồng transcode không đổi: smoke đã tới `READY`):
+
+```sh
+AWS_PROFILE=anhnv-stg aws guardduty list-malware-protection-plans --region ap-southeast-1 \
+  --query 'MalwareProtectionPlans[].MalwareProtectionPlanId' --output text
+AWS_PROFILE=anhnv-stg aws guardduty get-malware-protection-plan --malware-protection-plan-id <id trên> --region ap-southeast-1 \
+  --query '[Status,ProtectedResource.S3Bucket.BucketName]' --output text | sed "s/$A/<account>/g"
+up=$(jq -r .uploadsBucket "$values")
+key=$(AWS_PROFILE=anhnv-stg aws s3api list-objects-v2 --bucket "$up" --region ap-southeast-1 --output text \
+  --query "sort_by(Contents[?Key != 'malware-protection-resource-validation-object'], &LastModified)[-1].Key"); echo "$key"
+AWS_PROFILE=anhnv-stg aws s3api get-object-tagging --bucket "$up" --key "$key" --region ap-southeast-1 \
+  --query "TagSet[?Key=='GuardDutyMalwareScanStatus'].Value" --output text
+```
+
+Mong một id; `ACTIVE svp-stg-uploads-<account>-ap-southeast-1`; key của video smoke; `NO_THREATS_FOUND`. Dòng cuối rỗng:
+GuardDuty chưa quét xong, đọc lại sau một phút. Không key nào (lệnh `list-objects-v2` lỗi hay in `None`: bucket không còn
+video, vd smoke chưa chạy): tải một video qua app (`AWS_PROFILE=anhnv-stg make -C ../backend eks-smoke CONTEXT=svp-stg
+DOMAIN=<domain>`) rồi chạy lại ba lệnh cuối. Plan `WARNING`, `ERROR` hay tag khác: dán output cho AI.
 
 #### Alarm tới email
 
@@ -1481,6 +1834,344 @@ còn trong retention của workspace AMP, nhưng log ứng dụng và `aws/spans
 `aws/accounts/<env>`, ADR-0063 §10): quá hạn đó thì hai phần log, trace rỗng là đúng retention, ghi "ngoài retention", chỉ so metric.
 Dòng `query failed` là truy vấn hỏng, không phải dữ liệu mất: lỗi nằm trên terminal (stderr không vào file); sửa nguyên nhân (như
 `AWS_PROFILE=anhnv-sso aws sso login --region us-east-1` khi phiên SSO hết hạn) rồi chạy lại `persist`.
+
+#### Độ trễ mesh khi giữ tải
+
+Loại: `chuẩn ngành`, không cần cờ; cần thang k6 đang giữ tải (mục **Seed và thang k6**). Thêm: truy vấn AMP và `kubectl
+top`, chỉ đọc; chi phí của mesh chưa có số ([phụ lục ADR-0075, Số
+đo](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0075-service-mesh.md#số-đo)).
+
+Độ trễ mesh là p99 của `rpc.client.call.duration` ở gateway trừ p99 của `rpc.server.call.duration` ở service, cùng
+method, cửa sổ 5 phút dưới tải ([ADR-0075](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0075-service-mesh.md),
+Hệ quả); cùng lúc đọc request mỗi giây của từng pod (waypoint cân tải theo request, không theo kết nối) và RAM, CPU của mesh.
+Chạy khi một bậc k6 đang giữ tải: mốc `k6-<n>-start` của `timeline.tsv` cộng 2 phút lên tải, còn ≥ 5 phút giữ. Terminal có
+khối biến và hàm dùng chung của mục [Phép kiểm nền tảng managed](#phép-kiểm-nền-tảng-managed):
+
+```sh
+c='histogram_quantile(0.99, sum by (le, rpc_method) (rate(rpc_client_call_duration_seconds_bucket{service_name="gateway"}[5m])))'
+s='histogram_quantile(0.99, sum by (le, rpc_method) (rate(rpc_server_call_duration_seconds_bucket{service_name!="gateway"}[5m])))'
+echo "== p99 gateway, client (s)"; promql "$c"
+echo "== p99 service, server (s)"; promql "$s"
+echo "== p99 mesh (s)"; promql "$c - on (rpc_method) $s"
+echo "== requests per second per pod"
+promql 'sum by (service_name, k8s_pod_name) (rate(rpc_server_call_duration_seconds_count{k8s_namespace_name="svp"}[5m]))'
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n istio-system top pods
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp-mesh top pods
+```
+
+Mong: mỗi method gRPC mà gateway gọi một dòng ở ba truy vấn đầu, dòng mesh là số đo (giây; giá trị âm nhỏ là sai số ước
+lượng của histogram, ghi như đo); với service nhiều replica, request mỗi giây của các pod cùng `service_name` xấp xỉ
+nhau (cân theo kết nối thì một pod nhận gần hết); RAM, CPU của từng pod `istiod`, `istio-cni-node`, `ztunnel`, waypoint.
+Dán cả sáu output và số của bậc k6 lúc đo; số vào mục "Số đo" của phụ lục ADR-0075. Truy vấn rỗng: dán output và log của
+Collector (lệnh cuối của mục **Nền tảng managed (c)**).
+
+#### Uptime: probe và cảnh báo
+
+Loại: `lõi`; chạy ≥ 30 phút sau mốc `edge-healthy` (probe cần chạy đủ lâu; trước mốc đó ALB chưa có target khoẻ nên probe lỗi).
+
+Blackbox exporter trong cluster probe `web`, `api`, `media` qua domain công khai (CloudFront, WAF, ALB, Envoy) và DNS của
+ba tên; SLO `public-uptime` và nhóm luật `svp-uptime` ở ruler AMP
+([ADR-0074](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0074-cost-uptime.md); luồng probe ở
+`docs/explanation/cost-and-uptime.md` của repo code). Đường mặc định thường đã qua 30 phút đó khi tới mục này; chưa đủ thì
+làm các mục `lõi` khác trước, chạy mục này cuối, trước mục **Finding bảo mật của buổi**. Terminal có khối dùng chung của
+mục [Phép kiểm nền tảng managed](#phép-kiểm-nền-tảng-managed):
+
+```sh
+d=$(jq -r .domain "$SVP_SESSION_DIR/cluster-values.json")
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp-obs get pods -l app.kubernetes.io/name=prometheus-blackbox-exporter -o wide
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp-obs get probes.monitoring.coreos.com
+echo "$(( ($(date +%s) - $(awk -F '\t' '$3 == "edge-healthy" { t = $2 } END { print t }' "$SVP_SESSION_DIR/timeline.tsv")) / 60 )) min"
+{ promql 'probe_success{job="blackbox-http"}'
+  promql 'min_over_time(probe_success{job="blackbox-http"}[30m])'
+  promql '(probe_ssl_earliest_cert_expiry{job="blackbox-http"} - time()) / 86400'
+  promql 'probe_success{job="blackbox-dns"}'; } | sed "s/$d/<domain>/g"
+amp_get api/v1/alerts | jq -r '.data.alerts[] | select(.labels.alertname | test("^(Uptime|TLSCert|PublicUptime)"))
+  | "\(.labels.alertname) \(.labels.severity) \(.state) \(.activeAt)"'
+```
+
+Mong: hai pod `Running` (hai zone là ý định, không phải điều kiện: pod trải zone bằng `ScheduleAnyway`, nên cả hai
+cùng một zone vẫn hợp lệ, ghi zone vào kết quả; lỗi thật là pod `Pending`, `CrashLoopBackOff` hay chỉ còn một pod); sáu
+`Probe` (`uptime-web`, `uptime-api`, `uptime-media`, `uptime-dns-web`, `uptime-dns-api`, `uptime-dns-media`); số phút ≥ 30;
+ba dòng `probe_success` giá trị `1`, ba dòng `min_over_time` giá trị `1` (xanh suốt 30 phút, tính từ `edge-healthy`); ba
+dòng số ngày tới hạn cert lớn hơn 21 (cert ACM tự gia hạn); ba dòng DNS giá trị `1`; không dòng `UptimeProbesAbsent`, `TLSCert…`.
+`PublicUptimeBudgetBurn` còn cháy là probe lỗi lúc dựng (mục **15. Chờ Argo CD**): ghi lại, không điều tra.
+Probe nào `0`: dán output và theo runbook
+[`public-uptime-budget-burn.md`](https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks/public-uptime-budget-burn.md).
+
+Sau bước 31, hộp thư `alarm_email`: thư `UptimeProbesAbsent` nào trong buổi, giờ UTC của nó. Mong không thư nào lúc gỡ:
+bước 20 xoá luật ở AMP trước khi gỡ blackbox (bước 20 in `note left in AMP: …` thì luật còn đánh giá và thư tới là đúng:
+xoá luật bằng lệnh của dòng đó). Thư lúc dựng: so giờ của nó với mốc `observability-healthy`, `svp-root-healthy`, `edge-healthy`, dán cho
+AI.
+
+#### Chi phí theo namespace
+
+Loại: `chuẩn ngành`, không cần cờ; đoạn dashboard cần `managed_grafana` `session` (AMG $18 mỗi buổi stg, mục **Dashboard
+SLO khi giữ tải**). Thêm: truy vấn AMP, một port-forward, chỉ đọc; OpenCost chạy ở mọi buổi, phần của nó ~$0,07–0,16
+mỗi buổi stg ([phụ lục ADR-0074
+§11](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0074-cost-uptime.md#mỗi-buổi-4-giờ-mỗi-env)).
+
+OpenCost tính chi phí CPU, RAM được cấp phát theo namespace và service bằng giá on-demand công khai, đọc AMP qua sidecar
+`sigv4proxy`; nhóm luật `svp-cost` ở ruler AMP ghi ba recording rule
+([ADR-0074](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0074-cost-uptime.md); nghĩa và giới hạn của
+số ở `docs/explanation/cost-and-uptime.md` của repo code: node Spot của stg tính theo giá on-demand, nên số stg là trần).
+Sau ít nhất 30 phút chạy, terminal có khối dùng chung của mục [Phép kiểm nền tảng managed](#phép-kiểm-nền-tảng-managed):
+
+```sh
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp-obs get pods -l app.kubernetes.io/instance=opencost
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp-obs logs deploy/opencost -c opencost --since=15m |
+  grep -i -E 'pricing|error' | tail -n 20
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp-obs logs deploy/opencost -c sigv4proxy --tail=20
+promql 'namespace:svp_compute_cost_usd_per_hour:sum'
+promql 'service:svp_compute_cost_usd_per_hour:sum'
+promql 'cluster:svp_node_cost_usd_per_hour:sum'
+```
+
+Mong: pod `Running`, `READY` đủ; log `opencost` có dòng tải giá AWS xong, không dòng lỗi lặp lại (lời gọi
+`DescribeSpotPriceHistory` bị từ chối trên stg là chủ ý, mục "Vì sao không Spot Data Feed" của trang giải thích); log
+`sigv4proxy` không có `403`; mỗi namespace có pod một dòng USD mỗi giờ lớn hơn 0 (`svp`, `svp-obs`, `istio-system`…), mỗi
+service của `svp` một dòng, tổng cluster lớn hơn tổng các namespace (phần chưa cấp phát). Dán cả sáu output.
+
+API Allocation đọc thẳng OpenCost, đối chiếu với recording rule. Proxy của API server không dùng được: lời gọi tới pod từ
+control plane, mà NetworkPolicy của OpenCost chỉ mở cổng 9003 cho Prometheus; `port-forward` vào thẳng network namespace
+của pod. Cùng terminal, port-forward chạy nền rồi dừng ngay sau `curl`:
+
+```sh
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp-obs port-forward svc/opencost 9003:9003 >/dev/null & pf=$!
+sleep 3
+curl -s -m 30 'http://127.0.0.1:9003/allocation/compute?window=1h&aggregate=namespace' | jq '.data[0] | map_values(.totalCost)'
+kill "$pf"
+```
+
+Mong mỗi namespace một số USD của giờ qua, cùng cỡ với dòng của namespace đó ở `namespace:svp_compute_cost_usd_per_hour:sum`
+(một giờ); `__idle__` bỏ qua (OpenCost tính phần capacity, idle sai khi tắt metric kube-state-metrics v1, như trang giải
+thích ghi). `curl` không in gì: port-forward chưa lên sau 3 s, chạy lại khối; `kill` báo không có tiến trình là port-forward
+đã chết sớm, dán lỗi của nó (chạy lại lệnh đầu không có `>/dev/null &`). Dán JSON.
+
+Cờ `managed_grafana` khác `off`, trên AMG (mục **Dashboard SLO khi giữ tải**): dashboard `svp-cost` và `svp-uptime`, khung
+1 giờ gần nhất; chụp màn hình (che domain, account) hay ghi số đọc được của mỗi panel.
+
+#### Vận hành pod: timeout, grace, zone, DLQ
+
+Loại: `chuẩn ngành`, không cần cờ. Thêm: lệnh chỉ đọc qua `svp-ops` và một truy vấn AMP, vài phút; ADR không có số thời
+gian.
+
+Phép kiểm buổi không cần tải của mục "Xác nhận" của
+[ADR-0072](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0072-pod-operations.md#xác-nhận): timeout của
+role app, cỡ pool, preStop và startupProbe của gateway, grace của media-worker, ACL của user Kafka `svp-dlq-replay`. Trải
+zone và chạy thử phát lại DLQ ở mục **Trải zone và chạy thử DLQ**; kết nối RDS và chặn quá tải dưới tải ở mục **Chặn quá
+tải và pool khi giữ tải**. Sau bước 15, tunnel mở, terminal có khối dùng chung của mục [Phép kiểm nền tảng
+managed](#phép-kiểm-nền-tảng-managed).
+
+(a) Timeout của role app trên RDS, đọc bằng `svp-pg` (role app, phiên chỉ đọc):
+
+```sh
+for s in video engagement feed; do
+  for v in statement_timeout idle_in_transaction_session_timeout; do
+    printf '%s %s ' "$s" "$v"
+    AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp-data exec deploy/svp-ops -c postgres -- \
+      /opt/svp/bin/svp-pg "$s" -c "SHOW $v"
+  done
+done
+```
+
+Mong mỗi database `statement_timeout 5s` và `idle_in_transaction_session_timeout 30s`. Giá trị `0`: role chưa có
+timeout (bootstrap Postgres của chart `svp-data` chưa chạy bản mới); dán output cho AI.
+
+(b) Cỡ tối đa của pool mỗi service (`pgxpool_max_connections`), so với `DATABASE_MAX_CONNS` mà `svp-gitops` đặt cho stg:
+
+```sh
+promql 'max by (service_name, db_client_connection_pool_name) (pgxpool_max_connections)'
+for r in user-service video-service engagement-service feed-service; do
+  printf '%s ' "$r"; git -C ../gitops show "origin/main:envs/stg/$r.yaml" | sed -n 's/^ *DATABASE_MAX_CONNS: *"*\([0-9]*\)"*/\1/p'
+done
+```
+
+Mong `user-service`, `video-service`, `feed-service` mỗi service một dòng bằng giá trị của `svp-gitops`;
+`engagement-service` hai dòng (pool đọc, pool ghi) cộng lại bằng giá trị đó. Thiếu service: dán output và log của
+Collector (lệnh cuối của mục **Nền tảng managed (c)**).
+
+(c) Pod spec: preStop và startupProbe của gateway, grace của media-worker:
+
+```sh
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp get rollout gateway -o jsonpath=\
+'{.spec.template.spec.containers[0].lifecycle.preStop}{"\n"}{.spec.template.spec.containers[0].startupProbe}{"\n"}'
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp get deploy media-worker \
+  -o jsonpath='{.spec.template.spec.terminationGracePeriodSeconds}{"\n"}'
+```
+
+Mong `{"sleep":{"seconds":5}}`; startupProbe `httpGet` path `/healthz`, `periodSeconds` 2, `failureThreshold` 30; `570`
+(hạn drain 540 s của media-worker cộng 30 s, dưới `terminationGracePeriod` 10 phút của NodePool Karpenter).
+
+(d) ACL của `svp-dlq-replay` trên MSK:
+
+```sh
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp-data exec deploy/svp-ops -c kafka -- \
+  /opt/svp/bin/svp-kafka acls --list --principal User:svp-dlq-replay
+```
+
+Mong `Read` trên bốn topic `.dlq` (`video.lifecycle.v1.dlq`, `media.transcodes.v1.dlq`, `user.follows.v1.dlq`,
+`engagement.views.v1.dlq`), `Write` trên bốn topic gốc của chúng; không group, không quyền cluster. Rỗng hay thừa: dán
+output cho AI. Dán output của cả bốn phép.
+
+#### Trải zone và chạy thử DLQ
+
+Loại: `chuẩn ngành`, không cần cờ; khi `svp-gitops` có `dlq-replay` trong `argocd/apps/components.json` và `zoneSpread`
+ở `platforms/eks`, sau lượt sync của bản đó. Thêm: lệnh chỉ đọc và bốn lượt phát lại `--dry-run` không ghi gì; ADR không
+có số thời gian.
+
+Phép kiểm buổi của
+[ADR-0072](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0072-pod-operations.md#xác-nhận) §1, §9: pod
+của mỗi release trải trên các zone, lệnh phát lại DLQ đọc được bốn DLQ bằng user của nó. Tunnel mở. Điều kiện của mục
+(hai số lớn hơn 0; `0` thì bỏ mục, ghi `chưa có`):
+
+```sh
+git -C ../gitops fetch origin
+git -C ../gitops show origin/main:argocd/apps/components.json | grep -c '"dlq-replay"'
+git -C ../gitops grep -l zoneSpread origin/main -- platforms/eks | grep -c .
+```
+
+(a) Trải zone: pod của mỗi release nằm ở ít nhất `min(số pod, số AZ)` zone khác nhau. stg trải pod trên `az_count` = 2
+zone (`aws/envs/stg/stg.tfvars`; RDS và endpoint interface một zone không mang pod), nên mong `min(số pod, 2)`. Mỗi
+release một dòng: số pod, zone của chúng, ràng buộc zone của pod (`<whenUnsatisfiable>/<minDomains>`), phase:
+
+```sh
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg get nodes -L topology.kubernetes.io/zone,karpenter.sh/nodepool
+z=$(AWS_PROFILE=anhnv-stg kubectl --context svp-stg get nodes -o json |
+  jq -c '[.items[] | {key: .metadata.name, value: .metadata.labels["topology.kubernetes.io/zone"]}] | from_entries')
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp get pods -l app.kubernetes.io/component=server -o json |
+  jq -r --argjson z "$z" '[.items[] | {r: .metadata.labels["app.kubernetes.io/name"], phase: .status.phase,
+      zone: ($z[.spec.nodeName // ""] // "-"),
+      spread: ([.spec.topologySpreadConstraints[]? | select(.topologyKey == "topology.kubernetes.io/zone")
+        | "\(.whenUnsatisfiable)/\(.minDomains // "-")"] | first // "-")}]
+    | group_by(.r)[] | "\(.[0].r) pods=\(length) zones=\([.[].zone] | unique | join(","))"
+      + " spread=\([.[].spread] | unique | join(",")) \([.[].phase] | unique | join(","))"'
+```
+
+Mong release nhiều pod (`gateway`, `web`, `feed-service`…) có `zones=` hai zone và `spread=DoNotSchedule/2`, mọi pod
+`Running`. Pod `Pending` vì zone (Karpenter chưa mở node ở zone thiếu): chờ vài phút, đọc lại; còn thì dán lý do của nó:
+
+```sh
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp describe pods --field-selector=status.phase=Pending | grep -A 8 '^Events:'
+```
+
+(b) Phát lại DLQ chỉ chạy thử (`--dry-run`: đọc và lọc, không produce): mỗi DLQ một lượt, log vào thư mục buổi. Log mỗi
+record chỉ có partition, offset, topic đích, số byte của key, tên header; lệnh in dòng tổng và tên trường của các dòng
+record, không in log:
+
+```sh
+for t in video.lifecycle.v1.dlq media.transcodes.v1.dlq user.follows.v1.dlq engagement.views.v1.dlq; do
+  f=$SVP_SESSION_DIR/dlq-dry-run-$t.log
+  AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp exec deploy/dlq-replay -- /app replay --from "$t" --dry-run >"$f" 2>&1
+  echo "== $t exit $?"
+  grep -E '"dlq replay (finished|stopped)"' "$f"
+  grep '"dlq record"' "$f" | jq -r 'keys_unsorted | join(",")' | sort -u
+done
+```
+
+Mong mỗi DLQ `exit 0` và một dòng `"msg":"dlq replay finished"` có `"replayed":0`, `"dry_run"` bằng số record của DLQ
+(cluster mới mỗi buổi: thường 0); DLQ có record thì thêm dòng tên trường, không trường `key` hay `value`. DLQ có record ở
+đây chỉ chạy thử: phát lại thật theo runbook
+[`kafka-dlq-records.md`](https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks/kafka-dlq-records.md) của repo
+code khi người trực quyết. `exit 1` với dòng `dlq replay stopped`, hay `exit 2` (sai cờ): dán dòng đó cho AI. Dán output
+của (a) và (b).
+
+#### Chặn quá tải và pool khi giữ tải
+
+Loại: `chuẩn ngành`, không cần cờ; cần thang k6 (mục **Seed và thang k6**) đã chạy. Thêm: truy vấn AMP và CloudWatch sau
+thang đo, chỉ đọc; ADR không có số thời gian.
+
+Gateway trả ngay `503` khi số request đang xử lý trong một pod vượt `MAX_IN_FLIGHT`, và đếm chúng ở
+`svp.gateway.requests.shed` (`svp_gateway_requests_shed_total` trên AMP); kết nối tới RDS phải dưới 80 % `max_connections`
+([ADR-0072](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0072-pod-operations.md) §3, §5; trần của mỗi
+env ở [phụ lục ADR-0072
+§5](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0072-pod-operations.md#5-ngân-sách-kết-nối)).
+Sau `measure.sh stg`, trước bước 20, terminal có khối dùng chung của mục [Phép kiểm nền tảng
+managed](#phép-kiểm-nền-tảng-managed). Mỗi bậc k6 một dòng: số request bị chặn trong bậc, số 5xx và p99 lớn nhất (ms) của
+summary k6, số kết nối RDS lớn nhất (CloudWatch `DatabaseConnections`, Maximum mỗi phút):
+
+```sh
+at() { awk -F '\t' -v m="$1" -v c="$2" '$3 == m { t = $c } END { print t }' "$SVP_SESSION_DIR/timeline.tsv"; }
+cut -f1 "$SVP_SESSION_DIR/k6-levels.tsv" | while read -r n; do
+  [ -d "$SVP_SESSION_DIR/k6-$n/summaries" ] || continue
+  s=$(at "k6-$n-start" 2) e=$(at "k6-$n-end" 2)
+  shed=$(promql "sum(increase(svp_gateway_requests_shed_total[$((e - s))s]))" "$e" | awk '{ print $NF }')
+  k6=$(cat "$SVP_SESSION_DIR/k6-$n"/summaries/pod-*.json | jq -s -r \
+    '[.[].routes[]] | "5xx=\(map((.requests // 0) * (.failed_rate // 0)) | add | round) p99_ms=\(map(.p99_ms // 0) | max)"')
+  rds=$(AWS_PROFILE=anhnv-stg aws cloudwatch get-metric-statistics --namespace AWS/RDS --metric-name DatabaseConnections \
+    --dimensions Name=DBInstanceIdentifier,Value=svp-stg --start-time "$(at "k6-$n-start" 1)" --end-time "$(at "k6-$n-end" 1)" \
+    --period 60 --statistics Maximum --region ap-southeast-1 --query 'max(Datapoints[].Maximum)' --output text)
+  printf '%s\tshed=%s\t%s\trds_max=%s\n' "$n" "${shed:-0}" "$k6" "$rds"
+done
+```
+
+Mong mỗi bậc `shed=0` (mọi bậc của thang dưới mục tiêu tải của thiết kế 20 pod; series rỗng là chưa request nào bị chặn)
+và `5xx=0`; `rds_max` dưới cột 80 % của dòng RDS stg ở bảng phụ lục đó. Khác thì ghi bậc, số và p99, không sửa trong buổi.
+Dán bảng và `cat $SVP_SESSION_DIR/k6-levels.tsv`.
+
+#### Canary gRPC theo request
+
+Loại: `chuẩn ngành`, không cần cờ; khi một release gRPC của `svp-gitops` có `canary: true` (`base/services/<release>.yaml`)
+và buổi phát hành bản mới của nó (PR promote của `svp-gitops` merge giữa buổi) trong lúc thang k6 đang giữ tải. Thêm: một
+canary khoảng 3–4 phút (hai bước chờ 60 s rồi gate, như canary của mục **Nền tảng managed (d): canary và cảnh báo
+page**); chi phí của mesh chưa có số ([phụ lục ADR-0075, Số
+đo](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0075-service-mesh.md#số-đo)).
+
+Release gRPC có `canary: true` là Rollout có `trafficRouting` qua plugin Gateway API của Argo Rollouts trên `GRPCRoute`
+cùng tên: waypoint của mesh chia **từng lời gọi** giữa Service `<release>` (stable) và `<release>-canary` theo trọng số
+của route, 25 % rồi 50 % rồi gate; AnalysisRun đo tỉ lệ lỗi và p99 trên pod canary
+([ADR-0072](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0072-pod-operations.md) §8,
+[ADR-0075](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0075-service-mesh.md)). Buổi không phát hành bản
+mới nào của release gRPC: ghi `không có canary`. Release có canary và route của chúng (tunnel mở, terminal có khối dùng
+chung của mục [Phép kiểm nền tảng managed](#phép-kiểm-nền-tảng-managed)):
+
+```sh
+git -C ../gitops fetch origin
+git -C ../gitops grep -l '^canary: true' origin/main -- base/services | sed 's#.*/##; s#\.yaml$##'
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp get grpcroutes.gateway.networking.k8s.io
+```
+
+Mong release gRPC trong danh sách đầu (ngoài `gateway`, `web`) và một GRPCRoute cùng tên. Đặt `r` là release đó; khi một
+bậc k6 đã qua 2 phút lên tải (mốc `k6-<n>-start` của `timeline.tsv`), merge PR promote đổi image của nó. PR
+`bot/promote-stg` của `svp-backend` bật auto-merge nên tự merge ngay khi `gitops-ok` xanh, không đợi bậc k6: khi PR mở, tắt
+nó bằng `gh pr merge <số PR> --repo anhnvcoder/svp-gitops --disable-auto`, rồi merge tay (`gh pr merge <số PR> --repo
+anhnvcoder/svp-gitops --squash`) đúng lúc. Lượt chạy kế của job bật lại auto-merge (`--auto`), nên tắt lại sau mỗi lượt. Sau đó
+đọc mỗi 15 giây tới khi Rollout `Healthy` (Ctrl-C):
+
+```sh
+r=<release gRPC>
+while :; do
+  printf '%s ' "$(date -u +%H:%M:%S)"
+  AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp get rollout "$r" \
+    -o jsonpath='{.status.phase} step={.status.currentStepIndex} canary={.status.canary.weights.canary.weight} '
+  AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp get grpcroute "$r" \
+    -o jsonpath='route={.spec.rules[0].backendRefs[*].weight}{"\n"}'
+  sleep 15
+done | tee "$SVP_SESSION_DIR/canary-$r.txt"
+```
+
+Trong một bước chờ (trọng số 25 hay 50), terminal thứ hai đọc lời gọi mỗi giây của từng pod: pod mang hash canary nhận
+phần gần bằng trọng số, dù gateway giữ kết nối lâu (chia theo request, không theo kết nối):
+
+```sh
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp get rollout "$r" \
+  -o jsonpath='stable={.status.stableRS} canary={.status.currentPodHash}{"\n"}'
+promql "sum by (k8s_pod_name) (rate(rpc_server_call_duration_seconds_count{k8s_namespace_name=\"svp\",service_name=\"$r\"}[1m]))"
+```
+
+Rollout xong, giá trị của hai AnalysisRun mới nhất của release:
+
+```sh
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp get analysisruns.argoproj.io --sort-by=.metadata.creationTimestamp -o json |
+  jq -r --arg r "$r-" '[.items[] | select(.metadata.name | startswith($r))][-2:][]
+    | "\(.metadata.name) \(.status.phase) \([.status.metricResults[]? | "\(.name)=\([.measurements[].value] | join(","))"] | join("; "))"'
+```
+
+Mong: file `canary-$r.txt` có `canary=25 … route=75 25`, rồi `canary=50 … route=50 50`, cuối cùng `Healthy` với `route=100
+0`; phần lời gọi của pod canary gần 25 % rồi 50 %; hai AnalysisRun (nền, gate) `Successful`, mọi giá trị ≥ 0.
+`Inconclusive` với `-1` (canary dưới 30 lời gọi một phút): Rollout dừng chờ người, ghi số lời gọi của release
+(`promql "sum(increase(rpc_server_call_duration_seconds_count{k8s_namespace_name=\"svp\",service_name=\"$r\"}[1m]))"`) và
+dán output cho AI. `Degraded` (canary bị abort, bản stable nhận mọi lời gọi, `route=100 0`): dán file, AnalysisRun và
+`AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp get rollout "$r" -o jsonpath='{.status.message}{"\n"}'`.
 
 #### Phép kiểm transcode
 

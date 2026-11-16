@@ -193,7 +193,9 @@ aws/scripts/sso-profiles.sh check
 
 Các bước script, theo đúng thứ tự `session.sh --print prd`; bước tay của prd chen giữa, ở các mục dưới (đổi cờ prd trước
 buổi, cổng promote trước bước 1, email của alarm và tunnel sau bước 9, làm nóng cache sau bước 11, phát video và CORS
-của media, phép kiểm edge, phép kiểm nền tảng, phép kiểm nền tảng managed, commit status, phép kiểm transcode và mục
+của media, phép kiểm edge, phép kiểm nền tảng, migration của release, xác thực qua CloudFront, trải zone và chạy thử
+DLQ, service mesh, bảo vệ của account, data event của trail, phép kiểm nền tảng managed, commit status, phép kiểm
+transcode và mục
 **Đo** sau bước 16, đọc bản copy sau bước 17, ghi truy vấn dữ liệu và finding bảo mật trước bước 20, đọc recovery point
 sau bước 25, final snapshot sau bước 27, chạy lại truy vấn dữ liệu sau bước 31, trả prd về giá trị rẻ sau cùng). Đường
 mặc định chạy các mục `lõi` và bỏ bước 17–19:
@@ -355,7 +357,7 @@ chờ, không điều tra. Khi ba đích đã xanh, page hết sau chừng 30 ph
 ## Bước 16: smoke, edge, commit status
 
 `measure.sh prd` chỉ chạy smoke (`make eks-smoke CONTEXT=svp-prd DOMAIN=<domain>`), không seed, không thang k6 (số đo
-của prd là mục **Đo** dưới). Phép kiểm sau smoke ở ba mục con, mỗi mục một dòng `Loại:`. Output vào phụ lục của ADR
+của prd là mục **Đo** dưới). Phép kiểm sau smoke ở các mục con, mỗi mục một dòng `Loại:`. Output vào phụ lục của ADR
 tương ứng, một dòng kết luận vào mục "Xác nhận".
 
 ### Smoke, phát video và alarm
@@ -399,6 +401,93 @@ gh api "repos/anhnvcoder/svp-gitops/commits/<sha trên>/statuses" --jq '.[] | se
 
 Mong `success`; dán lại cả hai dòng.
 
+### Migration của release ở prd
+
+Loại: `lõi`.
+
+Mục [Migration của release](session-stg.md#migration-của-release) của `session-stg.md` với `AWS_PROFILE=anhnv-prd`,
+`--context svp-prd`, sau bước 15. Mong như stg: mỗi release hai dòng của runner (`"lock_timeout":"2s"`), bốn Application
+`Synced` `Healthy`; Job không còn thì ghi lại, không sync lại.
+
+### Xác thực qua CloudFront ở prd
+
+Loại: `lõi`; (d) giữ một trang web mở hơn 15 phút.
+
+Mục [Xác thực qua CloudFront](session-stg.md#xác-thực-qua-cloudfront) của `session-stg.md`, (a)–(d), với `api` từ
+`cluster-values.json` của buổi prd (CloudFront `svp-prd-api`), `AWS_PROFILE=anhnv-prd`, `--context svp-prd` ở lệnh
+port-forward. Mong như stg. `429` của `register`: chờ `Retry-After`, không xoá khoá nào ở Valkey của prd. User thử của
+(c) nằm trong database prd tới khi env gỡ cuối buổi.
+
+### Trải zone và chạy thử DLQ ở prd
+
+Loại: `chuẩn ngành`, không cần đổi cờ; khi commit `gitopsRevision` của `envs/prd/charts.yaml` có `dlq-replay` trong
+`argocd/apps/components.json` và `zoneSpread` ở `platforms/eks`. Thêm: như stg, lệnh chỉ đọc và bốn lượt `--dry-run`;
+ADR không có số thời gian.
+
+Mục [Trải zone và chạy thử DLQ](session-stg.md#trải-zone-và-chạy-thử-dlq) của `session-stg.md` với `anhnv-prd`,
+`--context svp-prd`; điều kiện đọc ở commit `gitopsRevision` (dòng `ok envs/prd/charts.yaml: …` của cổng promote) thay
+cho `origin/main`. prd trải pod trên ba AZ: mong release nhiều pod (`gateway`, `web`, `user-service`, `video-service`,
+`engagement-service`, `feed-service`…) ở `min(số pod, 3)` zone, `spread=DoNotSchedule/3`. DLQ của prd có record: chỉ
+chạy thử ở đây, phát lại thật theo `kafka-dlq-records.md` khi người trực quyết.
+
+### Service mesh ở prd
+
+Loại: `lõi`.
+
+Mục [Service mesh](session-stg.md#service-mesh) của `session-stg.md` với `AWS_PROFILE=anhnv-prd`, `--context svp-prd`,
+sau bước 15. Mong như stg; node của nhóm hệ thống và node Karpenter (on-demand) trên ba zone, DaemonSet `istio-cni-node`,
+`ztunnel` mỗi node một pod. Khác mong đợi: không chạy mục **Đo**, theo runbook `mesh-traffic-denied.md` của mục stg.
+
+### Service mesh ở prd: danh tính lạ bị từ chối
+
+Loại: `chuẩn ngành`, không cần đổi cờ; tạo rồi xoá một ServiceAccount và hai pod trong `svp`. Thêm: như stg, khoảng 3
+phút, chi phí của mesh chưa có số (phụ lục ADR-0075, Số đo).
+
+Khối của mục [Service mesh: danh tính lạ bị từ chối](session-stg.md#service-mesh-danh-tính-lạ-bị-từ-chối) với
+`anhnv-prd`, `--context svp-prd`, `$SVP_AWS_PRD_ACCOUNT_ID`; cùng mong đợi, lệnh cuối không còn tài nguyên nào.
+
+### Bảo vệ của account ở prd
+
+Loại: `lõi`; chạy ≥ 15 phút sau bước 15.
+
+Mục [Bảo vệ của account: GuardDuty, flow log, log WAF, quét
+malware](session-stg.md#bảo-vệ-của-account-guardduty-flow-log-log-waf-quét-malware) của `session-stg.md`, (a)–(d), với
+`anhnv-prd`, `--context svp-prd`, `A=$SVP_AWS_PRD_ACCOUNT_ID`, cluster `svp-prd`, web ACL `svp-prd-media` trong bộ lọc
+key của (c). Mong như stg: coverage `HEALTHY` khi DaemonSet có một pod mỗi node trên ba zone; bucket ở (d) là
+`svp-prd-uploads-<account>-ap-southeast-1`.
+
+### Data event S3 trong trail
+
+Loại: `lõi`.
+
+Chỉ prd: trail của org ghi data event của bucket `uploads` (ghi, đọc) và `media` (ghi) của prd (`aws/org/audit-trail.tf`).
+CloudTrail `lookup-events` không trả data event, nên đọc chúng ở nơi trail giao: bucket `svp-cloudtrail-<log>-ap-southeast-1`
+của Log Archive, profile `anhnv-log-ro`. Chạy ≥ 15 phút sau smoke (CloudTrail giao file trung bình trong khoảng 5 phút);
+lệnh chỉ in tên sự kiện và bucket, không in bản ghi (bản ghi có IP, ARN của người gọi):
+
+```sh
+L=$SVP_AWS_LOG_ACCOUNT_ID P=$SVP_AWS_PRD_ACCOUNT_ID
+b=svp-cloudtrail-$L-ap-southeast-1
+since=$(awk -F '\t' '$3 == "svp-root-healthy" { t = $1 } END { print t }' "$SVP_SESSION_DIR/timeline.tsv" | tr -d Z)
+org=$(AWS_PROFILE=anhnv-log-ro aws s3 ls "s3://$b/AWSLogs/" --region ap-southeast-1 | awk '$2 ~ /^o-/ { sub("/", "", $2); print $2 }')
+AWS_PROFILE=anhnv-log-ro aws s3api list-objects-v2 --bucket "$b" --region ap-southeast-1 \
+  --prefix "AWSLogs/$org/$P/CloudTrail/ap-southeast-1/$(date -u +%Y/%m/%d)/" --query 'Contents[].[Key,LastModified]' --output json |
+  jq -r --arg s "$since" '(. // [])[] | select(.[1] >= $s) | .[0]' |
+  while read -r k; do AWS_PROFILE=anhnv-log-ro aws s3 cp "s3://$b/$k" - --region ap-southeast-1 | gunzip -c; done |
+  jq -r --arg a "$P" '.Records[] | select(.eventCategory == "Data" and .eventSource == "s3.amazonaws.com")
+    | "\(.eventName) \(.requestParameters.bucketName | sub($a; "<account>"))"' | sort | uniq -c
+```
+
+Mong, mỗi dòng một số đếm: `PostObject svp-prd-uploads-<account>-ap-southeast-1` (video smoke tải lên bằng form presigned POST), `GetObject
+svp-prd-uploads-…` (MediaConvert, quét malware đọc), `PutObject svp-prd-media-<account>-ap-southeast-1` (output của
+transcode); không dòng `GetObject svp-prd-media-…` (trail chỉ ghi phần ghi của `media`). Rỗng: đọc lại sau 10 phút; ngay
+sau 00:00 UTC đổi ngày trong `--prefix` về ngày trước. Vẫn thiếu một trong ba: dán output và selector của trail `svp-audit`
+(`aws/org`) cho AI:
+
+```sh
+AWS_PROFILE=anhnv-sso aws cloudtrail get-event-selectors --trail-name svp-audit --region ap-southeast-1
+```
+
 ## Phép kiểm nền tảng managed
 
 Sau smoke, mục [Phép kiểm nền tảng managed](session-stg.md#phép-kiểm-nền-tảng-managed) của `session-stg.md` với `E=prd`
@@ -434,6 +523,46 @@ Loại: `chuẩn ngành`, không cần đổi cờ. Thêm: khoảng ghi ít nh�
 
 Như stg, thư mục `.session/persist-prd/`; ghi trước bước 20 (sau mục **Đo**), chạy lại sau bước 31 cùng ngày (mục **Kết
 thúc buổi**). Lượt so ở buổi kế chỉ có ở stg: prd không có buổi kế.
+
+### Độ trễ mesh ở prd
+
+Loại: `chuẩn ngành`, không cần đổi cờ; cần k6 của mục **Đo 4** đang giữ tải. Thêm: truy vấn AMP và `kubectl top`, chỉ
+đọc; chi phí của mesh chưa có số (phụ lục ADR-0075, Số đo).
+
+Khối của mục [Độ trễ mesh khi giữ tải](session-stg.md#độ-trễ-mesh-khi-giữ-tải) với `E=prd` ở khối dùng chung,
+`anhnv-prd`, `--context svp-prd`, trong lúc k6 của **Đo 4** giữ tải: sau 2 phút lên tải, trước lệnh `reboot-broker` (số
+đo lúc broker còn đủ). Mong và cách dán như stg; prd chạy service trên node on-demand ở ba zone.
+
+### Uptime ở prd
+
+Loại: `lõi`; chạy ≥ 30 phút sau mốc `edge-healthy`.
+
+Mục [Uptime: probe và cảnh báo](session-stg.md#uptime-probe-và-cảnh-báo) với `E=prd` ở khối dùng chung, `anhnv-prd`,
+`--context svp-prd`; mong như stg; prd có ba zone nhưng hai pod blackbox trải zone bằng `ScheduleAnyway`: cùng một zone vẫn hợp lệ (ghi
+zone), lỗi thật là pod `Pending`, `CrashLoopBackOff` hay chỉ còn một pod. Thư `UptimeProbesAbsent` đọc sau bước 4 của
+mục **Kết thúc buổi**, như stg đọc sau bước 31.
+
+### Chi phí theo namespace ở prd
+
+Loại: `chuẩn ngành`, không cần đổi cờ: dashboard `svp-cost`, `svp-uptime` trên AMG `svp-prd` có vì cờ của prd là
+`always` trong buổi. Thêm: OpenCost ~$0,08–0,16 mỗi buổi prd ([phụ lục ADR-0074
+§11](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0074-cost-uptime.md#mỗi-buổi-4-giờ-mỗi-env)),
+đã gồm trong chi phí buổi; truy vấn và port-forward chỉ đọc.
+
+Mục [Chi phí theo namespace](session-stg.md#chi-phí-theo-namespace) với `E=prd` ở khối dùng chung, `anhnv-prd`, `--context
+svp-prd`, cả đoạn dashboard. Khác stg: node prd on-demand nên số khớp giá niêm yết, không là trần; OpenCost không gọi
+giá Spot.
+
+### Canary gRPC theo request ở prd
+
+Loại: `chuẩn ngành`, không cần đổi cờ; khi buổi prd phát hành bản mới của một release gRPC có `canary: true` (PR
+`bot/promote-prd` của `svp-gitops` merge giữa buổi) trong lúc k6 của mục **Đo 4** giữ tải. Thêm: như stg, một canary
+khoảng 3–4 phút; chi phí của mesh chưa có số (phụ lục ADR-0075, Số đo).
+
+Mục [Canary gRPC theo request](session-stg.md#canary-grpc-theo-request) của `session-stg.md` với `E=prd` ở khối dùng
+chung, `anhnv-prd`, `--context svp-prd`, sau 2 phút lên tải của **Đo 4** và trước lệnh `reboot-broker`. Mong như stg: waypoint chia
+theo trọng số của route, không theo số replica, nên phần lời gọi của pod canary gần bằng trọng số của bước. Buổi không phát hành bản mới
+nào của release gRPC: ghi `không có canary`.
 
 ## Phép kiểm transcode
 

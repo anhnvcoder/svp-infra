@@ -16,7 +16,7 @@ tiên có diễn tập khôi phục. Mọi lệnh chạy từ gốc repo này (`
 
 ```mermaid
 flowchart TD
-  B1["(1) aws/org: account svp-backup, trusted access, BACKUP_POLICY,<br/>cross-account backup, opt-in, Backup policy, liên hệ, quyền đọc"]
+  B1["(1) aws/org: thêm account svp-backup và Backup policy vào tổ chức đã áp"]
   B1 -->|accounts.sh đặt SVP_AWS_BACKUP_ACCOUNT_ID| B2
   B2["(2) profile anhnv-backup-ro"] --> B3
   B3["(3) aws/baseline: baseline của svp-backup"] --> B4
@@ -42,7 +42,8 @@ flowchart TD
 - **(7)** —; [Bước (7)](#bước-7-kiểm-sau-áp). Dán lại: output từng mục.
 
 Thứ tự theo phụ thuộc: account phải có trước baseline, profile, vault và key policy chia sẻ cho nó; vault `svp-<env>-copy` phải có trước khi
-copy job đầu tiên chạy. Backup policy có hiệu lực ngay ở bước (1): AWS sinh plan `svp-<env>` trong account env, nhưng giữa các buổi account
+copy job đầu tiên chạy. Backup policy có hiệu lực ngay khi gắn vào tổ chức (bước (1) ở tổ chức đã áp; bước (4) của
+`org-security-setup.md` ở lần dựng đầu): AWS sinh plan `svp-<env>` trong account env, nhưng giữa các buổi account
 env không có tài nguyên nào mang tag `Backup`, nên lịch không tạo job nào tới khi env dựng lại. Vì thế không chạy buổi stg, prd nào từ bước
 (1) tới hết bước (6).
 
@@ -77,15 +78,17 @@ export SVP_SESSION_DIR="$PWD/.session/$(date -u +%Y%m%dT%H%M%SZ)"   # check-acco
 aws/scripts/check-account.sh mgmt
 ```
 
-Tìm `ok    account <12 số> of mgmt, arn:aws:sts::<12 số>:assumed-role/AWSReservedSSO_…`. Năm dòng `export` đầu đọc trên
-trang SSO, chỉ lần này: `aws/scripts/accounts.sh` đòi đủ năm account thành viên mà `svp-backup` chỉ có sau bước (1). Từ
-bước (1) `SVP_AWS_BACKUP_ACCOUNT_ID` và bốn biến kia đều do `eval "$(aws/scripts/accounts.sh)"` đặt: mở lại terminal
-giữa chừng chỉ cần `export SVP_AWS_MGMT_ACCOUNT_ID=<12 số>`, `eval` đó và `check-account.sh mgmt`. Lệnh ghi của bước
-(1), (3), (4), (5) chạy bằng `anhnv-sso` (root `aws/baseline`, `aws/backup` vào account đích qua
-`OrganizationAccountAccessRole`); bước (6) bằng `anhnv-stg`, `anhnv-prd`. Trước mỗi bước, chạy lại `check-account.sh`
-của account mà bước đó ghi.
+Tìm `ok    account <12 số> of mgmt, arn:aws:sts::<12 số>:assumed-role/AWSReservedSSO_…`. Khi tổ chức chưa có `svp-backup` (thêm
+vào tổ chức đã áp), năm dòng `export` đầu đọc trên trang SSO, chỉ lần này: `aws/scripts/accounts.sh` đòi đủ năm account thành
+viên. Lần dựng đầu (bước (4) của `org-security-setup.md` đã tạo `svp-backup`) và từ bước (1) trở đi, `SVP_AWS_BACKUP_ACCOUNT_ID`
+và bốn biến kia đều do `eval "$(aws/scripts/accounts.sh)"` đặt: mở lại terminal giữa chừng chỉ cần `export
+SVP_AWS_MGMT_ACCOUNT_ID=<12 số>`, `eval` đó và `check-account.sh mgmt`. Lệnh ghi của bước (1), (3), (4), (5) chạy bằng
+`anhnv-sso` (root `aws/baseline`, `aws/backup` vào account đích qua `OrganizationAccountAccessRole`); bước (6) bằng `anhnv-stg`,
+`anhnv-prd`. Trước mỗi bước, chạy lại `check-account.sh` của account mà bước đó ghi.
 
 ## Bước (1): `aws/org`
+
+Lần áp đầu của tổ chức đã tạo account này ở bước (4) của [`org-security-setup.md`](org-security-setup.md): bắt đầu từ bước (2).
 
 **Điểm dừng.** Tạo account gần như không đảo ngược được: đóng account chờ 90 ngày, email không dùng lại được. Plan thứ hai gắn Backup policy
 lên OU `Prod`, `NonProd` và đổi tag policy của cả tổ chức.
@@ -104,8 +107,8 @@ PR trước khi apply); plan có `-target` chỉ account, **dán plan đủ và 
 
 ## Bước (2): profile `anhnv-backup-ro`
 
-Ghi profile theo [README `aws/org`, Profile](../../aws/org/README.md#profile) (permission set `SvpReadOnly` ở account `svp-backup`; bước (1)
-đã gán):
+Ghi profile theo [README `aws/org`, Profile](../../aws/org/README.md#profile) (permission set `SvpReadOnly` ở account `svp-backup`; đã gán
+ở bước (1) hay, ở lần dựng đầu, ở bước (4) của `org-security-setup.md`):
 
 ```sh
 aws/scripts/sso-profiles.sh write
