@@ -116,13 +116,13 @@ cd aws/baseline
 ```
 
 `accounts.sh` đặt năm biến account của thành viên (mỗi biến một dòng `ok    SVP_AWS_<…>_ACCOUNT_ID: account svp-<tên>, ACTIVE`, không in
-id; `SVP_AWS_MGMT_ACCOUNT_ID` gõ tay trước đó). Khi tổ chức chưa có `svp-backup`, nó in `FAIL  no account svp-backup in the
-organization` và không đặt gì: làm bước (4) của [`aws/org`](../org/README.md#bước-4-đủ-root) trước (bước đó luôn tạo account này; plan của
-root này đòi `backup_account_id` đủ 12 số). `check-account.sh` in
-`ok    account … of mgmt, …`. `tfvars.sh example` chép `baseline.auto.tfvars.example` thành `baseline.auto.tfvars` (mode 600)
-khi file chưa có và liệt kê mỗi giá trị còn `<…>`. Sửa `sso_region`
-trong `baseline.auto.tfvars` (không commit; giá trị cá nhân giữ tay) cho bằng `sso_region` của `aws/org/org.auto.tfvars`. Khác hay thiếu thì
-dừng.
+id; `SVP_AWS_MGMT_ACCOUNT_ID` nạp qua direnv từ `.envrc` trước đó, xem
+[README](../../README.md#plan-và-apply)). Khi tổ chức chưa có `svp-backup`, nó in
+`FAIL  no account svp-backup in the organization` và không đặt gì: làm bước (4) của
+[`aws/org`](../org/README.md#bước-4-đủ-root) trước (bước đó luôn tạo account này; plan của root này đòi `backup_account_id`
+đủ 12 số). `check-account.sh` in `ok    account … of mgmt, …`. `tfvars.sh example` chép `baseline.auto.tfvars.example` thành
+`baseline.auto.tfvars` (mode 600) khi file chưa có và liệt kê mỗi giá trị còn `<…>`. Sửa `sso_region` trong
+`baseline.auto.tfvars` (không commit; giá trị cá nhân giữ tay) cho bằng `sso_region` của `aws/org/org.auto.tfvars`. Khác hay thiếu thì dừng.
 
 ### 2. Kiểm cái đã có
 

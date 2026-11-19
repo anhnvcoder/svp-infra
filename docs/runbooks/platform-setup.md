@@ -75,7 +75,7 @@ Job ECR của `svp-backend`, `svp-frontend` (chép bản phát hành vào ECR, p
 ```sh
 cd infra
 AWS_PROFILE=anhnv-sso aws sso login --region us-east-1      # one login for every profile of the same sso_session
-export SVP_AWS_MGMT_ACCOUNT_ID=<12 số>                      # typed by hand: the value check-account.sh compares against
+printf 'mgmt …%s\n' "${SVP_AWS_MGMT_ACCOUNT_ID: -4}"   # from .envrc (direnv), 4 last digits only
 eval "$(aws/scripts/accounts.sh)"                           # sets the other five SVP_AWS_*_ACCOUNT_ID, no file
 export SVP_SESSION_DIR="$PWD/.session/$(date -u +%Y%m%dT%H%M%SZ)"   # check-account.sh marks its timeline here
 aws/scripts/check-account.sh mgmt
@@ -244,8 +244,9 @@ Docker Hub → **Account settings** → **Personal access tokens**; đặt hạn
 ## Bước (7): biến CI ECR
 
 Hai secret repo `SVP_AWS_STG_ACCOUNT_ID`, `SVP_AWS_PRD_ACCOUNT_ID` ở `svp-backend` và `svp-frontend`: workflow dựng ARN role từ chúng (region,
-tên role cố định trong workflow); là secret để GitHub che account ID trong log của repo public. Hai biến cùng tên đã export trong terminal
-(`eval "$(aws/scripts/accounts.sh)"`), `gh` đăng nhập tài khoản admin của hai repo (`gh auth status`):
+tên role cố định trong workflow); là secret để GitHub che account ID trong log của repo public. Hai biến cùng tên đã nạp qua direnv
+từ `.envrc` ở thư mục chứa các clone ([README](../../README.md#plan-và-apply)), `gh` đăng nhập tài khoản admin của hai repo
+(`gh auth status`):
 
 ```sh
 make github-secrets

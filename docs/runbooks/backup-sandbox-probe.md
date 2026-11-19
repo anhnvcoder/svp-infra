@@ -43,7 +43,7 @@ Tài nguyên tạm, mọi tên mang tiền tố `svp-probe`, tag `Project=svp`, 
 ```sh
 cd infra
 AWS_PROFILE=anhnv-sso aws sso login --region us-east-1
-export SVP_AWS_MGMT_ACCOUNT_ID=<12 số của account management>        # never written to a file: the repo is public
+printf 'mgmt …%s\n' "${SVP_AWS_MGMT_ACCOUNT_ID: -4}"   # from .envrc (direnv); see the README
 export SVP_SESSION_DIR="$PWD/.session/backup-probe-$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p "$SVP_SESSION_DIR"; d=$SVP_SESSION_DIR
 b=svp-probe-$SVP_AWS_MGMT_ACCOUNT_ID-ap-southeast-1
@@ -431,7 +431,7 @@ còn thư mục đó thì đặt một thư mục mới:
 ```sh
 cd infra
 AWS_PROFILE=anhnv-sso aws sso login --region us-east-1
-export SVP_AWS_MGMT_ACCOUNT_ID=<12 số của account management>
+printf 'mgmt …%s\n' "${SVP_AWS_MGMT_ACCOUNT_ID: -4}"
 export SVP_SESSION_DIR=<thư mục .session/backup-probe-… của lần thử>; mkdir -p "$SVP_SESSION_DIR"; d=$SVP_SESSION_DIR
 b=svp-probe-$SVP_AWS_MGMT_ACCOUNT_ID-ap-southeast-1
 aws/scripts/check-account.sh mgmt

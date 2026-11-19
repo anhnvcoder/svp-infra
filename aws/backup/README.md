@@ -80,7 +80,8 @@ cd aws/backup
 
 `accounts.sh` đặt năm biến account của thành viên, gồm `SVP_AWS_BACKUP_ACCOUNT_ID` (mỗi biến một dòng `ok    SVP_AWS_<…>_ACCOUNT_ID:
 account svp-<tên>, ACTIVE`, không in id; `FAIL  no account svp-backup in the organization` là `aws/org` chưa tạo nó). `check-account.sh` in
-`ok    account … of mgmt, …` và dừng nếu account của `anhnv-sso` khác `SVP_AWS_MGMT_ACCOUNT_ID`.
+`ok    account … of mgmt, …` và dừng nếu account của `anhnv-sso` khác `SVP_AWS_MGMT_ACCOUNT_ID` (nạp qua direnv từ
+`.envrc`, xem [README](../../README.md#plan-và-apply)).
 
 ### 2. Init và plan
 

@@ -81,10 +81,11 @@ cd infra/aws/log-archive
 ```
 
 Tìm `ok    account <12 số> of mgmt, arn:aws:sts::<12 số>:assumed-role/AWSReservedSSO_…`; `FAIL  profile anhnv-sso is account …` thì dừng.
-Biến account của năm account (`SVP_AWS_MGMT_ACCOUNT_ID` gõ tay; `SVP_AWS_LOG_ACCOUNT_ID`, `SVP_AWS_SECURITY_ACCOUNT_ID` đã đặt ở
-[`aws/org`, Bước (2)](../org/README.md#bước-2-tổ-chức-ou-account); `SVP_AWS_STG_ACCOUNT_ID`, `SVP_AWS_PRD_ACCOUNT_ID` từ
-`eval "$(aws/scripts/accounts.sh)"` khi đã có `svp-backup`, nếu chưa thì từ trang SSO) đều phải là 12 số: biến thiếu thì `terraform plan`
-dừng ở validation của biến.
+Biến account của năm account (nạp qua direnv từ `.envrc`, xem [README](../../README.md#plan-và-apply);
+`SVP_AWS_LOG_ACCOUNT_ID`, `SVP_AWS_SECURITY_ACCOUNT_ID` thêm vào `.envrc` ở [`aws/org`, Bước
+(2)](../org/README.md#bước-2-tổ-chức-ou-account); `SVP_AWS_STG_ACCOUNT_ID`, `SVP_AWS_PRD_ACCOUNT_ID` từ
+`eval "$(aws/scripts/accounts.sh)"` khi đã có `svp-backup`, nếu chưa thì từ trang SSO) đều phải là 12 số: biến thiếu thì
+`terraform plan` dừng ở validation của biến.
 
 ### 2. Init và plan
 
