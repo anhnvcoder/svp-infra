@@ -23,14 +23,15 @@ resource "aws_guardduty_organization_configuration" "this" {
 
 locals {
   # The protection plans of every account; agents of Runtime Monitoring stay managed in Terraform (eks add-on and
-  # network endpoint), since GuardDuty would create an endpoint and a security group outside any state.
+  # network endpoint), since GuardDuty would create an endpoint and a security group outside any state. Additional
+  # configurations follow the order the API returns: the provider compares that list by position and replaces on change.
   guardduty_features = {
     S3_DATA_EVENTS         = []
     EKS_AUDIT_LOGS         = []
     EBS_MALWARE_PROTECTION = []
     RDS_LOGIN_EVENTS       = []
     LAMBDA_NETWORK_LOGS    = []
-    RUNTIME_MONITORING     = ["EKS_ADDON_MANAGEMENT", "ECS_FARGATE_AGENT_MANAGEMENT", "EC2_AGENT_MANAGEMENT"]
+    RUNTIME_MONITORING     = ["ECS_FARGATE_AGENT_MANAGEMENT", "EC2_AGENT_MANAGEMENT", "EKS_ADDON_MANAGEMENT"]
   }
 
   guardduty_region_features = {
@@ -95,8 +96,9 @@ resource "aws_guardduty_member" "management" {
   email       = data.aws_organizations_organization.this.master_account_email
 
   # An organization account needs no invitation; the provider reads its Enabled relationship back as invite = true.
+  # The API returns no email for an organization member, and email (required, forces replacement) would replace it.
   lifecycle {
-    ignore_changes = [invite]
+    ignore_changes = [email, invite]
   }
 
   depends_on = [aws_guardduty_detector.management, aws_guardduty_organization_configuration.this]
