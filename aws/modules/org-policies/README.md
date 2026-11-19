@@ -18,7 +18,7 @@ policy. Root `aws/org` truyền root của org (`root_id`), OU `Prod` (`prod_ou_
 | `svp-deny-iam-users` | SCP | root | `iam:CreateUser`, `CreateAccessKey`, `CreateLoginProfile`, `UpdateLoginProfile` trên `arn:aws:iam::*:user/*` | người vào account qua IAM Identity Center, không qua IAM user hay access key dài hạn |
 | `svp-prod-guardrails` | SCP | OU `Prod` | Spot qua `ec2:RunInstances` (`ec2:InstanceMarketType` = `spot`), `RequestSpotInstances`, `RequestSpotFleet` | prd chạy on-demand |
 | `svp-data-perimeter` | RCP | root | S3, SQS, KMS, Secrets Manager, STS: principal ngoài org, dịch vụ AWS thay tài nguyên ngoài org, request không TLS | dữ liệu và credential không tới được ai ngoài org |
-| `svp-ec2-baseline` | declarative EC2 | root | IMDSv2 bắt buộc (hop 1), chặn chia sẻ public AMI mới và mọi snapshot EBS public, tắt serial console | thiết lập EC2 an toàn không phụ thuộc từng launch template |
+| `svp-ec2-baseline` | declarative EC2 | root | IMDSv2 bắt buộc (hop 1), không đọc tag qua metadata, chặn chia sẻ public AMI mới và mọi snapshot EBS public, tắt serial console | thiết lập EC2 an toàn không phụ thuộc từng launch template |
 | `svp-tags` | tag policy | root | hoa thường và giá trị được phép của `Project`, `Env`, `ManagedBy`, `Stack`, `Backup`; enforce cho `ec2`, `eks`, `kms` | tag phân bổ chi phí, điều kiện theo tag (`ProtectEbsKey`) và selection của Backup policy chỉ đúng khi tag đúng |
 | `svp-backup-prd`, `svp-backup-stg` | Backup policy | OU `Prod`, OU `NonProd` | plan `svp-<env>` ở `ap-southeast-1`, rule `daily` vào vault `svp-<env>`, copy sang vault `svp-<env>-copy` của `svp-backup`, selection theo tag `Backup=daily` | admin của account env đọc được plan, không sửa, không xoá được; bản copy nằm ngoài account env |
 
@@ -32,6 +32,11 @@ policy. Root `aws/org` truyền root của org (`root_id`), OU `Prod` (`prod_ou_
   `arn:aws:iam::<id>:root`, ARN này không khớp `user/*`.
 - **Spot qua Karpenter:** `ec2:CreateFleet` không có khoá `ec2:InstanceMarketType` cho instance, nên SCP không chặn được; chặn đó là NodePool prd
   on-demand.
+- **Declarative EC2** theo
+  [EC2 policy syntax](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_ec2_syntax.html) (đọc
+  2026-11-19): khoá, giá trị là chuỗi của trang đó, `instance_metadata_defaults` đặt đủ năm trường như ví dụ đầy đủ của trang.
+  Hop limit `1`, dưới mức 2 trang đó khuyên cho container đọc IMDS: pod lấy credential qua EKS Pod Identity chứ không qua role của node,
+  nên không cần với tới IMDS; node EKS, Karpenter và bastion cũng đặt `1`.
 - **RCP** theo mẫu identity perimeter của AWS
   ([data-perimeter-policy-examples](https://github.com/aws-samples/data-perimeter-policy-examples/tree/main/resource_control_policies)):
   principal dịch vụ AWS được miễn ở statement principal; statement dịch vụ chỉ xét khi request có `aws:SourceAccount`; không ngoại lệ riêng
