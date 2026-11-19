@@ -83,9 +83,9 @@ cert target.
 
 Log chuẩn v2 (vended log của CloudWatch Logs): mỗi distribution một delivery source `ACCESS_LOGS` `<name>-<web|api>` ở `us-east-1` và một
 delivery tới `log_delivery_destination_arn`, delivery destination `svp-cloudfront-<env>` của account Log Archive (destination, policy và bucket
-do root `aws/log-archive` giữ). Đường object `{DistributionId}/{yyyy}/{MM}/{dd}/{HH}` kiểu Hive. `record_fields` là danh sách tường minh ở
-`local.log_record_fields` của `main.tf`: mọi trường của ví dụ trong tài liệu standard logging v2 trừ `cs(Cookie)` (cookie phiên của web); module
-`media` dùng cùng danh sách.
+do root `aws/log-archive` giữ). Đường object `{DistributionId}/{yyyy}/{MM}/{dd}/{HH}` kiểu Hive, dưới tiền tố `<account env>/` mà
+destination đặt. `record_fields` là danh sách tường minh ở `local.log_record_fields` của `main.tf`: mọi trường của ví dụ trong tài liệu
+standard logging v2 trừ `cs(Cookie)` (cookie phiên của web); module `media` dùng cùng danh sách.
 
 ## DNS
 

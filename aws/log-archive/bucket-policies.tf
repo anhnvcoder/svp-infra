@@ -1,6 +1,6 @@
 # Each bucket admits only the service that delivers into it, from this organization, as its service's documentation
-# shows; aws:SourceOrgID instead of a list of accounts lets a new account deliver without a policy change. Every
-# request without TLS is refused.
+# shows; aws:SourceOrgID instead of a list of accounts lets a new account deliver without a policy change, except
+# CloudFront, which writes per env account under its own prefix. Every request without TLS is refused.
 
 locals {
   service_bucket_policies = {
@@ -261,36 +261,42 @@ data "aws_iam_policy_document" "guardduty_bucket" {
   }
 }
 
-# Standard logs (v2) of CloudFront: the log delivery service writes for a delivery source of us-east-1 in an account
-# of the organization; each env's destination fixes its own AWSLogs/<account>/CloudFront prefix.
+# Standard logs (v2) of CloudFront: the log delivery service writes for a delivery source of us-east-1 of an env
+# account, only under that account's prefix, the one its destination fixes. Per account, not per organization, as in
+# the cross-account example of CloudFront standard logging (v2), read 2026-11-19:
+# https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/standard-logging.html
 data "aws_iam_policy_document" "cloudfront_bucket" {
-  statement {
-    sid       = "AWSLogDeliveryWrite"
-    effect    = "Allow"
-    actions   = ["s3:PutObject"]
-    resources = ["${local.bucket_arns.cloudfront}/AWSLogs/*"]
+  dynamic "statement" {
+    for_each = local.env_account_ids
 
-    principals {
-      type        = "Service"
-      identifiers = ["delivery.logs.amazonaws.com"]
-    }
+    content {
+      sid       = "AWSLogDeliveryWrite${title(statement.key)}"
+      effect    = "Allow"
+      actions   = ["s3:PutObject"]
+      resources = ["${local.bucket_arns.cloudfront}/${statement.value}/*"]
 
-    condition {
-      test     = "StringEquals"
-      variable = "s3:x-amz-acl"
-      values   = ["bucket-owner-full-control"]
-    }
+      principals {
+        type        = "Service"
+        identifiers = ["delivery.logs.amazonaws.com"]
+      }
 
-    condition {
-      test     = "StringEquals"
-      variable = "aws:SourceOrgID"
-      values   = [local.org_id]
-    }
+      condition {
+        test     = "StringEquals"
+        variable = "s3:x-amz-acl"
+        values   = ["bucket-owner-full-control"]
+      }
 
-    condition {
-      test     = "ArnLike"
-      variable = "aws:SourceArn"
-      values   = ["arn:${local.partition}:logs:${local.key_regions.waf}:*:delivery-source:*"]
+      condition {
+        test     = "StringEquals"
+        variable = "aws:SourceAccount"
+        values   = [statement.value]
+      }
+
+      condition {
+        test     = "ArnLike"
+        variable = "aws:SourceArn"
+        values   = ["arn:${local.partition}:logs:${local.key_regions.waf}:${statement.value}:delivery-source:*"]
+      }
     }
   }
 }

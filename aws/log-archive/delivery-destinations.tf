@@ -1,6 +1,6 @@
 # Cross-account standard logging of CloudFront: the destination and its policy live in the account of the bucket,
 # the delivery source and the delivery in the env account. Each env may create a delivery only to its own destination,
-# whose prefix carries its account id, so the stg lifecycle rule matches and no env writes under the other's prefix.
+# whose prefix is its account id, so the stg lifecycle rule matches and no env writes under the other's prefix.
 resource "aws_cloudwatch_log_delivery_destination" "cloudfront" {
   for_each = local.env_account_ids
 
@@ -9,8 +9,11 @@ resource "aws_cloudwatch_log_delivery_destination" "cloudfront" {
   # Set only at creation; Parquet keeps the same layout Athena reads for flow logs.
   output_format = "parquet"
 
+  # The prefix after the bucket ARN must be one segment: PutDeliveryDestination rejects any "/" in it. With a prefix,
+  # CloudFront adds no AWSLogs/<account>/CloudFront of its own, so the keys are <account>/<suffix path of the delivery>.
+  # https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/standard-logging.html (read 2026-11-19)
   delivery_destination_configuration {
-    destination_resource_arn = "${aws_s3_bucket.log["cloudfront"].arn}/AWSLogs/${each.value}/CloudFront"
+    destination_resource_arn = "${aws_s3_bucket.log["cloudfront"].arn}/${each.value}"
   }
 }
 
