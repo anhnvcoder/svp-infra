@@ -19,7 +19,7 @@ Management account không giữ hosted zone nào: zone DNS của lab nằm ở a
 [ADR-0051](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0051-dns-prd-apex.md).
 
 **Profile management:** root này (cùng `aws/org`, `github/`) chạy ở management account bằng profile `anhnv-sso`, account đọc từ biến
-`SVP_AWS_MGMT_ACCOUNT_ID` (export trong terminal của buổi, không file commit nào); mỗi lệnh `terraform` đặt
+`SVP_AWS_MGMT_ACCOUNT_ID` (nạp qua direnv từ `.envrc` ở thư mục chứa các clone, không file commit nào); mỗi lệnh `terraform` đặt
 `TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID"` ngay trong lệnh. Root của account stg, prd ở [`aws/accounts/`](../accounts/README.md).
 
 **Người học chạy mọi lệnh dưới đây** (AI không chạy lệnh nào chạm account). Làm trước root `aws/org` và buổi AWS đầu. Cần: Terraform
@@ -34,11 +34,12 @@ cd infra/aws/bootstrap
 AWS_PROFILE=anhnv-sso aws sts get-caller-identity --region ap-southeast-1 --query '{Account:Account,Arn:Arn}' --output table
 ```
 
-So `Account` với management account trên trang SSO, `Arn` là role SSO của người học. Khác thì dừng. Đúng thì đặt biến của management
-account trong terminal của buổi (không ghi vào file commit nào):
+So `Account` với management account trên trang SSO, `Arn` là role SSO của người học. Khác thì dừng. Đúng thì biến của management
+account đã nạp qua direnv từ `.envrc` ở thư mục chứa các clone ([README](../../README.md#plan-và-apply); chưa có file thì tạo
+theo README, với 12 số của `Account` vừa đọc). Kiểm biến đã nạp:
 
 ```sh
-export SVP_AWS_MGMT_ACCOUNT_ID=<12 số của Account vừa đọc>
+printf 'mgmt …%s\n' "${SVP_AWS_MGMT_ACCOUNT_ID: -4}"   # từ .envrc (direnv), 4 số cuối
 ```
 
 ## 2. Giá trị cá nhân

@@ -71,14 +71,15 @@ mục dưới). Gỡ DNSSEC theo mục [Tắt ký DNSSEC](#tắt-ký-dnssec).
 ```sh
 cd infra
 AWS_PROFILE=anhnv-sso aws sso login --region us-east-1      # one login for every profile of the same sso_session
-export SVP_AWS_MGMT_ACCOUNT_ID=<12 số>                      # typed by hand: the value check-account.sh compares against
+printf 'mgmt …%s\n' "${SVP_AWS_MGMT_ACCOUNT_ID: -4}"   # from .envrc (direnv), 4 last digits only
 eval "$(aws/scripts/accounts.sh)"                           # sets the other five SVP_AWS_*_ACCOUNT_ID, no file
 export SVP_SESSION_DIR="$PWD/.session/$(date -u +%Y%m%dT%H%M%SZ)"   # check-account.sh marks its timeline here
 aws/scripts/check-account.sh mgmt
 ```
 
 Tìm năm dòng `ok    SVP_AWS_<…>_ACCOUNT_ID: account svp-<tên>, ACTIVE` rồi `ok    account <12 số> of mgmt,
-arn:aws:sts::<12 số>:assumed-role/AWSReservedSSO_…`. Mở lại terminal giữa chừng: đặt lại `SVP_AWS_MGMT_ACCOUNT_ID` và `SVP_SESSION_DIR`,
+arn:aws:sts::<12 số>:assumed-role/AWSReservedSSO_…`. Mở lại terminal giữa chừng:
+direnv nạp lại biến account từ `.envrc`; đặt lại `SVP_SESSION_DIR`,
 chạy lại `eval` trên.
 
 ## Bước (1): log CloudFront và quyền đọc

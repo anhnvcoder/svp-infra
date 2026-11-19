@@ -295,9 +295,9 @@ Hai đường vào:
 - **Đổi cờ chi phí** (giữa hai buổi): runbook [`docs/runbooks/paid-features.md`](docs/runbooks/paid-features.md) (`aws/security`,
   `aws/baseline`, `aws/accounts/<env>` theo thứ tự của hướng đổi).
 
-Chỉ người học chạy, từ máy, bằng SSO, theo script và runbook của repo. Mỗi account một biến chứa 12 số của account (export trong terminal
-của buổi, không ghi vào file nào); mọi lệnh viết sẵn ghi profile ngay trong lệnh, `TF_VAR_account_id` từ biến của account mà profile vào, và
-`--region`:
+Chỉ người học chạy, từ máy, bằng SSO, theo script và runbook của repo. Mỗi account một biến chứa 12 số của account, nạp qua
+direnv từ `.envrc` ở thư mục chứa các clone (mục [Profile AWS không nằm trong code](#plan-và-apply)); mọi lệnh viết sẵn ghi
+profile ngay trong lệnh, `TF_VAR_account_id` từ biến của account mà profile vào, và `--region`:
 
 | Account | Profile ghi | Profile chỉ đọc | Biến account | Root |
 | --- | --- | --- | --- | --- |
@@ -327,10 +327,37 @@ của account thành viên đọc `aws/backend-<env>.hcl` (sinh từ output `bac
 
 **Profile AWS không nằm trong code** (khuyến nghị của HashiCorp và AWS: thông tin đăng nhập là của môi trường chạy, không của cấu hình; CI
 cần credential thì dùng OIDC, máy khác đặt tên profile khác). Code chỉ chặn nhầm account bằng `allowed_account_ids = [var.account_id]`.
-Vì mỗi root thuộc một account, không đặt một `TF_VAR_account_id` chung cho cả thư mục, và `AWS_PROFILE` chung chỉ như mặc định cá nhân của
-lệnh tay ở root management: `.envrc` của [direnv](https://direnv.net/) ở gốc repo (file cá nhân, git bỏ qua, không commit) đặt
-`AWS_PROFILE=anhnv-sso` và `AWS_REGION=ap-southeast-1`. Luật không đổi: lệnh viết sẵn và script vẫn ghi profile, `--region` trong lệnh
-(ghi đè mặc định của direnv), lệnh tay ở account thành viên phải ghi profile, và `allowed_account_ids = [var.account_id]` chặn nhầm account.
+
+Mọi thiết lập shell cá nhân của svp nằm ở một chỗ: file `.envrc` của [direnv](https://direnv.net/) ở thư mục chứa các bản clone (thư mục cha
+của `infra/`, `backend/`, `labs/`…; không phải git repo nên không có đường commit). File chứa `export SVP_AWS_<…>_ACCOUNT_ID=…` của từng
+account (`MGMT`, `STG`, `PRD`; `LOG`, `SECURITY`, `BACKUP` khi đã có) và mặc định `AWS_PROFILE=anhnv-sso`, `AWS_REGION=ap-southeast-1`.
+Lý do: ID account không được nằm trong cây repo public, một chỗ dùng chung cho mọi repo của lab, và không phải gõ lại biến mỗi buổi.
+direnv tìm `.envrc` ngược lên các thư mục cha, nên mọi repo bên dưới đều nạp nó. Vì direnv chỉ dùng file gần nhất, repo không giữ `.envrc`
+riêng: một file trong repo sẽ che file chung.
+
+Tạo file lần đầu (đọc 12 số trên trang SSO; chỉ ghi các account đã có, thêm dòng còn thiếu khi account được tạo), rồi cho direnv tin nó:
+
+```sh
+cd <thư mục chứa các bản clone>
+touch .envrc && chmod 600 .envrc
+cat > .envrc <<'ENV'
+export SVP_AWS_MGMT_ACCOUNT_ID=<12 số>
+export SVP_AWS_STG_ACCOUNT_ID=<12 số>
+export SVP_AWS_PRD_ACCOUNT_ID=<12 số>
+export AWS_PROFILE=anhnv-sso
+export AWS_REGION=ap-southeast-1
+ENV
+direnv allow
+```
+
+`SVP_AWS_MGMT_ACCOUNT_ID` luôn gõ tay vào file, không lấy từ Organizations: đó là giá trị mà `check_account` của mọi script đối chiếu với
+account thật của `anhnv-sso`. Biến của account thành viên (kể cả `LOG`, `SECURITY`, `BACKUP`) kiểm và đặt lại bằng
+`eval "$(aws/scripts/accounts.sh)"`: lệnh đọc Organizations, đặt biến trong terminal hiện tại và in `ok` mỗi biến; chép giá trị vào file
+khi cần giữ sang buổi sau.
+
+Luật không đổi. `TF_VAR_account_id` không bao giờ đặt chung trong file này, vì mỗi root thuộc một account: lệnh viết sẵn đặt nó
+từ biến của account mà profile vào. Lệnh viết sẵn và script vẫn ghi profile và `--region` trong lệnh (ghi đè mặc định của file); lệnh tay ở
+account thành viên phải ghi profile; `allowed_account_ids = [var.account_id]` chặn nhầm account. `SVP_SESSION_DIR` vẫn export mỗi buổi.
 Script buổi lấy profile và account từ bảng env của `aws/scripts/lib.sh`.
 
 **Script của `aws/scripts/`** gồm hai nhóm, dùng chung `lib.sh`, chạy từ terminal của máy Mac (bash 3.2 là đủ). Script buổi
@@ -353,7 +380,7 @@ Bảng env của `lib.sh` (`env_table`) mỗi env một dòng và là nơi duy n
 | --- | --- |
 | `name` | đối số của script; cluster, kubectl context và các root Terraform mang tên này |
 | `profile` | AWS profile (IAM Identity Center) của account của env, người học ghi bằng `aws/scripts/sso-profiles.sh write` |
-| `account` | biến chứa 12 số của account đó, export trong terminal của buổi, không bao giờ ghi vào file |
+| `account` | biến chứa 12 số của account đó, nạp qua direnv từ `.envrc` ở thư mục chứa các clone, không bao giờ trong file commit |
 | `zone` | `1` khi account có hosted zone, tên là `zone_name` của `aws/accounts/<name>/<name>.auto.tfvars` (`env_zone`); `-` khi không có |
 | `kept` | tag `Stack` của thứ ở lại account giữa các buổi (`sweep.sh`), cách nhau bằng dấu phẩy |
 | `tunnel` | cổng local của tunnel SSM tới endpoint API private; `-` khi endpoint public |

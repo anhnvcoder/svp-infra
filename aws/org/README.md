@@ -160,16 +160,18 @@ Root này áp hai lần trong thứ tự áp nền bảo mật org (runbook `doc
 ```sh
 cd infra/aws/org
 AWS_PROFILE=anhnv-sso aws sts get-caller-identity --region ap-southeast-1 --query '[Account,Arn]' --output text
-export SVP_AWS_MGMT_ACCOUNT_ID=<12 số của Account vừa đọc>
+printf 'mgmt …%s\n' "${SVP_AWS_MGMT_ACCOUNT_ID: -4}"   # nạp từ .envrc (direnv), 4 số cuối
 ../scripts/tfvars.sh init
 ../scripts/tfvars.sh example aws/org
 ```
 
-`Account` phải là management account (account sandbox), `Arn` là role SSO của người học. Khác thì dừng. `SVP_AWS_MGMT_ACCOUNT_ID` gõ tay vì
-nó là giá trị mà `check_account` của mọi script đối chiếu với account thật của `anhnv-sso`: đọc từ chính profile đó thì phép đối chiếu vô
-nghĩa. `tfvars.sh init` chạy `terraform init -reconfigure` ở mọi root của management ([`aws/bootstrap`, mục
-5](../bootstrap/README.md#5-áp-thay-đổi-khi-state-đã-ở-bucket)); `tfvars.sh example aws/org` chép `org.auto.tfvars.example` thành
-`org.auto.tfvars` (mode 600) khi file chưa có, không ghi đè, và liệt kê mỗi giá trị còn `<…>` một dòng `note`.
+`Account` phải là management account (account sandbox), `Arn` là role SSO của người học. Khác thì dừng.
+`SVP_AWS_MGMT_ACCOUNT_ID` đã nạp qua direnv từ `.envrc` ở thư mục chứa các clone ([README](../../README.md#plan-và-apply);
+chưa có file thì tạo theo README, với 12 số của `Account` vừa đọc) và gõ tay vào `.envrc` vì nó là giá trị mà `check_account`
+của mọi script đối chiếu với account thật của `anhnv-sso`: đọc từ chính profile đó thì phép đối chiếu vô nghĩa. `tfvars.sh
+init` chạy `terraform init -reconfigure` ở mọi root của management ([`aws/bootstrap`, mục
+5](../bootstrap/README.md#5-áp-thay-đổi-khi-state-đã-ở-bucket)); `tfvars.sh example aws/org` chép `org.auto.tfvars.example`
+thành `org.auto.tfvars` (mode 600) khi file chưa có, không ghi đè, và liệt kê mỗi giá trị còn `<…>` một dòng `note`.
 
 Giá trị cá nhân ở `org.auto.tfvars` (git bỏ qua; giữ tay, sửa trong editor), đủ mọi biến của `org.auto.tfvars.example`:
 
@@ -223,10 +225,10 @@ export SVP_AWS_SECURITY_ACCOUNT_ID="$(AWS_PROFILE=anhnv-sso terraform output -ra
 printf '%s\n' "$SVP_AWS_LOG_ACCOUNT_ID" "$SVP_AWS_SECURITY_ACCOUNT_ID"
 ```
 
-Tạo account mất vài phút mỗi account. Hai dòng cuối là hai id 12 số khác nhau; đặt chúng trong terminal của mọi bước sau
-(không ghi vào file commit), như `SVP_AWS_STG_ACCOUNT_ID`, `SVP_AWS_PRD_ACCOUNT_ID`. Lần dựng đầu dùng `terraform
-output` ở đây vì `aws/scripts/accounts.sh` đòi đủ năm account thành viên, kể cả `svp-backup` mà tổ chức chỉ có sau bước (4): từ đó
-trở đi một lệnh `eval "$(aws/scripts/accounts.sh)"` đặt cả năm biến. Tiếp theo: bước (3), apply
+Tạo account mất vài phút mỗi account. Hai dòng cuối là hai id 12 số khác nhau; thêm chúng vào `.envrc` ở thư mục chứa các
+clone (ngoài mọi repo) để mọi bước sau nạp lại được, cạnh `SVP_AWS_STG_ACCOUNT_ID`, `SVP_AWS_PRD_ACCOUNT_ID`. Lần dựng đầu
+dùng `terraform output` ở đây vì `aws/scripts/accounts.sh` đòi đủ năm account thành viên, kể cả `svp-backup` mà tổ chức chỉ
+có sau bước (4): từ đó trở đi một lệnh `eval "$(aws/scripts/accounts.sh)"` đặt cả năm biến. Tiếp theo: bước (3), apply
 [`aws/log-archive`](../log-archive/README.md).
 
 ### Bước (4): đủ root

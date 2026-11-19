@@ -154,7 +154,7 @@ Account dùng chung giữ giá trị của file suốt buổi. Buổi kết thú
    Mong `ok    no CloudFront flat-rate plan in prd` và `ok    account plan of prd is PAID`; dán lại. `FAIL  N CloudFront plan(s) left in
    prd …`: huỷ gói theo `session-stg.md`, mục **Lệnh xoá tay theo loại** (CloudFront), với `AWS_PROFILE=anhnv-prd`, rồi chạy lại.
 8. **Nền bảo mật của org đã áp** tới ít nhất bước (3) của [`org-security-setup.md`](org-security-setup.md#thứ-tự-áp-lần-đầu), và biến
-   `SVP_AWS_LOG_ACCOUNT_ID` đặt trong terminal của buổi: như `session-stg.md` điều kiện 6 (root env prd ghi flow log, log WAF vào bucket
+   `SVP_AWS_LOG_ACCOUNT_ID` đã nạp: như `session-stg.md` điều kiện 6 (root env prd ghi flow log, log WAF vào bucket
    của `svp-log-archive`).
 9. **Edge đã áp lần đầu** theo [`edge-setup.md`](edge-setup.md#thứ-tự-áp-lần-đầu) tới hết bước (3), như `session-stg.md` điều kiện 7 (destination
    `svp-cloudfront-prd`, `CAA`, zone `aws.<domain>` ký và có `DS` ở DNS cha); file có sẵn từ trước còn dòng `acme_email` thì xoá như
@@ -183,7 +183,7 @@ Như `session-stg.md` (cùng phiên SSO dùng chung cho mọi profile, cùng cá
 ```sh
 cd infra
 AWS_PROFILE=anhnv-sso aws sso login --region us-east-1                          # one login per sso_session
-export SVP_AWS_MGMT_ACCOUNT_ID=<12 số của account management>
+printf 'mgmt …%s\n' "${SVP_AWS_MGMT_ACCOUNT_ID: -4}"
 eval "$(aws/scripts/accounts.sh)"
 export SVP_SESSION_DIR="$PWD/.session/$(date -u +%Y%m%dT%H%M%SZ)"
 aws/scripts/sso-profiles.sh check

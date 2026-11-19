@@ -93,7 +93,7 @@ hay đã có `renovate.json`.
    `FAIL  gh api …` kèm lỗi của GitHub: thường `gh` thiếu quyền admin hay scope `repo` (`gh auth status`); sửa rồi chạy lại.
 7. **Secret account của CI ECR:** `SVP_AWS_STG_ACCOUNT_ID`, `SVP_AWS_PRD_ACCOUNT_ID` ở các repo của `ECR_SECRET_REPOS` (workflow dựng ARN
    role OIDC từ chúng; secret để GitHub che account ID trong log), sau khi role của `aws/accounts/<env>` có
-   ([`platform-setup.md`](platform-setup.md#bước-7-biến-ci-ecr) bước (7)). Hai biến cùng tên export trong terminal, rồi:
+   ([`platform-setup.md`](platform-setup.md#bước-7-biến-ci-ecr) bước (7)). Hai biến cùng tên đã nạp qua direnv từ `.envrc`, rồi:
 
    ```sh
    make github-secrets
@@ -157,8 +157,9 @@ Job `plan` của `plan.yml` (`svp-infra`) đọc account bằng role plan chỉ 
 environment; secret do người học đặt, mỗi env một lần, ở buổi cloud **sau khi** role plan của env đã apply
 (`aws/accounts/<env>`). Thứ tự: secret trước, biến `SVP_TF_PLAN_ENVS` sau, vì env có trong biến thì mọi PR đổi `aws/**` chạy plan của nó.
 
-1. Secret của env (ví dụ stg; prd thay `stg`). `SVP_AWS_LOG_ACCOUNT_ID`, `SVP_AWS_BACKUP_ACCOUNT_ID`, `SVP_AWS_STG_ACCOUNT_ID` export
-   trong terminal (không ghi vào file nào); `aws/accounts/stg/stg.auto.tfvars` và `aws/envs/stg/stg.auto.tfvars` đã có:
+1. Secret của env (ví dụ stg; prd thay `stg`). `SVP_AWS_LOG_ACCOUNT_ID`, `SVP_AWS_BACKUP_ACCOUNT_ID`, `SVP_AWS_STG_ACCOUNT_ID` đã nạp
+   qua direnv từ `.envrc` ở thư mục chứa các clone ([README](../../README.md#plan-và-apply)); `aws/accounts/stg/stg.auto.tfvars`
+   và `aws/envs/stg/stg.auto.tfvars` đã có:
 
    ```sh
    make github-secrets ENV=stg

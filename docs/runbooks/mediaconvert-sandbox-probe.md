@@ -39,7 +39,7 @@ Một bucket giữ cả hai tiền tố, nên quyền của role vẫn đúng b�
 ```sh
 cd infra
 AWS_PROFILE=anhnv-sso aws sso login --region us-east-1
-export SVP_AWS_MGMT_ACCOUNT_ID=<12 số của account management>        # never written to a file: the repo is public
+printf 'mgmt …%s\n' "${SVP_AWS_MGMT_ACCOUNT_ID: -4}"   # from .envrc (direnv)
 export SVP_SESSION_DIR="$PWD/.session/mediaconvert-probe-$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p "$SVP_SESSION_DIR"; d=$SVP_SESSION_DIR
 # The job the bridge submits, from your clone of the code repo.

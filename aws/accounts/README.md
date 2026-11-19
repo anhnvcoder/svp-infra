@@ -73,11 +73,12 @@ bằng `prd`, `anhnv-stg` bằng `anhnv-prd`, `SVP_AWS_STG_ACCOUNT_ID` bằng `S
 
 Cần: Terraform 1.15, AWS CLI v2, `jq`, `dig`; profile `anhnv-stg` (permission set `SvpAdmin` của account stg) đã có từ
 `aws/scripts/sso-profiles.sh write` ([`aws/org`, Profile](../org/README.md#profile)) và đã `aws sso login --profile anhnv-sso` (một lần
-cho mọi profile cùng `sso_session`). Trong terminal của buổi (không file commit nào) đã `export SVP_AWS_MGMT_ACCOUNT_ID=<12 số>` rồi
-`eval "$(aws/scripts/accounts.sh)"`: lệnh đọc tổ chức bằng `anhnv-sso` và đặt `SVP_AWS_STG_ACCOUNT_ID`, `SVP_AWS_PRD_ACCOUNT_ID`,
-`SVP_AWS_LOG_ACCOUNT_ID`, `SVP_AWS_SECURITY_ACCOUNT_ID`, `SVP_AWS_BACKUP_ACCOUNT_ID` (account `svp-backup` phải có trước). Mỗi biến một dòng
-`ok    SVP_AWS_<…>_ACCOUNT_ID: account svp-<tên>, ACTIVE` trên stderr, không in id; lỗi (`FAIL  no account svp-backup in the organization`,
-account không `ACTIVE`, mgmt sai) thì stdout rỗng nên `eval` không đặt gì.
+cho mọi profile cùng `sso_session`). Trong terminal của buổi đã nạp biến account (direnv nạp từ `.envrc`, xem
+[README](../../README.md#plan-và-apply); không file commit nào) rồi `eval "$(aws/scripts/accounts.sh)"`:
+lệnh đọc tổ chức bằng `anhnv-sso` và đặt `SVP_AWS_STG_ACCOUNT_ID`, `SVP_AWS_PRD_ACCOUNT_ID`, `SVP_AWS_LOG_ACCOUNT_ID`,
+`SVP_AWS_SECURITY_ACCOUNT_ID`, `SVP_AWS_BACKUP_ACCOUNT_ID` (account `svp-backup` phải có trước). Mỗi biến một dòng
+`ok    SVP_AWS_<…>_ACCOUNT_ID: account svp-<tên>, ACTIVE` trên stderr, không in id; lỗi
+(`FAIL  no account svp-backup in the organization`, account không `ACTIVE`, mgmt sai) thì stdout rỗng nên `eval` không đặt gì.
 
 ### 1. Kiểm account và role
 

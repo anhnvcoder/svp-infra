@@ -202,7 +202,7 @@ aws/scripts/session.sh --print stg
 ```sh
 cd infra
 AWS_PROFILE=anhnv-sso aws sso login --region us-east-1                          # one login per sso_session
-export SVP_AWS_MGMT_ACCOUNT_ID=<12 số của account management>                   # typed by hand, check_account compares
+printf 'mgmt …%s\n' "${SVP_AWS_MGMT_ACCOUNT_ID: -4}"                      # from .envrc (direnv), 4 last digits only
 eval "$(aws/scripts/accounts.sh)"                                               # sets five member-account variables
 export SVP_SESSION_DIR="$PWD/.session/$(date -u +%Y%m%dT%H%M%SZ)"               # số đo của buổi; .session/ git bỏ qua
 aws/scripts/sso-profiles.sh check                                               # all eight profiles sign in
@@ -221,10 +221,11 @@ get-caller-identity with profile <tên> (expired SSO session? …)`. Login lại
 thiết bị bằng tay (MFA; không có API), rồi chạy lại đúng lệnh đang dở. Một bước đã `FAIL` vì phiên hết hạn không để lại gì dở: các script
 chạy lại an toàn, và `measure.sh` nói rõ cách chạy tiếp (`--from <n>`).
 
-Biến account không nằm trong file commit nào, kể cả `.envrc`; script đặt `TF_VAR_account_id` từ biến của env,
+Biến account nằm trong `.envrc` ở thư mục chứa các clone, ngoài mọi repo (direnv nạp, xem
+[README](../../README.md#plan-và-apply)); không file commit nào chứa ID; script đặt `TF_VAR_account_id` từ biến của env,
 `TF_VAR_log_archive_account_id` từ `SVP_AWS_LOG_ACCOUNT_ID` và `TF_VAR_backup_account_id` từ `SVP_AWS_BACKUP_ACCOUNT_ID` ngay trong lệnh
-`terraform` của root env; `restore-drill.sh` dựng ARN vault `svp-stg-copy` từ `SVP_AWS_BACKUP_ACCOUNT_ID`. `.envrc` của direnv chỉ đặt
-mặc định cá nhân cho lệnh tay ở root management ([README](../../README.md#plan-và-apply)).
+`terraform` của root env; `restore-drill.sh` dựng ARN vault `svp-stg-copy` từ `SVP_AWS_BACKUP_ACCOUNT_ID`. File đó cũng đặt mặc
+định `AWS_PROFILE`, `AWS_REGION` cho lệnh tay ở root management ([README](../../README.md#plan-và-apply)).
 
 Mọi bước sau chạy trong **cùng terminal này** (cùng các biến). Thư mục buổi chứa: `timeline.tsv` (mốc UTC: `session-start`,
 `env-apply-start`, `env-apply-end`, `secrets-written`, `gitops-apply-start`, `gitops-apply-end`, `observability-healthy`, `glitchtip-init`,
@@ -233,14 +234,14 @@ Mọi bước sau chạy trong **cùng terminal này** (cùng các biến). Thư
 `svp-cluster-chart/`, các file text của plan, `k6-levels.tsv`, `k6-<n>/`, `restore-drill.tsv`, `restore-drill-points.tsv` và các file mẫu
 `restore-drill-*` của diễn tập.
 
-**Mở lại terminal giữa buổi** (terminal đóng, máy khởi động lại): đặt lại các biến, với `SVP_SESSION_DIR` là **thư mục của buổi đang dở**,
+**Mở lại terminal giữa buổi** (terminal đóng, máy khởi động lại): nạp lại biến (direnv đã nạp biến account khi vào repo), với
+`SVP_SESSION_DIR` là **thư mục của buổi đang dở**,
 không phải thư mục mới. `measure.sh` đọc `cluster-values.json` của nó và tính mốc 3 giờ từ `session-start` của nó; `tf.sh` đọc các mốc gỡ
 (`pre-destroy-done`, `gitops-destroy-end`) trong `timeline.tsv` của nó.
 
 ```sh
 cd infra
 AWS_PROFILE=anhnv-sso aws sso login --region us-east-1
-export SVP_AWS_MGMT_ACCOUNT_ID=<12 số>
 eval "$(aws/scripts/accounts.sh)"
 ls -1d .session/*/ | tail -n 3                                                 # thư mục mới nhất là buổi đang dở
 export SVP_SESSION_DIR="$PWD/.session/<thư mục đó>"

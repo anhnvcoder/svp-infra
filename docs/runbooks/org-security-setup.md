@@ -80,20 +80,21 @@ flowchart TD
 ```sh
 cd infra
 AWS_PROFILE=anhnv-sso aws sso login --region us-east-1
-export SVP_AWS_MGMT_ACCOUNT_ID=<12 số> SVP_AWS_STG_ACCOUNT_ID=<12 số> SVP_AWS_PRD_ACCOUNT_ID=<12 số>   # đọc trên trang SSO; không ghi vào file nào
+printf 'mgmt …%s stg …%s prd …%s\n' "${SVP_AWS_MGMT_ACCOUNT_ID: -4}" "${SVP_AWS_STG_ACCOUNT_ID: -4}" \
+  "${SVP_AWS_PRD_ACCOUNT_ID: -4}"   # từ .envrc (direnv)
 export SVP_SESSION_DIR="$PWD/.session/$(date -u +%Y%m%dT%H%M%SZ)"                                      # check-account.sh ghi mốc ở đây
 aws/scripts/check-account.sh mgmt
 ```
 
 Tìm `ok    account <12 số> of mgmt, arn:aws:sts::<12 số>:assumed-role/AWSReservedSSO_…`. Profile `anhnv-sso` và phiên
-SSO chưa có thì làm [Profile gốc](../../aws/org/README.md#profile-gốc-anhnv-sso) trước. `SVP_AWS_MGMT_ACCOUNT_ID` luôn
-gõ tay (là giá trị mà `check-account.sh` đối chiếu với account thật); bốn biến thành viên đọc trên trang SSO chỉ ở lần
-dựng đầu này, vì `aws/scripts/accounts.sh` đòi đủ năm account thành viên mà `svp-backup` chỉ có sau bước
-(4). Từ bước (2) thêm hai biến `SVP_AWS_LOG_ACCOUNT_ID`,
-`SVP_AWS_SECURITY_ACCOUNT_ID`. Mở lại terminal giữa chừng: đặt lại mọi biến của khối trên và hai biến của bước (2), rồi
-chạy lại `check-account.sh mgmt`; khi `svp-backup` đã có, `export SVP_AWS_MGMT_ACCOUNT_ID=<12 số>` rồi `eval
-"$(aws/scripts/accounts.sh)"` thay mọi biến còn lại. Mọi lệnh ghi của bước (1)–(6) chạy bằng `anhnv-sso` (root
-`aws/log-archive`, `aws/security`, `aws/baseline` vào account đích qua `OrganizationAccountAccessRole`); trước mỗi bước,
+SSO chưa có thì làm [Profile gốc](../../aws/org/README.md#profile-gốc-anhnv-sso) trước. Biến account đã nạp qua direnv từ
+`.envrc` ở thư mục chứa các clone ([README](../../README.md#plan-và-apply)); chưa có file thì tạo theo README,
+với ba biến trên đọc trên trang SSO (`SVP_AWS_MGMT_ACCOUNT_ID` luôn gõ tay: `check-account.sh` đối chiếu nó với account thật). Lần dựng
+đầu chỉ có ba biến đó, vì `aws/scripts/accounts.sh` đòi đủ năm account thành viên mà `svp-backup` chỉ có sau bước (4). Từ bước (2) thêm
+hai biến `SVP_AWS_LOG_ACCOUNT_ID`, `SVP_AWS_SECURITY_ACCOUNT_ID` vào `.envrc`. Mở lại terminal giữa chừng: direnv nạp lại biến, chạy lại
+`check-account.sh mgmt`; khi `svp-backup` đã có, `eval "$(aws/scripts/accounts.sh)"` đặt các biến thành viên còn lại, thêm chúng vào
+file. Mọi lệnh ghi của bước (1)–(6) chạy bằng `anhnv-sso` (root `aws/log-archive`, `aws/security`,
+`aws/baseline` vào account đích qua `OrganizationAccountAccessRole`); trước mỗi bước,
 chạy lại `check-account.sh mgmt`.
 
 Budget tổng của org (điều 3 của mục Trước khi bắt đầu):
