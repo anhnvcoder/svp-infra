@@ -86,7 +86,8 @@ resource "aws_ssoadmin_managed_policy_attachment" "read_only" {
   managed_policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/${each.key}"
 }
 
-# The log reads of an investigation (EKS control plane, RDS); none of these actions writes.
+# What the two managed policies lack: the log reads of an investigation (EKS control plane, RDS) and the Inspector
+# reads of aws/scripts/verify.sh. None of these actions writes.
 data "aws_iam_policy_document" "read_only" {
   statement {
     sid    = "ReadLogEvents"
@@ -97,6 +98,19 @@ data "aws_iam_policy_document" "read_only" {
       "logs:GetQueryResults",
       "logs:StartQuery",
       "logs:StopQuery",
+    ]
+    resources = ["*"]
+  }
+
+  # Action names, access levels (Read, List) and resource types (none) from the Service Authorization Reference:
+  # https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazoninspector2.html
+  statement {
+    sid    = "ReadInspector"
+    effect = "Allow"
+    actions = [
+      "inspector2:BatchGetAccountStatus",
+      "inspector2:DescribeOrganizationConfiguration",
+      "inspector2:ListMembers",
     ]
     resources = ["*"]
   }

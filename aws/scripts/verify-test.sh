@@ -118,15 +118,28 @@ policies=organizations_list-policies-for-target
 
 # --- org ---
 
+# gd_config AUTO [NAME=VALUE...]: the organization configuration of GuardDuty, the six features of aws/security on
+# AUTO, then the features AWS added, each with its value.
+gd_config() {
+  local f a=$1 out=''
+  shift
+  for f in S3_DATA_EVENTS EKS_AUDIT_LOGS EBS_MALWARE_PROTECTION RDS_LOGIN_EVENTS LAMBDA_NETWORK_LOGS RUNTIME_MONITORING; do
+    out="${out}[\"$f\", \"$a\"], "
+  done
+  for f in "$@"; do out="${out}[\"${f%%=*}\", \"${f#*=}\"], "; done
+  printf '["ALL", [%s]]\n' "${out%, }"
+}
+
 org_answers() {
   reset
   ans organizations_list-accounts "$accounts"
   ans organizations_list-delegated-services-for-account \
     'guardduty.amazonaws.com\tsecurityhub.amazonaws.com\tconfig.amazonaws.com\tconfig-multiaccountsetup.amazonaws.com\taccess-analyzer.amazonaws.com\tinspector2.amazonaws.com'
-  ans "$policies@--filter=SERVICE_CONTROL_POLICY" 'FullAWSAccess\tsvp-a\tsvp-b\tsvp-c\tsvp-d\tsvp-e'
-  ans "$policies@--filter=RESOURCE_CONTROL_POLICY" 'RCPFullAWSAccess\tsvp-data-perimeter\tsvp-ec2-baseline\tsvp-tags'
-  ans "$policies@--filter=DECLARATIVE_POLICY_EC2" 'svp-ec2-declarative'
-  ans "$policies@--filter=TAG_POLICY" 'svp-tag'
+  ans "$policies@--filter=SERVICE_CONTROL_POLICY" \
+    'svp-deny-iam-users\tFullAWSAccess\tsvp-deny-leave-organization\tsvp-protect-cloudtrail\tsvp-deny-other-regions\tsvp-protect-baseline'
+  ans "$policies@--filter=RESOURCE_CONTROL_POLICY" 'RCPFullAWSAccess\tsvp-data-perimeter'
+  ans "$policies@--filter=DECLARATIVE_POLICY_EC2" 'svp-ec2-baseline'
+  ans "$policies@--filter=TAG_POLICY" 'svp-tags'
   ans "$policies@--target-id=ou-prod@--filter=SERVICE_CONTROL_POLICY" 'FullAWSAccess\tsvp-prod-guardrails'
   ans iam_list-organizations-features 'RootCredentialsManagement\tRootSessions'
   ans events_describe-rule ENABLED
@@ -140,7 +153,7 @@ org_answers() {
   ans configservice_describe-configuration-recorder-status 'default\tTrue\tSUCCESS'
   ans cloudtrail_get-trail-status '[true, null, null]'
   ans guardduty_list-detectors det-1
-  ans guardduty_describe-organization-configuration "[\"ALL\", [$(for f in S3 EKS EBS RDS LAMBDA RUNTIME; do printf '["%s", "ALL"],' "$f"; done | sed 's/,$//')]]"
+  ans guardduty_describe-organization-configuration "$(gd_config ALL)"
   ans guardduty_list-members '000000000000\tEnabled\n111111111111\tEnabled\n222222222222\tEnabled\n333333333333\tEnabled\n555555555555\tEnabled'
   ans guardduty_list-publishing-destinations PUBLISHING
   ans accessanalyzer_list-analyzers 'svp-org\tACTIVE'
@@ -162,7 +175,7 @@ org_answers() {
 org_answers
 expect "org: exits 0 when every check is ok" run org
 expect "org: 7a delegated services, 7a policies, 7b features, 7a rule, 7c trails" \
-  sh -c 'for t in "7a: svp-security administers" "7a: policies of the root" "7b: RootCredentialsManagement" "7a: rule svp-security-admin-sso" "7c: the Log Archive bucket"; do grep -q "^ok    $t" "$1" || exit 1; done' _ "$out"
+  sh -c 'for t in "7a: svp-security administers" "7a: SCP, RCP, EC2 declarative and tag policies" "7b: RootCredentialsManagement" "7a: rule svp-security-admin-sso" "7c: the Log Archive bucket"; do grep -q "^ok    $t" "$1" || exit 1; done' _ "$out"
 expect "org: 7a Security Hub members as the cost flag of stg says" okl "7a: every ACTIVE account but svp-security"
 expect "org: 7a GuardDuty and Access Analyzer in both regions" \
   sh -c 'for r in ap-southeast-1 us-east-1; do grep -q "^ok    7a: GuardDuty in $r: auto-enable ALL" "$1" && grep -q "^ok    7a: Access Analyzer svp-org ACTIVE in $r" "$1" || exit 1; done' _ "$out"
@@ -205,11 +218,25 @@ expect "org FAIL: it names the missing principals" failedl '7a: svp-security is 
 expect "org FAIL: the next checks still ran" okl "7b: RootCredentialsManagement"
 
 org_answers
-ans "$policies@--filter=SERVICE_CONTROL_POLICY" 'FullAWSAccess\tsvp-a\tsvp-b'
+ans "$policies@--filter=SERVICE_CONTROL_POLICY" 'FullAWSAccess\tsvp-deny-iam-users\tsvp-protect-baseline'
 ans iam_list-organizations-features 'RootSessions'
 expect "org FAIL: SCPs and root features wrong exits non-zero" runs_fail org
-expect "org FAIL: it names the SCPs" failedl "7a: root SCPs are"
+expect "org FAIL: it names the SCPs" failedl "7a: policies wrong (apply aws/org): root SERVICE_CONTROL_POLICY is 'FullAWSAccess svp-deny-iam-users svp-protect-baseline'"
 expect "org FAIL: it names the missing root feature" failedl '7b: organization root features lack: RootCredentialsManagement'
+
+# Each type is read with its own filter: RCPs that also name the EC2 declarative and the tag policy, no tag policy and
+# an OU Prod without its SCP are three errors of one FAIL line; the declarative policy, right, is not named.
+org_answers
+ans "$policies@--filter=RESOURCE_CONTROL_POLICY" 'RCPFullAWSAccess\tsvp-data-perimeter\tsvp-ec2-baseline\tsvp-tags'
+ans "$policies@--filter=TAG_POLICY" ''
+ans "$policies@--target-id=ou-prod@--filter=SERVICE_CONTROL_POLICY" 'FullAWSAccess'
+expect "org FAIL: an RCP list with other types, no tag policy and OU Prod without its SCP exits non-zero" runs_fail org
+expect "org FAIL: it names the RCPs of the root against the two expected" \
+  failedl "7a: policies wrong (apply aws/org): root RESOURCE_CONTROL_POLICY is 'RCPFullAWSAccess svp-data-perimeter svp-ec2-baseline svp-tags', not 'RCPFullAWSAccess svp-data-perimeter'"
+expect "org FAIL: the same line names the tag policy and the SCPs of OU Prod" \
+  failedl "7a: policies wrong .*; root TAG_POLICY is '', not 'svp-tags'; Prod SERVICE_CONTROL_POLICY is 'FullAWSAccess', not 'FullAWSAccess svp-prod-guardrails'"
+expect "org FAIL: the policies right are not named" sh -c '! grep -qE "DECLARATIVE_POLICY_EC2|root SERVICE_CONTROL_POLICY" "$1"' _ "$err"
+expect "org FAIL: the next checks still ran" okl "7b: RootCredentialsManagement"
 
 org_answers
 ans securityhub_list-members '000000000000\tEnabled\n111111111111\tEnabled\n222222222222\tEnabled\n333333333333\tEnabled'
@@ -262,6 +289,25 @@ ans guardduty_list-publishing-destinations 'PUBLISHING\tSTOPPED'
 expect "org FAIL: a publishing destination STOPPED" runs_fail org
 expect "org FAIL: it names the publishing destinations" failedl "7a: GuardDuty in us-east-1: publishing destinations"
 
+# GuardDuty: features AWS adds after aws/security (NONE until someone turns them on) are a note; a feature of
+# aws/security that is not ALL, or members not auto-enabled ALL, FAIL.
+org_answers
+ans guardduty_describe-organization-configuration "$(gd_config ALL EKS_RUNTIME_MONITORING=NONE AI_PROTECTION=NONE)"
+expect "org: features AWS added, at NONE, still exit 0" run org
+expect "org: they are a note with their values, GuardDuty ok, in both regions" \
+  sh -c 'for r in ap-southeast-1 us-east-1; do grep -q "^note  7a: GuardDuty in $r: features outside aws/security, left as AWS sets them: EKS_RUNTIME_MONITORING=NONE AI_PROTECTION=NONE" "$1" && grep -q "^ok    7a: GuardDuty in $r: auto-enable ALL" "$1" || exit 1; done' _ "$out"
+org_answers
+ans guardduty_describe-organization-configuration \
+  "$(gd_config ALL AI_PROTECTION=NONE | sed 's/"RUNTIME_MONITORING", "ALL"/"RUNTIME_MONITORING", "NONE"/')"
+expect "org FAIL: a feature of aws/security at NONE exits non-zero" runs_fail org
+expect "org FAIL: it shows the configuration and names the six features" \
+  failedl '7a: GuardDuty in ap-southeast-1 auto-enables .*"RUNTIME_MONITORING","NONE".*, not ALL for members and S3_DATA_EVENTS EKS_AUDIT_LOGS EBS_MALWARE_PROTECTION RDS_LOGIN_EVENTS LAMBDA_NETWORK_LOGS RUNTIME_MONITORING'
+expect "org FAIL: no note of the other features then" sh -c '! grep -q "features outside aws/security" "$1"' _ "$out"
+org_answers
+ans guardduty_describe-organization-configuration "$(gd_config ALL | sed 's/^\["ALL"/["NEW"/')"
+expect "org FAIL: members auto-enabled NEW, not ALL, exits non-zero" runs_fail org
+expect "org FAIL: it shows the auto-enable of members" failedl '7a: GuardDuty in us-east-1 auto-enables \["NEW",'
+
 org_answers
 ans securityhub_list-configuration-policy-associations 'r-0001\tPENDING\n111111111111\tFAILED'
 ans configservice_describe-configuration-aggregator-sources-status '222222222222\tus-east-1\tFAILED\n111111111111\tus-east-1\tFAILED'
@@ -280,6 +326,24 @@ expect "org FAIL: an account with inspector_ecr off is a member" runs_fail org
 expect "org FAIL: it names it" failedl '7a: Inspector wrong for: ...1111(inspector_ecr off but a member)'
 expect "org: a PENDING association is a note, not a FAIL" \
   sh -c 'grep -q "^note  7a: Security Hub association PENDING for: root" "$1" && grep -q "^ok    7a: Security Hub is CENTRAL ENABLED" "$1"' _ "$out"
+
+# Two closed accounts (not in the ACTIVE list) fail their association and so the root's: a note, not a FAIL. An ACTIVE
+# account that fails as well, or a root FAILED that no account explains, FAILs.
+org_answers
+ans securityhub_list-configuration-policy-associations \
+  'r-0001\tFAILED\nou-prod\tSUCCESS\n111111111111\tSUCCESS\n222222222222\tSUCCESS\n666666666666\tFAILED\n777777777777\tFAILED'
+expect "org: a root association FAILED by accounts not ACTIVE only exits 0" run org
+expect "org: those accounts are a note by their last 4 digits, the association check ok" \
+  sh -c 'grep -q "^note  7a: Security Hub association FAILED for accounts not ACTIVE: ...6666 ...7777 (closed accounts" "$1" && grep -q "^ok    7a: Security Hub is CENTRAL ENABLED" "$1" && ! grep -qE "[0-9]{12}" "$1" "$2"' _ "$out" "$err"
+ans securityhub_list-configuration-policy-associations \
+  'r-0001\tFAILED\n111111111111\tSUCCESS\n222222222222\tFAILED\n666666666666\tFAILED'
+expect "org FAIL: an ACTIVE account FAILED as well exits non-zero" runs_fail org
+expect "org FAIL: it names the root and the ACTIVE account" \
+  failedl '7a: Security Hub configuration policy association not SUCCESS for: root(FAILED in ...2222)'
+expect "org FAIL: the account not ACTIVE is still a note" notel '7a: Security Hub association FAILED for accounts not ACTIVE: ...6666 ('
+ans securityhub_list-configuration-policy-associations 'r-0001\tFAILED\n111111111111\tSUCCESS'
+expect "org FAIL: a root FAILED that no account explains exits non-zero" runs_fail org
+expect "org FAIL: it names the root" failedl '7a: Security Hub configuration policy association not SUCCESS for: root(FAILED)'
 
 org_answers
 SVP_AWS_MGMT_ACCOUNT_ID=999999999999 expect "org FAIL: anhnv-sso in another account exits non-zero" runs_fail org
@@ -380,6 +444,28 @@ backup_answers
 ans guardduty_list-members ''
 expect "backup FAIL: GuardDuty without the member says to wait" runs_fail backup
 expect "backup FAIL: it names the region and the 24 hours" failedl '7a: GuardDuty member status of svp-backup in ap-southeast-1 is .none. (a new account takes up to 24 h)'
+
+# The vault of prd before aws/accounts/prd is applied: describe-backup-vault is denied and the list of vaults lacks it,
+# a note. A vault in the list that cannot be described FAILs with its likely cause, and so does an unreadable list.
+backup_answers
+rm "$answers/backup_describe-backup-vault@--backup-vault-name=svp-prd"
+ans "backup_list-backup-vaults@profile=anhnv-prd-ro" 'Default'
+expect "backup: the prd vault not created yet still exits 0" run backup
+expect "backup: it is a note naming the root to apply" notel '7c: vault svp-prd not created yet (aws/accounts/prd not applied)'
+expect "backup: the stg vault still checked, the role of prd not read" \
+  sh -c 'grep -q "^ok    7c: the vault svp-stg is not locked" "$1" && ! grep -q "svp-prd-backup" "$2"' _ "$out" "$log"
+ans "backup_list-backup-vaults@profile=anhnv-prd-ro" 'Default\tsvp-prd'
+expect "backup FAIL: a prd vault listed but not described exits non-zero" runs_fail backup
+expect "backup FAIL: no Deny in its access policy, so the profile lacks the permission" \
+  failedl '7c: the vault svp-prd exists but describe-backup-vault failed with profile anhnv-prd-ro: no Deny in its access policy'
+ans "backup_get-backup-vault-access-policy@--backup-vault-name=svp-prd" \
+  '{"Statement": [{"Effect": "Deny", "Principal": "*", "Action": "backup:*", "Resource": "*"}]}'
+expect "backup FAIL: a Deny in the access policy of the prd vault exits non-zero" runs_fail backup
+expect "backup FAIL: it counts the Deny statements" failedl '7c: the vault svp-prd exists .*: its access policy has 1 Deny statement'
+rm "$answers/backup_list-backup-vaults@profile=anhnv-prd-ro"
+expect "backup FAIL: the list of vaults unreadable too exits non-zero" runs_fail backup
+expect "backup FAIL: it says both calls failed" \
+  failedl 'backup describe-backup-vault svp-prd, and list-backup-vaults with profile anhnv-prd-ro failed too'
 
 # security_hub and config_recording off for backup: no member status, no standards and no recorder are expected there.
 flags_before=$(cat "$work/infra/aws/paid-features.json")
