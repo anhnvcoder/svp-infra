@@ -1,8 +1,8 @@
-# Static checks of every pull request and push to main (make check); infra-ok is the only check the ruleset requires.
+# Static checks of every pull request and push to main: make check, one job per group; the ruleset requires infra-ok.
 # Public repository, a fork's pull request runs this file with the fork's code, so:
 # - no AWS credential, no OIDC (no id-token), no secret, no environment: make check never reaches an account
 #   (init with -backend=false, no apply, no AWS CLI; terraform test plans against a mock provider with no network);
-# - no pull_request_target, no workflow_run; the only job that runs repository code has contents: read and nothing else;
+# - no pull_request_target, no workflow_run; the jobs that run repository code have contents: read and nothing else;
 # - every action is GitHub's own, pinned to a full commit SHA; tools run from images pinned by digest in the Makefile;
 # - checkout with persist-credentials: false.
 # Design notes: README.md.
@@ -64,30 +64,44 @@ jobs:
           fi
           echo "code=$code" | tee -a "$GITHUB_OUTPUT"
 
+  # One job per check-* group of the Makefile, side by side: the slowest group sets the time to a result instead of
+  # their sum. Each job bills its own minutes, rounded up; a public repository's standard runners cost nothing.
   check:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 20
     permissions:
       contents: read
+    strategy:
+      # Every group reports even when another fails, so one run shows every failure.
+      fail-fast: false
+      matrix:
+        include:
+          - group: terraform
+          - group: lint
+            token: true
+          - group: test
+          - group: scripts
+            token: true
+    name: check (${{ matrix.group }})
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: make check
+      - name: make check-${{ matrix.group }}
         env:
-          # Read-only token of the run, so that tflint --init downloads its AWS ruleset from GitHub under the token's
-          # rate limit instead of the anonymous one shared by the runner's address. The Makefile passes it to the tflint
-          # container alone.
-          GITHUB_TOKEN: ${{ github.token }}
-          # The same token for zizmor's online audits (impostor commits, actions with known vulnerabilities): the
-          # Makefile passes it to the zizmor container alone. Findings show as annotations of the pull request.
-          GH_TOKEN: ${{ github.token }}
+          GROUP: ${{ matrix.group }}
+          # The run's read-only token, for the two groups that call GitHub alone: tflint --init downloads its AWS
+          # ruleset under the token's rate limit instead of the anonymous one shared by the runner's address, and
+          # zizmor runs its online audits (impostor commits, actions with known vulnerabilities). The Makefile passes
+          # each to its one container. Findings of zizmor show as annotations of the pull request.
+          GITHUB_TOKEN: ${{ matrix.token && github.token || '' }}
+          GH_TOKEN: ${{ matrix.token && github.token || '' }}
           ZIZMOR_FORMAT: github
-        run: make check
+        run: make "check-$GROUP"
 
-  # The Markdown lint and internal links of every pull request, documentation only included (make check runs it too).
+  # The Markdown lint and internal links of every pull request, documentation only included.
   docs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -99,8 +113,9 @@ jobs:
           persist-credentials: false
       - run: make docs-check
 
-  # The required check: green only when every job above succeeded. The one skip accepted is check's on a pull request
-  # job changes found documentation only; any other skip, and a cancelled job, is a failure.
+  # The required check: green only when every job above succeeded; check stands for all its groups, any one failing
+  # fails it. The one skip accepted is check's on a pull request job changes found documentation only; any other skip,
+  # and a cancelled job, is a failure.
   infra-ok:
     if: always()
     needs: [changes, check, docs]

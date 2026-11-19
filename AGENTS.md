@@ -8,14 +8,16 @@ quyết định chung của lab nằm ở `docs/` của repo code (bản clone `
 
 ## An toàn cloud
 
-- **AI chỉ chạy:** `make check` (và từng target của nó: `fmt-check`, `validate`, `tflint`, `tfdocs-check`, `trivy`, `shellcheck`, `zizmor`, `docs-check`,
-  `session-test`, `test-guard`, `test`, `ci-plan-test`, `infracost-test`), `make fmt`,
-  `make tfdocs` (terraform-docs, chỉ đọc `.tf`), `make shellcheck SH='<file …>'` (một script đang sửa), `make lock`, tức
+- **AI chỉ chạy:** `make check` (các nhóm `check-terraform`, `check-lint`, `check-test`, `check-scripts` và từng target của chúng:
+  `fmt-check`, `validate`, `tflint`, `tfdocs-check`, `trivy`, `shellcheck`, `zizmor`, `docs-check`, `session-test`, `test-guard`, `test`,
+  `ci-plan-test`, `infracost-test`), `make fmt`, `make tfdocs` (terraform-docs, chỉ đọc `.tf`), `make shellcheck SH='<file …>'` (một
+  script đang sửa), `make pre-commit FILES='<file …>'` (phép kiểm của hook, không mạng), `make lock`, tức
   `terraform fmt`, `terraform init -backend=false`, `terraform validate`, `terraform providers lock`; `bash -n`,
   test script với lệnh giả trên PATH; `aws --version`.
 - **`terraform test` chỉ qua `make test`**, target tự ép ba điều kiện, không tin người viết test: (1) chạy trong container image Terraform
   ghim digest (`TERRAFORM_IMAGE`) với `--network none`; (2) không truyền credential nào: `env -u` mọi biến `AWS_*`, không `-e AWS_*`, không
-  mount `~/.aws`, `.envrc`, `backend.hcl` (chỉ mount thư mục module, module chứa `.envrc` hay `backend.hcl` bị từ chối); (3) mỗi
+  mount `~/.aws`, `.envrc`, `backend.hcl` (chỉ mount thư mục module và cache provider, cả hai chỉ đọc; module chứa `.envrc` hay
+  `backend.hcl` bị từ chối); (3) mỗi
   `tests/*.tftest.hcl` có `mock_provider "aws"` và mọi `run` là `command = plan`, kiểm theo khuôn cố định (allowlist) chứ không dò từng cách viết
   sai: đúng một dòng `mock_provider "aws" {` (hay `mock_provider "aws" {}`) đứng riêng; mỗi `run` mở bằng dòng `run "<tên>" {` (chữ, số, `_`, `-`)
   và dòng không trống đầu tiên bên trong là `command = plan`; dòng khác bắt đầu bằng `run`, `mock_provider`, `provider`, `override_`, `module`,
@@ -97,7 +99,11 @@ Quy ước chung (ngôn ngữ, tài liệu timeless, ADR, comment, Git, repo pub
   còn trên bool hay số chỉ khi quét chính module, nên root của env cần ngoại lệ như vậy lặp lại nó, không điều kiện, ở lời gọi module
   của chính root đó. `.trivyignore.yaml` không có mục chỉ-stg nào (`paths` không phân biệt được env).
 - **Docker** chỉ qua `Makefile` (`env -u DOCKER_DEFAULT_PLATFORM docker run …`, image ghim digest có dòng `# renovate:` ngay trên).
-- **Card chạy song song** kiểm bằng `make check DIRS=<thư mục của mình>`: mỗi lượt chỉ ghi dưới thư mục đó, không có cache dùng chung.
+- **Card chạy song song** kiểm bằng `make check DIRS=<thư mục của mình>`: mỗi lượt chỉ ghi dưới thư mục đó, trừ cache provider và
+  ruleset tflint `.plugin-cache/` dùng chung, ghi lần lượt qua khoá `.plugin-cache/lock` (mục "Lệnh kiểm" của `README.md`).
+- **CI và hook:** `check.yml` chạy mỗi nhóm `check-*` của `Makefile` thành một job song song; target mới vào đúng một nhóm. Phút billable là
+  tổng phút các job (mỗi job làm tròn lên phút), không ít hơn một job tuần tự dù xong sớm hơn; repo public nên runner chuẩn miễn phí.
+  `make hooks` bật hook `pre-commit` một lần mỗi clone (fmt, markdownlint, shellcheck, gitleaks trên file đã stage); phép chậm để CI.
 - **Git:** mọi thay đổi vào `main` qua PR có `infra-ok` xanh (từ khi bật ruleset), squash merge.
 - **Tiêu đề PR** thành tiêu đề commit squash, theo Conventional Commits: `<type>[(<scope>)][!]: <mô tả>`, `type` là một trong
   `feat fix chore docs refactor test ci build perf revert`, hoặc `Revert "<tiêu đề>"`; check `pr-title` (`.github/workflows/pr-title.yml`)
