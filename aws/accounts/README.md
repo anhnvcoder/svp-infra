@@ -7,7 +7,8 @@ ghi `CAA` ở đỉnh, budget tháng; cùng module [`registry`](../modules/regis
 phần tốn tiền theo cờ (mục [Cờ chi phí](#cờ-chi-phí)), role chỉ đọc của `terraform plan` trong CI (module
 [`ci-plan-role`](../modules/ci-plan-role/README.md), mục [Role plan của CI](#role-plan-của-ci)), và vault AWS Backup
 `svp-<env>` cùng key, opt-in, role của nó
-(mục [Backup](#backup)). Root prd bật thêm DNSSEC (key KMS, KSK, hai alarm `page`) và query log cho zone prd, cùng topic
+(mục [Backup](#backup)). Root stg có thêm role liên kết dịch vụ EC2 Spot cho node Spot của Karpenter (mục
+[Role Spot của stg](#role-spot-của-stg)). Root prd bật thêm DNSSEC (key KMS, KSK, hai alarm `page`) và query log cho zone prd, cùng topic
 SNS `svp-prd-dns-alarms` ở `us-east-1` (module [`alarms`](../modules/alarms/README.md)) nhận hai alarm đó.
 Mọi thứ sống giữa các buổi AWS, mang tag `Stack=baseline` (script quét sót của buổi giữ lại tag này), trừ workspace AMG
 và tham số SSM của env khi cờ `managed_grafana` của [`aws/paid-features.json`](../paid-features.json) không là `always`:
@@ -24,7 +25,7 @@ quyền bằng bốn bản ghi `NS` tên `aws`. Zone của stg là `stg.aws.<dom
 | `prd/` | `anhnv-prd` | `SVP_AWS_PRD_ACCOUNT_ID` | key `aws/accounts/prd/terraform.tfstate` trong bucket của account prd |
 
 Hai root chỉ khác `local.env` và các giá trị theo env cạnh nó trong `locals` của `main.tf` (`ci_roles`, retention),
-`key` của backend (`versions.tf`), những gì chỉ prd có (biến `delegated_subdomains`, `dnssec_signing`, `alarm_email`;
+`key` của backend (`versions.tf`), role Spot chỉ stg có, những gì chỉ prd có (biến `delegated_subdomains`, `dnssec_signing`, `alarm_email`;
 `dnssec_enabled = true`, `query_log_enabled = true` và module `alarms` trong `main.tf`) và mô tả của biến, output theo
 zone của env. stg không DNSSEC, không query log (lý do:
 [ADR-0061](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0061-edge-cloudfront-waf-acm.md) §11). Trong
@@ -118,12 +119,13 @@ AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_
 ```
 
 Đọc plan (số ứng với `aws/paid-features.json` của repo: cờ `managed_grafana` của stg và prd là `off`; mục
-[Cờ chi phí](#cờ-chi-phí)): ở stg `Plan: 67 to add, 0 to change, 0 to destroy`: 11 của `module.baseline` (KMS
+[Cờ chi phí](#cờ-chi-phí)): ở stg `Plan: 68 to add, 0 to change, 0 to destroy`: 11 của `module.baseline` (KMS
 key và alias,
 bucket cùng 5 cấu hình của nó, hosted zone, bản ghi `caa`, budget; không bản ghi `delegation` nào), 43 của
 `module.registry`, `module.observability` (danh sách ở [Thêm vào account đã có
 baseline](#thêm-vào-account-đã-có-baseline); không phần AMG vì cờ là `off`), 9 của `backup.tf` (danh sách ở
-[Backup](#backup)) và 4 của `module.ci_plan_role` ([Role plan của CI](#role-plan-của-ci)). Ở prd
+[Backup](#backup)), 4 của `module.ci_plan_role` ([Role plan của CI](#role-plan-của-ci)) và 1
+`aws_iam_service_linked_role.spot` ([Role Spot của stg](#role-spot-của-stg)). Ở prd
 `Plan: 79 to add, 0 to change, 0 to destroy`: 41 của hai module đó, 11 của `module.baseline`, 9 của `backup.tf` và 4 của
 `module.ci_plan_role` như stg, thêm 6 của DNSSEC (`aws_kms_key.dnssec` và alias ở `us-east-1`,
 `aws_route53_key_signing_key.this`, `aws_route53_hosted_zone_dnssec.this`, hai `aws_cloudwatch_metric_alarm.dnssec`), 3
@@ -417,6 +419,30 @@ Plan của phần backup có 9 tài nguyên, giống nhau ở hai env: `aws_kms_
 | `backup_key_arn` | đối chiếu key của vault (`describe-backup-vault`) |
 | `backup_role_arn` | `--iam-role-arn` của job on-demand và restore |
 
+## Role Spot của stg
+
+NodePool của stg chạy node Spot (`capacityTypes: [spot]` ở `envs/stg/svp-cluster.yaml` của `svp-gitops`); Karpenter dựng chúng bằng
+`CreateFleet`. Gọi Spot qua API thì role liên kết dịch vụ `AWSServiceRoleForEC2Spot` phải có sẵn: EC2 chỉ tự tạo nó khi yêu cầu Spot đầu
+tiên đi từ console ([Service-linked role for Spot Instance
+requests](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/service-linked-roles-spot-instance-requests.html)), còn policy controller
+Karpenter của module `eks` không có `iam:CreateServiceLinkedRole`. Thiếu role thì NodeClaim Spot hỏng với
+`AuthFailure.ServiceLinkedRoleCreationNotPermitted`. Root `aws/accounts/stg` giữ `aws_iam_service_linked_role.spot` (tên dịch vụ
+`spot.amazonaws.com`) sống giữa các buổi; prd chạy node on-demand nên không có.
+
+Account đã có role (từng tạo Spot từ console): `apply` báo `InvalidInput: Service role name AWSServiceRoleForEC2Spot has been taken in this
+account`. Khi đó nhập role vào state rồi `plan` lại:
+
+```sh
+AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" \
+  terraform import aws_iam_service_linked_role.spot \
+  "arn:aws:iam::$SVP_AWS_STG_ACCOUNT_ID:role/aws-service-role/spot.amazonaws.com/AWSServiceRoleForEC2Spot"
+```
+
+Mong đợi `Plan: 0 to add, 1 to change, 0 to destroy`: `aws_iam_service_linked_role.spot` sửa tại chỗ (`~`), `tags_all` thêm bốn tag
+của `default_tags` (`Project`, `Env`, `ManagedBy`, `Stack`) mà role tạo ngoài Terraform không có; role có mô tả thì thêm dòng
+`description` về `null` (code không đặt mô tả, provider so với mô tả đọc từ API). Dừng (không apply, dán plan lại) nếu có thay đổi
+khác; không thì apply plan đó, và plan lần hai phải là `No changes.`.
+
 ## Thêm vào account đã có baseline
 
 **Người học chạy mọi lệnh dưới đây.** Dùng khi account đã apply một bản trước của root này, và root nay có phần mà account chưa có.
@@ -432,6 +458,7 @@ Các phần của root và số tài nguyên `plan` thêm cho phần account ch�
 | Registry, observability | `module.registry`, `module.observability` (danh sách dưới bảng) | 43 | 41 |
 | Backup | 9 của `backup.tf` (danh sách ở mục [Backup](#backup)) | 9 | 9 |
 | Role plan của CI | `module.ci_plan_role`: `aws_iam_role.this`, `aws_iam_role_policy_attachment.read_only`, `aws_iam_role_policy.read`, `aws_iam_role_policy.deny` ([Role plan của CI](#role-plan-của-ci)) | 4 | 4 |
+| Role Spot | `aws_iam_service_linked_role.spot` ([Role Spot của stg](#role-spot-của-stg)) | 1 | — |
 
 - `module.registry` (stg 34, prd 32): key KMS và alias, 8 `aws_ecr_repository.release` (`local.release_repositories`),
   `aws_ecr_registry_scanning_configuration.this`, 5 `aws_ecr_pull_through_cache_rule.this`, 2
@@ -467,9 +494,10 @@ AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_
 nào có trong plan thì có đủ số tài nguyên ở cột của env; số `to add` bằng tổng các phần đó. Thay đổi duy nhất được phép là
 `1 to change` khi phần role plan của CI có trong plan: `module.baseline.aws_kms_key.state` sửa tại chỗ, chỉ `policy` thêm statement
 `CiPlanReadsState`. Ví dụ: account chỉ có baseline (cùng `CAA` và, ở prd, DNSSEC, query log) thì stg
-`Plan: 56 to add, 1 to change, 0 to destroy`, prd `Plan: 54 to add, 1 to change, 0 to destroy`; account đã có registry,
-observability thì `Plan: 13 to add, 1 to change, 0 to destroy` ở cả hai env (backup và role plan); đã có cả backup thì
-`Plan: 4 to add, 1 to change, 0 to destroy`, đúng phần role plan. Account có registry từ trước khi
+`Plan: 57 to add, 1 to change, 0 to destroy`, prd `Plan: 54 to add, 1 to change, 0 to destroy`; account đã có registry,
+observability thì stg `Plan: 14 to add, 1 to change, 0 to destroy`, prd `Plan: 13 to add, 1 to change, 0 to destroy` (backup,
+role plan và ở stg role Spot); đã có cả backup thì stg `Plan: 5 to add, 1 to change, 0 to destroy`, prd
+`Plan: 4 to add, 1 to change, 0 to destroy`, đúng phần role plan và ở stg role Spot. Account có registry từ trước khi
 `local.release_repositories` của module `registry` thêm repo thì phần registry chỉ thiếu một `aws_ecr_repository.release`
 mỗi repo mới. Dừng (không apply, dán plan lại) nếu có
 `change`, `destroy`, tài nguyên ngoài bảng hay phần thiếu tài nguyên; trừ khi account đã có observability với AMG từ
