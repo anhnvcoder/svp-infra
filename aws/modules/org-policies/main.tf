@@ -549,8 +549,9 @@ locals {
       })
     }
 
-    # Hop limit 1 is what the EKS nodes, Karpenter nodes and the bastion already use. Public VPCs stay allowed: the NAT
-    # gateways need an internet gateway, and CloudFront accepts a VPC origin only in a VPC that has one.
+    # Hop limit 1, below the 2 AWS advises for containers that read IMDS: pods get credentials from EKS Pod Identity.
+    # Public VPCs stay allowed: NAT gateways and CloudFront VPC origins need an internet gateway. Metadata defaults set
+    # the five fields of the full example in orgs_manage_policies_ec2_syntax (read 2026-11-19).
     "ec2-baseline" = {
       type        = "DECLARATIVE_POLICY_EC2"
       target_id   = var.root_id
@@ -567,6 +568,7 @@ locals {
             http_tokens                 = { "@@assign" = "required" }
             http_put_response_hop_limit = { "@@assign" = "1" }
             http_endpoint               = { "@@assign" = "enabled" }
+            instance_metadata_tags      = { "@@assign" = "disabled" }
             http_tokens_enforced        = { "@@assign" = "enabled" }
           }
           serial_console_access = {

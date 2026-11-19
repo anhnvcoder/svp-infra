@@ -382,8 +382,8 @@ for c in get-instance-metadata-defaults get-serial-console-access-status get-sna
 done
 ```
 
-Mong `HttpTokens` `required`, `HttpPutResponseHopLimit` `1`; serial console `false`; snapshot `block-all-sharing`; AMI
-`block-new-sharing`; mỗi kết quả có `ManagedBy` `declarative-policy`. Giá trị đủ ở
+Mong `HttpTokens` `required`, `HttpPutResponseHopLimit` `1`, `InstanceMetadataTags` `disabled`; serial console `false`; snapshot
+`block-all-sharing`; AMI `block-new-sharing`; mỗi kết quả có `ManagedBy` `declarative-policy`. Giá trị đủ ở
 [ADR-0059 §5](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0059-org-structure-guardrails.md#5-declarative-policy-ec2).
 
 ### 7e. Cảnh báo thử

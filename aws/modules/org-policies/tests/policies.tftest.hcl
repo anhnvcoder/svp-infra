@@ -498,6 +498,32 @@ run "ec2_baseline" {
     error_message = "ec2-baseline must keep the instance metadata endpoint on; the nodes read their credentials from it."
   }
 
+  # The five fields of the full example in the EC2 declarative policy syntax page.
+  assert {
+    condition     = keys(jsondecode(aws_organizations_policy.this["ec2-baseline"].content).ec2_attributes.instance_metadata_defaults) == ["http_endpoint", "http_put_response_hop_limit", "http_tokens", "http_tokens_enforced", "instance_metadata_tags"]
+    error_message = "ec2-baseline must set all five instance metadata defaults of the AWS EC2 policy syntax."
+  }
+
+  assert {
+    condition     = jsondecode(aws_organizations_policy.this["ec2-baseline"].content).ec2_attributes.instance_metadata_defaults.instance_metadata_tags["@@assign"] == "disabled"
+    error_message = "ec2-baseline must keep instance tags out of instance metadata."
+  }
+
+  # Allowed values per field, as listed on the AWS EC2 policy syntax page; the hop limit is a string, as in its example.
+  assert {
+    condition = alltrue([
+      for k, v in jsondecode(aws_organizations_policy.this["ec2-baseline"].content).ec2_attributes.instance_metadata_defaults :
+      contains(lookup({
+        http_tokens                 = ["no_preference", "required", "optional"]
+        http_put_response_hop_limit = [for n in range(-1, 65) : tostring(n)]
+        http_endpoint               = ["no_preference", "enabled", "disabled"]
+        instance_metadata_tags      = ["no_preference", "enabled", "disabled"]
+        http_tokens_enforced        = ["no_preference", "enabled", "disabled"]
+      }, k, []), v["@@assign"])
+    ])
+    error_message = "Every instance metadata default must be a string value that the AWS EC2 policy syntax allows for its field."
+  }
+
   assert {
     condition     = jsondecode(aws_organizations_policy.this["ec2-baseline"].content).ec2_attributes.image_block_public_access.state["@@assign"] == "block_new_sharing" && jsondecode(aws_organizations_policy.this["ec2-baseline"].content).ec2_attributes.snapshot_block_public_access.state["@@assign"] == "block_all_sharing"
     error_message = "ec2-baseline must block public sharing of AMIs and EBS snapshots."
