@@ -26,6 +26,15 @@ locals {
   # Client.UnauthorizedOperation.
   denied = [{ prefix = "AccessDenied" }]
 
+  # The Terraform roots that reach a member account through OrganizationAccountAccessRole use this session name. The
+  # caller picks the name, so this trusts whoever may assume the role, already the one principal the baseline policy
+  # lets change the security baseline. Events without an ARN (calls of an AWS service) still match.
+  terraform_session_arn = "arn:${data.aws_partition.current.partition}:sts::${data.aws_caller_identity.current.account_id}:assumed-role/OrganizationAccountAccessRole/svp-terraform"
+  not_terraform = [
+    { userIdentity = { arn = [{ "anything-but" = [local.terraform_session_arn] }] } },
+    { userIdentity = { arn = [{ exists = false }] } },
+  ]
+
   # Patterns are JSON strings and regions lists, so every rule has the same type whatever its pattern.
   rules = merge(
     {
@@ -161,7 +170,7 @@ locals {
     } : k => v if var.organization_events },
     { for k, v in {
       "svp-security-admin-iam" = {
-        description = "Successful IAM change"
+        description = "Successful IAM change, outside the Terraform session"
         regions     = [local.global_region]
         all_events  = false
         pattern = jsonencode({
@@ -171,11 +180,12 @@ locals {
             eventName = [for p in ["Add", "Attach", "Create", "Deactivate", "Delete", "Detach", "Enable", "Put", "Remove", "Reset", "Set", "Update", "Upload"] :
             { prefix = p }]
             errorCode = [{ exists = false }]
+            "$or"     = local.not_terraform
           }
         })
       }
       "svp-security-admin-kms-s3" = {
-        description = "Successful change to a KMS key or to the policy, encryption or retention of an S3 bucket"
+        description = "Successful change to a KMS key or to the policy, encryption or retention of an S3 bucket, outside the Terraform session"
         regions     = tolist(local.regions)
         all_events  = false
         pattern = jsonencode({
@@ -189,13 +199,14 @@ locals {
               "PutBucketPublicAccessBlock", "DeleteBucketPublicAccessBlock",
             ]
             errorCode = [{ exists = false }]
+            "$or"     = local.not_terraform
           }
         })
       }
     } : k => v if var.admin_events },
     { for k, v in {
       "svp-security-admin-sso" = {
-        description = "Successful IAM Identity Center permission set or account assignment change"
+        description = "Successful IAM Identity Center permission set or account assignment change, outside the Terraform session"
         regions     = [coalesce(var.identity_center_region, local.home_region)]
         all_events  = false
         pattern = jsonencode({
@@ -208,6 +219,7 @@ locals {
               "PutInlinePolicyToPermissionSet", "UpdatePermissionSet",
             ]
             errorCode = [{ exists = false }]
+            "$or"     = local.not_terraform
           }
         })
       }

@@ -258,6 +258,23 @@ run "management_account" {
     error_message = "The management rules must match AssumeRoot, Organizations policy changes and successful IAM, KMS, S3 and Identity Center changes."
   }
 
+  # Only the Terraform session of this account drops out: any other ARN, and events without one, still match.
+  assert {
+    condition = alltrue([for k in ["svp-security-admin-iam/us-east-1", "svp-security-admin-kms-s3/ap-southeast-1", "svp-security-admin-kms-s3/us-east-1", "svp-security-admin-sso/ap-southeast-1"] :
+      jsondecode(aws_cloudwatch_event_rule.forward[k].event_pattern).detail["$or"] == [
+        { userIdentity = { arn = [{ "anything-but" = ["arn:aws:sts::000000000000:assumed-role/OrganizationAccountAccessRole/svp-terraform"] }] } },
+        { userIdentity = { arn = [{ exists = false }] } },
+      ]
+    ])
+    error_message = "The admin rules must leave out exactly the session svp-terraform of OrganizationAccountAccessRole of this account."
+  }
+
+  # The rules nobody may trigger, Terraform included, keep every session.
+  assert {
+    condition     = alltrue([for k, r in aws_cloudwatch_event_rule.forward : strcontains(r.event_pattern, "svp-terraform") == startswith(k, "svp-security-admin-")])
+    error_message = "Only the svp-security-admin-* rules may leave out the Terraform session."
+  }
+
   assert {
     condition     = length(aws_ebs_default_kms_key.this) == 1 && aws_ebs_default_kms_key.this[0].key_arn == "arn:aws:kms:ap-southeast-1:000000000000:key/11111111-1111-1111-1111-111111111111" && aws_ebs_default_kms_key.this[0].region == "ap-southeast-1"
     error_message = "With ebs_kms_key_arn the home region must encrypt new volumes with that key by default."
