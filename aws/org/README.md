@@ -76,12 +76,15 @@ Nguồn (đọc 2026-11-19):
 | Permission set | Quyền | Phiên | Gán ở | Profile |
 | --- | --- | --- | --- | --- |
 | `SvpAdmin` | `AdministratorAccess` | 1 giờ | `svp-stg`, `svp-prd` | `anhnv-stg`, `anhnv-prd` |
-| `SvpReadOnly` | `ViewOnlyAccess`, `SecurityAudit`, inline đọc log CloudWatch (`FilterLogEvents`, `GetLogEvents`, `StartQuery`, `StopQuery`, `GetQueryResults`) | 4 giờ | `svp-stg`, `svp-prd`, `svp-security`, `svp-backup` | `anhnv-stg-ro`, `anhnv-prd-ro`, `anhnv-security-ro`, `anhnv-backup-ro` |
+| `SvpReadOnly` | `ViewOnlyAccess`, `SecurityAudit`, inline đọc log CloudWatch (`FilterLogEvents`, `GetLogEvents`, `StartQuery`, `StopQuery`, `GetQueryResults`) và Inspector (`BatchGetAccountStatus`, `DescribeOrganizationConfiguration`, `ListMembers`) | 4 giờ | `svp-stg`, `svp-prd`, `svp-security`, `svp-backup` | `anhnv-stg-ro`, `anhnv-prd-ro`, `anhnv-security-ro`, `anhnv-backup-ro` |
 | `SvpLogReader` | `ViewOnlyAccess`, inline `s3:ListBucket`, `s3:GetObject` trên bảy bucket của `aws/log-archive`, `kms:Decrypt` chỉ qua S3 của hai region và chỉ trên key có alias `alias/svp-log-archive` | 4 giờ | `svp-log-archive` | `anhnv-log-ro` |
 
 - `SvpReadOnly` đọc cấu hình, trạng thái và finding của GuardDuty, Security Hub, Config, Access Analyzer; không đọc object S3, giá trị secret,
-  dữ liệu bảng, không ghi gì (kể cả đổi trạng thái finding). Ở `svp-backup` nó đọc đủ vault, lock, vault access policy, recovery point, job,
-  plan và cài đặt của AWS Backup mà không cần inline thêm (bảng action ở
+  dữ liệu bảng, không ghi gì (kể cả đổi trạng thái finding). `SecurityAudit`, `ViewOnlyAccess` thiếu ba action đọc Inspector mà
+  `aws/scripts/verify.sh org` gọi (`list-members` trả `AccessDenied`), nên inline thêm chúng; tên action, mức truy cập theo
+  [Service Authorization Reference](https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazoninspector2.html)
+  của Inspector. Ở `svp-backup` nó đọc đủ vault, lock, vault access policy, recovery point, job, plan và cài đặt của AWS Backup
+  mà không cần inline thêm (bảng action ở
   [phụ lục ADR-0067](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0067-backup-dr.md#3-account-organizations-opt-in) §3).
 - Phiên `SvpAdmin` 1 giờ không cắt `apply` dài khi profile dùng khối `[sso-session …]`: SDK lấy lại credential role từ token SSO tới hết
   phiên cổng truy cập. Profile kiểu cũ (không `sso-session`) không tự làm mới.
@@ -476,6 +479,18 @@ account of organization <o-…> (management account <id>), used for a <staging|p
 giải quyết được thì hiện form tạo case đã điền sẵn. Kiểm Case type "Account and billing", Service "Account Activation",
 Category "Account Verification", Severity "General question", liên lạc qua Web, rồi Submit; dán số case. Buổi stg, prd
 chỉ bắt đầu khi quota đã duyệt và case đã xong.
+
+Ghi id case cùng file với case quota AMP ([`platform-setup.md`, Bước
+(8)](../../docs/runbooks/platform-setup.md#khi-service-quotas-từ-chối-mở-case-support)), một dòng mỗi case:
+`printf '%s\t<account>\tcloudfront-verify\t<case-id>\n' "$(date -u +%FT%TZ)" >>"$SVP_SESSION_DIR/support-cases.tsv"`. AWS trả
+lời qua email root của account đó và ở **Your support cases** của Support Center. Không có API đọc trạng thái xác minh, nên
+bảng dưới giữ trạng thái theo account; đổi dòng của account khi case xong:
+
+| Account | Xác minh CloudFront | Việc |
+| --- | --- | --- |
+| management | case đã mở | chờ AWS trả lời; id case ở `support-cases.tsv` |
+| `svp-stg` | dùng được: account từng có distribution tạo trên console | không cần case |
+| `svp-prd` | chưa kiểm | apply đầu có CloudFront (`aws/envs/prd`) đỏ ở `aws_cloudfront_distribution` với `AccessDenied: Your account must be verified before you can add new CloudFront resources`: mở case như trên từ account prd, gỡ buổi, chờ xác nhận |
 
 ## OU ngoài Terraform
 

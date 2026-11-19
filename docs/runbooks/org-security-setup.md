@@ -260,12 +260,17 @@ account của profile và in `ok    profile <tên> is the account of <tên>`; d�
 
 - **7a** `svp-security administers GuardDuty, Security Hub, Config, Access Analyzer and Inspector`: sáu principal của
   delegated administrator.
-- **7a** `policies of the root and of OU Prod as expected`: root `FullAWSAccess` với năm SCP `svp-*`
-  ([`org-policies`](../../aws/modules/org-policies/README.md)), `RCPFullAWSAccess` với `svp-data-perimeter`,
-  `svp-ec2-baseline`, `svp-tags`; OU `Prod` `svp-prod-guardrails`.
+- **7a** `SCP, RCP, EC2 declarative and tag policies of the root and of OU Prod as aws/org declares them`: mỗi loại policy
+  đọc theo đúng type của nó và so với đúng danh sách của [`org-policies`](../../aws/modules/org-policies/README.md): root
+  có SCP `FullAWSAccess` với năm SCP `svp-*`, RCP `RCPFullAWSAccess` với `svp-data-perimeter`, declarative policy EC2
+  `svp-ec2-baseline`, tag policy `svp-tags`; OU `Prod` có SCP `FullAWSAccess` với `svp-prod-guardrails`. Backup policy của
+  hai OU kiểm ở `verify.sh backup` ([`backup-setup.md`](backup-setup.md)). Thiếu hay thừa một policy:
+  `FAIL  7a: policies wrong (apply aws/org): <target> <type> is '<có>', not '<mong>'`.
 - **7a** `GuardDuty in <region>`, `Access Analyzer svp-org ACTIVE`, `Security Hub is CENTRAL ENABLED`, `every source of
   the Config aggregator`, `Inspector scans only ECR`: các dịch vụ của [`aws/security`, Kiểm
-  nhanh](../../aws/security/README.md#6-kiểm-nhanh).
+  nhanh](../../aws/security/README.md#6-kiểm-nhanh). GuardDuty chỉ đòi `ALL` cho member và cho sáu feature mà
+  `aws/security` quản (`local.guardduty_features` của `guardduty.tf`); feature AWS thêm sau (ví dụ `AI_PROTECTION` ở
+  `NONE`) chỉ là dòng `note  7a: GuardDuty in <region>: features outside aws/security, left as AWS sets them: …`.
 - **7a** `every ACTIVE account but svp-security is a Security Hub member as its cost flag says`: account có
   `security_hub` `off` không phải member.
 - **7a** `<profile> <region>: Security Hub standards and Config recorder as expected`: hai chuẩn `READY`, recorder
@@ -278,13 +283,35 @@ account của profile và in `ok    profile <tên> is the account of <tên>`; d�
 - **7c** `the Log Archive bucket holds logs of every ACTIVE account, management included`: log mới của mọi account, đọc
   được bằng `SvpLogReader`; sau bước (4) ít nhất một giờ.
 
-Account mới nhận có thể tới 24 giờ mới hiện (`FAIL  7a: … Member status …`, `PENDING` ở association): đọc lại hôm sau,
-vẫn `FAIL` thì dán dòng đó. Lỗi quyền ở một profile chỉ đọc: dán lệnh và lỗi, đó cũng là kết quả kiểm của permission
-set. Dòng `note` dán lại và đọc bằng mắt: `7a: control <id> FAILED in <n> finding(s)` là control FAILED ban đầu, đầu vào
-của việc sửa sau, không phải lỗi của bước này; `7c: last write to the old management trail bucket: <giờ>` là lần ghi
-cuối vào bucket trail cũ, không mới hơn lúc apply bước (4) cộng vài phút giao log; `7a: Security score` chỉ trang
-Summary của Security Hub trên console của `svp-security` (profile `anhnv-security-ro`), không có API đọc điểm: dán điểm
-đó cùng danh sách control.
+Ngay sau apply, vài dòng `FAIL` là việc AWS chưa làm xong, không phải lỗi của bước; chúng tự hết trong tối đa 24 giờ. Đọc
+lại hôm sau, vẫn `FAIL` thì dán dòng đó:
+
+- `FAIL  <profile> <region>: <n> of the 2 standards (…) are READY (Security Hub can take 24 h)`: chuẩn vừa bật còn chờ.
+- `FAIL  7a: GuardDuty in <region>: not an Enabled member: …<4 số cuối> (new accounts can take 24 h)` và
+  `FAIL  7a: Security Hub member status wrong for: …` (trạng thái `none` hay chưa `Enabled`): account mới chưa thành member.
+- `note  7a: Security Hub association PENDING for: …`: association đang áp.
+
+Account không `ACTIVE` (đã đóng, chưa rời tổ chức) có association Security Hub `FAILED` vì Security Hub không assume được
+service-linked role ở đó, và association của root thành `FAILED` theo. Lỗi chỉ ở account không `ACTIVE` là dòng
+`note  7a: Security Hub association FAILED for accounts not ACTIVE: …<4 số cuối> (…)`, không `FAIL`; nó tự hết khi các account
+đó rời tổ chức, 90 ngày sau khi đóng ([`aws/org`, OU ngoài Terraform](../../aws/org/README.md#ou-ngoài-terraform)). Đối chiếu 4 số
+cuối với danh sách account không `ACTIVE` (dán output, che 8 số đầu):
+
+```sh
+AWS_PROFILE=anhnv-sso aws organizations list-accounts --region us-east-1 \
+  --query "Accounts[?Status!='ACTIVE'].[Id,Name,Status,State]" --output text
+```
+
+Mong mỗi account của dòng `note` có ở đây, `SUSPENDED` (`State` `CLOSED`). Association `FAILED` của account `ACTIVE` là lỗi thật:
+`FAIL  7a: Security Hub configuration policy association not SUCCESS for: root(FAILED in …<4 số cuối>)`; `root(FAILED)` không
+account nào giải thích cũng vậy.
+
+`FAIL` khác (policy, cấu hình, delegated admin, trail sai) là lỗi thật: dừng, dán output. Lỗi quyền ở một profile chỉ
+đọc: dán lệnh và lỗi, đó cũng là kết quả kiểm của permission set. Dòng `note` dán lại và đọc bằng mắt: `7a: control <id>
+FAILED in <n> finding(s)` là control FAILED ban đầu, đầu vào của việc sửa sau, không phải lỗi của bước này; `7c: last
+write to the old management trail bucket: <giờ>` là lần ghi cuối vào bucket trail cũ, không mới hơn lúc apply bước (4)
+cộng vài phút giao log; `7a: Security score` chỉ trang Summary của Security Hub trên console của `svp-security` (profile
+`anhnv-security-ro`), không có API đọc điểm: dán điểm đó cùng danh sách control.
 
 ### 7b. Root tập trung
 

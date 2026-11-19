@@ -140,6 +140,17 @@ Lệnh kiểm account stg, đọc output `backend_hcl` của root này và ghi `
 qua) là cấu hình backend mà mọi root của account stg đọc bằng `-backend-config`: bucket, region, encrypt, `kms_key_id`,
 `use_lockfile` của account stg.
 
+Output `spans_retention_command` in lệnh đặt retention của log group `aws/spans` (X-Ray tạo group này, Terraform không quản):
+giữ span `span_retention_days` ngày (`locals` của `main.tf` của env). In lệnh, đọc, rồi chạy đúng lệnh đã in, một lần
+mỗi account:
+
+```sh
+AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform output -raw spans_retention_command; echo
+```
+
+Lệnh in ra không in gì là thành công. `ResourceNotFoundException` là group chưa có (X-Ray chưa nhận span nào): chạy lại sau buổi
+đầu của env, như [`platform-setup.md`, Bước (10)](../../docs/runbooks/platform-setup.md#bước-10-retention-của-awsspans).
+
 ### 4. Chuyển state vào bucket
 
 ```sh

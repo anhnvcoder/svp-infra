@@ -274,7 +274,7 @@ lệnh (`make github-secrets ENV=<stg|prd>`) và thứ tự ở [`github-setup.m
 
 Chart ghi `interval: 15s` vào mỗi nhóm luật như k3d; AMP mặc định tối thiểu 30 s, chỉnh được qua quota "Rule evaluation
 interval" ([AMP quotas](https://docs.aws.amazon.com/prometheus/latest/userguide/AMP_quotas.html)). Workspace có từ bước
-(5). Mỗi account (stg rồi prd), đọc quota (mã quota tra theo tên, không chép mã vào đây), rồi xin 15 nếu chưa đủ:
+(5). Mỗi account (stg rồi prd), đọc quota (script tra mã quota theo tên), rồi xin 15 nếu chưa đủ:
 
 ```sh
 aws/scripts/preflight.sh quotas stg
@@ -288,11 +288,47 @@ then run quotas again`; quota đã có yêu cầu mở thì `note  … a request
 không gửi hai lần. Chờ `APPROVED` rồi chạy lại lệnh đầu tới khi mọi dòng `ok`. Quota EC2 và Elastic IP của cùng lệnh đọc
 theo [`aws/org`, Quota](../../aws/org/README.md#quota-và-xác-minh-cloudfront-của-account-workload).
 
-Service Quotas từ chối vì giá trị xin nhỏ hơn giá trị đang có (lỗi `IllegalArgumentException`, `InvalidParameterValue`; script in
-`FAIL  service-quotas request-service-quota-increase …`): mở case trên console AWS
-Support từ account đó (**Create case** → **Service limit increase** → Amazon Managed Service for Prometheus, quota "Rule evaluation interval",
-giá trị 15 s, region `ap-southeast-1`), dán id case. AWS từ chối hẳn: không chạy buổi có luật trên AMP; báo AI (ADR-0063 §5: quyết lại bằng ADR
-mới, không chạy với 30 s). Buổi stg đầu kiểm chu kỳ thật ở phép kiểm cảnh báo của runbook buổi.
+### Khi Service Quotas từ chối: mở case Support
+
+Quota này là chu kỳ **tối thiểu**, xin 15 là xin giảm, nên API Service Quotas từ chối (script in `FAIL  service-quotas
+request-service-quota-increase …` với `IllegalArgumentException … greater than the default quota value of 30.0`). Đường còn lại là
+một case Support, gói Basic mở được loại này. Mỗi account một case (quota tính theo account):
+
+1. Đăng nhập AWS access portal, chọn đúng account (`svp-stg`, rồi `svp-prd`), role `SvpAdmin`. Case mở ở account nào thì chỉ
+   quota của account đó đổi.
+2. Mở [Support Center](https://support.console.aws.amazon.com/support/home), **Create case**, chọn **Service limit increase**
+   (không chọn Technical: gói Basic không mở được).
+3. Điền: Service **Service Limit Increase**, Category **General**, Severity **General question**; Contact method **Web**.
+4. Subject, Description chép từ khối dưới, thay `<env>`. Mã quota lấy ở dòng `L-…` mà `preflight.sh quotas <env>` in
+   (`L-8DEDEE8E` ở `ap-southeast-1`).
+
+   ```text
+   Subject: Amazon Managed Service for Prometheus: lower "Rule evaluation interval" (L-8DEDEE8E) to 15 seconds in ap-southeast-1
+
+   Description:
+   Service: Amazon Managed Service for Prometheus (AMP)
+   Region: ap-southeast-1
+   Quota: Rule evaluation interval (quota code L-8DEDEE8E)
+   Current value: 30 seconds (default)
+   Requested value: 15 seconds
+
+   Use case: the alerting and recording rules of our AMP workspace (environment <env>) use a 15 second evaluation
+   interval, the same as the self-managed Prometheus they come from, so that alert latency and recording rule
+   resolution stay the same on AMP. The workspace has few rule groups and a small number of series.
+
+   Why a support case: the Service Quotas API rejects this request (IllegalArgumentException: the requested value
+   must be greater than the default quota value of 30.0), because this quota is a minimum interval and the request
+   lowers it.
+   ```
+
+5. **Submit**. Ghi id case vào thư mục buổi, không vào file commit (một file cho mọi case Support, cả case xác minh CloudFront):
+   `printf '%s\t<env>\tamp-rule-interval\t<case-id>\n' "$(date -u +%FT%TZ)" >>"$SVP_SESSION_DIR/support-cases.tsv"` (ngoài
+   buổi: ghi chú của người học).
+
+AWS trả lời qua email root của account đó và ở **Your support cases** của Support Center. Sáng hôm
+sau chạy lại `aws/scripts/preflight.sh quotas <env>`, mong dòng `ok    L-… AMP rule evaluation interval (seconds): 15.0
+(max 15)`. Case bị từ chối: không chạy buổi có luật trên AMP; báo AI (ADR-0063 §5: quyết lại bằng ADR mới, không chạy với
+30 s). Buổi stg đầu kiểm chu kỳ thật ở phép kiểm cảnh báo của runbook buổi.
 
 ## Bước (9): Grafana managed
 
@@ -323,8 +359,9 @@ AWS_PROFILE=anhnv-stg aws logs describe-log-groups --log-group-name-prefix aws/s
 ```
 
 Lệnh in ra có dạng `AWS_PROFILE=anhnv-stg aws logs put-retention-policy --log-group-name aws/spans --retention-in-days <n> --region ap-southeast-1`.
-Sau khi chạy nó, lệnh `describe-log-groups` in `aws/spans <n>` (`<n>` là `span_retention_days` của env); `None` là chưa đặt. Không có
-dòng nào: X-Ray chưa nhận span, làm sau buổi kế.
+Chạy nó: không in gì là thành công; `ResourceNotFoundException` là log group chưa có (X-Ray chưa nhận span), chạy lại sau buổi
+đầu của env. Sau khi chạy, lệnh `describe-log-groups` in `aws/spans <n>` (`<n>` là `span_retention_days` của env); `None` là chưa đặt.
+Không có dòng nào: X-Ray chưa nhận span, làm sau buổi kế.
 
 ## Xoay credential
 

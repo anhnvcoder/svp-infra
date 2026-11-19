@@ -220,14 +220,21 @@ kiểm; dòng `FAIL` đó nghĩa là bỏ cả nhóm của profile ấy.
 - **7c** `the plan svp-<env> has the rule daily into svp-<env> and the selection svp-<env>-tagged`: AWS đã sinh plan và
   selection trong account env.
 - **7c** `the vault svp-<env> is not locked (<n> recovery points) and its role has the 4 policies`: vault env không
-  lock, role có đúng bốn managed policy.
+  lock, role có đúng bốn managed policy. Account env chưa áp `aws/accounts/<env>` thì chưa có vault, AWS Backup trả
+  `AccessDenied` thay vì "không có", script đọc danh sách vault để phân biệt và in
+  `note  7c: vault svp-<env> not created yet (aws/accounts/<env> not applied)`, không `FAIL`: đọc lại sau apply đó. Vault có
+  mà vẫn không đọc được là `FAIL  7c: the vault svp-<env> exists but describe-backup-vault failed …` kèm nguyên nhân (có
+  statement `Deny` trong access policy của vault, hay profile thiếu quyền): dán dòng đó.
 - **7d** `the vault svp-<env>-copy is locked and accepts copies from the account of <env> only`: vault copy lock, access
   policy một statement của account env.
 
-Account mới có thể cần tới 24 giờ mới hiện ở GuardDuty, Security Hub (`FAIL  7a: … Member status … (a new account takes
-up to 24 h)`): đọc lại hôm sau, vẫn `FAIL` thì dán output. `FAIL  7c: AWS has not generated the plan svp-<env> in the
-account yet`: policy mới gắn, đọc lại sau. Các dòng `note` để so bằng mắt, dán lại: `7c: <env> rule schedule and
-retention (vault days, copy days)` với lịch và hai retention của [ADR-0067
+Ngay sau apply, các dòng `FAIL` sau là việc AWS chưa làm xong, không phải lỗi của bước; đọc lại hôm sau (tối đa 24 giờ),
+vẫn `FAIL` thì dán output: `FAIL  7a: GuardDuty member status of svp-backup in <region> is 'none' (a new account takes
+up to 24 h)`, `FAIL  7a: Security Hub member status of svp-backup is …` (account mới chưa thành member), `FAIL
+<profile> <region>: <n> of the 2 standards … are READY` (chuẩn vừa bật còn chờ), `FAIL  7c: AWS has not generated the
+plan svp-<env> in the account yet` (Backup policy mới gắn, AWS chưa sinh plan). `FAIL` khác là lỗi thật: dừng, dán
+output. Các dòng `note` để so bằng mắt, dán lại: `7c: <env> rule schedule and retention (vault days, copy days)` với
+lịch và hai retention của [ADR-0067
 §4](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0067-backup-dr.md#4-backup-policy-lịch-retention), và
 `7d: svp-<env>-copy lock min <n> days, max <n> days` với bảng Tài nguyên của [README
 `aws/backup`](../../aws/backup/README.md#tài-nguyên). Bước 17 của buổi (`restore-drill.sh <env> backup`) kiểm lại plan,

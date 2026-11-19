@@ -173,31 +173,28 @@ org_services() {
   ok "7a: svp-security administers GuardDuty, Security Hub, Config, Access Analyzer and Inspector"
 }
 
+# The policies of aws/modules/org-policies by target (root or OU) and type, with the AWS managed FullAWSAccess and
+# RCPFullAWSAccess that each target keeps; the Backup policies of the OUs are checked by verify.sh backup (7c).
+org_policy_table='root SERVICE_CONTROL_POLICY FullAWSAccess svp-deny-leave-organization svp-protect-cloudtrail svp-deny-other-regions svp-protect-baseline svp-deny-iam-users
+root RESOURCE_CONTROL_POLICY RCPFullAWSAccess svp-data-perimeter
+root DECLARATIVE_POLICY_EC2 svp-ec2-baseline
+root TAG_POLICY svp-tags
+Prod SERVICE_CONTROL_POLICY FullAWSAccess svp-prod-guardrails'
+
 org_policies() {
-  local t names miss n
-  for t in SERVICE_CONTROL_POLICY RESOURCE_CONTROL_POLICY DECLARATIVE_POLICY_EC2 TAG_POLICY; do
-    names=$(aws_global_ organizations list-policies-for-target --target-id "$root_id" --filter "$t" \
-      --query 'Policies[].Name' --output text) || fail "organizations list-policies-for-target $t"
+  local target type want id names got bad_p=''
+  while read -r target type want <&4; do
+    if [ "$target" = root ]; then id=$root_id; else id=$(jq -r ".$target // empty" <<<"$ou_json"); fi
+    [ -n "$id" ] || fail "7a: no id of $target (terraform output of aws/org failed above)"
+    names=$(aws_global_ organizations list-policies-for-target --target-id "$id" --filter "$type" \
+      --query 'Policies[].Name' --output text) || fail "organizations list-policies-for-target $target $type"
     printing && continue
-    case $t in
-      SERVICE_CONTROL_POLICY)
-        miss=$(missing "$names" FullAWSAccess)
-        n=$(tr -s '[:space:]' '\n' <<<"$names" | grep -c '^svp-' || true)
-        [ -z "$miss" ] && [ "$n" = 5 ] || fail "7a: root SCPs are '$names': FullAWSAccess and five svp-* expected"
-        ;;
-      RESOURCE_CONTROL_POLICY)
-        miss=$(missing "$names" RCPFullAWSAccess svp-data-perimeter svp-ec2-baseline svp-tags)
-        [ -z "$miss" ] || fail "7a: root RCPs lack: $miss"
-        ;;
-      *) note "7a: root $t: ${names:-none}" ;;
-    esac
-  done
-  names=$(aws_global_ organizations list-policies-for-target --target-id "$(jq -r .Prod <<<"$ou_json")" \
-    --filter SERVICE_CONTROL_POLICY --query 'Policies[].Name' --output text) || fail "organizations list-policies-for-target Prod"
+    got=$(tr -s '[:space:]' '\n' <<<"$names" | grep . | sort | oneline)
+    [ "$got" = "$(tr ' ' '\n' <<<"$want" | sort | oneline)" ] || bad_p="$bad_p; $target $type is '$got', not '$want'"
+  done 4<<<"$org_policy_table"
   printing && return 0
-  miss=$(missing "$names" FullAWSAccess svp-prod-guardrails)
-  [ -z "$miss" ] || fail "7a: OU Prod SCPs lack: $miss"
-  ok "7a: policies of the root and of OU Prod as expected"
+  [ -z "$bad_p" ] || fail "7a: policies wrong (apply aws/org):${bad_p#;}"
+  ok "7a: SCP, RCP, EC2 declarative and tag policies of the root and of OU Prod as aws/org declares them"
 }
 
 org_features() {
@@ -264,9 +261,13 @@ flag_off() {
   [ -n "$key" ] && [ "$(paid_feature "$key" "$2")" = off ]
 }
 
+# The features local.guardduty_features of aws/security/guardduty.tf auto-enables for ALL members; AWS adds new ones
+# to the organization configuration (NONE until someone turns them on), which only get a note.
+gd_features='["S3_DATA_EVENTS","EKS_AUDIT_LOGS","EBS_MALWARE_PROTECTION","RDS_LOGIN_EVENTS","LAMBDA_NETWORK_LOGS","RUNTIME_MONITORING"]'
+
 # sec_guardduty REGION: organization configuration, members and publishing of GuardDuty at the delegated administrator.
 sec_guardduty() {
-  local r=$1 d cfg mem dest id st bad_ids=
+  local r=$1 d cfg mem dest id st other bad_ids=
   [ -n "$active" ] || printing || fail "7a: no list of accounts (organizations list-accounts failed above)"
   d=$(aws_in "$r" guardduty list-detectors --query 'DetectorIds[0]' --output text) || fail "guardduty list-detectors in $r"
   cfg=$(aws_in "$r" guardduty describe-organization-configuration --detector-id "$d" \
@@ -277,8 +278,12 @@ sec_guardduty() {
   dest=$(aws_in "$r" guardduty list-publishing-destinations --detector-id "$d" --query 'Destinations[].Status' \
     --output text) || fail "guardduty list-publishing-destinations in $r"
   printing && return 0
-  jq -e '.[0] == "ALL" and (.[1] | length) == 6 and all(.[1][]; .[1] == "ALL")' <<<"$cfg" >/dev/null 2>&1 ||
-    fail "7a: GuardDuty in $r auto-enables $(jq -c . <<<"$cfg" 2>/dev/null), not ALL for members and the six features"
+  jq -e --argjson w "$gd_features" '.[0] == "ALL" and
+    ([.[1][] | select(.[1] == "ALL") | .[0]] as $all | all($w[]; IN($all[])))' <<<"$cfg" >/dev/null 2>&1 ||
+    fail "7a: GuardDuty in $r auto-enables $(jq -c . <<<"$cfg" 2>/dev/null), not ALL for members and $(jq -r 'join(" ")' <<<"$gd_features")"
+  other=$(jq -r --argjson w "$gd_features" '[.[1][] | select(.[0] | IN($w[]) | not) | "\(.[0])=\(.[1])"] | join(" ")' \
+    <<<"$cfg")
+  [ -z "$other" ] || note "7a: GuardDuty in $r: features outside aws/security, left as AWS sets them: $other"
   for id in $active; do
     [ "$id" != "${SVP_AWS_SECURITY_ACCOUNT_ID:-}" ] || continue
     st=$(awk -v i="$id" '$1 == i { print $2 }' <<<"$mem")
@@ -302,7 +307,7 @@ sec_analyzer() {
 # sec_hub_org: central configuration of Security Hub, and the policy association of the root and of each account
 # whose security_hub flag is off (its own association wins over the root's).
 sec_hub_org() {
-  local cfg as id t st label targets bad_t='' pend=''
+  local cfg as id t st label targets bad_t='' pend='' live='' gone=''
   cfg=$(aws_ securityhub describe-organization-configuration \
     --query 'OrganizationConfiguration.[ConfigurationType, Status]' --output text) ||
     fail "securityhub describe-organization-configuration"
@@ -313,6 +318,13 @@ sec_hub_org() {
   [ "$(words <<<"$cfg")" = "CENTRAL ENABLED" ] || fail "7a: Security Hub organization configuration is '$cfg', not CENTRAL ENABLED"
   [ -n "$root_id" ] || fail "7a: no root id to look for (terraform output root_id of aws/org failed above)"
   [ -n "$active" ] || fail "7a: no list of accounts (organizations list-accounts failed above)"
+  # An account not ACTIVE (closed, until it leaves the organization) fails its association, and with it the root's:
+  # Security Hub cannot assume its service-linked role. The root's FAILED is an error only when an ACTIVE account
+  # fails too, or when no account explains it.
+  while read -r id st; do
+    [[ $id =~ ^[0-9]{12}$ ]] && [ "$st" = FAILED ] || continue
+    case " $active " in *" $id "*) live="$live ...${id: -4}" ;; *) gone="$gone ...${id: -4}" ;; esac
+  done <<<"$as"
   targets=$root_id
   for id in $active; do
     [ "$id" = "${SVP_AWS_SECURITY_ACCOUNT_ID:-}" ] || ! flag_off "$id" security_hub || targets="$targets $id"
@@ -323,9 +335,18 @@ sec_hub_org() {
     case $st in
       SUCCESS) ;;
       PENDING) pend="$pend $label" ;;
+      FAILED)
+        if [ "$t" != "$root_id" ]; then
+          bad_t="$bad_t $label(FAILED)"
+        elif [ -n "$live" ] || [ -z "$gone" ]; then
+          bad_t="$bad_t root(FAILED${live:+ in$live})"
+        fi
+        ;;
       *) bad_t="$bad_t $label(${st:-none})" ;;
     esac
   done
+  [ -z "$gone" ] || note "7a: Security Hub association FAILED for accounts not ACTIVE:$gone (closed accounts leave the" \
+    "organization 90 days after closing; list them: org-security-setup.md, 7a)"
   [ -z "$bad_t" ] || fail "7a: Security Hub configuration policy association not SUCCESS for:$bad_t"
   [ -z "$pend" ] || note "7a: Security Hub association PENDING for:$pend (up to 24 h is normal; read again later)"
   ok "7a: Security Hub is CENTRAL ENABLED, the root and the accounts with security_hub off have their association"
@@ -571,10 +592,24 @@ backup_plan() {
   ok "7c: the plan svp-$e has the rule daily into svp-$e and the selection svp-$e-tagged"
 }
 
+# backup_vault ENV: the vault and the role that aws/accounts/<env> creates. AWS Backup answers AccessDenied, not
+# ResourceNotFound, for a vault that does not exist: the list of vaults tells a vault not created yet from a denial.
 backup_vault() {
-  local e=$1 v n locked count pol
-  v=$(aws_ backup describe-backup-vault --backup-vault-name "svp-$e" --query '[BackupVaultName,Locked,NumberOfRecoveryPoints]' \
-    --output text) || fail "backup describe-backup-vault svp-$e"
+  local e=$1 v n locked count pol vaults deny why
+  if ! v=$(aws_ backup describe-backup-vault --backup-vault-name "svp-$e" \
+    --query '[BackupVaultName,Locked,NumberOfRecoveryPoints]' --output text); then
+    vaults=$(aws_ backup list-backup-vaults --query 'BackupVaultList[].BackupVaultName' --output text) ||
+      fail "backup describe-backup-vault svp-$e, and list-backup-vaults with profile $profile failed too"
+    if [ -n "$(missing "$vaults" "svp-$e")" ]; then
+      note "7c: vault svp-$e not created yet (aws/accounts/$e not applied): read again after that apply"
+      return 0
+    fi
+    deny=$(aws_ backup get-backup-vault-access-policy --backup-vault-name "svp-$e" --query Policy --output text |
+      jq '[.Statement[]? | select(.Effect == "Deny")] | length' 2>/dev/null) || deny=
+    why="no Deny in its access policy: the profile lacks backup:DescribeBackupVault"
+    [ "${deny:-0}" = 0 ] || why="its access policy has $deny Deny statement(s): read them with get-backup-vault-access-policy"
+    fail "7c: the vault svp-$e exists but describe-backup-vault failed with profile $profile: $why"
+  fi
   pol=$(aws_global_ iam list-attached-role-policies --role-name "svp-$e-backup" --query 'AttachedPolicies[].PolicyName' \
     --output text) || fail "iam list-attached-role-policies svp-$e-backup"
   printing && return 0
