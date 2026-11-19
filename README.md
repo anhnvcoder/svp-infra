@@ -371,11 +371,19 @@ cat > .envrc <<'ENV'
 export SVP_AWS_MGMT_ACCOUNT_ID=<12 số>
 export SVP_AWS_STG_ACCOUNT_ID=<12 số>
 export SVP_AWS_PRD_ACCOUNT_ID=<12 số>
+export TF_VAR_stg_account_id=$SVP_AWS_STG_ACCOUNT_ID
+export TF_VAR_prd_account_id=$SVP_AWS_PRD_ACCOUNT_ID
 export AWS_PROFILE=anhnv-sso
 export AWS_REGION=ap-southeast-1
 ENV
 direnv allow
 ```
+
+Các biến `TF_VAR_*` không đổi giữa root cũng nằm trong file, lấy từ biến account tương ứng: `TF_VAR_stg_account_id`,
+`TF_VAR_prd_account_id`, và khi account đã có thì `TF_VAR_log_archive_account_id=$SVP_AWS_LOG_ACCOUNT_ID`,
+`TF_VAR_security_account_id=$SVP_AWS_SECURITY_ACCOUNT_ID`, `TF_VAR_backup_account_id=$SVP_AWS_BACKUP_ACCOUNT_ID`. Lệnh của runbook
+vì vậy chỉ cần ghi `TF_VAR_account_id` (mỗi root một account); lệnh nào vẫn ghi cả các biến kia thì cho cùng giá trị. direnv chỉ nạp
+file đã được tin: sau mỗi lần sửa `.envrc`, chạy `direnv allow` rồi kiểm bằng `printf '%s\n' "${SVP_AWS_STG_ACCOUNT_ID: -4}"` (4 số cuối).
 
 `SVP_AWS_MGMT_ACCOUNT_ID` luôn gõ tay vào file, không lấy từ Organizations: đó là giá trị mà `check_account` của mọi script đối chiếu với
 account thật của `anhnv-sso`. Biến của account thành viên (kể cả `LOG`, `SECURITY`, `BACKUP`) kiểm và đặt lại bằng
@@ -384,7 +392,9 @@ khi cần giữ sang buổi sau.
 
 Luật không đổi. `TF_VAR_account_id` không bao giờ đặt chung trong file này, vì mỗi root thuộc một account: lệnh viết sẵn đặt nó
 từ biến của account mà profile vào. Lệnh viết sẵn và script vẫn ghi profile và `--region` trong lệnh (ghi đè mặc định của file); lệnh tay ở
-account thành viên phải ghi profile; `allowed_account_ids = [var.account_id]` chặn nhầm account. `SVP_SESSION_DIR` vẫn export mỗi buổi.
+account thành viên phải ghi profile; `allowed_account_ids = [var.account_id]` chặn nhầm account. `SVP_SESSION_DIR` vẫn export mỗi buổi,
+từ thư mục `infra/` (`export SVP_SESSION_DIR="$PWD/.session/$(date -u +%Y%m%dT%H%M%SZ)"`): script từ chối đường dẫn ngoài `infra/.session/`,
+nơi duy nhất git bỏ qua cho file của buổi.
 Script buổi lấy profile và account từ bảng env của `aws/scripts/lib.sh`.
 
 **Script của `aws/scripts/`** gồm hai nhóm, dùng chung `lib.sh`, chạy từ terminal của máy Mac (bash 3.2 là đủ). Script buổi
@@ -452,6 +462,31 @@ External Secrets Operator dựng Secret trong cluster từ entry; Reloader resta
 secret: runbook
 [`session-stg.md`](docs/runbooks/session-stg.md#đổi-một-secret-của-env-đang-chạy). `pre-destroy.sh` để lại tới bước cuối các Application nền tảng,
 vì finalizer và webhook của chúng cần cho việc xoá object của workload.
+
+### Đọc plan an toàn
+
+Plan lưu bằng `-out=<root>.tfplan` được git bỏ qua. Bản văn bản của plan thì không: lưu ra file `.txt` trong repo (để dán hay đọc lại)
+là để lộ account ID và tên tài nguyên vào cây repo public, nên xoá ngay khi đọc xong. Cách gọn, không tạo file, chỉ in dòng mỗi
+tài nguyên đổi và dòng tổng:
+
+```sh
+terraform show -no-color <root>.tfplan | grep -E '^\s*# .* (will|must) be|^Plan:'
+```
+
+Mong đợi: mỗi dòng `# <địa chỉ> will be created|updated in-place|destroyed` hay `must be replaced`, cuối cùng `Plan: N to add, N to change,
+N to destroy`. So với số mong đợi ở README của root rồi mới apply.
+
+### Khi apply lỗi giữa chừng
+
+1. Đọc lỗi, đừng apply lại ngay. Phần đã tạo nằm trong state; `plan` lại cùng root chỉ còn phần chưa tạo.
+2. Áp phần không lỗi bằng `-target=<địa chỉ>` khi cần. `-target` kéo theo mọi thứ địa chỉ đó phụ thuộc: attachment phụ thuộc cả resource
+   policy của nó, nên target attachment kéo theo policy đang lỗi và lỗi lại.
+3. Áp code của một PR chưa merge (để thử bản sửa): `git switch --detach origin/<nhánh>`, apply, rồi `git switch main`. Không tạo nhánh
+   cục bộ cho việc này, và chỉ apply từ `main` sau khi PR đã merge.
+4. Dòng `-/+` (thay thế) lặp lại ở mọi plan dù đã apply là lỗi code: chênh lệch vĩnh viễn giữa code và nơi chạy. Không apply, dán plan
+   và báo để sửa code.
+
+Runbook của từng bước trỏ về đây ở mục "Khi một bước đỏ".
 
 ## Plan trên PR
 

@@ -67,7 +67,7 @@ Job ECR của `svp-backend`, `svp-frontend` (chép bản phát hành vào ECR, p
    [ADR-0063 §12](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0063-managed-observability.md#12-chi-phí-hợp-đồng-cluster-và-adr-cũ);
    budget của org đủ cho khoản đó cộng các buổi (lệnh đọc ở [`org-security-setup.md`](org-security-setup.md#mở-terminal)).
 3. **Credential để sẵn** (chưa dán vào đâu): PAT (classic) của GitHub chỉ scope `read:packages`, hạn 90 ngày (GitHub Packages chỉ nhận PAT
-   classic); personal access token của Docker Hub quyền "Public Repo Read-only", hạn 90 ngày. Ghi ngày hết hạn vào lịch của người học.
+   classic); personal access token của Docker Hub quyền "Public Repo Read-only", hạn 90 ngày. Cách tạo và chỗ giữ bản sao: bước (6).
 4. **Trên máy**: Terraform 1.15, AWS CLI v2, `jq`, `gh` đăng nhập tài khoản admin của mọi repo (`gh auth status`, scope `repo`).
 
 ## Mở terminal
@@ -238,8 +238,14 @@ bước (5) chưa chạy.
 
 Tạo PAT và token giữ tay vì do bên thứ ba cấp, bằng chính tài khoản của người học trên trang web của họ (lab không giữ công cụ nào để tạo
 thay): PAT
-classic scope `read:packages` ở <https://github.com/settings/tokens>, token Docker Hub quyền "Public Repo Read-only" ở
-Docker Hub → **Account settings** → **Personal access tokens**; đặt hạn 90 ngày. Cùng PAT cho hai account.
+classic scope `read:packages` ở <https://github.com/settings/tokens> (**Generate new token (classic)**), token Docker Hub quyền "Public
+Repo Read-only" ở Docker Hub → **Account settings** → **Personal access tokens**; đặt hạn 90 ngày. Cùng một cặp cho stg và prd.
+
+Giá trị chỉ hiện một lần lúc tạo. Giữ bản sao trong password manager của người học ngay lúc đó: `cache-secrets.sh` ghi vào Secrets Manager
+(entry `ecr-pullthroughcache/*` là chỗ duy nhất của chúng ở AWS, không trên máy, không trong file nào), nhưng stg và prd cần cùng cặp, và
+ghi lại một account sau này cần giá trị gốc: bản sao tránh phải đọc secret ra khỏi AWS.
+Đặt nhắc lịch trước hạn (khoảng 7 ngày) cho cả hai token; vòng xoay ở
+mục [Xoay credential](#xoay-credential).
 
 ## Bước (7): biến CI ECR
 
@@ -359,6 +365,8 @@ svp-grafana-operator left after the deletes: …`, chạy lại lệnh. Không �
 ## Khi một bước đỏ
 
 - Lỗi ở `plan`: không có gì đổi trên account; đọc lỗi, sửa nguyên nhân (biến terminal, file `.auto.tfvars`, phiên SSO), chạy lại đúng bước.
-- Lỗi giữa `apply`: phần đã tạo nằm trong state; `plan` lại cùng root chỉ còn phần chưa tạo. Dán lỗi và plan mới trước khi apply lại.
-- Plan có `destroy` hay `-/+` ở tài nguyên có sẵn (baseline, tổ chức, repo GitHub): dừng, không apply, dán plan.
+- Lỗi giữa `apply`: phần đã tạo nằm trong state; `plan` lại cùng root chỉ còn phần chưa tạo. Dán lỗi và plan mới trước khi apply lại;
+  `-target` và áp code của PR chưa merge: [README, Khi apply lỗi giữa chừng](../../README.md#khi-apply-lỗi-giữa-chừng).
+- Plan có `destroy` hay `-/+` ở tài nguyên có sẵn (baseline, tổ chức, repo GitHub): dừng, không apply, dán plan. `-/+` lặp lại ở mọi plan là
+  lỗi code, không phải việc apply thêm.
 - Gỡ hẳn registry, observability của một env: mục "Gỡ baseline" của [README `aws/accounts`](../../aws/accounts/README.md#gỡ-baseline-có-chủ-đích).
