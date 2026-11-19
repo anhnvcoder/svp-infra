@@ -14,7 +14,7 @@ policy. Root `aws/org` truyền root của org (`root_id`), OU `Prod` (`prod_ou_
 | `svp-deny-leave-organization` | SCP | root | `organizations:LeaveOrganization` | account rời org thì thoát mọi policy và organization trail |
 | `svp-protect-cloudtrail` | SCP | root | `cloudtrail:StopLogging`, `DeleteTrail`, `UpdateTrail`, `PutEventSelectors`, `PutInsightSelectors` | không account thành viên nào tắt hay đổi được trail, kể cả trail của riêng nó |
 | `svp-deny-other-regions` | SCP | root | mọi action ngoài danh sách dịch vụ toàn cục (`NotAction`) khi `aws:RequestedRegion` không phải `ap-southeast-1`, `us-east-1` | tài nguyên ở region không ai xem thì tốn tiền mà không thấy; script quét sót của buổi chỉ đọc hai region này |
-| `svp-protect-baseline` | SCP | root | đổi S3 Block Public Access cấp account, EBS mã hoá mặc định và key mặc định, Config, GuardDuty, Security Hub, Access Analyzer, rule EventBridge và role `svp-security-*`, IAM của `OrganizationAccountAccessRole`, CMK EBS (tag `Stack=security-baseline`, alias `alias/svp-ebs`) | baseline bảo mật chỉ đổi qua Terraform chạy từ management; miễn đúng `OrganizationAccountAccessRole` |
+| `svp-protect-baseline` | SCP | root | đổi S3 Block Public Access cấp account, EBS mã hoá mặc định và key mặc định, Config, GuardDuty, Security Hub, bật, tắt Inspector (trừ request ECR gọi thay người gọi), Access Analyzer (cả tạo analyzer), rule EventBridge và role `svp-security-*`, IAM của `OrganizationAccountAccessRole`, CMK EBS (tag `Stack=security-baseline`, alias `alias/svp-ebs`); bật Macie, Detective, Security Lake, Audit Manager, đăng ký Shield Advanced | baseline bảo mật chỉ đổi qua Terraform chạy từ management, dịch vụ bảo mật tính tiền mà lab không dùng không bật được bằng một cú bấm; miễn đúng `OrganizationAccountAccessRole` |
 | `svp-deny-iam-users` | SCP | root | `iam:CreateUser`, `CreateAccessKey`, `CreateLoginProfile`, `UpdateLoginProfile` trên `arn:aws:iam::*:user/*` | người vào account qua IAM Identity Center, không qua IAM user hay access key dài hạn |
 | `svp-prod-guardrails` | SCP | OU `Prod` | Spot qua `ec2:RunInstances` (`ec2:InstanceMarketType` = `spot`), `RequestSpotInstances`, `RequestSpotFleet` | prd chạy on-demand |
 | `svp-data-perimeter` | RCP | root | S3, SQS, KMS, Secrets Manager, STS: principal ngoài org, dịch vụ AWS thay tài nguyên ngoài org, request không TLS | dữ liệu và credential không tới được ai ngoài org |
@@ -42,6 +42,33 @@ policy. Root `aws/org` truyền root của org (`root_id`), OU `Prod` (`prod_ou_
   principal dịch vụ AWS được miễn ở statement principal; statement dịch vụ chỉ xét khi request có `aws:SourceAccount`; không ngoại lệ riêng
   nào khác. Đăng nhập liên kết (`AssumeRoleWithSAML` của Identity Center, `AssumeRoleWithWebIdentity`) và `sts:AssumeRoot` không nằm trong
   statement principal. RCP không đổi quyền của service-linked role. Bảng đối chiếu từng luồng ở phụ lục ADR-0059.
+- **Inspector** (statement `ProtectInspector`: `inspector2:Enable`, `inspector2:Disable`, trừ request có `aws:ViaAWSService` `true`): bấm
+  "Get started" ở console của account thành viên là bật Inspector cho riêng account đó, tính tiền, ngoài Terraform (account có
+  `inspector_ecr` `off` hay region `us-east-1`). Hai đường Terraform không bị chặn. Một: root `aws/accounts/<env>` (module `registry`) đổi
+  cấu hình quét của registry giữa Enhanced và Basic bằng role admin của env, và ECR gọi `Enable`, `Disable` của Inspector bằng quyền của
+  người gọi ([ECR: quyền IAM của enhanced
+  scanning](https://docs.aws.amazon.com/AmazonECR/latest/userguide/image-scanning-enhanced-iam.html), đọc 2026-11-19: principal bật quét
+  phải được gọi API Inspector), tức request forward access session, luôn có `aws:ViaAWSService` `true`
+  ([IAM: FAS](https://docs.aws.amazon.com/IAM/latest/UserGuide/access_forward_access_sessions.html), đọc 2026-11-19). Cái giá: theo
+  principal không tách được đường này khỏi nút bật Enhanced ở console ECR, nên nút đó cũng qua; nó chỉ bật quét ECR, và plan của
+  `aws/accounts/<env>` thấy cấu hình lệch. Hai: root `aws/security` gọi `Enable`, `Disable` cho thành viên từ `svp-security` (delegated
+  admin) bằng `OrganizationAccountAccessRole` của account đó, principal được miễn; SCP chỉ xét principal của account gắn nó, không xét
+  account đích của lời gọi. Bật cho account mới vào tổ chức do chính Inspector làm, qua service-linked role, mà SCP không áp
+  ([Organizations: SCP](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_scps.html), đọc 2026-11-19:
+  "SCPs do not affect any service-linked role"). Thành viên đã liên kết thì chỉ delegated admin tắt được Inspector
+  ([Inspector: delegated admin và thành viên](https://docs.aws.amazon.com/inspector/latest/user/admin-member-relationship.html), đọc
+  2026-11-19); `Disable` vẫn chặn cho account chưa liên kết và cho chính `svp-security`.
+- **Dịch vụ bảo mật lab không dùng** (statement `DenyUnusedSecurityServices`): lệnh mà nút bật trên console gọi, mỗi dịch vụ tính tiền
+  cho cả account khi đã bật: `macie2:EnableMacie` (Macie), `detective:CreateGraph` (Detective), `securitylake:CreateDataLake` (Security
+  Lake), `auditmanager:RegisterAccount` (Audit Manager), `shield:CreateSubscription` (Shield Advanced: phí tháng từ $3 000, cam kết một
+  năm, tự gia hạn; [Shield pricing](https://aws.amazon.com/shield/pricing/), đọc 2026-11-19). Không chặn thêm: `guardduty:CreateDetector`
+  (delegated admin đã bật detector ở cả hai region được phép, mỗi region một detector, `DeleteDetector` đã chặn),
+  `securityhub:EnableSecurityHub` (cấu hình tập trung của delegated admin giữ trạng thái), Config (`PutConfigurationRecorder` đã chặn),
+  Firewall Manager (chỉ management chỉ định được admin, SCP không áp lên management).
+- **Access Analyzer** (statement `ProtectAccessAnalyzer`): chặn cả `CreateAnalyzer`. Analyzer unused access tính tiền theo mỗi IAM role,
+  user mỗi tháng, analyzer external access miễn phí ([Access Analyzer pricing](https://aws.amazon.com/iam/access-analyzer/pricing/), đọc
+  2026-11-19), nhưng `CreateAnalyzer` không có khoá điều kiện theo loại analyzer, nên chặn mọi loại. Analyzer `ORGANIZATION` do root
+  `aws/security` tạo từ `svp-security` bằng `OrganizationAccountAccessRole`, principal được miễn.
 - **Không chặn** tạo, xoá plan Malware Protection, flow log, logging WAF: buổi tạo và gỡ chúng. Test kiểm không SCP nào chặn chúng.
 - **Danh sách dịch vụ toàn cục** chép nguyên văn `NotAction` của mẫu AWS "Deny access to AWS based on the requested AWS Region"
   ([Control Tower: Region deny](https://docs.aws.amazon.com/controltower/latest/controlreference/primary-region-deny-policy.html)): IAM,
@@ -62,9 +89,9 @@ policy. Root `aws/org` truyền root của org (`root_id`), OU `Prod` (`prod_ou_
 - **Đổi đích** là thay `aws_organizations_policy_attachment` (khoá `for_each` giữ nguyên), không tạo lại policy.
 
 Test (`make test DIRS=aws/modules/org-policies`, provider giả) đọc lại JSON gửi lên Organizations: tập policy theo loại và đích, chỉ `Deny`,
-cỡ, statement và action của từng SCP, miễn trừ đúng một role ở `svp-protect-baseline`, điều kiện của RCP, thiết lập declarative, khoá và giá trị
-của tag policy; plan, rule, lịch, hai cửa sổ, retention và bất đẳng thức retention, vault, copy, selection của hai Backup policy; validation của
-các id.
+cỡ, statement và action của từng SCP, miễn trừ đúng một role ở `svp-protect-baseline` (thêm request dịch vụ AWS gọi thay ở
+`ProtectInspector`), điều kiện của RCP, thiết lập declarative, khoá và giá trị của tag policy; plan, rule, lịch, hai cửa sổ, retention và
+bất đẳng thức retention, vault, copy, selection của hai Backup policy; validation của các id.
 
 <!-- markdownlint-disable MD033 -->
 <!-- BEGIN_TF_DOCS -->

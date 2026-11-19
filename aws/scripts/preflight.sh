@@ -193,8 +193,18 @@ plans() {
 }
 plan_state() {
   local t
-  t=$(aws_global_ freetier get-account-plan-state --query accountPlanType --output text) ||
-    fail "freetier get-account-plan-state with profile $profile"
+  # A member account of an organization has no account plan: joining upgrades a Free plan to paid, and the API answers
+  # ResourceNotFoundException. Any other error stays a FAIL. Source (read 2026-11-19):
+  # https://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/free-tier-plans.html
+  if ! t=$(aws_global_ freetier get-account-plan-state --query accountPlanType --output text 2>&1); then
+    case $t in
+      *ResourceNotFoundException*)
+        ok "account plan of $env_name is PAID (member of an organization, no account plan)"
+        return 0
+        ;;
+      *) fail "freetier get-account-plan-state with profile $profile: $(flat <<<"$t")" ;;
+    esac
+  fi
   printing && return 0
   case $t in
     PAID) ok "account plan of $env_name is PAID" ;;

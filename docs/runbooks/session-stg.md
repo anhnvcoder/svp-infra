@@ -115,9 +115,13 @@ aws/scripts/session.sh --print stg
    aws/scripts/preflight.sh quotas stg
    ```
 
-   `freetier` mong `ok    no CloudFront flat-rate plan in stg` và `ok    account plan of stg is PAID`; dán lại cả hai. `FAIL  N CloudFront
-   plan(s) left in stg …`: gói sót của buổi trước hay của lần thử ở console giữ một suất và distribution của nó, huỷ theo mục **Lệnh xoá
-   tay theo loại** (CloudFront) rồi chạy lại. `FAIL  account plan of stg is FREE`: account còn ở AWS Free Tier, apply sẽ đỏ ở gói: không bắt
+   `freetier` mong `ok    no CloudFront flat-rate plan in stg` và `ok    account plan of stg is PAID`; dán lại cả hai. Account thành
+   viên của tổ chức không có gói riêng: vào tổ chức là gói Free tự lên gói trả phí
+   ([AWS: Free Tier plans](https://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/free-tier-plans.html), đọc 2026-11-19), API
+   `GetAccountPlanState` trả `ResourceNotFoundException`, script in
+   `ok    account plan of stg is PAID (member of an organization, no account plan)`: cũng đạt. `FAIL  N CloudFront plan(s) left in stg …`:
+   gói sót của buổi trước hay của lần thử ở console giữ một suất và distribution của nó, huỷ theo mục **Lệnh xoá tay theo loại**
+   (CloudFront) rồi chạy lại. `FAIL  account plan of stg is FREE`: account còn ở AWS Free Tier, apply sẽ đỏ ở gói: không bắt
    đầu buổi, dán output cho AI.
 
    `quotas` đọc mỗi quota một dòng `ok    <mã> <tên>: <giá trị> (min|max <cần>)`: on-demand chuẩn (`L-1216C47A`) cho nhóm node hệ thống tới

@@ -217,6 +217,8 @@ run "protect_baseline" {
       "ProtectConfig",
       "ProtectGuardDuty",
       "ProtectSecurityHub",
+      "ProtectInspector",
+      "DenyUnusedSecurityServices",
       "ProtectAccessAnalyzer",
       "ProtectAlertRules",
       "ProtectBaselineRoles",
@@ -239,10 +241,17 @@ run "protect_baseline" {
   assert {
     condition = alltrue([
       for s in jsondecode(aws_organizations_policy.this["protect-baseline"].content).Statement :
-      toset(keys(s.Condition)) == toset(s.Sid == "ProtectEbsKey" ? ["ArnNotLike", "StringEquals"] : ["ArnNotLike"])
+      toset(keys(s.Condition)) == toset(lookup({ ProtectEbsKey = ["ArnNotLike", "StringEquals"], ProtectInspector = ["ArnNotLike", "BoolIfExists"] }, s.Sid, ["ArnNotLike"]))
       && length(setintersection(toset(keys(s)), toset(["NotAction", "NotResource", "Principal", "NotPrincipal"]))) == 0
     ])
-    error_message = "protect-baseline must condition on the exempted role alone (plus the key tag of ProtectEbsKey), without NotAction, NotResource or Principal."
+    error_message = "protect-baseline must condition on the exempted role alone (plus the key tag of ProtectEbsKey and the AWS service requests of ProtectInspector), without NotAction, NotResource or Principal."
+  }
+
+  # ECR switches its registry between enhanced and basic scanning by calling Inspector with the caller's credentials;
+  # every other Enable or Disable stays denied.
+  assert {
+    condition     = one([for s in jsondecode(aws_organizations_policy.this["protect-baseline"].content).Statement : s.Condition.BoolIfExists if s.Sid == "ProtectInspector"]) == { "aws:ViaAWSService" = "false" }
+    error_message = "ProtectInspector must leave open only the requests an AWS service makes on the caller's behalf."
   }
 
   assert {
@@ -297,8 +306,21 @@ run "protect_baseline" {
           "securityhub:UpdateSecurityControl",
           "securityhub:UpdateStandardsControl",
         ]
-        ProtectAccessAnalyzer = ["access-analyzer:CreateArchiveRule", "access-analyzer:DeleteAnalyzer", "access-analyzer:UpdateArchiveRule"]
-        ProtectAlertRules     = ["events:DeleteRule", "events:DisableRule", "events:PutRule", "events:PutTargets", "events:RemoveTargets"]
+        ProtectInspector = ["inspector2:Disable", "inspector2:Enable"]
+        DenyUnusedSecurityServices = [
+          "auditmanager:RegisterAccount",
+          "detective:CreateGraph",
+          "macie2:EnableMacie",
+          "securitylake:CreateDataLake",
+          "shield:CreateSubscription",
+        ]
+        ProtectAccessAnalyzer = [
+          "access-analyzer:CreateAnalyzer",
+          "access-analyzer:CreateArchiveRule",
+          "access-analyzer:DeleteAnalyzer",
+          "access-analyzer:UpdateArchiveRule",
+        ]
+        ProtectAlertRules = ["events:DeleteRule", "events:DisableRule", "events:PutRule", "events:PutTargets", "events:RemoveTargets"]
         ProtectBaselineRoles = [
           "iam:AttachRolePolicy",
           "iam:DeleteRole",
