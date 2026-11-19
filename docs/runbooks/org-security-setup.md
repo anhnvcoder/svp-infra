@@ -60,6 +60,7 @@ flowchart TD
 2. **Giá trị ngoài repo** (không commit, mỗi file tạo từ `.example` cùng thư mục):
    - `aws/org/org.auto.tfvars`: `account_emails` với hai khoá mới `log-archive`, `security`, mỗi khoá một email chưa account AWS nào dùng, kể
      cả account đã đóng hay `SUSPENDED`; `security_contact`; `sso_user_name`, `sso_region` (README `aws/org`, mục Chuẩn bị).
+     Chép file mẫu bằng `aws/scripts/tfvars.sh example aws/org`, rồi điền bằng editor (xem "Điền giá trị lần đầu" dưới).
    - `aws/security/security.auto.tfvars`: `security_alert_email`, hộp thư nhận mọi cảnh báo bảo mật.
    - `aws/baseline/baseline.auto.tfvars`: `sso_region` bằng giá trị của `org.auto.tfvars`.
 3. **Chi phí liên tục**: từ bước (5) dịch vụ phát hiện tính tiền mỗi tháng ở mọi account của tổ chức, kể cả khi không có buổi; bước (1),
@@ -75,6 +76,17 @@ flowchart TD
    Budget tổng của org phải đủ cho khoản đó cộng các buổi: lệnh đọc ở cuối mục [Mở terminal](#mở-terminal) (cần biến và phiên SSO của mục đó).
 4. **Phụ thuộc buổi**: từ khi code này ở `main`, root `aws/envs/stg`, `aws/envs/prd` ghi flow log và log WAF vào bucket của `svp-log-archive`
    và cần `SVP_AWS_LOG_ACCOUNT_ID`. Buổi stg, prd chỉ chạy được sau khi bước (1)–(3) đã áp.
+
+### Điền giá trị lần đầu
+
+- `security_contact`: một người thật, vì AWS gửi thông báo bảo mật và gọi theo số này. Số điện thoại dạng quốc tế `+84…` (không số 0 đầu,
+  không khoảng trắng), email là hộp thư người đó đọc hằng ngày.
+- Email root của mỗi account mới: alias Gmail `<gmail>+svp-<tên>@gmail.com` dùng được (thư vào hộp thư gốc), miễn là chưa từng dùng cho
+  account AWS nào, kể cả account đã đóng. Mỗi account một alias riêng, vì email root không đổi và không dùng lại được.
+- Quy ước alias cho hộp thư nhận cảnh báo, để lọc theo nguồn: `+svp-security-alerts` cho `security_alert_email` (cảnh báo bảo mật của
+  org), `+svp-<env>-alarms` cho `alarm_email` của env (alarm của env và alarm DNSSEC của prd, ví dụ `+svp-prd-alarms`).
+- Domain của env (`aws/scripts/tfvars.sh env <env>` hỏi `domain`): tên hosted zone của env đó, không phải domain gốc: prd là zone gốc
+  `aws.<domain>`, stg là `stg.` cộng zone gốc (`stg.aws.<domain>`).
 
 ## Mở terminal
 
@@ -106,6 +118,11 @@ AWS_PROFILE=anhnv-sso aws budgets describe-budget --account-id "$SVP_AWS_MGMT_AC
 ```
 
 Hạn mức thấp hơn ước của ADR cộng chi phí buổi trong tháng: đổi `budget_limit_usd` của `aws/bootstrap/bootstrap.auto.tfvars` trước bước (1).
+Hạn mức tháng nên bằng ít nhất phí giữ cả org giữa các buổi (dịch vụ phát hiện, KMS key, lưu log; ~$31,1 ở tháng đầu,
+~$39,4 ở tháng thứ sáu theo
+[ADR-0078 §8](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0078-paid-features-lean-defaults.md#8-chi-phí))
+cộng các buổi dự kiến trong tháng. Đặt thấp hơn thì email cảnh báo 80 %, 100 % tới liên tục dù không có gì sai, và người
+học quen bỏ qua cảnh báo thật.
 
 ## Cái đã có trước khi áp
 
@@ -167,6 +184,9 @@ cd aws/org
 Theo [README, Bước (4)](../../aws/org/README.md#bước-4-đủ-root): plan, đọc, apply, plan lần hai `No changes.`, `get-trail-status`. Delegated
 admin và cấu hình tổ chức của dịch vụ có thể mất vài phút mới nhận: lỗi kiểu đó thì chờ rồi chạy lại đúng bước này. `cd ../..` khi xong.
 
+**Portal SSO.** Account mới chỉ hiện ở AWS access portal sau khi có gán permission set cho nhóm của người học, tức sau khi `aws/org` đủ
+đã áp: chưa thấy `svp-log-archive`, `svp-security`, `svp-backup` ở portal trước bước này là bình thường.
+
 **Bốn profile chỉ đọc**, ngay sau bước này (bước (5), (6), (7) dùng chúng): `anhnv-stg-ro`, `anhnv-prd-ro`, `anhnv-security-ro` (`SvpReadOnly`),
 `anhnv-log-ro` (`SvpLogReader`), theo [README `aws/org`, Profile](../../aws/org/README.md#bảy-profile-còn-lại):
 
@@ -190,8 +210,9 @@ cd aws/security
 ```
 
 Theo [README, Apply](../../aws/security/README.md#apply-bước-5-của-thứ-tự-áp-lần-đầu): giá trị cá nhân, plan, apply,
-**xác nhận email SNS** (thư "AWS Notification - Subscription Confirmation" tới `security_alert_email`; `verify.sh
-subscriptions mgmt` kiểm), kiểm nhanh. Root đọc cờ `security_hub`, `inspector_ecr`: account `off` gắn policy
+**xác nhận email SNS** (thư "AWS Notification - Subscription Confirmation" tới `security_alert_email`: mở thư, bấm **Confirm
+subscription**; chưa bấm thì không cảnh báo nào tới. `verify.sh subscriptions mgmt` kiểm, mong mọi subscription có ARN thật, không còn
+`PendingConfirmation`), kiểm nhanh. Root đọc cờ `security_hub`, `inspector_ecr`: account `off` gắn policy
 `svp-security-off`, không có liên kết Inspector, và có rule `svp-security-guardduty-findings` giữ email finding
 GuardDuty của nó (mục Cờ chi phí của [README `aws/security`](../../aws/security/README.md#cờ-chi-phí)). `cd ../..` khi
 xong.
@@ -205,7 +226,11 @@ cd aws/baseline
 
 Theo [README, Apply lần đầu](../../aws/baseline/README.md#apply-lần-đầu): kiểm cái đã có, plan, apply. Apply có thể sinh vài email
 `svp-security-detection` (recorder, delivery channel mới); thiếu email ở account hay region nào cũng chưa phải lỗi: rule có thể được tạo sau
-recorder trong cùng apply. Account có cờ `config_recording` `off` không có recorder, delivery channel ở hai region (mục Cờ chi phí của
+recorder trong cùng apply. Apply này còn gửi một loạt email có tiêu đề dạng `svp-security: AWS API Call via CloudTrail PutRule`,
+`PutTargets` … `svp-terraform error .`: rule bảo vệ cảnh báo bắt đúng lời gọi của Terraform khi nó tạo rule, nên chính apply sinh thư.
+`error` trống (kết thúc `error .`) nghĩa là lời gọi thành công, không phải lỗi; chỉ một lần, ở apply đầu. Lọc bằng Gmail theo tiêu đề
+`svp-terraform` rồi gắn nhãn, để các thư `error .` này không lẫn với cảnh báo thật; thư có `error` khác rỗng mới là
+lỗi, đọc nó. Account có cờ `config_recording` `off` không có recorder, delivery channel ở hai region (mục Cờ chi phí của
 [README `aws/baseline`](../../aws/baseline/README.md#cờ-chi-phí)). Lần đầu, (5) đi trước (6) với cờ của file; đổi cờ sau đó theo thứ tự của
 [`paid-features.md`](paid-features.md#thứ-tự-apply-cờ). Đường cảnh báo kiểm ở [7e](#7e-cảnh-báo-thử). `cd ../..` khi xong.
 
@@ -213,6 +238,12 @@ recorder trong cùng apply. Account có cờ `config_recording` `off` không có
 
 Chạy sau bước (6) ít nhất 30 phút (GuardDuty, Security Hub nhận account có sẵn có thể tới 24 giờ: mục nào chưa đủ thì đọc lại hôm sau). Lệnh
 chỉ đọc trừ phép thử guardrail. Dán output từng mục; che 8 số đầu của account ID.
+
+**Xem trên console.** Vào AWS access portal, chọn account và role `SvpReadOnly`. GuardDuty, Security Hub và Inspector xem ở account
+`svp-security` (delegated admin: findings của cả tổ chức ở đó). AWS Config chỉ có recorder ở `svp-security` với cờ của file repo, nên các
+account khác không có gì để xem. Ở management và các account thành viên, console hiện trang "Get started", "Enable" hay "1-click setup" cho
+các dịch vụ này: đó là bình thường vì chúng bật qua Terraform và uỷ quyền cho `svp-security`. **Không bấm**: nút đó tạo tài nguyên ngoài
+Terraform (detector, recorder, bộ quét) và tính tiền.
 
 ### 7a. Dịch vụ bật
 
@@ -430,7 +461,8 @@ Mỗi dòng dữ liệu là `note  <ngày>  <dịch vụ>  <số> USD` cho sáu 
 KMS, S3, CloudTrail), cuối `ok    N row(s) from <ngày> to <hôm nay>, <tổng> USD`; chưa có dữ liệu thì `note  no cost
 data from … yet (Cost Explorer lags about 24 hours)`. So với [ADR-0060
 §12](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0060-org-detection-logging.md#12-chi-phí-liên-tục).
-Trong 30 ngày dùng thử GuardDuty và Security Hub ghi $0: đọc chi phí ước sau dùng thử ở trang "Usage" của GuardDuty và
+Dùng thử miễn phí chỉ có ở một số dịch vụ: GuardDuty 30 ngày, Security Hub 30 ngày, Inspector 15 ngày, Config không có. Trong 30 ngày dùng
+thử GuardDuty và Security Hub ghi $0: đọc chi phí ước sau dùng thử ở trang "Usage" của GuardDuty và
 Security Hub trên console của `svp-security` (giữ tay: không có API đọc ước tính đó), dán cả hai; lệnh nhắc bằng hai
 dòng `note` cuối. Monitor, subscription Cost Anomaly Detection và trạng thái tag phân bổ: hai lệnh đọc ở [README
 `aws/bootstrap`, mục 5](../../aws/bootstrap/README.md#5-áp-thay-đổi-khi-state-đã-ở-bucket), mong monitor `svp-services`
@@ -454,9 +486,37 @@ Bẫy: bật Cost Explorer cũng tự cấu hình Cost Anomaly Detection (tắt 
 monitor này làm `apply` của `aws/bootstrap` lỗi `Limit exceeded on dimensional spend monitor creation` cho tới khi nhận
 quản nó: mục "Cái đã có trước khi áp" ở trên. Kiểm: chạy lại `verify.sh cost mgmt` sau 24 giờ, mong `ok    N row(s) …`.
 
+## Đồ ngoài Terraform
+
+Ba thứ `aws/org` không quản, mỗi thứ chờ một điều kiện rồi dọn tay. Lệnh đọc chỉ đọc; chỉ lệnh xoá ghi.
+
+| Thứ | Vì sao còn | Khi nào dọn | Cách |
+| --- | --- | --- | --- |
+| OU `Development`, `Production` và hai account demo cũ (`SUSPENDED`) | account đã đóng, AWS giữ 90 ngày rồi tự đưa ra khỏi tổ chức | khi hai OU rỗng | [README `aws/org`, OU ngoài Terraform](../../aws/org/README.md#ou-ngoài-terraform): liệt kê, xoá OU khi lệnh liệt kê account in rỗng |
+| SCP tạo tay từ trước khi có code | không có trong state | khi không còn gắn vào đâu | liệt kê rồi xem nơi gắn, xoá tay khi rỗng (dưới) |
+| Key `alias/svp-cloudtrail` và bucket trail cũ ở management | Object Lock 365 ngày sau lần ghi cuối | sau khi khoá hết hạn | [README `aws/org`, Gỡ bucket trail cũ](../../aws/org/README.md#gỡ-bucket-trail-cũ): kiểm hạn rồi gỡ |
+
+SCP tạo tay: liệt kê policy không do AWS quản, so với danh sách SCP trong code ở README `aws/org`; cái nào không có trong code là của
+ngoài Terraform.
+
+```sh
+AWS_PROFILE=anhnv-sso aws organizations list-policies --filter SERVICE_CONTROL_POLICY --region us-east-1 \
+  --query 'Policies[?AwsManaged==`false`].[Id,Name]' --output text
+AWS_PROFILE=anhnv-sso aws organizations list-targets-for-policy --policy-id <p-… của policy tạo tay> --region us-east-1 \
+  --query 'Targets[].[TargetId,Name]' --output text
+```
+
+Lệnh thứ hai không in dòng nào thì policy không gắn ở đâu: xoá bằng
+`AWS_PROFILE=anhnv-sso aws organizations delete-policy --policy-id <p-…> --region us-east-1`.
+Còn gắn thì đọc xem nó đang chặn gì, gỡ khỏi từng đích bằng `detach-policy` trước;
+không xoá policy đang gắn. Key và bucket trail cũ giữ tới hết Object Lock: xoá sớm (kể cả bằng cách bỏ
+qua retention) làm mất lịch sử audit còn trong hạn.
+
 ## Khi một bước đỏ
 
 - Lỗi ở `plan`: không có gì đổi trên account; đọc lỗi, sửa nguyên nhân (biến terminal, file `.auto.tfvars`, phiên SSO), chạy lại đúng bước.
-- Lỗi giữa `apply`: phần đã tạo nằm trong state; `plan` lại cùng root chỉ còn phần chưa tạo. Dán lỗi và plan mới trước khi apply lại.
-- Plan có `destroy` hay `-/+` ở tổ chức, account, bucket hay key có sẵn: dừng, không apply, dán plan.
+- Lỗi giữa `apply`: phần đã tạo nằm trong state; `plan` lại cùng root chỉ còn phần chưa tạo. Dán lỗi và plan mới trước khi apply lại;
+  `-target`, áp code của PR chưa merge: [README, Khi apply lỗi giữa chừng](../../README.md#khi-apply-lỗi-giữa-chừng). Đọc plan gọn mà
+  không để file lộ account ID: [README, Đọc plan an toàn](../../README.md#đọc-plan-an-toàn).
+- Plan có `destroy` hay `-/+` ở tổ chức, account, bucket hay key có sẵn: dừng, không apply, dán plan. `-/+` lặp lại ở mọi plan là lỗi code.
 - Mất đường vào (Identity Center hỏng, phiên SSO không đăng nhập được): [`break-glass.md`](break-glass.md).

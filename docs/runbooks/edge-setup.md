@@ -57,6 +57,9 @@ mục dưới). Gỡ DNSSEC theo mục [Tắt ký DNSSEC](#tắt-ký-dnssec).
      Mong `ok    aws/envs/<env>/<env>.auto.tfvars: hosted_zone_id from aws/accounts/<env>, domain, alarm_email; removed:
      acme_email written (N lines, mode 600)` rồi `ok    … : 3 of hosted_zone_id, domain, alarm_email`; chưa có file thì
      dòng `FAIL … stdin is not a terminal` nghĩa là chạy trong terminal thật để nhập `domain`, `alarm_email`.
+   - `domain` của `tfvars.sh env <env>` là tên hosted zone của env đó (prd: zone gốc `aws.<domain>`, stg: `stg.aws.<domain>`);
+     quy ước alias email cho `alarm_email` (`<gmail>+svp-<env>-alarms@gmail.com`) ở
+     [`org-security-setup.md`](org-security-setup.md#điền-giá-trị-lần-đầu).
    - `aws/accounts/prd/prd.auto.tfvars`: thêm trong editor một dòng `alarm_email = "<email>"` (hộp thư của topic `svp-prd-dns-alarms`; giá
      trị cá nhân giữ tay, dạng ở `prd.auto.tfvars.example`; file chưa có thì `aws/scripts/tfvars.sh example aws/accounts/prd` chép nó), rồi
      `grep -c '^alarm_email ' aws/accounts/prd/prd.auto.tfvars` in `1`.
@@ -403,6 +406,7 @@ còn trong state: plan lỗi ở `prevent_destroy`.
 ## Khi một bước đỏ
 
 - Lỗi ở `plan`: không gì đổi trên account; sửa nguyên nhân (biến terminal, `.auto.tfvars`, phiên SSO), chạy lại đúng bước.
-- Lỗi giữa `apply`: phần đã tạo nằm trong state; `plan` lại chỉ còn phần chưa tạo. Dán lỗi và plan mới trước khi apply lại.
-- Plan có `destroy` hay `-/+` ở zone, bucket, key có sẵn: dừng, không apply, dán plan.
+- Lỗi giữa `apply`: phần đã tạo nằm trong state; `plan` lại chỉ còn phần chưa tạo. Dán lỗi và plan mới trước khi apply lại;
+  `-target`: [README, Khi apply lỗi giữa chừng](../../README.md#khi-apply-lỗi-giữa-chừng).
+- Plan có `destroy` hay `-/+` ở zone, bucket, key có sẵn: dừng, không apply, dán plan. `-/+` lặp lại ở mọi plan là lỗi code.
 - `SERVFAIL` ở zone prd hay stg sau bước (3): [đường lui](#đường-lui) ngay, rồi dán output của `verify.sh dnssec`.
