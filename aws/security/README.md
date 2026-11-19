@@ -105,6 +105,9 @@ flowchart LR
 - Rule `svp-security-*` ở mỗi account chọn sự kiện (đăng nhập root, đổi policy của Organizations, trail, dịch vụ phát hiện, lệnh bị guardrail
   từ chối, đổi quản trị) và chuyển sang bus `svp-security-events`. Rule `svp-security-notify` khớp mọi sự kiện trên bus (`source` có tiền tố
   rỗng), vì việc chọn đã làm ở rule nguồn.
+- Rule đổi quản trị `svp-security-admin-*` bỏ phiên Terraform `OrganizationAccountAccessRole/svp-terraform` của account, nên apply của root
+  qua role không gửi email đổi quản trị; apply bằng phiên SSO ở management vẫn gửi. Lý do và giới hạn ở
+  [module `security-baseline`](../modules/security-baseline/README.md#rule-theo-input).
 - Rule `svp-security-findings` trên bus mặc định của region aggregator chỉ khớp finding `Severity.Label` `HIGH` hay `CRITICAL`, `RecordState`
   `ACTIVE`, `Workflow.Status` `NEW`, `ProductName` `GuardDuty` hay `IAM Access Analyzer`. Finding control FSBP, CIS và finding Inspector không
   gửi email: đọc trên bảng Security Hub theo runbook.

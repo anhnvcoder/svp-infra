@@ -61,6 +61,21 @@ hai region này.
   ([sự kiện quản lý của CloudTrail](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-service-event-cloudtrail-management.html)).
 - `admin_events` chỉ bật ở account ít đổi IAM, KMS, S3 (management, `svp-log-archive`, `svp-security`): mỗi buổi stg, prd tạo và xoá hàng chục
   role, key, bucket.
+- Ba rule `svp-security-admin-*` bỏ phiên Terraform của account: sự kiện có `userIdentity.arn` là
+  `arn:<partition>:sts::<account>:assumed-role/OrganizationAccountAccessRole/svp-terraform` không khớp (`anything-but`); sự kiện không có
+  `arn` (lời gọi của dịch vụ AWS) vẫn khớp qua nhánh `exists` `false` của `$or`
+  ([toán tử của event pattern](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-create-pattern-operators.html)). Cảnh báo đổi
+  quản trị nhắm thay đổi đi ngoài pipeline IaC; thay đổi của chính pipeline đã được đọc ở plan trước apply. Mọi root qua role
+  (`aws/log-archive`, `aws/security`, `aws/baseline`, `aws/backup`, provider `log_archive` của `aws/org`) assume role với `session_name`
+  `svp-terraform`, nên apply của chúng không gửi email đổi quản trị từ `svp-log-archive`, `svp-security`, `svp-backup`.
+- Tên phiên do người gọi đặt: principal nào assume được `OrganizationAccountAccessRole` cũng đặt được `svp-terraform`. Bộ lọc không mở
+  thêm quyền nào: role đó đã là principal duy nhất `svp-protect-baseline` cho sửa baseline của account.
+- Phiên SSO vẫn cảnh báo. Management không có `OrganizationAccountAccessRole`: root `aws/bootstrap`, `aws/org`, `github/` và provider `mgmt`
+  của `aws/baseline` chạy bằng phiên SSO của `anhnv-sso`, cũng là phiên console của người học. Event không tách được Terraform khỏi thao tác
+  tay hay người dùng phiên bị lộ (`userAgent` do client tự đặt), nên apply ở management vẫn gửi email `admin-iam`, `admin-kms-s3`,
+  `admin-sso`. Phiên `SvpAdmin` chỉ có ở stg, prd, nơi không có rule `admin-*`.
+- Các rule còn lại không lọc phiên: thay đổi trail, rule cảnh báo, dịch vụ phát hiện, root, Organizations và lệnh bị guardrail từ chối là
+  việc không ai được làm ngoài lúc apply đã đọc plan, kể cả pipeline.
 - Pattern viết bằng `jsonencode`; mỗi pattern tối đa 2 048 ký tự ([EventBridge quotas](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-quota.html)),
   test kiểm cỡ.
 - Tên rule và role bắt đầu `svp-security-` vì `svp-protect-baseline` chặn mọi principal trừ `OrganizationAccountAccessRole` sửa rule, role theo
@@ -78,11 +93,14 @@ hai region này.
   - apply đầu tiên: `svp-security-detection` báo `PutConfigurationRecorder`, `PutDeliveryChannel` thành công;
   - apply đầu tiên và mỗi lần đổi pattern hay đích: `svp-security-alert-rules` báo mỗi `PutRule`, `PutTargets` thành công trên rule
     `svp-security-*` chạy sau khi chính nó đã có hiệu lực, một email mỗi lời gọi.
+  - apply đổi IAM, KMS hay S3 của management (provider `mgmt`, phiên SSO): `svp-security-admin-*` báo từng lệnh; account thành viên thì
+    không, vì apply qua phiên `svp-terraform`.
 
 Test (`make test DIRS=aws/modules/security-baseline`, provider giả): bốn cờ BPA, EBS mã hoá ở hai region, recorder `CONTINUOUS` với loại toàn cục
 chỉ ở region nhà, delivery channel đúng bucket và key, tập rule của account thành viên, của management và của `admin_events`, region và đích của
-từng rule, nội dung các pattern, role chuyển sự kiện; số tài nguyên Config mỗi region và các tài nguyên giữ ở cả hai giá trị của
-`config_recording`; mỗi luật validation và precondition một plan.
+từng rule, nội dung các pattern, ba rule `admin-*` bỏ đúng phiên `svp-terraform` của account và rule khác không lọc phiên, role chuyển sự
+kiện; số tài nguyên Config mỗi region và các tài nguyên giữ ở cả hai giá trị của `config_recording`; mỗi luật validation và precondition một
+plan.
 
 <!-- markdownlint-disable MD033 -->
 <!-- BEGIN_TF_DOCS -->
