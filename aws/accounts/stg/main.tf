@@ -72,6 +72,13 @@ module "ci_plan_role" {
   state_kms_key_arn = module.baseline.state_kms_key_arn
 }
 
+# Karpenter launches the Spot nodes of stg through CreateFleet, which needs this role to exist already: EC2 creates it
+# on first use from the console only ("Service-linked role for Spot Instance requests", EC2 User Guide, read
+# 2026-11-19), and the Karpenter controller may not create it. Design notes: aws/accounts/README.md.
+resource "aws_iam_service_linked_role" "spot" {
+  aws_service_name = "spot.amazonaws.com"
+}
+
 module "observability" {
   source = "../../modules/observability"
 
