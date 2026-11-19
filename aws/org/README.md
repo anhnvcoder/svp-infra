@@ -24,6 +24,7 @@ trung, permission set, liên hệ), [ADR-0060](https://github.com/anhnvcoder/svp
 | Cross-account backup (`aws_backup_global_settings`) | `backup.tf` | `isCrossAccountBackupEnabled`: chỉ management bật được, có hiệu lực cho mọi account thành viên; account env copy recovery point sang vault của `svp-backup`. `isMpaEnabled`, `isDelegatedAdministratorEnabled` ghi rõ `false` |
 | Opt-in loại tài nguyên của management (`aws_backup_region_settings`, `ap-southeast-1`) | `backup.tf` | plan của Backup policy chạy theo opt-in của management, không theo opt-in của account thành viên; xem mục [Backup](#backup) |
 | Delegated admin `svp-security` | `delegated-admins.tf` | GuardDuty (`ap-southeast-1`, `us-east-1`), Security Hub CSPM (region nhà, cấu hình tập trung), Amazon Inspector (`ap-southeast-1`, nơi có registry ECR), Config (`config`, `config-multiaccountsetup`), IAM Access Analyzer; dịch vụ cấu hình ở [`aws/security`](../security/README.md) |
+| Role `AWSServiceRoleForAccessAnalyzer` | `delegated-admins.tf` | analyzer tổ chức cần nó ở management: [Access Analyzer](#access-analyzer) |
 | Root tập trung (`aws_iam_organizations_features`) | `root-access.tf` | `RootCredentialsManagement`, `RootSessions`: account thành viên không giữ credential root; việc chỉ root làm đi qua `sts:AssumeRoot` từ management |
 | Liên hệ `SECURITY` của sáu account | `contacts.tf` | AWS báo sự cố bảo mật tới người phụ trách, không chỉ email root (CIS AWS Foundations v5.0.0, 1.2); giá trị ở biến `security_contact` |
 | Permission set `SvpAdmin`, `SvpReadOnly`, `SvpLogReader` | `identity-center.tf` | xem mục [Permission set](#permission-set) |
@@ -56,6 +57,19 @@ quét malware EC2 ở account thành viên
 | `iam.amazonaws.com` | root tập trung |
 | `backup.amazonaws.com` | Backup policy `svp-backup-prd`, `svp-backup-stg` (đòi trusted access cùng policy type `BACKUP_POLICY`) |
 | `ec2.amazonaws.com` | declarative policy EC2 `svp-ec2-baseline`: tài liệu EC2 đòi bật cùng policy type; console bật nó khi mở trang EC2 policy, nên thiếu ở đây thì apply kế tiếp tắt và plan không bao giờ sạch ([Getting started with EC2 policies](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies-ec2_getting-started.html), đọc 2026-11-12) |
+
+### Access Analyzer
+
+`svp-security` tạo analyzer loại `ORGANIZATION` ở `aws/security`. `CreateAnalyzer` từ delegated admin cần service-linked role
+`AWSServiceRoleForAccessAnalyzer` ở management account; thiếu nó thì lỗi `ConflictException: Access Analyzer Service Linked Role is not in
+the organizational management account`. Access Analyzer tự tạo role ở account bật nó (console, hay analyzer tạo trong chính account đó);
+analyzer tạo từ `svp-security` không tạo role ở management. Vì thế root này tạo nó bằng `aws_iam_service_linked_role` với tên dịch vụ
+`access-analyzer.amazonaws.com`. IAM là dịch vụ toàn cục: một role dùng cho mọi region.
+Nguồn (đọc 2026-11-19):
+[Access Analyzer: service-linked role](https://docs.aws.amazon.com/IAM/latest/UserGuide/access-analyzer-using-service-linked-roles.html)
+(tên dịch vụ, một role cho mọi region, xoá được chỉ khi tổ chức không còn analyzer nào);
+[Cloud Posse: `aws-access-analyzer`](https://docs.cloudposse.com/components/library/aws/access-analyzer/) (role ở management là điều kiện
+để delegated admin tạo analyzer tổ chức). Root này áp trước `aws/security`.
 
 ### Permission set
 
@@ -239,10 +253,11 @@ Sau khi `aws/log-archive` đã apply (key `alias/svp-log-archive` và bucket `sv
 AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform plan -out=org.tfplan
 ```
 
-Mong đợi `Plan: 50 to add, 2 to change, 3 to destroy`:
+Mong đợi `Plan: 51 to add, 2 to change, 3 to destroy`:
 
 - thêm: account `svp-backup` (`parent_id` là OU `Security`), delegated admin (2 GuardDuty, 1 Security Hub, 1 Inspector, 3 qua
-  Organizations), `aws_iam_organizations_features.root_access`, 6 liên hệ `SECURITY`, permission set `SvpReadOnly`, `SvpLogReader` với
+  Organizations), `aws_iam_service_linked_role.access_analyzer`, `aws_iam_organizations_features.root_access`,
+  6 liên hệ `SECURITY`, permission set `SvpReadOnly`, `SvpLogReader` với
   policy và gán (12, trong đó gán `read_only["backup"]`), hai nhóm nền tảng, `aws_backup_global_settings.this`,
   `aws_backup_region_settings.this`, policy mới của `module.org_policies` và đích của chúng (16, trong đó `backup-prd`, `backup-stg`);
 - đổi tại chỗ: `aws_ssoadmin_permission_set.admin` (chỉ `session_duration` `PT4H` → `PT1H`); `aws_cloudtrail.audit` (`s3_bucket_name` sang
@@ -284,6 +299,22 @@ Mong đợi `Plan: 3 to add, 1 to change, 0 to destroy`:
 
 Dừng (không apply, dán plan lại) nếu có `destroy`, `-/+` hay thay đổi nào khác. Sau apply, Inspector tự bật mọi loại quét ở `svp-security`;
 `aws/security` thu về chỉ ECR. Plan lần hai phải là `No changes.`; rồi ghi id nhóm theo mục [Nhóm nền tảng](#nhóm-nền-tảng).
+
+### Thêm service-linked role Access Analyzer vào tổ chức đã áp
+
+Khi bước (4) đã chạy trước khi root có role (mục [Access Analyzer](#access-analyzer)), apply root này trước
+[`aws/security`](../security/README.md), cùng lệnh `plan`, `apply` của bước (4).
+
+Mong đợi `Plan: 1 to add, 0 to change, 0 to destroy`: thêm `aws_iam_service_linked_role.access_analyzer`. Dừng (không apply, dán plan lại)
+nếu có thay đổi nào khác. Apply lỗi `Service role name AWSServiceRoleForAccessAnalyzer has been taken in this account` là role đã có (ai đó
+mở Access Analyzer trên console của management): đưa nó vào state thay vì tạo.
+
+```sh
+AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform import aws_iam_service_linked_role.access_analyzer \
+  "arn:aws:iam::$SVP_AWS_MGMT_ACCOUNT_ID:role/aws-service-role/access-analyzer.amazonaws.com/AWSServiceRoleForAccessAnalyzer"
+```
+
+Sau đó plan lần hai phải là `No changes.`; rồi apply lại `aws/security`.
 
 ### Thêm account backup và Backup policy vào tổ chức đã áp
 
@@ -507,14 +538,15 @@ và bước 2 theo [mục gỡ của root đó](../log-archive/README.md#gỡ-c�
 
    `Account` phải bằng `$SVP_AWS_MGMT_ACCOUNT_ID` (management account), `Arn` là role SSO của người học. Khác thì dừng, không chạy bước nào dưới đây.
 
-1. **Tắt trail, bỏ delegated admin, root tập trung, liên hệ, quyền SSO, nhóm nền tảng** (không tài nguyên nào trong số này có
-   `prevent_destroy`; log đã ghi vẫn còn):
+1. **Tắt trail, bỏ delegated admin, role Access Analyzer, root tập trung, liên hệ, quyền SSO, nhóm nền tảng** (không tài nguyên
+   nào trong số này có `prevent_destroy`; log đã ghi vẫn còn):
 
    ```sh
    AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform apply -destroy -target=aws_cloudtrail.audit \
      -target=aws_guardduty_organization_admin_account.security -target=aws_securityhub_organization_admin_account.security \
      -target=aws_inspector2_delegated_admin_account.security \
-     -target=aws_organizations_delegated_administrator.security -target=aws_iam_organizations_features.root_access \
+     -target=aws_organizations_delegated_administrator.security -target=aws_iam_service_linked_role.access_analyzer \
+     -target=aws_iam_organizations_features.root_access \
      -target=aws_account_alternate_contact.security \
      -target=aws_ssoadmin_account_assignment.learner -target=aws_ssoadmin_managed_policy_attachment.admin -target=aws_ssoadmin_permission_set.admin \
      -target=aws_ssoadmin_account_assignment.read_only -target=aws_ssoadmin_managed_policy_attachment.read_only \

@@ -96,7 +96,7 @@ locals {
       object_lock     = false
       retention_days  = local.network_retention_days
       cold_after_days = null
-      stg_prefix      = "AWSLogs/${var.stg_account_id}/"
+      stg_prefix      = "${var.stg_account_id}/"
     }
   }
 

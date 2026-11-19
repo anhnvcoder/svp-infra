@@ -7,8 +7,9 @@
 # session-test runs on the host. Docker runs with DOCKER_DEFAULT_PLATFORM unset: the dev machine's shell sets it to
 # linux/amd64 for another project, which would run these images under emulation.
 
-# Parallel runs: `make check DIRS=<dir>` writes only below <dir> (.terraform/tflint.d and the .terraform.lock.hcl of a
-# module), so two runs on two different directories never write the same file.
+# Parallel runs: `make check DIRS=<dir>` writes below <dir> only the .terraform.lock.hcl of a module, and the plugin
+# cache that every run shares only gains the versions it lacks, one writer at a time (CACHE_LOCK), so runs on two
+# different directories can go side by side.
 # Design notes: README.md.
 
 # renovate: datasource=docker depName=hashicorp/terraform
@@ -39,6 +40,9 @@ LYCHEE_IMAGE     := lycheeverse/lychee:0.24.2@sha256:e2d19e57cf6ab037026f20b8e44
 # The CI tag of the Infracost CLI: the CLI with bash, git and jq beside it, published for linux/amd64 alone.
 # renovate: datasource=docker depName=infracost/infracost
 INFRACOST_IMAGE  := infracost/infracost:ci-0.10.49@sha256:78ce091ec7324caa46b8fbc15d7053ea27f4e383c3258779a4746fd5411ed6a1
+# Same version as GITLEAKS_VERSION of the code repository's Makefile, which installs it with go install.
+# renovate: datasource=docker depName=ghcr.io/gitleaks/gitleaks
+GITLEAKS_IMAGE   := ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
 
 # Platforms whose provider hashes `make lock` writes into the lock file of a root: the Mac that runs plan and apply,
 # and the two Linux architectures of CI and of the images.
@@ -56,9 +60,28 @@ TF = $(TF_RUN) $(TERRAFORM_IMAGE)
 # init, validate and providers lock keep their working data (providers, modules) in a temporary directory of the host,
 # $$data, through TF_DATA_DIR: <dir>/.terraform/terraform.tfstate of a root the learner initialised with its S3 backend
 # would otherwise make `init -backend=false` configure that backend and ask for AWS credentials.
-TF_DATA = $(TF_RUN) -e TF_DATA_DIR=/tfdata -v "$$data:/tfdata" $(TERRAFORM_IMAGE)
+TF_DATA = $(TF_RUN) -e TF_DATA_DIR=/tfdata -v "$$data:/tfdata" $(TF_CACHE) $(TERRAFORM_IMAGE)
 # Starts each loop turn with an empty $$data; the trap removes the last one however the recipe ends.
 NEW_DATA = rm -rf "$$data"; data=$$(mktemp -d) || exit 1
+
+# One copy of each plugin version for every directory, gitignored and kept until removed (rm -rf .plugin-cache, plus the
+# module lock files aws/modules/**/.terraform.lock.hcl that recorded its hashes); the AWS provider unpacks to hundreds
+# of MB. init links $$data/providers to /plugin-cache, so every container that runs Terraform after it mounts the cache.
+PLUGIN_CACHE := .plugin-cache
+# With no lock file entry (a module's lock file is not committed), init would download again and unpack over the cached
+# copy another run may be executing; MAY_BREAK links that copy instead. The hashes of a root's lock file are still
+# checked, and make lock still writes them for every LOCK_PLATFORMS.
+TF_CACHE = -e TF_PLUGIN_CACHE_DIR=/plugin-cache -e TF_PLUGIN_CACHE_MAY_BREAK_DEPENDENCY_LOCK_FILE=1 \
+	-v "$(CURDIR)/$(PLUGIN_CACHE)/terraform:/plugin-cache"
+# Neither Terraform nor tflint guards its cache against a second writer: an init waits for the lock directory (mkdir
+# is atomic and needs no flock, which macOS lacks). The recipe's EXIT trap runs CACHE_UNLOCKED when the init fails.
+CACHE_LOCK = mkdir -p "$(PLUGIN_CACHE)/terraform" "$(PLUGIN_CACHE)/tflint" || exit 1; n=0; \
+	until mkdir "$(PLUGIN_CACHE)/lock" 2>/dev/null; do \
+	  n=$$((n + 1)); [ $$n -lt 600 ] || { echo "FAIL: $(PLUGIN_CACHE)/lock held for 10 minutes; remove it if no make runs" >&2; exit 1; }; \
+	  sleep 1; \
+	done; locked=1
+CACHE_UNLOCK = rmdir "$(PLUGIN_CACHE)/lock"; locked=
+CACHE_UNLOCKED = [ -z "$$locked" ] || rmdir "$(PLUGIN_CACHE)/lock"
 
 # Prints the directories to check, one per line, or stops with the first DIRS entry that is not a Terraform directory
 # of this repository.
@@ -77,14 +100,65 @@ IS_MODULE = case "/$$d/" in (*/modules/*) true;; (*) false;; esac
 
 .DEFAULT_GOAL := help
 
-.PHONY: help check fmt-check fmt validate tflint tfdocs tfdocs-check trivy shellcheck zizmor docs-check session-test test-guard test lock \
+.PHONY: help check check-terraform check-lint check-test check-scripts hooks pre-commit \
+	fmt-check fmt validate tflint tfdocs tfdocs-check trivy shellcheck zizmor docs-check session-test test-guard test lock \
 	github-app-test github-check github-app github-app-key github-settings github-secrets infracost-key github-tfvars \
 	github-plan github-apply ci-plan ci-plan-test infracost infracost-comment infracost-test
 
 help: ## List the targets
-	@grep -hE '^[a-zA-Z0-9_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-11s %s\n", $$1, $$2}'
+	@grep -hE '^[a-zA-Z0-9_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-15s %s\n", $$1, $$2}'
 
-check: fmt-check validate tflint tfdocs-check trivy shellcheck zizmor docs-check session-test test-guard test github-app-test ci-plan-test infracost-test ## Every static check (narrow the Terraform ones with DIRS=<dir> ...)
+check: check-terraform check-lint check-test check-scripts docs-check ## Every static check (narrow the Terraform ones with DIRS=<dir> ...)
+
+# Each check-* group is one job of .github/workflows/check.yml, and docs-check is its job docs: a target added to a
+# group runs in CI with no change to the workflow. The groups are split by the time they take in CI.
+check-terraform: fmt-check validate tfdocs-check ## terraform fmt -check, init and validate, terraform-docs --output-check
+check-lint: tflint trivy ## tflint and trivy config
+check-test: test-guard test ## terraform test of the modules, and the self-test of its rules
+check-scripts: shellcheck zizmor session-test github-app-test ci-plan-test infracost-test ## Scripts and workflows: lint and self-tests
+
+# The pre-commit hook of `make hooks` runs make pre-commit; a hook already there that is not this one is left alone.
+# git rev-parse --git-path resolves the hooks directory of a worktree and core.hooksPath. Every worktree of the clone
+# shares the hook, so on a branch whose Makefile has no pre-commit target it lets the commit through with a note.
+hooks: ## Install the pre-commit hook that runs make pre-commit (once per clone)
+	@hook=$$(git rev-parse --git-path hooks/pre-commit) || exit 1; \
+	want='#!/bin/sh\n# Installed by make hooks of svp-infra.\n'; \
+	want="$$want"'grep -q "^pre-commit:" Makefile 2>/dev/null || { echo "pre-commit hook: no make pre-commit on this branch, nothing checked" >&2; exit 0; }\n'; \
+	want="$$want"'exec make --no-print-directory pre-commit\n'; \
+	if [ -e "$$hook" ] && [ "$$(cat "$$hook")" != "$$(printf "$$want")" ]; then \
+	  echo "FAIL: $$hook exists and is not the hook of make hooks; move it away first" >&2; exit 1; \
+	fi; \
+	mkdir -p "$$(dirname "$$hook")" && printf "$$want" > "$$hook" && chmod +x "$$hook" && echo "hooks: $$hook runs make pre-commit"
+
+# The staged version of each file, not the working tree's, is copied to a temporary directory and checked there, so a
+# change left unstaged neither hides nor causes a failure (-f: .markdownlint.yaml may be one of the files). gitleaks
+# reads only the lines the commit adds, as the code repository's hook does: committed test fixtures hold fake keys.
+# validate, tflint, trivy and test stay in CI. FILES='<file> ...' checks those working tree files, whole, unstaged.
+pre-commit: ## Fast checks of the staged files (or FILES='<file> ...'): terraform fmt, markdownlint, shellcheck, gitleaks
+	@tmp=$$(mktemp -d) || exit 1; trap 'rm -rf "$$tmp"' EXIT; \
+	if [ -n "$${FILES:-}" ]; then \
+	  files=$$FILES; \
+	  for f in .markdownlint.yaml $$files; do mkdir -p "$$tmp/$$(dirname "$$f")" && cp "$$f" "$$tmp/$$f" || exit 1; done; \
+	  added() { (cd "$$tmp" && cat $$files); }; \
+	else \
+	  files=$$(git diff --cached --name-only --diff-filter=ACMR) || exit 1; \
+	  [ -n "$$files" ] || exit 0; \
+	  git checkout-index -f --prefix="$$tmp/" -- .markdownlint.yaml $$files || exit 1; \
+	  added() { git diff --cached --no-color --no-ext-diff -U0 --diff-filter=ACMR | grep '^+' | grep -v '^+++ '; }; \
+	fi; \
+	tf=$$(printf '%s\n' $$files | grep -E '\.(tf|tfvars|tftest\.hcl)$$'); \
+	md=$$(printf '%s\n' $$files | grep '\.md$$' | grep -v '^\.claude/'); \
+	sh=$$(printf '%s\n' $$files | grep '\.sh$$'); \
+	rc=0; \
+	[ -z "$$tf" ] || $(DOCKER) --network none -v "$$tmp:/src:ro" -w /src $(TERRAFORM_IMAGE) fmt -check -diff $$tf \
+	  || { echo "FAIL: terraform fmt (run make fmt, then stage the result)" >&2; rc=1; }; \
+	[ -z "$$md" ] || $(DOCKER) --network none -v "$$tmp:/repo:ro" -w /repo $(MARKDOWNLINT_IMAGE) $$md \
+	  || { echo "FAIL: markdownlint" >&2; rc=1; }; \
+	[ -z "$$sh" ] || env -u DOCKER_DEFAULT_PLATFORM docker run --rm --network none -v "$$tmp:/mnt:ro" -w /mnt $(SHELLCHECK_IMAGE) $$sh \
+	  || { echo "FAIL: shellcheck" >&2; rc=1; }; \
+	added | $(DOCKER) -i --network none $(GITLEAKS_IMAGE) stdin --redact --verbose --no-banner --no-color --log-level warn \
+	  || { echo "FAIL: gitleaks found a secret in the lines checked (staged: git diff --cached shows them)" >&2; rc=1; }; \
+	exit $$rc
 
 fmt-check: ## terraform fmt -check on the checked directories
 	@dirs=$$($(LIST_DIRS)) || exit 1; [ -n "$$dirs" ] || { echo "fmt-check: no Terraform directory"; exit 0; }; \
@@ -98,7 +172,7 @@ fmt: ## terraform fmt, rewriting the files of the checked directories
 
 validate: ## terraform init -backend=false, then terraform validate, in each checked directory
 	@dirs=$$($(LIST_DIRS)) || exit 1; [ -n "$$dirs" ] || { echo "validate: no Terraform directory"; exit 0; }; \
-	data=; trap 'rm -rf "$$data"' EXIT; \
+	data=; locked=; trap 'rm -rf "$$data"; $(CACHE_UNLOCKED)' EXIT; \
 	for d in $$dirs; do \
 	  echo "validate $$d"; \
 	  $(NEW_DATA); \
@@ -107,19 +181,24 @@ validate: ## terraform init -backend=false, then terraform validate, in each che
 	    [ -f "$$d/.terraform.lock.hcl" ] || { echo "FAIL: $$d is a root without .terraform.lock.hcl (run make lock DIRS=$$d)" >&2; exit 1; }; \
 	    lock=-lockfile=readonly; \
 	  fi; \
+	  $(CACHE_LOCK); \
 	  $(TF_DATA) init -backend=false -input=false -no-color $$lock >/dev/null || { echo "FAIL: terraform init $$d" >&2; exit 1; }; \
+	  $(CACHE_UNLOCK); \
 	  $(TF_DATA) validate -no-color || { echo "FAIL: terraform validate $$d" >&2; exit 1; }; \
 	done
 
-# The AWS ruleset is downloaded from GitHub into <dir>/.terraform/tflint.d/; CI passes its token in GITHUB_TOKEN against
+# The AWS ruleset is downloaded from GitHub into the plugin cache; CI passes its token in GITHUB_TOKEN against
 # the anonymous rate limit, and only this container gets it. Local modules are inspected where they are called.
 tflint: ## tflint --init, then tflint, in each checked directory (.tflint.hcl)
 	@dirs=$$($(LIST_DIRS)) || exit 1; [ -n "$$dirs" ] || { echo "tflint: no Terraform directory"; exit 0; }; \
+	locked=; trap '$(CACHE_UNLOCKED)' EXIT; \
 	for d in $$dirs; do \
 	  echo "tflint $$d"; \
-	  set -- $(DOCKER) -e GITHUB_TOKEN -e "TFLINT_PLUGIN_DIR=/src/$$d/.terraform/tflint.d" -v "$(CURDIR):/src" -w "/src/$$d" \
+	  set -- $(DOCKER) -e GITHUB_TOKEN -e "TFLINT_PLUGIN_DIR=/src/$(PLUGIN_CACHE)/tflint" -v "$(CURDIR):/src" -w "/src/$$d" \
 	    $(TFLINT_IMAGE) --config=/src/.tflint.hcl; \
+	  $(CACHE_LOCK); \
 	  "$$@" --init >/dev/null || { echo "FAIL: tflint --init $$d" >&2; exit 1; }; \
+	  $(CACHE_UNLOCK); \
 	  "$$@" --format=compact || { echo "FAIL: tflint $$d" >&2; exit 1; }; \
 	done
 
@@ -268,8 +347,8 @@ infracost-test: ## Self-test of ci/infracost.sh with a fake docker (no container
 # test file only in a fixed layout.
 
 # No credential: env(1) drops every AWS_* variable of the caller before docker starts, no -e passes one, HOME is /tmp
-# of the container, and only the module directory is mounted (read-only for the test), never ~/.aws, the repository
-# root or an env directory. A module directory holding .envrc or backend.hcl is refused.
+# of the container, and only the module directory and the provider cache are mounted (both read-only for the test),
+# never ~/.aws, the repository root or an env directory. A module directory holding .envrc or backend.hcl is refused.
 
 # TEST_GUARD refuses anything outside the layout, naming the file and the line, rather than looking for known ways to
 # break the rule (a run without command applies; a mock under an alias leaves the real provider as the default).
@@ -306,14 +385,16 @@ TEST_GUARD = \
 
 test: ## terraform test of each checked module: mock AWS provider, plan only, no network, no credential
 	@dirs=$$($(LIST_DIRS)) || exit 1; [ -n "$$dirs" ] || { echo "test: no Terraform directory"; exit 0; }; \
-	data=; trap 'rm -rf "$$data"' EXIT; \
+	data=; locked=; trap 'rm -rf "$$data"; $(CACHE_UNLOCKED)' EXIT; \
 	for d in $$dirs; do \
 	  $(IS_MODULE) || continue; \
 	  echo "test $$d"; \
 	  $(TEST_GUARD); \
 	  $(NEW_DATA); \
-	  $(TEST_RUN) -v "$(CURDIR)/$$d:/src" -w /src $(TERRAFORM_IMAGE) init -backend=false -input=false -no-color >/dev/null || { echo "FAIL: terraform init $$d" >&2; exit 1; }; \
-	  $(TEST_RUN) --network none -v "$(CURDIR)/$$d:/src:ro" -w /src $(TERRAFORM_IMAGE) test -no-color || { echo "FAIL: terraform test $$d" >&2; exit 1; }; \
+	  $(CACHE_LOCK); \
+	  $(TEST_RUN) $(TF_CACHE) -v "$(CURDIR)/$$d:/src" -w /src $(TERRAFORM_IMAGE) init -backend=false -input=false -no-color >/dev/null || { echo "FAIL: terraform init $$d" >&2; exit 1; }; \
+	  $(CACHE_UNLOCK); \
+	  $(TEST_RUN) --network none -v "$(CURDIR)/$(PLUGIN_CACHE)/terraform:/plugin-cache:ro" -v "$(CURDIR)/$$d:/src:ro" -w /src $(TERRAFORM_IMAGE) test -no-color || { echo "FAIL: terraform test $$d" >&2; exit 1; }; \
 	done
 
 test-guard: ## Self-test of the rules of make test, with a fake docker (no container, network or credential)
@@ -373,16 +454,26 @@ test-guard: ## Self-test of the rules of make test, with a fake docker (no conta
 	! grep -E -q 'AWS_|/\.aws|\.envrc|backend\.hcl' "$$tmp/log" || fail "an AWS credential or env file reaches the container: $$(cat "$$tmp/log")"; \
 	line=$$(grep ' test -no-color$$' "$$tmp/log") || fail "no terraform test run: $$(cat "$$tmp/log")"; \
 	case "$$line" in (*" --network none "*) ;; (*) fail "terraform test runs with network: $$line";; esac; \
+	mounts=$$(echo "$$line" | awk '{ for (i = 1; i <= NF; i++) \
+	  if ($$i == "-v") print $$(++i); else if ($$i ~ /^(-v.|--volume|--mount)/) print $$i }'); \
+	data=$$(echo "$$mounts" | sed -n 's|^\(/[^:]*\):/tfdata$$|\1|p'); \
+	[ -n "$$data" ] && [ ! -e "$$data" ] && case "$$data" in (*/..*) false;; esac \
+	  || fail "terraform test mounts at /tfdata what make test does not remove: $$line"; \
+	mounts=$$(echo "$$mounts" | sed 's|^/[^:]*:/tfdata$$|DATA|' | sort | tr '\n' ' '); \
+	want=$$(printf '%s\n' DATA "$(CURDIR)/$(PLUGIN_CACHE)/terraform:/plugin-cache:ro" "$(CURDIR)/aws/modules/rds:/src:ro" | sort | tr '\n' ' '); \
+	[ "$$mounts" = "$$want" ] || fail "terraform test mounts more than its data directory, the module and the provider cache (read-only): $$line"; \
 	case "$$line" in (*" $(TERRAFORM_IMAGE) "*) ;; (*) fail "terraform test does not run TERRAFORM_IMAGE: $$line";; esac; \
 	case "$(TERRAFORM_IMAGE)" in (*@sha256:*) ;; (*) fail "TERRAFORM_IMAGE is not pinned by digest";; esac
 
 lock: ## Write the lock file of each root in DIRS (default: every root) with hashes for LOCK_PLATFORMS
 	@dirs=$$($(LIST_DIRS)) || exit 1; \
-	data=; trap 'rm -rf "$$data"' EXIT; \
+	data=; locked=; trap 'rm -rf "$$data"; $(CACHE_UNLOCKED)' EXIT; \
 	for d in $$dirs; do \
 	  if $(IS_MODULE); then echo "lock: $$d is a module, its lock file is not committed; skipped"; continue; fi; \
 	  echo "lock $$d"; \
 	  $(NEW_DATA); \
+	  $(CACHE_LOCK); \
 	  $(TF_DATA) init -backend=false -input=false -no-color >/dev/null || { echo "FAIL: terraform init $$d" >&2; exit 1; }; \
+	  $(CACHE_UNLOCK); \
 	  $(TF_DATA) providers lock -no-color $(addprefix -platform=,$(LOCK_PLATFORMS)) || { echo "FAIL: providers lock $$d" >&2; exit 1; }; \
 	done

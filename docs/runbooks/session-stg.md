@@ -1334,7 +1334,7 @@ là truy vấn hỏng, không phải kết quả rỗng: dán dòng lỗi ngay t
 
 ```sh
 L=$SVP_AWS_LOG_ACCOUNT_ID A=$SVP_AWS_STG_ACCOUNT_ID
-AWS_PROFILE=anhnv-log-ro aws s3 ls "s3://svp-cloudfront-$L-us-east-1/AWSLogs/$A/CloudFront/" --recursive --region us-east-1 |
+AWS_PROFILE=anhnv-log-ro aws s3 ls "s3://svp-cloudfront-$L-us-east-1/$A/" --recursive --region us-east-1 |
   tail -n 3 | sed "s/$A/<account>/g"
 AWS_PROFILE=anhnv-log-ro aws s3 ls "s3://aws-waf-logs-svp-$L-us-east-1/AWSLogs/$A/WAFLogs/" --recursive --region us-east-1 |
   tail -n 3 | sed "s/$A/<account>/g"

@@ -30,15 +30,19 @@ Tên bucket theo `<tiền tố>-<id account log>-<region>`; root khác suy cùng
   (SSE-KMS đòi key cùng region với bucket). Cả hai xoay khoá hằng năm, chờ xoá 30 ngày. Root khác lấy ARN `key/<id>` của key region nhà bằng data source `aws_kms_alias`.
 - **Bucket access log dùng SSE-S3, không Object Lock**: S3 không giao server access log vào bucket SSE-KMS hay có Object Lock.
 - **Mọi bucket**: chặn public, `BucketOwnerEnforced`, versioning, chỉ nhận request TLS, version cũ hết hạn sau 1 ngày.
-- **Policy theo org, không theo danh sách account**: Config, flow log, log WAF, log CloudFront qua điều kiện `aws:SourceOrgID`, nên account
-  mới của org ghi được mà không sửa policy. Log CloudFront thêm `aws:SourceArn` là delivery source ở `us-east-1`. Trail theo `aws:SourceArn` của `svp-audit`; GuardDuty theo `aws:SourceAccount` của `svp-security` và ARN
-  detector của account đó ở hai region.
+- **Policy theo org, không theo danh sách account**: Config, flow log, log WAF qua điều kiện `aws:SourceOrgID`, nên account mới của org ghi
+  được mà không sửa policy. Log CloudFront theo từng account env: mỗi account một statement chỉ cho ghi dưới tiền tố `<account env>/`, với
+  `aws:SourceAccount` là account đó và `aws:SourceArn` là delivery source của nó ở `us-east-1`. Trail theo `aws:SourceArn` của `svp-audit`;
+  GuardDuty theo `aws:SourceAccount` của `svp-security` và ARN detector của account đó ở hai region.
 - **Retention**: số ngày ở `locals` của `main.tf`, lý do ở ADR. Log của account stg trong bucket flow log, WAF và CloudFront có rule riêng
   theo tiền tố account, ngắn hơn: S3 áp hạn ngắn hơn khi hai rule chồng nhau.
 - **Delivery destination `svp-cloudfront-<env>`** (`us-east-1`, một mỗi env, Parquet): đích là bucket log CloudFront với tiền tố
-  `AWSLogs/<account env>/CloudFront`; destination policy chỉ cho account env đó `logs:CreateDelivery`. Account env tạo delivery source và
+  `<account env>`; destination policy chỉ cho account env đó `logs:CreateDelivery`. Account env tạo delivery source và
   delivery (module `edge`, `media`), suy ARN `arn:aws:logs:us-east-1:<log>:delivery-destination:svp-cloudfront-<env>` từ tên. Mỗi env
-  chỉ giao được vào tiền tố mang id account của nó.
+  chỉ giao được vào tiền tố là id account của nó. Tiền tố chỉ một đoạn: `PutDeliveryDestination` từ chối tiền tố có `/` (lỗi
+  `prefix contains characters that are not allowed`). Có tiền tố thì CloudFront không tự thêm `AWSLogs/<account>/CloudFront`, nên object
+  nằm ở `<account env>/DistributionId=<id>/year=…/month=…/day=…/hour=…/` (`suffix_path` kiểu Hive của delivery;
+  [CloudFront: Standard logging (v2)](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/standard-logging.html)).
 - **Key policy**: account quản và đọc key qua IAM (permission set `SvpLogReader` có `kms:Decrypt` qua S3); dịch vụ giao log chỉ được dùng
   key với cùng điều kiện như policy bucket.
 
@@ -96,7 +100,7 @@ AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" TF_VAR_log_ar
 Mong đợi `Plan: 59 to add, 0 to change, 0 to destroy` (root đã apply từ trước: chỉ phần chưa có, không `change` hay `destroy`). Đọc:
 hai `aws_kms_key.log`, key `waf`, mọi tài nguyên `["waf"]`, `["cloudfront"]` và hai `aws_cloudwatch_log_delivery_destination.cloudfront` có
 `region = "us-east-1"`, còn lại `ap-southeast-1`; `aws_s3_bucket_server_side_encryption_configuration.log["waf"]` và `["cloudfront"]` trỏ key
-`waf`; `destination_resource_arn` của mỗi destination kết thúc bằng `/AWSLogs/<id account env đó>/CloudFront`. Lỗi `AccessDenied` khi
+`waf`; `destination_resource_arn` của mỗi destination kết thúc bằng `/<id account env đó>`. Lỗi `AccessDenied` khi
 assume role là account chưa tạo xong hay profile sai; lỗi `account_id is not the management account` là `SVP_AWS_MGMT_ACCOUNT_ID` sai. Dừng
 và dán output nếu có dòng `change` hay `destroy`.
 

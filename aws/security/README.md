@@ -23,7 +23,7 @@ region. Region khác bị SCP `svp-deny-other-regions` chặn ở account thành
 | Tài nguyên | Region | Vì sao |
 | --- | --- | --- |
 | Cấu hình tổ chức GuardDuty (`aws_guardduty_organization_configuration`) | hai region | `auto_enable_organization_members = "ALL"`: mọi account có sẵn, account mới, cả delegated admin |
-| Sáu protection plan (`aws_guardduty_organization_configuration_feature`) | hai region | `S3_DATA_EVENTS`, `EKS_AUDIT_LOGS`, `EBS_MALWARE_PROTECTION`, `RDS_LOGIN_EVENTS`, `LAMBDA_NETWORK_LOGS`, `RUNTIME_MONITORING` đều `ALL`; ba additional configuration quản agent tự động của Runtime Monitoring (`EKS_ADDON_MANAGEMENT`, `ECS_FARGATE_AGENT_MANAGEMENT`, `EC2_AGENT_MANAGEMENT`) `NONE` |
+| Sáu protection plan (`aws_guardduty_organization_configuration_feature`) | hai region | `S3_DATA_EVENTS`, `EKS_AUDIT_LOGS`, `EBS_MALWARE_PROTECTION`, `RDS_LOGIN_EVENTS`, `LAMBDA_NETWORK_LOGS`, `RUNTIME_MONITORING` đều `ALL`; ba additional configuration quản agent tự động của Runtime Monitoring (`ECS_FARGATE_AGENT_MANAGEMENT`, `EC2_AGENT_MANAGEMENT`, `EKS_ADDON_MANAGEMENT`, theo thứ tự API trả: provider so theo vị trí, lệch là thay thế) `NONE` |
 | Publishing destination GuardDuty | hai region | finding của detector hai region vào `svp-guardduty-<log>-ap-southeast-1` của Log Archive, mã hoá bằng key Log Archive region nhà |
 | Detector GuardDuty của management, member `management` | hai region | đưa management vào tổ chức GuardDuty (mục [Management account](#management-account)) |
 | Finding aggregator Security Hub | nhà | `SPECIFIED_REGIONS` gom `us-east-1`; region nhà thành home region của cấu hình tập trung |
@@ -129,11 +129,14 @@ flowchart LR
   "Before the management account account gets added as a GuardDuty member, it must have GuardDuty enabled"). Root tạo detector ở management mỗi
   region (provider `management`), rồi `aws_guardduty_member` từ detector của `svp-security` thêm management (email đọc từ tổ chức, không lời
   mời: account của tổ chức không cần). Sau đó cấu hình tổ chức áp protection plan lên management như mọi member. Provider đọc trạng thái
-  `Enabled` của member thành `invite = true`, nên `invite` nằm trong `ignore_changes`.
+  `Enabled` của member thành `invite = true`, và API không trả email của member thuộc tổ chức, nên state không có `email`; `email` bắt buộc,
+  đổi là thay thế, nên cả `email` và `invite` nằm trong `ignore_changes` để plan sau apply không đòi thay member.
 - **Security Hub:** policy gắn root áp cho mọi account và OU của tổ chức không có policy khác
   ([Security Hub: central configuration](https://docs.aws.amazon.com/securityhub/latest/userguide/central-configuration-intro.html)), gồm
   management. Management không làm delegated admin được khi dùng cấu hình tập trung.
-- **Config, Access Analyzer:** aggregator nguồn tổ chức và analyzer loại `ORGANIZATION` phủ mọi account, kể cả management.
+- **Config, Access Analyzer:** aggregator nguồn tổ chức và analyzer loại `ORGANIZATION` phủ mọi account, kể cả management. Analyzer tổ
+  chức chỉ tạo được khi management có service-linked role `AWSServiceRoleForAccessAnalyzer`, do `aws/org` tạo
+  ([README `aws/org`, Access Analyzer](../org/README.md#access-analyzer)).
 
 ## Trạng thái chờ của Security Hub
 
@@ -181,9 +184,9 @@ Security Hub dùng thử. Inspector tính theo image quét ở registry của ac
 `docs/runbooks/org-security-setup.md`. Cần trước:
 
 - Bước (3): `aws/log-archive` đã apply (bucket `svp-guardduty-…`, key `alias/svp-log-archive` với key policy cho GuardDuty của `svp-security`).
-- Bước (4): `aws/org` đã apply đủ: trusted access và `svp-security` là delegated admin của GuardDuty (hai region), Security Hub, Inspector,
-  Config, Access Analyzer. Thiếu bước này thì plan dừng ở data source `aws_guardduty_detector` (không có detector) hay apply lỗi quyền delegated
-  admin.
+- Bước (4): `aws/org` đã apply đủ: trusted access, `svp-security` là delegated admin của GuardDuty (hai region), Security Hub, Inspector,
+  Config, Access Analyzer, và service-linked role `AWSServiceRoleForAccessAnalyzer` ở management. Thiếu bước này thì plan dừng ở data source
+  `aws_guardduty_detector` (không có detector) hay apply lỗi quyền delegated admin.
 - Biến terminal `SVP_AWS_MGMT_ACCOUNT_ID` (gõ tay) và `SVP_AWS_SECURITY_ACCOUNT_ID`, `SVP_AWS_LOG_ACCOUNT_ID`. Lần dựng đầu,
   chưa có `svp-backup`: hai biến sau là hai dòng `export` từ `terraform output` của
   [`aws/org`, Bước (2)](../org/README.md#bước-2-tổ-chức-ou-account), `SVP_AWS_STG_ACCOUNT_ID`, `SVP_AWS_PRD_ACCOUNT_ID` (bước 6
@@ -250,7 +253,10 @@ rm security.tfplan
 ```
 
 Bật cấu hình tập trung và gắn policy có thể mất vài phút. Lỗi `DataUnavailableException` (dữ liệu tổ chức còn đồng bộ sau bước 4): đợi vài phút
-rồi chạy lại plan và apply.
+rồi chạy lại plan và apply. Lỗi `ConflictException: Access Analyzer Service Linked Role is not in the organizational management account` ở
+`aws_accessanalyzer_analyzer.org`: management chưa có role; apply `aws/org` theo mục
+[Thêm service-linked role Access Analyzer](../org/README.md#thêm-service-linked-role-access-analyzer-vào-tổ-chức-đã-áp),
+rồi plan và apply lại root này (plan chỉ còn hai analyzer và phần chưa tạo).
 
 ### 5. Xác nhận email SNS
 

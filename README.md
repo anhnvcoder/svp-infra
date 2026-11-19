@@ -42,6 +42,7 @@ Terraform 1.15 (Homebrew) và AWS CLI v2 với một profile SSO mỗi account (
 ```sh
 make check                            # mọi phép kiểm tĩnh, không chạm account
 make check DIRS=aws/modules/network   # chỉ các phép Terraform của một thư mục
+make hooks                            # bật hook pre-commit (một lần mỗi clone)
 make help                             # liệt kê target
 ```
 
@@ -92,7 +93,7 @@ lychee.toml                   cấu hình lychee của make docs-check (cùng fi
 .tflint.hcl                   ruleset terraform (recommended) và aws ghim version
 .trivyignore.yaml             ngoại lệ của trivy trong module tải từ registry
 renovate.json                 provider, module, ruleset tflint, image ghim của Makefile, action
-.github/workflows/check.yml   PR và push main: make check (bỏ qua khi PR chỉ tài liệu), docs-check; check tổng infra-ok; không secret
+.github/workflows/check.yml   PR và push main: mỗi nhóm check-* một job song song (bỏ qua khi PR chỉ tài liệu), docs-check; infra-ok
 .github/workflows/plan.yml    PR đổi aws/, ci/, Makefile: terraform plan bằng role chỉ đọc qua OIDC, comment tóm tắt đã che (mục Plan trên PR)
 .github/workflows/cost.yml    PR đổi aws/, ci/, Makefile, infracost*.yml: chi phí tháng của HCL ở base và ở PR qua Infracost, comment diff (mục Chi phí trên PR)
 .github/workflows/pr-title.yml  PR: tiêu đề theo Conventional Commits (check pr-title)
@@ -156,6 +157,8 @@ Chạy từ gốc repo, không cần credential AWS, cần Docker và mạng (re
 | Lệnh | Làm gì |
 | --- | --- |
 | `make check` | `fmt-check`, `validate`, `tflint`, `tfdocs-check`, `trivy` trên mọi thư mục có `*.tf`, rồi `shellcheck` trên mọi `*.sh`, `zizmor` trên mọi workflow, `docs-check` trên mọi `.md`, `session-test`, `test-guard`, `test` trên mọi module, `github-app-test`, `ci-plan-test`, `infracost-test` |
+| `make check-terraform` / `check-lint` / `check-test` / `check-scripts` | từng nhóm của `make check`, mỗi nhóm một job của CI |
+| `make hooks` / `make pre-commit [FILES='<file …>']` | bật hook / chạy phép kiểm nhanh của hook (mục [Hook pre-commit](#hook-pre-commit)) |
 | `make check DIRS="aws/modules/x aws/envs/stg"` | như trên, sáu phép Terraform chỉ trên các thư mục đó; thư mục không có, không có `*.tf` hay nằm ngoài repo thì dừng, nêu thư mục |
 | `make fmt-check` / `make fmt` | `terraform fmt -check -diff -recursive` / viết lại file |
 | `make validate` | mỗi thư mục: `terraform init -backend=false -input=false`, rồi `terraform validate`; provider và module nằm ở thư mục tạm (`TF_DATA_DIR`), nên `.terraform/` của người học đã `init` với backend S3 không bị đọc hay ghi |
@@ -167,8 +170,8 @@ Chạy từ gốc repo, không cần credential AWS, cần Docker và mạng (re
 | `make docs-check [DOCS='<file hay glob>']` | markdownlint-cli2 theo `.markdownlint.yaml`, rồi lychee `--offline --include-fragments` (link tương đối và anchor heading; link ra ngoài không kiểm), container `--network none`; mặc định mọi `.md` git theo dõi và file mới chưa theo dõi, trừ `.claude/` (cấu hình agent, không phải tài liệu của repo) |
 | `make lock [DIRS=<root>]` | `init -backend=false` rồi `terraform providers lock` cho ba nền tảng; module bị bỏ qua |
 | `make tfdocs` / `make tfdocs-check` | terraform-docs ghi / kiểm khối sinh (requirements, providers, resources, inputs, outputs) giữa `<!-- BEGIN_TF_DOCS -->` và `<!-- END_TF_DOCS -->` của `README.md` mỗi module; `tfdocs-check` đỏ khi README lệch `.tf`, root bị bỏ qua; container `--network none` |
-| `make test` | `terraform test` của mỗi module (`tests/*.tftest.hcl`): `init -backend=false` trong một container, rồi `terraform test` trong container `--network none` với image `TERRAFORM_IMAGE` ghim digest, chỉ thư mục module được mount (chỉ đọc), không biến `AWS_*` nào (bỏ bằng `env -u`), không `~/.aws`, `.envrc`, `backend.hcl`; file test chỉ được nhận khi theo khuôn: đúng một dòng `mock_provider "aws" {`, mỗi `run "<tên>" {` có `command = plan` ở dòng không trống đầu tiên, không dòng nào khác bắt đầu bằng `run`, `mock_provider`, `provider`, `override_`, `module`, `command`, `/*`, không `alias`, `*/`, heredoc, symlink hay `*.tftest.json`; sai thì bị từ chối, nêu file và dòng; root bị bỏ qua |
-| `make test-guard` | tự kiểm ba luật của `make test` với `docker` giả trên PATH: file test sai bị từ chối, lệnh docker có `--network none`, image ghim digest, không biến hay file credential AWS nào tới container |
+| `make test` | `terraform test` của mỗi module (`tests/*.tftest.hcl`): `init -backend=false` trong một container, rồi `terraform test` trong container `--network none` với image `TERRAFORM_IMAGE` ghim digest, chỉ thư mục module và cache provider được mount (chỉ đọc), không biến `AWS_*` nào (bỏ bằng `env -u`), không `~/.aws`, `.envrc`, `backend.hcl`; file test chỉ được nhận khi theo khuôn: đúng một dòng `mock_provider "aws" {`, mỗi `run "<tên>" {` có `command = plan` ở dòng không trống đầu tiên, không dòng nào khác bắt đầu bằng `run`, `mock_provider`, `provider`, `override_`, `module`, `command`, `/*`, không `alias`, `*/`, heredoc, symlink hay `*.tftest.json`; sai thì bị từ chối, nêu file và dòng; root bị bỏ qua |
+| `make test-guard` | tự kiểm ba luật của `make test` với `docker` giả trên PATH: file test sai bị từ chối, lệnh docker có `--network none`, image ghim digest, chỉ mount thư mục dữ liệu, module và cache provider (chỉ đọc), không biến hay file credential AWS nào tới container |
 | `make ci-plan-test` | tự kiểm `ci/terraform-plan.sh` với `docker`, `curl`, `gh` giả trên PATH và một bản chép của repo ở thư mục tạm: từ chối chạy ngoài Actions, cổng (biến bật plan, fork, gốc không plan, PR Renovate), buổi mở hay không, thứ tự lệnh Terraform, token mới mỗi lệnh, secret account cần và không cần, khoá media lấy từ state, giá trị che vắng khỏi log và tóm tắt, stdout của `plan` không vào log, lỗi `init`, `plan` làm đỏ với stderr đã che, tóm tắt đúng số và address của `ci/testdata/plan.json`; bước đăng comment của `plan.yml` chạy đúng như trong file với `gh` giả (đăng mới, sửa comment dính, cắt khi quá dài) |
 | `make ci-plan ENV=<stg\|prd>` | plan của job `plan` trong `plan.yml` (mục [Plan trên PR](#plan-trên-pr)); từ chối chạy khi thiếu `GITHUB_ACTIONS=true` và `ACTIONS_ID_TOKEN_REQUEST_URL`, nên không bao giờ chạy trên máy dev |
 | `make infracost-test` | tự kiểm `ci/infracost.sh` với `docker` giả trên PATH và một bản chép của script ở thư mục tạm: không khoá thì từ chối trên máy, bỏ qua có notice trong Actions, PR từ fork bỏ qua, thứ tự lệnh (breakdown cây base, breakdown cây PR, `diff`), hai cây mount chỉ đọc, khoá và token GitHub chỉ vào container theo tên, không bao giờ trong tham số, output hay job summary, bảng tổng mỗi project, lệnh `comment` đúng cờ; `INFRACOST_IMAGE` ghim digest có dòng `# renovate:` |
@@ -199,18 +202,34 @@ zone) lấy từ `mock_data` của file test vì provider giả vẫn kiểm đ�
 ai dùng được key state, bucket state được bảo vệ ra sao, tên zone, uỷ quyền zone con và bốn cảnh báo budget, rồi mỗi rule `validation` một
 plan. Thêm rule `validation` thì thêm `run` trong cùng thay đổi.
 
-**Chạy song song trên hai thư mục khác nhau** (`make check DIRS=a` và `make check DIRS=b` cùng lúc) an toàn vì mỗi lượt chỉ ghi dưới
-thư mục nó kiểm:
+**Chạy song song trên hai thư mục khác nhau** (`make check DIRS=a` và `make check DIRS=b` cùng lúc) an toàn: mỗi lượt ghi dưới thư mục
+nó kiểm, còn cache dùng chung chỉ có một người ghi mỗi lúc:
 
-- thư mục tạm của lượt (`TF_DATA_DIR`): provider (bản Linux của container, ~700 MB cho provider AWS) và module tải về, xoá khi lượt kết thúc;
-- plugin tflint ở `<dir>/.terraform/tflint.d/` (`TFLINT_PLUGIN_DIR`, ~70 MB);
+- thư mục tạm của lượt (`TF_DATA_DIR`): module tải về và link tới provider trong cache, xoá khi lượt kết thúc;
+- `.plugin-cache/` (gitignore): provider Terraform (`TF_PLUGIN_CACHE_DIR`, bản Linux của container, hàng trăm MB cho provider AWS) và
+  ruleset tflint (`TFLINT_PLUGIN_DIR`), mỗi version tải một lần cho mọi thư mục. `init` và `tflint --init` chỉ thêm version còn thiếu, lần
+  lượt (khoá `.plugin-cache/lock`, `mkdir` nguyên tử); `TF_PLUGIN_CACHE_MAY_BREAK_DEPENDENCY_LOCK_FILE` cho module chưa có lock file dùng
+  bản trong cache, hash trong lock của root vẫn được kiểm. Container `terraform test` thấy cache chỉ đọc. Cache giữ mọi version đã tải: xoá
+  `.plugin-cache/` cùng lock file của module (`aws/modules/**/.terraform.lock.hcl`) khi không có `make` nào chạy, để lấy lại đĩa hay sửa
+  một bản giải nén dở;
 - `<dir>/.terraform.lock.hcl` của module (root chỉ đọc lock của nó; `make lock` thì ghi);
 - cache của trivy, zizmor nằm trong container (`/tmp/trivy`, `/tmp/zizmor`) và mất khi container dừng; `session-test` chỉ ghi trong một thư mục
   tạm riêng của nó và xoá thư mục đó; shellcheck, `docs-check` không ghi gì.
 
-Không có cache plugin dùng chung (`TF_PLUGIN_CACHE_DIR` không đặt, không thư mục plugin tflint chung): hai lượt không bao giờ cùng ghi một
-file, đổi lại mỗi lượt tải provider riêng. `.terraform/` mà người học `init` với backend thật không bị `make check` đọc hay ghi (trừ
-`tflint.d/`).
+`.terraform/` mà người học `init` với backend thật không bị `make check` đọc hay ghi.
+
+### Hook pre-commit
+
+`make hooks` (một lần mỗi clone) cài hook `pre-commit` của git chạy `make pre-commit`; hook khác đã có thì không bị ghi đè. Hook chỉ kiểm
+bản đã stage của file đổi, chép ra thư mục tạm, mỗi phép một container ghim digest không mạng, vài giây mỗi lần commit:
+
+- `terraform fmt -check` trên `*.tf`, `*.tfvars`, `*.tftest.hcl`;
+- markdownlint trên `*.md` (trừ `.claude/`), shellcheck trên `*.sh`;
+- gitleaks (cùng version với repo code) trên các dòng commit thêm vào, không cả file: fixture của test đã commit chứa khoá giả.
+
+`validate`, `tflint`, `trivy`, `test` và link của `docs-check` để CI chạy. `make pre-commit FILES='<file …>'` kiểm các file đó trong cây làm
+việc (cả file) mà không cần stage. Hook cần Docker đang chạy; `git commit --no-verify` bỏ qua hook, CI vẫn chặn. Mọi worktree của clone
+dùng chung hook: ở nhánh mà `Makefile` chưa có target `pre-commit`, hook cho commit qua kèm một dòng nhắc.
 
 **Ngoại lệ của trivy:** finding trong file `.tf` của repo này bỏ qua ngay cạnh resource bằng dòng `#trivy:ignore:<id>`, lý do ở comment
 ngay trên; finding trong module tải từ registry (không comment được) vào `.trivyignore.yaml`, `paths` tương đối với thư mục được kiểm. Sửa
@@ -228,11 +247,19 @@ ai hay. Module registry do chính trivy tải về và được quét với cấ
 một env (ignore có điều kiện thuộc tính, ignore trên lời gọi module trong root của env đó) không bao giờ che finding của env khác. Module,
 hay root không có file đó, được quét với giá trị mặc định của biến.
 
-**CI** (`.github/workflows/check.yml`): mỗi PR và push `main` chạy đúng `make check` trên `ubuntu-24.04`; job `check` chỉ `contents: read`,
-token của lượt chỉ vào container tflint (giới hạn tải plugin từ GitHub) và container zizmor (audit online, finding thành annotation), không
-secret, không OIDC, không credential AWS; job `infra-ok` là check duy nhất ruleset `main` đòi từ workflow này, nên job khác đổi tên hay thêm mà không đụng ruleset. Job `changes` đọc danh sách file của PR
-qua API: PR chỉ đổi tài liệu (`.md`, `docs/`, `LICENSE`, trừ `README.md` của thư mục Terraform mà terraform-docs viết một phần) bỏ qua
-`make check`; job `docs` (`make docs-check`) luôn chạy; đổi `Makefile` hay `check.yml` và push thì chạy hết (file đổi tên xét cả tên cũ; API liệt kê thiếu file thì cũng chạy hết); `infra-ok` chỉ nhận skip đó.
+**CI** (`.github/workflows/check.yml`): mỗi PR và push `main` chạy `make check` trên `ubuntu-24.04`, chia thành các job song song của
+matrix `check`, mỗi job một nhóm `check-*` của `Makefile` (nhóm chia theo thời lượng từng target trong CI); `docs-check` là job `docs`. Thêm
+target vào một nhóm thì CI chạy nó mà không sửa workflow. Mỗi job chỉ `contents: read`; token của lượt chỉ vào hai nhóm gọi GitHub (`lint`:
+container tflint, giới hạn tải plugin; `scripts`: container zizmor, audit online, finding thành annotation); không secret, không OIDC, không
+credential AWS. Trong một job, provider và ruleset tflint tải một lần vào `.plugin-cache/` (không `actions/cache`). Job `infra-ok` là check
+duy nhất ruleset `main` đòi từ workflow này, đỏ khi bất kỳ nhóm nào đỏ, nên job khác đổi tên hay thêm mà không đụng ruleset. Job `changes`
+đọc danh sách file của PR qua API: PR chỉ đổi tài liệu (`.md`, `docs/`, `LICENSE`, trừ `README.md` của thư mục Terraform mà terraform-docs
+viết một phần) bỏ qua mọi job `check`; job `docs` (`make docs-check`) luôn chạy; đổi `Makefile` hay `check.yml` và push thì chạy hết (file
+đổi tên xét cả tên cũ; API liệt kê thiếu file thì cũng chạy hết); `infra-ok` chỉ nhận skip đó.
+
+**Phút billable:** GitHub tính phút của từng job, làm tròn lên phút. Chạy song song cho kết quả sau thời lượng của nhóm chậm nhất thay vì
+tổng các nhóm, nhưng tổng phút tính tiền là tổng các job, cộng thêm phần checkout và kéo image mỗi job lặp lại, nên không ít hơn một job
+tuần tự. Repo public: runner chuẩn (`ubuntu-24.04`) miễn phí, nên cái giá chỉ là số runner chạy cùng lúc.
 
 Repo public và PR từ fork chạy workflow với code của fork, nên workflow này theo các luật:
 
@@ -240,7 +267,7 @@ Repo public và PR từ fork chạy workflow với code của fork, nên workflo
   với `-backend=false`; không gì gọi `apply` hay AWS CLI; các plan duy nhất là của `terraform test`, trên provider AWS giả, trong container không mạng
   và không biến AWS).
 - Không `pull_request_target`, không `workflow_run`: PR không bao giờ chạy với token ghi.
-- Job duy nhất chạy code của repo chỉ có `contents: read`.
+- Các job chạy code của repo chỉ có `contents: read`.
 - Mọi action của workflow là của GitHub và ghim SHA đầy đủ của commit; terraform, tflint, trivy, shellcheck và zizmor chạy từ image ghim digest trong
   `Makefile`, nên không tin action bên thứ ba nào ở đây.
 - `actions/checkout` không để token trong `.git/config` (`persist-credentials: false`).
