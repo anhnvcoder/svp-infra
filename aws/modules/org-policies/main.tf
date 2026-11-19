@@ -241,8 +241,8 @@ locals {
     }
 
     # The security baseline (account public access block, default EBS encryption and its key, Config, GuardDuty,
-    # Security Hub, Access Analyzer, the alert rules and their roles) changes only through Terraform run from the
-    # management account. Creating and deleting malware protection plans, flow logs and WAF logging stay open: every
+    # Security Hub, Inspector, Access Analyzer, the alert rules and their roles) changes only through Terraform run from
+    # the management account. Creating and deleting malware protection plans, flow logs and WAF logging stay open: every
     # session creates and removes them.
     "protect-baseline" = {
       type        = "SERVICE_CONTROL_POLICY"
@@ -334,9 +334,44 @@ locals {
             Condition = local.baseline_exemption
           },
           {
+            # Turning Inspector on in a member is billed and outside Terraform, which turns it on from the delegated
+            # administrator. Requests ECR makes with the caller's credentials when the registry scanning configuration
+            # switches between enhanced and basic stay open: Terraform of each env account sets it with the admin role.
+            Sid    = "ProtectInspector"
+            Effect = "Deny"
+            Action = [
+              "inspector2:Disable",
+              "inspector2:Enable",
+            ]
+            Resource = "*"
+            Condition = merge(local.baseline_exemption, {
+              BoolIfExists = {
+                "aws:ViaAWSService" = "false"
+              }
+            })
+          },
+          {
+            # Billed security services the lab does not use, which one click on their console page turns on; Shield
+            # Advanced also commits the organization to a year of its monthly fee.
+            Sid    = "DenyUnusedSecurityServices"
+            Effect = "Deny"
+            Action = [
+              "auditmanager:RegisterAccount",
+              "detective:CreateGraph",
+              "macie2:EnableMacie",
+              "securitylake:CreateDataLake",
+              "shield:CreateSubscription",
+            ]
+            Resource  = "*"
+            Condition = local.baseline_exemption
+          },
+          {
+            # CreateAnalyzer too: an unused access analyzer is billed per role and user, and the API has no condition
+            # key on the analyzer type to leave the free external access one open.
             Sid    = "ProtectAccessAnalyzer"
             Effect = "Deny"
             Action = [
+              "access-analyzer:CreateAnalyzer",
               "access-analyzer:CreateArchiveRule",
               "access-analyzer:DeleteAnalyzer",
               "access-analyzer:UpdateArchiveRule",

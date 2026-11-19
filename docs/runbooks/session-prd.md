@@ -151,7 +151,8 @@ Account dùng chung giữ giá trị của file suốt buổi. Buổi kết thú
    aws/scripts/preflight.sh freetier prd
    ```
 
-   Mong `ok    no CloudFront flat-rate plan in prd` và `ok    account plan of prd is PAID`; dán lại. `FAIL  N CloudFront plan(s) left in
+   Mong `ok    no CloudFront flat-rate plan in prd` và `ok    account plan of prd is PAID` (account thành viên của tổ chức: `… is PAID
+   (member of an organization, no account plan)`, cũng đạt); dán lại. `FAIL  N CloudFront plan(s) left in
    prd …`: huỷ gói theo `session-stg.md`, mục **Lệnh xoá tay theo loại** (CloudFront), với `AWS_PROFILE=anhnv-prd`, rồi chạy lại.
 8. **Nền bảo mật của org đã áp** tới ít nhất bước (3) của [`org-security-setup.md`](org-security-setup.md#thứ-tự-áp-lần-đầu), và biến
    `SVP_AWS_LOG_ACCOUNT_ID` đã nạp: như `session-stg.md` điều kiện 6 (root env prd ghi flow log, log WAF vào bucket

@@ -24,6 +24,11 @@ for a in "$@"; do
   case $a in -*) break ;; esac
   ckey=${ckey:+${ckey}_}$a
 done
+if [ -f "$FAKE_ERRORS/$ckey" ]; then
+  echo "aws $*" >>"$FAKE_LOG"
+  cat "$FAKE_ERRORS/$ckey" >&2
+  exit 254
+fi
 n=0
 if [ -f "$FAKE_SEL" ]; then
   while IFS=$'\t' read -r key pat; do
@@ -47,8 +52,8 @@ fi
 exec "$(dirname "$0")/aws-base" "$@"
 EOF
 chmod +x "$bin/aws"
-export FAKE_SEL=$work/sel.tsv FAKE_SEL_DIR=$work/sel
-mkdir -p "$FAKE_SEL_DIR"
+export FAKE_SEL=$work/sel.tsv FAKE_SEL_DIR=$work/sel FAKE_ERRORS=$work/errors
+mkdir -p "$FAKE_SEL_DIR" "$FAKE_ERRORS"
 # sel KEY PART BODY: a call whose arguments contain PART is answered with BODY as the answer of command KEY.
 sel() {
   local n
@@ -62,9 +67,19 @@ sel() {
   fi
   printf '%b\n' "$3" >"$FAKE_SEL_DIR/$n"
 }
-sel_reset() { rm -rf "$FAKE_SEL" "$FAKE_SEL_DIR"; mkdir -p "$FAKE_SEL_DIR"; : >"$log"; : >"$log.profiles"; rm -f "$answers"/*; }
+sel_reset() {
+  rm -rf "$FAKE_SEL" "$FAKE_SEL_DIR"
+  mkdir -p "$FAKE_SEL_DIR"
+  : >"$log"
+  : >"$log.profiles"
+  rm -f "$answers"/* "$FAKE_ERRORS"/*
+}
 # ans KEY BODY: the answer of command KEY.
 ans() { printf '%b\n' "$2" >"$answers/$1"; }
+# ans_err KEY [MESSAGE]: command KEY fails as aws does, MESSAGE on stderr, exit 254; without MESSAGE it answers again.
+ans_err() {
+  if [ $# -ge 2 ]; then printf '%b\n' "$2" >"$FAKE_ERRORS/$1"; else rm -f "$FAKE_ERRORS/$1"; fi
+}
 
 here=$work/infra/aws/scripts
 mkdir -p "$here" "$work/infra/aws/envs/stg" "$work/infra/aws/envs/prd"
@@ -202,6 +217,15 @@ expect "freetier prd: the arn is not printed" sh -c '! grep -q "subscription/s1"
 ans pricing-plan-manager_list-subscriptions '[]'
 ans freetier_get-account-plan-state 'UPGRADING'
 fails "freetier stg: any other state" "account plan of stg is 'UPGRADING', not PAID" run freetier stg
+# A member account of an organization has no account plan (the answer of stg and prd).
+ans_err freetier_get-account-plan-state '\nAn error occurred (ResourceNotFoundException) when calling the GetAccountPlanState operation: Missing data for account'
+expect "freetier stg: ResourceNotFoundException (member account) exits 0" run freetier stg
+expect "freetier stg member account: PAID, as a member of an organization" \
+  grep -qx 'ok    account plan of stg is PAID (member of an organization, no account plan)' "$out"
+ans_err freetier_get-account-plan-state '\nAn error occurred (AccessDeniedException) when calling the GetAccountPlanState operation: not authorized'
+fails "freetier stg: any other error" 'freetier get-account-plan-state with profile anhnv-stg: .*AccessDeniedException' run freetier stg
+expect "freetier stg other error: no ok line for the plan" sh -c '! grep -q "^ok    account plan" "$1"' _ "$out"
+ans_err freetier_get-account-plan-state
 
 # --- eks-upgrade ---
 eks_ok() {
