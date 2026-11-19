@@ -19,9 +19,20 @@ resource "aws_securityhub_organization_configuration" "this" {
   depends_on = [aws_securityhub_finding_aggregator.this]
 }
 
+# Security Hub rejects a configuration policy description with a character outside this pattern, but only at apply
+# (InvalidInputException); regex() fails on such a description already in terraform validate.
+locals {
+  securityhub_policy_descriptions = {
+    for k, v in {
+      standards = "FSBP v1.0.0 and CIS AWS Foundations Benchmark v5.0.0 in every account, new controls on"
+      off       = "Security Hub off for the accounts whose security_hub flag is off in aws/paid-features.json"
+    } : k => regex("^[a-zA-Z0-9_/(),.?! -]*$", v)
+  }
+}
+
 resource "aws_securityhub_configuration_policy" "this" {
   name        = "svp-security-standards"
-  description = "FSBP v1.0.0 and CIS AWS Foundations Benchmark v5.0.0 in every account; new controls on"
+  description = local.securityhub_policy_descriptions.standards
 
   configuration_policy {
     service_enabled = true
@@ -51,7 +62,7 @@ resource "aws_securityhub_configuration_policy" "off" {
   count = length(local.security_hub_off_ids) > 0 ? 1 : 0
 
   name        = "svp-security-off"
-  description = "Security Hub off: the accounts whose security_hub flag is off in aws/paid-features.json"
+  description = local.securityhub_policy_descriptions.off
 
   configuration_policy {
     service_enabled = false

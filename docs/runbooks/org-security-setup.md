@@ -41,8 +41,9 @@ flowchart TD
   `Apply complete!`, hai id đã che bớt.
 - **(3)** `aws/log-archive`; [README, Apply lần đầu](../../aws/log-archive/README.md#apply-lần-đầu). Dán lại: dòng
   `Plan:`, `Apply complete!`, số bucket và key của output.
-- **(4)** `aws/org` (đủ): account `svp-backup`, trusted access, delegated admin (cả Inspector), policy (cả Backup
-  policy), root tập trung, permission set, nhóm nền tảng, liên hệ, trail đổi đích;
+- **(4)** `aws/org` (đủ): account `svp-backup`, trusted access, delegated admin (cả Inspector), service-linked role
+  Access Analyzer ở management (analyzer tổ chức của bước (5) cần nó), policy (cả Backup policy), root tập trung,
+  permission set, nhóm nền tảng, liên hệ, trail đổi đích;
   [README, Bước (4)](../../aws/org/README.md#bước-4-đủ-root). Dán lại: **plan đủ** (điểm dừng), `Apply complete!`,
   `No changes.`, `get-trail-status`.
 - **(5)** `aws/security`: GuardDuty, Security Hub CSPM, Config aggregator, Access Analyzer, Inspector ECR theo cờ,
