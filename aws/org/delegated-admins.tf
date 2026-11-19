@@ -47,3 +47,10 @@ resource "aws_organizations_delegated_administrator" "security" {
 
   depends_on = [aws_organizations_organization.this]
 }
+
+# The organization analyzer that svp-security creates in aws/security needs this role in the management account, or
+# CreateAnalyzer fails with a ConflictException. Access Analyzer makes it only in the account that turns it on, and
+# an analyzer created from svp-security turns it on there, not here. Design notes: README.md.
+resource "aws_iam_service_linked_role" "access_analyzer" {
+  aws_service_name = "access-analyzer.amazonaws.com"
+}
