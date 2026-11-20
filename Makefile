@@ -281,7 +281,9 @@ docs-check: ## markdownlint-cli2 + lychee --offline on the Markdown (DOCS='<file
 # classes the diagrams import and is no diagram. The engine and the light and dark themes come from d2-config in each
 # file, so one SVG holds both themes; LAYOUT=<elk|tala> overrides the engine, OUT=<directory> writes there instead
 # (relative to this one), SUFFIX=<text> is added to the file names, and PNG=1 writes a PNG beside each SVG, to look at.
+# NAMES='<name …>' limits both targets to those diagrams, so parallel edits never rewrite each other's SVG.
 DIAGRAMS_DIR := docs/diagrams
+NAMES ?=
 OUT ?=
 SUFFIX ?=
 LAYOUT ?=
@@ -299,8 +301,9 @@ D2_RENDER = \
 	  grep -q prefers-color-scheme "$$out/$$n$$suffix.svg" || { echo "FAIL: $$f has no dark theme (dark-theme-id in d2-config)" >&2; exit 1; }; \
 	done
 
-diagrams: ## D2 to SVG (light and dark in one file) of docs/diagrams/*.d2 (LAYOUT=elk|tala, OUT=<dir>, SUFFIX=<text>, PNG=1)
-	@srcs=$$(ls $(DIAGRAMS_DIR)/*.d2 2>/dev/null | grep -v '/tokens\.d2$$'); [ -n "$$srcs" ] || { echo "diagrams: no .d2 file"; exit 0; }; \
+diagrams: ## D2 to SVG (light and dark in one file) of docs/diagrams/*.d2 (NAMES=, LAYOUT=, OUT=<dir>, SUFFIX=, PNG=1)
+	@srcs=$$(if [ -n "$(NAMES)" ]; then for n in $(NAMES); do echo "$(DIAGRAMS_DIR)/$$n.d2"; done; \
+	  else ls $(DIAGRAMS_DIR)/*.d2 2>/dev/null | grep -v '/tokens\.d2$$'; fi); [ -n "$$srcs" ] || { echo "diagrams: no .d2 file"; exit 0; }; \
 	dir=$${OUT:-$(DIAGRAMS_DIR)}; \
 	case "$$dir" in (/*|..|../*|*/..|*/../*) echo "OUT: $$dir is outside this repository; give a path relative to it" >&2; exit 1;; esac; \
 	case "$$SUFFIX" in (*/*) echo "SUFFIX: no slash in a file name" >&2; exit 1;; esac; \
@@ -309,7 +312,8 @@ diagrams: ## D2 to SVG (light and dark in one file) of docs/diagrams/*.d2 (LAYOU
 	$(D2_RENDER)
 
 diagrams-check: ## Fails, naming the file, when a committed SVG differs from what its .d2 renders to
-	@srcs=$$(ls $(DIAGRAMS_DIR)/*.d2 2>/dev/null | grep -v '/tokens\.d2$$'); [ -n "$$srcs" ] || { echo "diagrams-check: no .d2 file"; exit 0; }; \
+	@srcs=$$(if [ -n "$(NAMES)" ]; then for n in $(NAMES); do echo "$(DIAGRAMS_DIR)/$$n.d2"; done; \
+	  else ls $(DIAGRAMS_DIR)/*.d2 2>/dev/null | grep -v '/tokens\.d2$$'; fi); [ -n "$$srcs" ] || { echo "diagrams-check: no .d2 file"; exit 0; }; \
 	out=$$(mktemp -d) || exit 1; trap 'rm -rf "$$out"' EXIT; layout=; suffix=; png=; \
 	$(D2_RENDER); rc=0; \
 	for f in $$srcs; do \
