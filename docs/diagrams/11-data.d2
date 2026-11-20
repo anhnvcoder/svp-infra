@@ -1,0 +1,116 @@
+# Overview of the data stores of an env (aws/envs/<env>/main.tf): the pods reach RDS, MSK and ElastiCache on one TLS
+# port each with passwords from Secrets Manager, and the CloudWatch alarms of the three modules notify the topic of
+# module alarms, outside the cluster.
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 0
+    dark-theme-id: 200
+    pad: 20
+  }
+}
+...@tokens
+
+direction: down
+
+title: "Pod của env tới dữ liệu bằng đường nào, và ai báo khi dữ liệu sắp hỏng?" {
+  shape: text
+  near: top-center
+  style: {font-size: 18; bold: true}
+}
+
+env: "svp-stg · svp-prd (ap-southeast-1)" {
+  class: account
+  label.near: top-left
+
+  secrets: "Mật khẩu" {
+    class: prevention
+    grid-rows: 3
+    grid-gap: 24
+    vertical-gap: 6
+    s: "Secrets Manager · External Secrets" {class: sub}
+    t: "không qua plan, không qua state" {class: sub}
+    r: "module rds · msk · elasticache" {class: root}
+  }
+
+  pods: "Pod của svp" {
+    class: workload
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "service · Job bootstrap · KEDA · otelcol" {class: sub}
+    r: "cluster EKS" {class: root}
+  }
+
+  db: "subnet database, 2–3 AZ" {
+    class: region
+    label.near: top-left
+
+    rds: "PostgreSQL" {
+      class: data
+      grid-rows: 3
+      grid-gap: 24
+      vertical-gap: 6
+      s: "RDS for PostgreSQL 17" {class: sub}
+      t: "mỗi service một database" {class: sub}
+      r: "aws/modules/rds" {class: root}
+    }
+    msk: "Kafka" {
+      class: data
+      grid-rows: 3
+      grid-gap: 24
+      vertical-gap: 6
+      s: "Amazon MSK · KRaft" {class: sub}
+      t: "mỗi client một user SCRAM" {class: sub}
+      r: "aws/modules/msk" {class: root}
+    }
+    valkey: "Cache và khoá" {
+      class: data
+      grid-rows: 3
+      grid-gap: 24
+      vertical-gap: 6
+      s: "ElastiCache for Valkey" {class: sub}
+      t: "mỗi client một user RBAC" {class: sub}
+      r: "aws/modules/elasticache" {class: root}
+    }
+  }
+
+  alarms: "CloudWatch alarm" {
+    class: alerting
+    grid-rows: 3
+    grid-gap: 24
+    vertical-gap: 6
+    s: "svp-<env>-<alarm> · tag Severity" {class: sub}
+    t: "sống ngoài cluster" {class: sub}
+    r: "alarms.tf của mỗi module" {class: root}
+  }
+
+  sns: "Amazon SNS" {
+    class: alerting
+    grid-rows: 3
+    grid-gap: 24
+    vertical-gap: 6
+    s: "topic svp-<env>-alarms" {class: sub}
+    t: "mã hoá bằng KMS key của module" {class: sub}
+    r: "aws/modules/alarms" {class: root}
+  }
+}
+
+email: "Email cảnh báo" {
+  class: workload
+  grid-rows: 2
+  grid-gap: 24
+  vertical-gap: 6
+  s: "ALARM rồi OK, alarm page kèm link runbook" {class: sub}
+  r: "alarm_email" {class: root}
+}
+
+env.secrets -> env.pods: "mật khẩu từng client" {class: data-flow}
+env.pods -> env.db.rds: "5432 · TLS verify-full" {class: data-flow}
+env.pods -> env.db.msk: "9096 · SCRAM trên TLS" {class: data-flow}
+env.pods -> env.db.valkey: "6379 · TLS" {class: data-flow}
+env.db.rds -> env.alarms: {class: data-flow}
+env.db.msk -> env.alarms: {class: data-flow}
+env.db.valkey -> env.alarms: {class: data-flow}
+env.alarms -> env.sns: "ALARM, OK" {class: data-flow}
+env.sns -> email: {class: data-flow}

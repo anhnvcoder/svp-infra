@@ -1,0 +1,91 @@
+# Security in layers, a concept and not an API flow: governance and prevention guard every workload, then detection
+# and investigation run side by side over it. The last line of each block is the Terraform roots that build the layer.
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 0
+    dark-theme-id: 200
+    pad: 20
+  }
+}
+...@tokens
+
+direction: down
+
+title: "Sáu lớp bảo mật của svp và root dựng mỗi lớp" {
+  shape: text
+  near: top-center
+  style: {font-size: 18; bold: true}
+}
+
+governance: "Quản trị" {
+  class: governance
+  grid-rows: 2
+  grid-gap: 24
+  vertical-gap: 6
+  s: "Organizations · SCP · RCP · Identity Center" {class: sub}
+  r: "aws/org" {class: root}
+}
+
+prevention: "Phòng ngừa" {
+  class: prevention
+  grid-rows: 2
+  grid-gap: 24
+  vertical-gap: 6
+  s: "IAM · KMS · S3 BPA · IMDSv2" {class: sub}
+  r: "aws/org · aws/baseline" {class: root}
+}
+
+workload: "Workload và tài nguyên AWS" {
+  class: workload
+  grid-rows: 2
+  grid-gap: 24
+  vertical-gap: 6
+  s: "EKS · RDS · S3 · ECR của mọi account" {class: sub}
+  r: "aws/accounts/ENV · aws/envs/ENV" {class: root}
+}
+
+detection: "Phát hiện" {
+  class: detection
+  grid-rows: 3
+  grid-gap: 24
+  vertical-gap: 6
+  s1: "GuardDuty · Inspector" {class: sub}
+  s2: "Security Hub CSPM · Access Analyzer" {class: sub}
+  r: "aws/security" {class: root}
+}
+
+alerting: "Cảnh báo" {
+  class: alerting
+  grid-rows: 2
+  grid-gap: 24
+  vertical-gap: 6
+  s: "EventBridge · SNS" {class: sub}
+  r: "aws/security · aws/baseline" {class: root}
+}
+
+investigation: "Điều tra" {
+  class: investigation
+  grid-rows: 3
+  grid-gap: 24
+  vertical-gap: 6
+  s: "CloudTrail · Config · Log Archive" {class: sub}
+  r1: "aws/org · aws/baseline" {class: root}
+  r2: "aws/log-archive" {class: root}
+}
+
+recovery: "Phục hồi" {
+  class: recovery
+  grid-rows: 2
+  grid-gap: 24
+  vertical-gap: 6
+  s: "AWS Backup chéo account · Vault Lock" {class: sub}
+  r: "aws/backup · aws/accounts/ENV" {class: root}
+}
+
+governance -> prevention {class: control-flow}
+prevention -> workload {class: control-flow}
+workload -> detection {class: data-flow}
+workload -> investigation {class: data-flow}
+detection -> alerting {class: data-flow}
+investigation -> recovery {class: data-flow}

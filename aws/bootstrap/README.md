@@ -1,180 +1,74 @@
-# `aws/bootstrap`: tầng account (chạy một lần mỗi account)
+# `aws/bootstrap`: bucket state của management và cảnh báo tiền của cả tổ chức
 
-Tạo những thứ sống lâu hơn mọi buổi AWS và không thuộc env nào:
+**Account** management · **region** `ap-southeast-1` (bucket, key), Budgets và Cost Explorer qua `us-east-1` · **profile** `anhnv-sso` ·
+**state** bucket của chính root này, key `aws/bootstrap/terraform.tfstate` (lần áp đầu trên state local)
 
-| Tài nguyên | Vì sao | Chi phí |
+Giải thích: [01. Bootstrap](../../docs/handbook/01-bootstrap.md).
+
+## Dựng gì
+
+Mọi tài nguyên mang tag `Stack=bootstrap` (script quét sót của buổi bỏ qua tag này) và sống suốt lab.
+
+| Tài nguyên | Account, region | Một câu |
 | --- | --- | --- |
-| Bucket state `svp-tfstate-<account>-<region>` | state của mọi root chạy bằng profile management (danh sách ở [mục 5](#5-áp-thay-đổi-khi-state-đã-ở-bucket)), mỗi root một key `<thư mục root>/terraform.tfstate`; state của env ở bucket của account env (`aws/accounts/`); khoá bằng lock file native của backend S3 (`use_lockfile`, không DynamoDB); versioning, SSE-KMS bằng key `alias/svp-tfstate` với S3 Bucket Key, chặn public, `BucketOwnerEnforced`, policy từ chối request không TLS, `prevent_destroy` | < $0,01/tháng (vài file state; ước lượng) |
-| KMS key `alias/svp-tfstate` | mã hoá state trong bucket; xoay tự động mỗi năm, chờ xoá 30 ngày, `prevent_destroy`; key policy mặc định của AWS (IAM của management account quyết ai dùng key, như ai đọc bucket: permission set của management không quản ở repo này) | $1/tháng mỗi key, hai lần xoay đầu mỗi lần thêm $1/tháng; request nằm trong 20 000 miễn phí mỗi tháng nhờ Bucket Key ([AWS KMS pricing](https://aws.amazon.com/kms/pricing/), đọc 2026-11-12) |
-| Budget tháng `svp-monthly` | chi phí của cả org (budget không lọc ở management account tính hoá đơn gộp: management và mọi account thành viên); email ở 50 %, 80 %, 100 % chi phí thực tế và 100 % dự báo; mặc định $20 (`budget_limit_usd`) | miễn phí ([AWS Budgets pricing](https://aws.amazon.com/aws-cost-management/aws-budgets/pricing/), đọc 2026-10-31) |
-| Cost Anomaly Detection: monitor `svp-services` (`DIMENSIONAL`, theo dịch vụ), subscription `svp-daily` | bất thường chi phí của mọi dịch vụ trên hoá đơn gộp; email tóm tắt hằng ngày tới `budget_emails` khi tác động của bất thường từ ngưỡng của `cost.tf` trở lên; ngưỡng và lý do ở [ADR-0060](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0060-org-detection-logging.md) §11 | miễn phí ([Cost Anomaly Detection FAQ](https://aws.amazon.com/aws-cost-management/aws-cost-anomaly-detection/faqs/)) |
-| Tag phân bổ chi phí `Project`, `Env`, `Stack` | kích hoạt (`Active`) để Cost Explorer, Budgets lọc và nhóm chi phí theo dự án, env, stack; điều kiện ở [mục Tag phân bổ chi phí](#tag-phân-bổ-chi-phí) | miễn phí ([ADR-0060](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0060-org-detection-logging.md) §12) |
+| `aws_s3_bucket.state` `svp-tfstate-<account>-<region>` và năm cấu hình của nó | management, `ap-southeast-1` | Versioning, SSE-KMS mặc định với S3 Bucket Key, chặn public, `BucketOwnerEnforced`, policy chỉ TLS; `prevent_destroy` |
+| `aws_kms_key.state`, alias `alias/svp-tfstate` | management, `ap-southeast-1` | Mã hoá state; xoay mỗi năm, chờ xoá 30 ngày, key policy mặc định; `prevent_destroy` |
+| `aws_budgets_budget.monthly` `svp-monthly` | management, toàn cục | Hoá đơn gộp; email ở ngưỡng của `local.budget_alerts`; hạn mức `budget_limit_usd` |
+| `aws_ce_anomaly_monitor.services` `svp-services`, `aws_ce_anomaly_subscription.daily` `svp-daily` | management, toàn cục | Bất thường theo dịch vụ, email hằng ngày từ ngưỡng của `cost.tf` |
+| `aws_ce_cost_allocation_tag.this` | management, toàn cục | `Project`, `Env`, `Stack` ở `Active` |
 
-Mọi tài nguyên mang tag `Project=svp`, `ManagedBy=terraform`, `Stack=bootstrap` (script quét sót của buổi bỏ qua `Stack=bootstrap`). Tên
-bucket theo `<tên>-<account>-<region>` như bucket của AWS CDK, Control Tower: duy nhất toàn cầu không cần phần ngẫu nhiên. Account chỉ vào
-qua `TF_VAR_account_id` lúc chạy (provider từ chối mọi account khác, `allowed_account_ids`), nên không file commit nào chứa account thật.
+Giá trị cá nhân ở `bootstrap.auto.tfvars` (git bỏ qua, chép từ `bootstrap.auto.tfvars.example`): `budget_emails`, `budget_limit_usd`.
+Account chỉ vào qua `TF_VAR_account_id` trong lệnh, sau khi kiểm account.
 
-Management account không giữ hosted zone nào: zone DNS của lab nằm ở account env, do baseline của nó tạo, uỷ quyền theo
-[mục 5 của `aws/accounts/README.md`](../accounts/README.md#5-uỷ-quyền-zone-của-env). Lý do:
-[ADR-0051](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0051-dns-prd-apex.md).
+## Chạy
 
-**Profile management:** root này (cùng `aws/org`, `github/`) chạy ở management account bằng profile `anhnv-sso`, account đọc từ biến
-`SVP_AWS_MGMT_ACCOUNT_ID` (nạp qua direnv từ `.envrc` ở thư mục chứa các clone, không file commit nào); mỗi lệnh `terraform` đặt
-`TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID"` ngay trong lệnh. Root của account stg, prd ở [`aws/accounts/`](../accounts/README.md).
+Người học chạy mọi lệnh; AI không chạy lệnh nào chạm account. Các bước đánh số là bước của
+[`org-security-setup.md`, bước (1)](../../docs/runbooks/org-security-setup.md#bước-1-awsbootstrap):
 
-**Người học chạy mọi lệnh dưới đây** (AI không chạy lệnh nào chạm account). Làm trước root `aws/org` và buổi AWS đầu. Cần: Terraform
-1.15 trên máy (`terraform version`), AWS CLI v2, profile `anhnv-sso` đã có (người học tạo tay một lần:
-[`aws/org`, Profile gốc `anhnv-sso`](../org/README.md#profile-gốc-anhnv-sso)) và đã `aws sso login --profile anhnv-sso`.
-Mọi script `aws/scripts/*.sh` nhận `--print` làm đối số đầu: in lệnh sẽ chạy, không gọi công cụ nào, không ghi gì.
+1. Kiểm account: [1a](../../docs/runbooks/org-security-setup.md#1a-kiểm-account).
+2. Giá trị cá nhân: [1b](../../docs/runbooks/org-security-setup.md#1b-giá-trị-cá-nhân).
+3. Bucket state chưa có (lab dựng từ đầu), apply trên state local:
+   [1c](../../docs/runbooks/org-security-setup.md#1c-apply-lần-đầu-trên-state-local), rồi chuyển state vào bucket:
+   [1d](../../docs/runbooks/org-security-setup.md#1d-chuyển-state-vào-bucket).
+4. Code đổi khi state đã ở bucket: [1e](../../docs/runbooks/org-security-setup.md#1e-áp-thay-đổi-khi-state-đã-ở-bucket).
+5. Monitor, subscription Cost Anomaly Detection và tag phân bổ chi phí: kiểm trước mỗi `plan` ở
+   [1c](../../docs/runbooks/org-security-setup.md#1c-apply-lần-đầu-trên-state-local),
+   [1e](../../docs/runbooks/org-security-setup.md#1e-áp-thay-đổi-khi-state-đã-ở-bucket) (monitor AWS tự tạo thì nhận quản, tag chưa có
+   trong dữ liệu billing thì chờ); sau khi áp, đọc lại ở
+   [7f](../../docs/runbooks/org-security-setup.md#7f-chi-phí-sau-1-và-7-ngày).
+6. `aws/backend.hcl` đổi: init lại mọi root ở [1f](../../docs/runbooks/org-security-setup.md#1f-init-lại-mọi-root).
 
-## 1. Kiểm account
+Gỡ có chủ đích khi lab kết thúc: [mục dưới](#gỡ-có-chủ-đích).
 
-```sh
-cd infra/aws/bootstrap
-AWS_PROFILE=anhnv-sso aws sts get-caller-identity --region ap-southeast-1 --query '{Account:Account,Arn:Arn}' --output table
-```
+## Root dùng bucket state
 
-So `Account` với management account trên trang SSO, `Arn` là role SSO của người học. Khác thì dừng. Đúng thì biến của management
-account đã nạp qua direnv từ `.envrc` ở thư mục chứa các clone ([README](../../README.md#plan-và-apply); chưa có file thì tạo
-theo README, với 12 số của `Account` vừa đọc). Kiểm biến đã nạp:
+Bucket giữ state của mọi root chạy bằng profile của management, mỗi root một key `<thư mục root>/terraform.tfstate`. Root của env để state
+ở bucket của account env (`aws/accounts/<env>`). Danh sách và `-backend-config` (cùng thứ tự `aws/scripts/tfvars.sh init` chạy):
 
-```sh
-printf 'mgmt …%s\n' "${SVP_AWS_MGMT_ACCOUNT_ID: -4}"   # từ .envrc (direnv), 4 số cuối
-```
+| Root | `-backend-config` |
+| --- | --- |
+| `aws/bootstrap` | `../backend.hcl` |
+| `aws/org` | `../backend.hcl` |
+| `aws/log-archive` | `../backend.hcl` |
+| `aws/security` | `../backend.hcl` |
+| `aws/baseline` | `../backend.hcl` |
+| `aws/backup` | `../backend.hcl` |
+| `github` | `../aws/backend.hcl` |
 
-## 2. Giá trị cá nhân
+`aws/backend.hcl` (git bỏ qua) là output `backend_hcl` của root này: bucket, region, `encrypt`, `kms_key_id` (ARN `key/<id>` của
+`alias/svp-tfstate`), `use_lockfile`; không có `key`. `aws/scripts/tfvars.sh backend mgmt` ghi nó
+([1c](../../docs/runbooks/org-security-setup.md#1c-apply-lần-đầu-trên-state-local)); thiếu file thì mọi root trên không `init` được.
 
-```sh
-../scripts/tfvars.sh example aws/bootstrap
-```
+## Gỡ có chủ đích
 
-Lệnh chép `bootstrap.auto.tfvars.example` thành `bootstrap.auto.tfvars` (mode 600) khi file chưa có, không bao giờ ghi
-đè file có sẵn, rồi mỗi giá trị còn `<…>` một dòng `note  aws/bootstrap/bootstrap.auto.tfvars:<dòng> <biến> still holds
-a placeholder <...>`; chạy lại tới khi in `ok    … no placeholder <...> left`. Sửa `bootstrap.auto.tfvars` trong editor
-(git bỏ qua; giá trị cá nhân giữ tay): `budget_emails` (email nhận cảnh báo; AWS Budgets gửi thẳng, không có thư xác
-nhận), `budget_limit_usd` nếu muốn khác $20.
+Bucket và key có `prevent_destroy`: mất bucket là mất state của mọi root ở bảng trên, mất key là không đọc được state. Chỉ gỡ khi lab kết
+thúc, sau mọi root khác và sau khi state của `github` đã chuyển đi:
+[`lab-teardown.md`, Xoá bootstrap](../../docs/runbooks/lab-teardown.md#xoá-bootstrap).
 
-## 3. Apply lần đầu, state local
+## Tham chiếu
 
-Bucket state chưa có, nên lần đầu chạy trên state local: file override (git bỏ qua) thay khối `backend "s3"` của `versions.tf`.
-
-```sh
-printf 'terraform {\n  backend "local" {}\n}\n' > local_override.tf
-AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform init
-AWS_PROFILE=anhnv-sso aws ce get-anomaly-monitors --region us-east-1 \
-  --query 'AnomalyMonitors[].{Name:MonitorName,Type:MonitorType,Dimension:MonitorDimension,Arn:MonitorArn}' --output table
-```
-
-AWS cho mỗi account một monitor `DIMENSIONAL`/`SERVICE` và tự tạo `Default-Services-Monitor` khi Cost Explorer bật, nên account mới có
-thể đã có nó: tạo thêm thì `apply` lỗi `Limit exceeded on dimensional spend monitor creation`. Lệnh trên in một monitor như vậy thì nhận
-quản nó trước `plan` như [mục 5](#5-áp-thay-đổi-khi-state-đã-ở-bucket) (`terraform import aws_ce_anomaly_monitor.services <Arn>`); plan khi
-đó có `13 to add` và monitor đổi tên tại chỗ (`~`), không thêm.
-
-```sh
-AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform plan -out=bootstrap.tfplan
-```
-
-Đọc plan: `Plan: 14 to add, 0 to change, 0 to destroy` (bucket cùng 5 cấu hình của nó, key và alias, budget, monitor và
-subscription, 3 tag phân bổ). Dán dòng đó lại nếu muốn kiểm cùng. Account mới chưa có tag trong dữ liệu billing thì `apply` báo lỗi ở
-`aws_ce_cost_allocation_tag` và vẫn tạo mọi tài nguyên khác: xem [mục Tag phân bổ chi phí](#tag-phân-bổ-chi-phí). Rồi:
-
-```sh
-AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform apply bootstrap.tfplan
-../scripts/tfvars.sh backend mgmt
-```
-
-Lệnh kiểm account, đọc output `backend_hcl` và ghi `aws/backend.hcl` (mode 600, qua file tạm rồi `mv`): in `ok    account … of mgmt, …` rồi
-`ok    aws/backend.hcl: output backend_hcl of aws/bootstrap written (N lines, mode 600)`; output không có dòng `bucket` thì `FAIL` và
-không ghi gì. `aws/backend.hcl` (git bỏ qua) là cấu hình backend mà mọi root ở [mục 5](#5-áp-thay-đổi-khi-state-đã-ở-bucket) đọc bằng
-`-backend-config`; nội dung gồm bucket, region, encrypt, `kms_key_id` (ARN `key/<id>` của `alias/svp-tfstate`) và `use_lockfile`.
-
-## 4. Chuyển state vào bucket
-
-```sh
-rm local_override.tf bootstrap.tfplan
-AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform init -migrate-state -backend-config=../backend.hcl    # trả lời yes khi được hỏi chép state
-AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform plan   # expect: No changes.
-AWS_PROFILE=anhnv-sso aws s3api head-object --region ap-southeast-1 \
-  --bucket "$(AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform output -raw state_bucket)" \
-  --key aws/bootstrap/terraform.tfstate --query '{Size:ContentLength,SSE:ServerSideEncryption,Key:SSEKMSKeyId}'   # SSE: aws:kms
-```
-
-`plan` còn đòi tạo tag phân bổ chưa kích hoạt được thì vẫn coi là đúng mong đợi. `Key` là ARN `kms_key_id` của `aws/backend.hcl`.
-Ba lệnh đều đúng mong đợi thì xoá state local còn lại: `rm -f terraform.tfstate terraform.tfstate.backup`. Từ đây mọi lệnh của root này
-đọc state trong bucket.
-
-## 5. Áp thay đổi khi state đã ở bucket
-
-Root này đã chạy (state ở bucket) và code đổi thì áp như sau. Bước 1 và 2 ở trên vẫn cần (account, `bootstrap.auto.tfvars`).
-Kiểm hai điều kiện của Cost Explorer trước (ở `us-east-1`, dịch vụ toàn cục):
-
-```sh
-cd infra/aws/bootstrap
-AWS_PROFILE=anhnv-sso aws ce get-anomaly-monitors --region us-east-1 \
-  --query 'AnomalyMonitors[].{Name:MonitorName,Type:MonitorType,Dimension:MonitorDimension,Arn:MonitorArn}' --output table
-AWS_PROFILE=anhnv-sso aws ce list-cost-allocation-tags --region us-east-1 --tag-keys Project Env Stack \
-  --query 'CostAllocationTags[].{Key:TagKey,Status:Status}' --output table
-```
-
-Lệnh đầu không có monitor nào khác `svp-services`; có monitor `DIMENSIONAL`/`SERVICE` do AWS tự tạo thì nhận quản nó trước khi `plan`:
-`AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform import aws_ce_anomaly_monitor.services <Arn>`, rồi đọc plan:
-đổi tên tại chỗ (`~`) là đúng, đòi thay (`-/+`) thì dừng và dán plan. Lệnh sau liệt kê đủ ba key (`Active` hay `Inactive`); thiếu key nào
-thì đọc [mục Tag phân bổ chi phí](#tag-phân-bổ-chi-phí).
-
-```sh
-AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform plan -out=bootstrap.tfplan
-```
-
-Đọc plan và dán lại dòng `Plan:`. Lần đầu bucket chuyển sang KMS: `7 to add, 1 to change, 0 to destroy` (thêm key, alias, monitor,
-subscription, 3 tag; đổi tại chỗ cấu hình mã hoá của bucket). Không có dòng `destroy` nào. Rồi:
-
-```sh
-AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform apply bootstrap.tfplan && rm bootstrap.tfplan
-../scripts/tfvars.sh backend mgmt
-```
-
-Dòng `ok` thứ hai là `… written` khi file đổi (lần đầu có thêm `kms_key_id` khi bucket vừa chuyển sang KMS), `… already as written, file
-unchanged` khi không đổi.
-
-`aws/backend.hcl` đổi (lần đầu có `kms_key_id`) thì mọi root đọc nó phải nhận lại cấu hình backend. `-reconfigure` ghi cấu hình mới
-mà không chép state (bucket, key không đổi). Root chưa từng `init` cũng chạy được lệnh của nó (lần `init` đầu). Từ `infra/aws/bootstrap`:
-
-```sh
-../scripts/tfvars.sh init
-AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform plan    # expect: No changes.
-```
-
-`tfvars.sh init` chạy `terraform init -reconfigure` với `aws/backend.hcl` ở bảy root của management theo thứ tự `aws/bootstrap`, `aws/org`,
-`aws/log-archive`, `aws/security`, `aws/baseline`, `aws/backup` và `github/` (root cuối đọc `../aws/backend.hcl`), mỗi root một dòng
-`ok    terraform init -reconfigure of <root> with <backend-config>`. Root nào lỗi thì `FAIL  terraform init -reconfigure of <root>` và
-các root trước đã xong: sửa nguyên nhân rồi chạy lại cả lệnh (chạy lại an toàn). Thiếu `aws/backend.hcl` thì `FAIL  no aws/backend.hcl`:
-chạy `tfvars.sh backend mgmt` trước.
-
-Backend S3 có `encrypt = true` mà không `kms_key_id` tự đặt SSE-S3 cho mỗi lần ghi, ghi đè mã hoá mặc định của bucket; nên root nào
-chưa `init -reconfigure` vẫn ghi state SSE-S3, kể cả `apply` trên của chính root này. Object state đã có giữ SSE-S3 tới lần ghi kế của
-root đó sau `-reconfigure` (lần `apply` tiếp theo); bản cũ do versioning giữ lại vẫn SSE-S3 (bucket không có lifecycle xoá bản cũ). Kiểm
-một object bằng lệnh `head-object` của bước 4 với `--key` của root đó: `SSE` là `aws:kms` sau lần ghi kế, `AES256` trước đó.
-
-## Tag phân bổ chi phí
-
-AWS chỉ kích hoạt được một tag key đã có trong dữ liệu billing: key xuất hiện trong vòng 24 giờ sau khi một tài nguyên có tag đó phát sinh
-chi phí. `Project`, `Stack` có sau lần apply đầu của root này (bucket mang tag); `Env` chỉ có sau buổi stg hay prd đầu tiên. Thiếu key
-thì `apply` lỗi ở đúng `aws_ce_cost_allocation_tag` của key đó, các tài nguyên khác vẫn được tạo, và thứ tự áp không đổi: chờ key hiện ra
-trong `list-cost-allocation-tags` (lệnh ở mục 5), rồi `plan`, `apply` lại.
-
-## Xoá bootstrap (khi lab kết thúc)
-
-Chỉ khi không còn root nào dùng bucket (mọi env đã `destroy`, script quét sót sạch):
-
-0. Root `aws/org` giữ state ở bucket này: gỡ org trước (README của nó). Root `github/` (cài đặt GitHub) giữ state ở bucket này và không bao giờ `destroy`: trước khi xoá bucket, chuyển state của nó sang
-   backend khác (`terraform init -migrate-state` với backend mới, như bước chuyển state ở trên). Bỏ qua bước này thì state mới
-   rỗng: `plan` đòi tạo mọi tài nguyên đã có trên GitHub, phải nhận quản lại theo mục "Nhận quản repo đã có" của `github/README.md`.
-
-1. Đưa state về local (bucket sắp bị xoá): tạo lại `local_override.tf` như bước 3, rồi
-   `AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform init -migrate-state` (trả lời yes).
-2. Gỡ bảo vệ có chủ đích, chỉ trong bản sửa local này (không commit): trong `state.tf` đổi cả hai `prevent_destroy = true` (bucket và
-   `aws_kms_key.state`) thành `false` và thêm `force_destroy = true` vào `aws_s3_bucket.state` (xoá được bucket còn version cũ). Key
-   bị lên lịch xoá sau 30 ngày; trong thời gian đó `aws kms cancel-key-deletion` còn cứu được nó. Rồi
-   `AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform apply` (chỉ đổi `force_destroy`), `AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform destroy`.
-3. `rm -f terraform.tfstate* ../backend.hcl bootstrap.auto.tfvars local_override.tf`, hoàn tác sửa của bước 2 (`git checkout -- state.tf`),
-   xoá thư mục này bằng PR nếu không dùng nữa.
+- [01. Bootstrap](../../docs/handbook/01-bootstrap.md): vì sao, kịch bản env quên gỡ, chi phí, đọc sâu về mã hoá state.
+- [`org-security-setup.md`, bước (1)](../../docs/runbooks/org-security-setup.md#bước-1-awsbootstrap): áp root này.
+- [ADR-0060](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0060-org-detection-logging.md) §11: Cost Anomaly Detection, tag
+  phân bổ.
+- [ADR-0059](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0059-org-structure-guardrails.md) §11: CMK của bucket state.

@@ -1,0 +1,95 @@
+# Overview of the alert path of aws/security/alerts.tf: a GuardDuty finding of an env account reaches email by one of
+# two branches, picked by the security_hub flag of that account in aws/paid-features.json. The rules, regions and
+# roles are in security-finding-to-email.d2.
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 0
+    dark-theme-id: 200
+    pad: 20
+  }
+}
+...@tokens
+
+direction: down
+
+title: "Finding của account env tới email: hai nhánh theo cờ security_hub" {
+  shape: text
+  near: top-center
+  style: {font-size: 18; bold: true}
+}
+
+env: "svp-stg · svp-prd" {
+  class: account
+  label.near: top-left
+  guardduty: "GuardDuty" {
+    class: detection
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "phát hiện nguy cơ trong account" {class: sub}
+    r: "member, hai region" {class: sub}
+  }
+  hub: "Security Hub CSPM của account" {
+    class: detection
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    c: "chỉ ở account bật nó" {class: sub}
+    s: "nhận finding GuardDuty" {class: sub}
+  }
+}
+
+security: "svp-security" {
+  class: account
+  label.near: top-left
+  always: "Security Hub CSPM, aggregator" {
+    class: detection
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    c: "gom finding từ account bật Security Hub" {class: sub}
+    s: "HIGH, CRITICAL" {class: sub}
+  }
+  off: "GuardDuty của delegated admin" {
+    class: detection
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    c: "nhận finding của mọi member" {class: sub}
+    s: "rule lấy account security_hub = off, severity ≥ 7" {class: sub}
+  }
+  events: "EventBridge" {
+    class: alerting
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "lọc và chuyển tiếp finding" {class: sub}
+    r: "bus mặc định của svp-security" {class: sub}
+  }
+  sns: "Amazon SNS" {
+    class: alerting
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "gửi tới mọi subscription" {class: sub}
+    r: "topic svp-security-alarms" {class: sub}
+  }
+}
+
+email: "Email cảnh báo" {
+  class: workload
+  grid-rows: 2
+  grid-gap: 24
+  vertical-gap: 6
+  s: "một dòng mỗi finding, kèm link runbook" {class: sub}
+  r: "security_alert_email" {class: sub}
+}
+
+env.guardduty -> env.hub: "security_hub = always" {class: data-flow}
+env.hub -> security.always {class: data-flow}
+env.guardduty -> security.off: "mọi finding" {class: data-flow}
+security.always -> security.events {class: data-flow}
+security.off -> security.events {class: data-flow}
+security.events -> security.sns {class: data-flow}
+security.sns -> email {class: data-flow}

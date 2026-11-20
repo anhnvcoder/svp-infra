@@ -1,0 +1,89 @@
+# The four places that keep the bill of svp small: Infracost on a pull request (cost.yml, infracost.yml), the cost flags
+# of aws/paid-features.json read through the paid-features module, the session that builds and removes the env roots
+# (session.sh, sweep.sh), and the budgets and anomaly monitor that email the learner (budget.tf, cost.tf,
+# module account-baseline).
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 0
+    dark-theme-id: 200
+    pad: 20
+  }
+}
+...@tokens
+
+direction: down
+
+title: "Bốn chốt giữ hoá đơn của svp nhỏ: trước merge, giữa các buổi, trong buổi, sau khi tiêu" {
+  shape: text
+  near: top-center
+  style: {font-size: 18; bold: true}
+}
+
+pr: "Trước merge · Infracost trên PR" {
+  class: detection
+  grid-rows: 3
+  grid-gap: 24
+  vertical-gap: 6
+  s1: "cost.yml đọc HCL, đăng giá tháng của base, PR và phần chênh" {class: sub}
+  s2: "chỉ thông tin, không chặn merge" {class: sub}
+  r: "infracost.yml · ci/infracost.sh" {class: root}
+}
+
+org: "Tổ chức AWS của svp" {
+  class: trust
+  style: {font-size: 15; bold: true}
+  label.near: bottom-left
+
+  steady: "Giữa các buổi · cờ chi phí" {
+    class: governance
+    grid-rows: 3
+    grid-gap: 24
+    vertical-gap: 6
+    s1: "aws/paid-features.json: giá trị rẻ nhất hợp lệ; vắng là always" {class: sub}
+    s2: "module paid-features: validation, flags, off_accounts" {class: sub}
+    r: "aws/security · aws/baseline · aws/accounts/<env>" {class: root}
+  }
+
+  session: "Trong buổi · tối đa 4 giờ" {
+    class: workload
+    grid-rows: 3
+    grid-gap: 24
+    vertical-gap: 6
+    s1: "session.sh: dựng, đo, diễn tập, gỡ hai root của buổi" {class: sub}
+    s2: "sweep.sh <env> rồi sweep.sh mgmt: liệt kê đồ sót" {class: sub}
+    r: "aws/envs/<env> · aws/gitops/<env>" {class: root}
+  }
+
+  bill: "Hoá đơn gộp của tổ chức" {
+    class: data
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s1: "~31 USD mỗi tháng không buổi (tháng đầu)" {class: sub}
+    s2: "tag phân bổ Project · Env · Stack" {class: sub}
+  }
+
+  alert: "Sau khi tiêu · báo tiền" {
+    class: alerting
+    grid-rows: 3
+    grid-gap: 24
+    vertical-gap: 6
+    s1: "Budgets: 50 · 80 · 100 % thực tế, 100 % dự báo" {class: sub}
+    s2: "Cost Anomaly Detection: tóm tắt mỗi ngày" {class: sub}
+    r: "aws/bootstrap · aws/accounts/<env>" {class: root}
+  }
+}
+
+email: "Email budget_emails" {
+  class: workload
+  grid-rows: 1
+  grid-gap: 24
+  s: "*.auto.tfvars, không commit" {class: sub}
+}
+
+pr -> org.steady: "merge, rồi người học áp" {class: control-flow}
+org.steady -> org.bill: "phí giữ" {class: data-flow}
+org.session -> org.bill: "phí theo giờ" {class: data-flow}
+org.bill -> org.alert {class: data-flow}
+org.alert -> email {class: data-flow}

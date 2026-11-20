@@ -1,65 +1,37 @@
 # Module `ci-plan-role`
 
-Role IAM `svp-ci-terraform-plan` của một account env (`svp-stg`, `svp-prd`), gọi từ root `aws/accounts/<env>`
-([README](../../accounts/README.md#role-plan-của-ci)) nên sống giữa các buổi. Workflow `plan.yml` của `svp-infra` assume role này qua OIDC
-để chạy `terraform plan` trên PR: role đọc được cấu hình của account và state của hai root, không đọc được dữ liệu workload, không ghi gì
-vào bucket state. Thiết kế, tập Deny và kiểm kê refresh:
-[ADR-0076](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0076-terraform-plan-infracost-pr.md) §4–§6 và phụ lục của nó (số §
-dưới đây là § của ADR).
+Role IAM `svp-ci-terraform-plan` của một account env (`svp-stg`, `svp-prd`) mà job `plan` của workflow `plan.yml` assume qua OIDC để
+chạy `terraform plan` trên PR: `ReadOnlyAccess`, policy inline đọc state qua S3, policy inline Deny dữ liệu workload và mọi ghi lên bucket
+state. Root [`aws/accounts/<env>`](../../accounts/README.md) gọi module, nên role sống giữa các buổi. Lý do, trust theo `sub` và luồng
+đọc state ở [chương 14. CI](../../../docs/handbook/14-ci.md#role-plan-svp-ci-terraform-plan); bảng Deny ở
+[`docs/reference/ci.md`](../../../docs/reference/ci.md#quyền-của-role-plan).
 
-## Luồng đọc state
+## Ví dụ
 
-```mermaid
-sequenceDiagram
-  participant job as Job plan (environment terraform-plan)
-  participant sts as STS
-  participant s3 as Bucket state
-  participant kms as Khoá alias/svp-tfstate
-  job->>sts: AssumeRoleWithWebIdentity (token OIDC, sub của environment)
-  sts-->>job: phiên svp-ci-terraform-plan, tối đa 1 giờ
-  job->>s3: GetObject aws/accounts/#60;env#62;/terraform.tfstate
-  s3->>kms: Decrypt (kms:ViaService s3, encryption context là ARN bucket)
-  kms-->>s3: khoá dữ liệu
-  s3-->>job: state
+Lời gọi trong `aws/accounts/stg/main.tf`, giá trị placeholder:
+
+```hcl
+module "ci_plan_role" {
+  source = "../../modules/ci-plan-role"
+
+  env               = "stg"
+  oidc_provider_arn = "arn:aws:iam::000000000000:oidc-provider/token.actions.githubusercontent.com" # module.registry
+  subject           = "repo:<owner>@<owner-id>/svp-infra@<repo-id>:environment:terraform-plan"
+  state_bucket      = "svp-tfstate-000000000000-ap-southeast-1"                                      # module.baseline
+  state_kms_key_arn = "arn:aws:kms:ap-southeast-1:000000000000:key/<key-id>"                         # module.baseline
+}
 ```
 
-Job nhận phiên chỉ khi người học duyệt lượt đó ở environment `terraform-plan`. S3 giải mã state thay cho role: lần `kms:Decrypt` đi qua S3 nên
-mang `kms:ViaService` và encryption context của bucket (S3 Bucket Key dùng ARN bucket). Gọi KMS trực tiếp bằng role thì bị Deny.
+Key policy của khoá state cần statement `CiPlanReadsState` cho đúng role này (module
+[`account-baseline`](../account-baseline/README.md)): thiếu nó thì role không giải mã được state. `tests/ci-plan-role.tftest.hcl` (mock
+provider, chỉ `plan`) kiểm trust, phiên, hai policy inline và mỗi luật validation (`make test DIRS=aws/modules/ci-plan-role`).
 
-## Trust
+## Tham chiếu
 
-- Principal: IAM OIDC provider của GitHub Actions trong account (`oidc_provider_arn`, output `github_oidc_provider_arn` của module
-  [`registry`](../registry/README.md#role-ci)); `StringEquals` trên `aud` = `sts.amazonaws.com` và trên `sub` đúng một chuỗi (`subject`).
-- Validation chỉ nhận `sub` dạng bất biến của job có environment, `repo:<owner>@<owner-id>/<repo>@<repo-id>:environment:<tên>`: không ký tự
-  đại diện, không dạng `ref:`, `pull_request`. Reviewer bắt buộc của environment là lượt duyệt của mỗi lần đọc account (§1).
-- Phiên tối đa 3 600 giây, mức thấp nhất IAM nhận.
-
-## Quyền
-
-- `ReadOnlyAccess` (policy AWS quản lý), gắn bằng `aws_iam_role_policy_attachment`.
-- Policy inline `svp-ci-terraform-plan-read`:
-  - `StateKeyViaS3`: `kms:Decrypt` trên khoá state (`state_kms_key_arn`, ARN dạng `key/<id>`: IAM không khớp ARN alias) khi
-    `kms:ViaService` là S3 của region và encryption context là ARN bucket state. Key policy của khoá ủy quyền dùng cho IAM qua statement
-    `CiPlanReadsState` của module [`account-baseline`](../account-baseline/README.md), nên cần cả hai phía.
-  - `RefreshReadsMissing`: `grafana:ListWorkspaceServiceAccounts`, `pricingplanmanager:GetSubscription`, hai lệnh đọc mà refresh gọi và
-    `ReadOnlyAccess` không có (§6).
-- Policy inline `svp-ci-terraform-plan-deny` (explicit Deny thắng mọi Allow, cả của resource policy):
-
-  | Sid | Chặn |
-  | --- | --- |
-  | `DenyWorkloadData` | Đọc dữ liệu workload trên mọi resource: giá trị secret, item DynamoDB, log event, message SQS, record Kinesis, trace, truy vấn AMP, log RDS, console EC2 (danh sách ở `local.workload_data_actions`) |
-  | `DenyObjectReads` | `s3:GetObject*` trên mọi object trừ hai khoá state của env và `media/uptime-probe.txt` của bucket media (`svp-<env>-media-<account>-<region>`) |
-  | `DenyDecryptOtherKeys` | `kms:Decrypt` trên mọi khoá trừ khoá state; giá trị `SecureString` của SSM cũng cần giải mã nên bị chặn theo |
-  | `DenyDecryptStateOutsideS3` | `kms:Decrypt` trên khoá state khi không qua S3 |
-  | `DenyStateWrites` | Mọi hành động S3 trừ `s3:Get*`, `s3:List*` trên bucket state và object của nó, cả file khoá `.tflock` |
-
-Thêm resource mà refresh đọc bằng hành động trong tập Deny hay ngoài `ReadOnlyAccess` thì đối chiếu lại §6 trước khi đổi tập ở đây.
-
-## Test
-
-`tests/ci-plan-role.tftest.hcl` (mock provider, chỉ `plan`) kiểm với stg và prd: tên role, phiên 1 giờ; trust đúng provider, `aud` và một `sub`;
-`ReadOnlyAccess` gắn; policy read đúng hai statement và điều kiện; policy deny đúng năm statement, hành động, resource, ngoại lệ theo env; rồi một
-run mỗi luật validation (env, ARN provider, `sub` có ký tự đại diện, dạng `pull_request`, dạng không bất biến, tên bucket, ARN alias của khoá).
+- [Chương 14. CI](../../../docs/handbook/14-ci.md): plan trên PR, bảo mật của CI, role plan.
+- [`docs/reference/ci.md`](../../../docs/reference/ci.md#plan-trên-pr): root được plan, giá trị che, duyệt lượt chờ, quyền của role.
+- [ADR-0076](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0076-terraform-plan-infracost-pr.md) §4–§6: thiết kế,
+  tập Deny, kiểm kê refresh.
 
 <!-- markdownlint-disable MD033 -->
 <!-- BEGIN_TF_DOCS -->

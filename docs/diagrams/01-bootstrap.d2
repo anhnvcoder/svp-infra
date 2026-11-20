@@ -1,0 +1,83 @@
+# What aws/bootstrap keeps for the other roots of the management account (state.tf) and how the cost of the whole
+# organization reaches email (budget.tf, cost.tf). The roots that read the bucket are the init_roots of
+# aws/scripts/tfvars.sh.
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 0
+    dark-theme-id: 200
+    pad: 20
+  }
+}
+...@tokens
+
+direction: down
+
+title: "Bootstrap giữ state cho các root của management và báo tiền của cả tổ chức" {
+  shape: text
+  near: top-center
+  style: {font-size: 18; bold: true}
+}
+
+mgmt: "Management account" {
+  class: account
+  label.near: top-left
+
+  roots: "Root Terraform của management" {
+    class: workload
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "org · log-archive · security · baseline · backup · github" {class: sub}
+    r: "-backend-config=aws/backend.hcl" {class: root}
+  }
+
+  state: "Bucket state" {
+    class: data
+    grid-rows: 3
+    grid-gap: 24
+    vertical-gap: 6
+    s1: "S3 · một key mỗi root · lock file" {class: sub}
+    s2: "versioning · chỉ TLS · không public" {class: sub}
+    r: "svp-tfstate-<account>-ap-southeast-1" {class: root}
+  }
+  key: "KMS key" {
+    class: prevention
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "mã hoá mặc định · xoay mỗi năm" {class: sub}
+    r: "alias/svp-tfstate · ap-southeast-1" {class: root}
+  }
+
+  cost: "Báo tiền (dịch vụ toàn cục)" {
+    class: alerting
+    grid-rows: 3
+    grid-gap: 24
+    vertical-gap: 6
+    s1: "Budgets svp-monthly: 50 · 80 · 100 % thực tế, 100 % dự báo" {class: sub}
+    s2: "Cost Anomaly Detection: svp-services, svp-daily" {class: sub}
+    s3: "tag phân bổ Project · Env · Stack" {class: sub}
+  }
+}
+
+bill: "Hoá đơn gộp" {
+  class: workload
+  grid-rows: 2
+  grid-gap: 24
+  vertical-gap: 6
+  s: "management và mọi account thành viên" {class: sub}
+  r: "dữ liệu billing trễ khoảng một ngày" {class: sub}
+}
+
+email: "Email budget_emails" {
+  class: workload
+  grid-rows: 1
+  grid-gap: 24
+  s: "bootstrap.auto.tfvars, không commit" {class: sub}
+}
+
+mgmt.roots -> mgmt.state: "state, khoá" {class: data-flow}
+mgmt.key -> mgmt.state: "mã hoá" {class: control-flow}
+bill -> mgmt.cost {class: data-flow}
+mgmt.cost -> email {class: data-flow}

@@ -1,106 +1,39 @@
 # Module `security-baseline`
 
-Baseline bảo mật của một account: S3 Block Public Access cấp account, EBS mã hoá mặc định, AWS Config ghi liên tục, và rule EventBridge chuyển sự
-kiện bảo mật sang account Security Tooling. Root `aws/baseline` gọi module một lần mỗi account, chạy từ management qua
-`OrganizationAccountAccessRole`. Thiết kế: [ADR-0059](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0059-org-structure-guardrails.md)
-§9 và [ADR-0060](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0060-org-detection-logging.md) §4, §10; event pattern đủ ở phụ
-lục ADR-0060.
+Baseline bảo mật của một account: S3 Block Public Access cấp account, EBS mã hoá mặc định ở hai region, AWS Config ghi liên tục theo
+`config_recording`, và rule EventBridge `svp-security-*` chuyển sự kiện bảo mật sang bus `svp-security-events` của `svp-security` qua role
+`svp-security-forwarder`. Root `aws/baseline` gọi module đúng một lần mỗi account, chạy từ management qua `OrganizationAccountAccessRole`
+(management: phiên SSO). Phần baseline giải thích ở chương [06. Baseline](../../../docs/handbook/06-baseline.md), bảng
+rule ở [tra cứu đường cảnh báo](../../../docs/reference/security-alerts.md#rule-chuyển-sự-kiện); test:
+`make test DIRS=aws/modules/security-baseline`.
 
-Module dùng một provider `aws` ở region nhà (region của provider). Tài nguyên ở region khác đặt đối số `region` của AWS provider v6, không dùng
-provider thứ hai: `us-east-1` là region phụ cố định, vì IAM và Organizations ghi sự kiện CloudTrail ở đó và SCP `svp-deny-other-regions` chỉ cho
-hai region này.
+## Ví dụ
 
-## Tạo gì
+Lời gọi của account stg trong `aws/baseline/main.tf`, giá trị là placeholder:
 
-- **S3 Block Public Access cấp account:** bốn cờ `true`. Cài đặt của cả account, không theo region.
-- **EBS mã hoá mặc định:** bật ở region nhà và `us-east-1`. Key mặc định ở region nhà là `ebs_kms_key_arn` khi có (CMK EBS của `svp-stg`,
-  `svp-prd`); `null` giữ key AWS managed `aws/ebs`. `us-east-1` luôn dùng `aws/ebs`. Key phải cùng region nhà (precondition), vì EC2 chỉ nhận key
-  mặc định của chính region. Xoá `ebs_kms_key_arn` thì Terraform xoá tài nguyên key mặc định, EC2 trở về `aws/ebs`.
-- **AWS Config**, mỗi region một bộ khi `config_recording` là `true` (mặc định):
-  - Service-linked role `AWSServiceRoleForConfig`, có ở mọi giá trị của `config_recording`; recorder dùng ARN của role này, ghép từ partition và
-    account để plan biết trước.
-  - Recorder `default`: mọi loại tài nguyên hỗ trợ, `recording_frequency` `CONTINUOUS`. Loại toàn cục (IAM) chỉ ghi ở region nhà
-    ([điều kiện Config của Security Hub](https://docs.aws.amazon.com/securityhub/latest/userguide/securityhub-setup-prereqs.html)), không thì
-    mọi region ghi cùng một thay đổi. Ghi liên tục thay vì hằng ngày vì tài nguyên của buổi chỉ sống vài giờ
-    ([tần suất ghi](https://docs.aws.amazon.com/config/latest/developerguide/select-resources.html)).
-  - Delivery channel `default` về `config_bucket_name` (bucket Config của Log Archive), mã hoá bằng `log_archive_key_arn`, snapshot 24 giờ. Config
-    giao object bằng principal `config.amazonaws.com`, bucket policy của Log Archive cho phép
-    ([quyền bucket](https://docs.aws.amazon.com/config/latest/developerguide/s3-bucket-policy.html)).
-  - Trạng thái recorder bật, sau khi delivery channel có (`depends_on`): recorder không chạy được khi region chưa có delivery channel.
-- **`config_recording`** = `false`: account không có recorder, delivery channel, recorder status ở cả hai region. Service-linked role, S3 Block
-  Public Access, EBS mã hoá và mọi rule chuyển sự kiện giữ nguyên. Root ánh xạ cờ `config_recording` của file cờ chi phí (`off` → `false`); cờ,
-  giá trị theo account và cái giá ở [ADR-0071](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0071-paid-features.md).
-  Rule `svp-security-detection`, `svp-security-denied-detection` vẫn hợp lệ: chúng khớp lời gọi API Config do CloudTrail ghi, không cần recorder.
-  Đổi `true` → `false` xoá recorder status, delivery channel, recorder của hai region; lịch sử đã giao vào bucket Config của Log Archive còn.
-  Lần apply đó `svp-security-detection` báo `StopConfigurationRecorder`, `DeleteDeliveryChannel`, `DeleteConfigurationRecorder` thành công.
-- **Rule chuyển sự kiện** trên bus mặc định, đích là bus `svp-security-events` của Security Tooling (`security_event_bus_arn`), qua role
-  `svp-security-forwarder`: đích là bus của account khác thì EventBridge cần role
-  ([gửi sự kiện giữa account](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-cross-account.html)). Role chỉ tin
-  `events.amazonaws.com` với `aws:SourceAccount` là account, chỉ được `events:PutEvents` trên bus đó.
+```hcl
+module "stg" {
+  source    = "../modules/security-baseline"
+  providers = { aws = aws.stg }
 
-## Rule theo input
+  config_bucket_name     = "svp-config-000000000000-ap-southeast-1"
+  log_archive_key_arn    = "arn:aws:kms:ap-southeast-1:000000000000:key/<id>"
+  security_event_bus_arn = "arn:aws:events:ap-southeast-1:000000000000:event-bus/svp-security-events"
+  ebs_kms_key_arn        = "arn:aws:kms:ap-southeast-1:000000000000:key/<id>"
+  admin_events           = false
+  organization_events    = false
+  root_signin_regions    = ["us-east-1"]
+  identity_center_region = null
+  config_recording       = false
+}
+```
 
-| Rule | Region | Có khi |
-| --- | --- | --- |
-| `svp-security-root-signin` | `root_signin_regions` | luôn |
-| `svp-security-trail`, `svp-security-detection`, `svp-security-alert-rules` | nhà, `us-east-1` | luôn |
-| `svp-security-denied-iam` | `us-east-1` | luôn |
-| `svp-security-denied-detection`, `svp-security-denied-storage` | nhà, `us-east-1` | luôn |
-| `svp-security-root-session`, `svp-security-org` | `root-session`: nhà, `us-east-1`; `org`: `us-east-1` | `organization_events` |
-| `svp-security-admin-iam`, `svp-security-admin-kms-s3` | `admin-iam`: `us-east-1`; `admin-kms-s3`: nhà, `us-east-1` | `admin_events` |
-| `svp-security-admin-sso` | `identity_center_region` | `identity_center_region` khác `null` |
+## Tham chiếu
 
-- Nhóm `denied-*` có ở mọi account, kể cả stg, prd, không phụ thuộc `admin_events`: lệnh bị SCP `svp-protect-baseline`, `svp-deny-iam-users`
-  từ chối luôn là sự kiện cần biết. `errorCode` khớp `prefix` `AccessDenied` (phủ cả `AccessDeniedException` của API JSON);
-  `denied-storage` khớp thêm `Client.UnauthorizedOperation` của EC2, kể cả `--dry-run`.
-- `svp-security-root-signin`: CloudTrail ghi đăng nhập console của root ở `us-east-1`, `us-east-2` hay `us-west-2`
-  ([sự kiện đăng nhập](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-event-reference-aws-console-sign-in-events.html)).
-  Management truyền cả ba; account thành viên giữ mặc định `us-east-1`, vì SCP chặn chúng ở region khác.
-- `svp-security-root-session` có `state` `ENABLED_WITH_ALL_CLOUDTRAIL_MANAGEMENT_EVENTS`: `AssumeRoot` có thể là sự kiện chỉ đọc, mà rule
-  `ENABLED` chỉ nhận sự kiện ghi
-  ([sự kiện quản lý của CloudTrail](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-service-event-cloudtrail-management.html)).
-- `admin_events` chỉ bật ở account ít đổi IAM, KMS, S3 (management, `svp-log-archive`, `svp-security`): mỗi buổi stg, prd tạo và xoá hàng chục
-  role, key, bucket.
-- Ba rule `svp-security-admin-*` bỏ phiên Terraform của account: sự kiện có `userIdentity.arn` là
-  `arn:<partition>:sts::<account>:assumed-role/OrganizationAccountAccessRole/svp-terraform` không khớp (`anything-but`); sự kiện không có
-  `arn` (lời gọi của dịch vụ AWS) vẫn khớp qua nhánh `exists` `false` của `$or`
-  ([toán tử của event pattern](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-create-pattern-operators.html)). Cảnh báo đổi
-  quản trị nhắm thay đổi đi ngoài pipeline IaC; thay đổi của chính pipeline đã được đọc ở plan trước apply. Mọi root qua role
-  (`aws/log-archive`, `aws/security`, `aws/baseline`, `aws/backup`, provider `log_archive` của `aws/org`) assume role với `session_name`
-  `svp-terraform`, nên apply của chúng không gửi email đổi quản trị từ `svp-log-archive`, `svp-security`, `svp-backup`.
-- Tên phiên do người gọi đặt: principal nào assume được `OrganizationAccountAccessRole` cũng đặt được `svp-terraform`. Bộ lọc không mở
-  thêm quyền nào: role đó đã là principal duy nhất `svp-protect-baseline` cho sửa baseline của account.
-- Phiên SSO vẫn cảnh báo. Management không có `OrganizationAccountAccessRole`: root `aws/bootstrap`, `aws/org`, `github/` và provider `mgmt`
-  của `aws/baseline` chạy bằng phiên SSO của `anhnv-sso`, cũng là phiên console của người học. Event không tách được Terraform khỏi thao tác
-  tay hay người dùng phiên bị lộ (`userAgent` do client tự đặt), nên apply ở management vẫn gửi email `admin-iam`, `admin-kms-s3`,
-  `admin-sso`. Phiên `SvpAdmin` chỉ có ở stg, prd, nơi không có rule `admin-*`.
-- Các rule còn lại không lọc phiên: thay đổi trail, rule cảnh báo, dịch vụ phát hiện, root, Organizations và lệnh bị guardrail từ chối là
-  việc không ai được làm ngoài lúc apply đã đọc plan, kể cả pipeline.
-- Pattern viết bằng `jsonencode`; mỗi pattern tối đa 2 048 ký tự ([EventBridge quotas](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-quota.html)),
-  test kiểm cỡ.
-- Tên rule và role bắt đầu `svp-security-` vì `svp-protect-baseline` chặn mọi principal trừ `OrganizationAccountAccessRole` sửa rule, role theo
-  đúng tiền tố đó. Đổi tên thì đổi cả SCP.
-
-## Áp lần đầu
-
-- Mỗi account mỗi region chỉ có một recorder và một delivery channel. Module đặt tên cố định `default`; `PutConfigurationRecorder`,
-  `PutDeliveryChannel` với tên đã có thì cập nhật chứ không báo lỗi. Gọi module lần hai cho cùng account vì vậy không tạo recorder thứ hai mà
-  apply thành công, hai địa chỉ state cùng ghi đè một recorder: root gọi module đúng một lần mỗi account.
-- Account đã có `AWSServiceRoleForConfig`, recorder hay delivery channel tạo tay thì root nhập chúng vào state bằng khối `import` trước apply,
-  không thêm cờ "đã có" vào module. Địa chỉ: `module.<account>.aws_iam_service_linked_role.config`,
-  `module.<account>.aws_config_configuration_recorder.this["<region>"]`, `module.<account>.aws_config_delivery_channel.this["<region>"]`.
-- Khi bus của Security Tooling đã có rule gửi SNS, apply của module sinh email từ chính các rule của nó, ở mỗi account áp baseline:
-  - apply đầu tiên: `svp-security-detection` báo `PutConfigurationRecorder`, `PutDeliveryChannel` thành công;
-  - apply đầu tiên và mỗi lần đổi pattern hay đích: `svp-security-alert-rules` báo mỗi `PutRule`, `PutTargets` thành công trên rule
-    `svp-security-*` chạy sau khi chính nó đã có hiệu lực, một email mỗi lời gọi.
-  - apply đổi IAM, KMS hay S3 của management (provider `mgmt`, phiên SSO): `svp-security-admin-*` báo từng lệnh; account thành viên thì
-    không, vì apply qua phiên `svp-terraform`.
-
-Test (`make test DIRS=aws/modules/security-baseline`, provider giả): bốn cờ BPA, EBS mã hoá ở hai region, recorder `CONTINUOUS` với loại toàn cục
-chỉ ở region nhà, delivery channel đúng bucket và key, tập rule của account thành viên, của management và của `admin_events`, region và đích của
-từng rule, nội dung các pattern, ba rule `admin-*` bỏ đúng phiên `svp-terraform` của account và rule khác không lọc phiên, role chuyển sự
-kiện; số tài nguyên Config mỗi region và các tài nguyên giữ ở cả hai giá trị của `config_recording`; mỗi luật validation và precondition một
-plan.
+- [Rule và đường cảnh báo bảo mật](../../../docs/reference/security-alerts.md): rule theo input, bộ lọc phiên Terraform của
+  `svp-security-admin-*` (ghi chú thiết kế mà `events.tf` trỏ tới), link event pattern đủ; lý do ở chương 05.
+- Chương [06. Baseline](../../../docs/handbook/06-baseline.md): S3 Block Public Access, EBS mã hoá, recorder Config (ghi chú
+  thiết kế mà `main.tf`, `config.tf` trỏ tới).
 
 <!-- markdownlint-disable MD033 -->
 <!-- BEGIN_TF_DOCS -->

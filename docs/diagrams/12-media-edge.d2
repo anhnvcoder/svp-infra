@@ -1,0 +1,112 @@
+# Overview of the way in and the media of an env (aws/envs/<env>: modules edge, waf, media, transcode): the viewer
+# reaches every public name through CloudFront and its web ACL, uploads go straight to the uploads bucket, MediaConvert
+# turns them into HLS in the media bucket, and the edge logs land in the log archive account.
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 0
+    dark-theme-id: 200
+    pad: 20
+  }
+}
+...@tokens
+
+direction: down
+
+title: "Video đi từ lúc tải lên tới lúc người xem phát qua những chặng nào?" {
+  shape: text
+  near: top-center
+  style: {font-size: 18; bold: true}
+}
+
+viewer: "Trình duyệt" {
+  class: workload
+  grid-rows: 2
+  grid-gap: 24
+  vertical-gap: 6
+  s: "<domain> · api.<domain> · media.<domain>" {class: sub}
+  r: "web, hls.js" {class: root}
+}
+
+env: "svp-stg · svp-prd" {
+  class: account
+  label.near: top-left
+
+  edge: "Đường vào duy nhất" {
+    class: prevention
+    grid-rows: 3
+    grid-gap: 24
+    vertical-gap: 6
+    s: "CloudFront ×3 · web ACL WAF ×3 · cert ACM (us-east-1)" {class: sub}
+    t: "media/ · preview/ công khai, mọi path khác cần URL ký" {class: sub}
+    r: "aws/modules/edge · waf · media" {class: root}
+  }
+
+  home: "ap-southeast-1" {
+    class: region
+    label.near: bottom-left
+
+    app: "Ứng dụng trong VPC" {
+      class: workload
+      grid-rows: 3
+      grid-gap: 24
+      vertical-gap: 6
+      s: "ALB internal · Envoy · gateway · video-service" {class: sub}
+      t: "media-worker mediaconvert (bridge)" {class: sub}
+      r: "aws/modules/edge · eks" {class: root}
+    }
+
+    uploads: "Bucket uploads" {
+      class: data
+      grid-rows: 3
+      grid-gap: 24
+      vertical-gap: 6
+      s: "SSE-KMS · quét malware GuardDuty" {class: sub}
+      t: "uploads/<video_id>, Deep Archive sau 30 ngày" {class: sub}
+      r: "aws/modules/media" {class: root}
+    }
+
+    transcode: "Transcode" {
+      class: workload
+      grid-rows: 3
+      grid-gap: 24
+      vertical-gap: 6
+      s: "MediaConvert queue svp-<env> · on-demand" {class: sub}
+      t: "EventBridge → SQS, DLQ có alarm page" {class: sub}
+      r: "aws/modules/transcode" {class: root}
+    }
+
+    media: "Bucket media" {
+      class: data
+      grid-rows: 3
+      grid-gap: 24
+      vertical-gap: 6
+      s: "media/ · premium/ · preview/" {class: sub}
+      t: "chỉ distribution media đọc, qua OAC" {class: sub}
+      r: "aws/modules/media" {class: root}
+    }
+  }
+}
+
+log: "svp-log-archive (us-east-1)" {
+  class: account
+  label.near: bottom-left
+
+  logs: "Log edge" {
+    class: investigation
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "log WAF mọi request · log chuẩn v2 web, api (media chỉ prd)" {class: sub}
+    r: "aws/log-archive" {class: root}
+  }
+}
+
+viewer -> env.edge: "HTTPS" {class: data-flow}
+viewer -> env.home.uploads: "POST form đã ký" {class: data-flow}
+env.edge -> env.home.app: "VPC origin" {class: data-flow}
+env.home.app -> env.home.transcode: "CreateJob, đọc SQS" {class: control-flow}
+env.home.uploads -> env.home.transcode: "bản gốc" {class: data-flow}
+env.home.transcode -> env.home.media: "HLS" {class: data-flow}
+env.edge -> env.home.media: "OAC, GET" {class: data-flow}
+env.edge -> log.logs: {class: data-flow}

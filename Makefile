@@ -43,6 +43,10 @@ INFRACOST_IMAGE  := infracost/infracost:ci-0.10.49@sha256:78ce091ec7324caa46b8fb
 # Same version as GITLEAKS_VERSION of the code repository's Makefile, which installs it with go install.
 # renovate: datasource=docker depName=ghcr.io/gitleaks/gitleaks
 GITLEAKS_IMAGE   := ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+# D2 from its official image (terrastruct/d2 on Docker Hub is a mirror), a multi-architecture index: the SVGs come out
+# byte for byte the same on arm64 and amd64, with the ELK and TALA layout engines bundled, offline.
+# renovate: datasource=docker depName=d2lang/d2
+D2_IMAGE         := d2lang/d2:v0.9.0@sha256:0f9237e0213338415de5ef7436c92450ddd04e0e6e7df2db3f41387322df97b9
 
 # Platforms whose provider hashes `make lock` writes into the lock file of a root: the Mac that runs plan and apply,
 # and the two Linux architectures of CI and of the images.
@@ -101,17 +105,17 @@ IS_MODULE = case "/$$d/" in (*/modules/*) true;; (*) false;; esac
 .DEFAULT_GOAL := help
 
 .PHONY: help check check-terraform check-lint check-test check-scripts hooks pre-commit \
-	fmt-check fmt validate tflint tfdocs tfdocs-check trivy shellcheck zizmor docs-check session-test test-guard test lock \
+	fmt-check fmt validate tflint tfdocs tfdocs-check trivy shellcheck zizmor docs-check diagrams diagrams-check session-test test-guard test lock \
 	github-app-test github-check github-app github-app-key github-settings github-secrets infracost-key github-tfvars \
 	github-plan github-apply ci-plan ci-plan-test infracost infracost-comment infracost-test
 
 help: ## List the targets
 	@grep -hE '^[a-zA-Z0-9_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-15s %s\n", $$1, $$2}'
 
-check: check-terraform check-lint check-test check-scripts docs-check ## Every static check (narrow the Terraform ones with DIRS=<dir> ...)
+check: check-terraform check-lint check-test check-scripts docs-check diagrams-check ## Every static check (narrow the Terraform ones with DIRS=<dir> ...)
 
-# Each check-* group is one job of .github/workflows/check.yml, and docs-check is its job docs: a target added to a
-# group runs in CI with no change to the workflow. The groups are split by the time they take in CI.
+# Each check-* group is one job of .github/workflows/check.yml, and docs-check with diagrams-check is its job docs: a
+# target added to a group runs in CI with no change to the workflow. The groups are split by the time they take in CI.
 check-terraform: fmt-check validate tfdocs-check ## terraform fmt -check, init and validate, terraform-docs --output-check
 check-lint: tflint trivy ## tflint and trivy config
 check-test: test-guard test ## terraform test of the modules, and the self-test of its rules
@@ -272,6 +276,51 @@ docs-check: ## markdownlint-cli2 + lychee --offline on the Markdown (DOCS='<file
 	$(DOCKER) --network none -v "$(CURDIR):/repo:ro" -w /repo $(LYCHEE_IMAGE) --offline --include-fragments "$$@" || rc=1; \
 	[ $$rc = 0 ] || echo "FAIL: docs-check" >&2; \
 	exit $$rc
+
+# docs/diagrams/<name>.d2 is the source, <name>.svg is generated; tokens.d2 holds shared classes. Engine and both themes
+# come from d2-config in each file. NAMES='<name …>' limits both targets (parallel edits never rewrite another SVG);
+# LAYOUT overrides the engine, OUT=<dir in repo> writes elsewhere, SUFFIX renames, PNG=1 adds a PNG to look at.
+DIAGRAMS_DIR := docs/diagrams
+NAMES ?=
+OUT ?=
+SUFFIX ?=
+LAYOUT ?=
+PNG ?=
+
+# Renders every diagram into $$out with $$layout, $$suffix and $$png set by the caller; a diagram without a dark theme
+# is an error, since the SVG would show a white box on a dark page. The container has no network.
+D2_RENDER = \
+	for f in $$srcs; do \
+	  n=$$(basename "$$f" .d2); echo "d2 $$n"; \
+	  for ext in svg $$png; do \
+	    msg=$$($(DOCKER) --network none --entrypoint d2 -v "$(CURDIR)/$(DIAGRAMS_DIR):/work:ro" -v "$$out:/out" -w /work \
+	      $(D2_IMAGE) $$layout "$$n.d2" "/out/$$n$$suffix.$$ext" 2>&1) || { echo "$$msg" >&2; echo "FAIL: d2 $$f" >&2; exit 1; }; \
+	  done; \
+	  grep -q prefers-color-scheme "$$out/$$n$$suffix.svg" || { echo "FAIL: $$f has no dark theme (dark-theme-id in d2-config)" >&2; exit 1; }; \
+	done
+
+diagrams: ## D2 to SVG (light and dark in one file) of docs/diagrams/*.d2 (NAMES=, LAYOUT=, OUT=<dir>, SUFFIX=, PNG=1)
+	@srcs=$$(if [ -n "$(NAMES)" ]; then for n in $(NAMES); do echo "$(DIAGRAMS_DIR)/$$n.d2"; done; \
+	  else ls $(DIAGRAMS_DIR)/*.d2 2>/dev/null | grep -v '/tokens\.d2$$'; fi); [ -n "$$srcs" ] || { echo "diagrams: no .d2 file"; exit 0; }; \
+	dir=$${OUT:-$(DIAGRAMS_DIR)}; \
+	case "$$dir" in (/*|..|../*|*/..|*/../*) echo "OUT: $$dir is outside this repository; give a path relative to it" >&2; exit 1;; esac; \
+	case "$$SUFFIX" in (*/*) echo "SUFFIX: no slash in a file name" >&2; exit 1;; esac; \
+	mkdir -p "$$dir" && out=$$(cd "$$dir" && pwd) || exit 1; \
+	layout=; [ -z "$$LAYOUT" ] || layout="--layout=$$LAYOUT"; suffix=$$SUFFIX; png=; [ -z "$$PNG" ] || png=png; \
+	$(D2_RENDER)
+
+diagrams-check: ## Fails, naming the file, when a committed SVG differs from what its .d2 renders to or has no .d2
+	@srcs=$$(if [ -n "$(NAMES)" ]; then for n in $(NAMES); do echo "$(DIAGRAMS_DIR)/$$n.d2"; done; \
+	  else ls $(DIAGRAMS_DIR)/*.d2 2>/dev/null | grep -v '/tokens\.d2$$'; fi); [ -n "$$srcs" ] || { echo "diagrams-check: no .d2 file"; exit 0; }; \
+	out=$$(mktemp -d) || exit 1; trap 'rm -rf "$$out"' EXIT; layout=; suffix=; png=; \
+	$(D2_RENDER); rc=0; \
+	for f in $$srcs; do \
+	  svg="$(DIAGRAMS_DIR)/$$(basename "$$f" .d2).svg"; \
+	  cmp -s "$$out/$$(basename "$$svg")" "$$svg" || { echo "FAIL: $$svg is out of date or missing (run make diagrams)" >&2; rc=1; }; \
+	done; \
+	[ -n "$(NAMES)" ] || for svg in $(DIAGRAMS_DIR)/*.svg; do \
+	  [ ! -f "$$svg" ] || [ -f "$${svg%.svg}.d2" ] || { echo "FAIL: $$svg has no .d2 source (restore it, or drop the SVG)" >&2; rc=1; }; \
+	done; exit $$rc
 
 # The session scripts reach the AWS account and the cluster when the learner runs them; their self-test puts fake aws,
 # kubectl, helm, terraform, make and dig first on PATH, so it reaches nothing. Only its FAIL lines are printed.

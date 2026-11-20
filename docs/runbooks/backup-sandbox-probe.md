@@ -1,29 +1,35 @@
-# Thử AWS Backup ở account sandbox
+# Runbook: thử AWS Backup ở account sandbox
 
-Hướng dẫn này dựng ở account management (account sandbox, profile `anhnv-sso`) một bản thu nhỏ của thiết kế backup: vault mã hoá bằng CMK,
-vault khoá governance, role AWS Backup với đúng các managed policy của role `svp-<env>-backup`, một instance RDS và một bucket mang tag backup,
-một backup plan cục bộ cùng dạng Backup policy của Organizations. Rồi nó chạy từng phép thử mà buổi stg, prd dựa vào: job theo lịch, job
-on-demand, restore item-level một object S3, restore point-in-time của RDS, copy vào vault khoá rồi xoá trong đó. Output thô (đã thay định danh
-thật) thành fixture của test script diễn tập: phần "Thử sandbox" của mục "Xác nhận" ở
+[Mục lục](README.md)
+
+> **Tóm tắt**
+>
+> - **Làm gì:** dựng ở account management (account sandbox, profile `anhnv-sso`) một bản thu nhỏ của thiết kế backup (vault mã hoá bằng CMK,
+>   vault khoá governance, role AWS Backup với đúng các managed policy của role `svp-<env>-backup`, một instance RDS và một bucket mang tag
+>   backup, một backup plan cục bộ cùng dạng Backup policy của Organizations), rồi chạy từng phép thử mà buổi stg, prd dựa vào: job theo
+>   lịch, job on-demand, restore item-level một object S3, restore point-in-time của RDS, copy vào vault khoá rồi xoá trong đó. Output thô
+>   (đã thay định danh thật) thành fixture của test script diễn tập.
+> - **Khi nào và bao lâu:** bằng chứng một lần cho thiết kế backup, không lặp lại; khoảng 90 phút, phần lớn là chờ RDS và job theo lịch.
+> - **Phí trong lúc chạy:** trần $1, ước dưới $0,4 (chi tiết ở mục [Điều kiện trước](#điều-kiện-trước)).
+
+Bằng chứng này là phần "Thử sandbox" của mục "Xác nhận" ở
 [ADR-0067](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0067-backup-dr.md#xác-nhận). Giá trị mà lần thử đối chiếu (managed
 policy, khoá opt-in, cú pháp selection, metadata restore S3) ở
-[phụ lục ADR-0067](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0067-backup-dr.md) (§3, §4, §7, §10). Copy chéo account
-không thử ở đây (cần account đích): buổi stg kiểm nó.
+[phụ lục ADR-0067](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0067-backup-dr.md) (§3, §4, §7, §10). Copy chéo
+account không thử ở đây (cần account đích): buổi stg kiểm nó. Vì sao thiết kế như vậy: [07. Backup](../handbook/07-backup.md).
 
 **Người học chạy mọi lệnh ở đây.** AI không chạy lệnh nào chạm account, kể cả lệnh chỉ đọc; AI đọc output dán lại và nhắc tới khi gỡ, kiểm
-sạch và quét sót đều đã chạy. Mọi lệnh chạy từ gốc repo này (`infra/`), ghi profile và region ngay trong lệnh: `ap-southeast-1` cho AWS Backup,
-KMS, RDS, S3, EC2, STS; `us-east-1` cho IAM. Đồng hồ: lệnh `date -u -v…` là cú pháp `date` của macOS.
+sạch và quét sót đều đã chạy. Mọi lệnh chạy từ gốc repo này (`infra/`), ghi profile và region ngay trong lệnh: `ap-southeast-1` cho AWS
+Backup, KMS, RDS, S3, EC2, STS; `us-east-1` cho IAM. Đồng hồ: lệnh `date -u -v…` là cú pháp `date` của macOS.
 
-Chi phí: trần $1. Theo bảng giá ở mục "Chi phí" của phụ lục ADR-0067: hai instance `db.t4g.micro` (rẻ hơn `db.t4g.small` $0,051 mỗi giờ)
-khoảng hai giờ, gp3 20 GB của chúng, CMK tính theo giờ (chờ xoá không tính), recovery point và restore vài MB, item Config của tài nguyên tạm;
-cộng dưới $0,4. Lần thử kéo dài khoảng 90 phút, phần lớn là chờ RDS và job theo lịch. Bắt đầu rồi thì kết thúc bằng mục "Gỡ", "Kiểm sạch" và
-"Quét sót" trong cùng ngày, kể cả khi một bước lỗi.
+## Điều kiện trước
 
-## Trước khi bắt đầu
-
-- AWS CLI v2 có lệnh `backup` (`AWS_PROFILE=anhnv-sso aws backup describe-region-settings help --region ap-southeast-1` in trang trợ giúp),
-  `jq` 1.6 trở lên, `shasum`.
-- Phiên SSO của `anhnv-sso` và 12 số của account management.
+- [ ] AWS CLI v2 có lệnh `backup` (`AWS_PROFILE=anhnv-sso aws backup describe-region-settings help --region ap-southeast-1` in trang trợ
+  giúp), `jq` 1.6 trở lên, `shasum`.
+- [ ] Phiên SSO của `anhnv-sso` và 12 số của account management.
+- [ ] Chấp nhận chi phí: trần $1. Theo bảng giá ở mục "Chi phí" của phụ lục ADR-0067: hai instance `db.t4g.micro` (rẻ hơn `db.t4g.small`
+  $0,051 mỗi giờ) khoảng hai giờ, gp3 20 GB của chúng, CMK tính theo giờ (chờ xoá không tính), recovery point và restore vài MB, item
+  Config của tài nguyên tạm; cộng dưới $0,4.
 
 Tài nguyên tạm, mọi tên mang tiền tố `svp-probe`, tag `Project=svp`, không tag `Stack`:
 
@@ -51,17 +57,17 @@ aws/scripts/check-account.sh mgmt
 AWS_PROFILE=anhnv-sso aws ec2 describe-vpcs --filters Name=is-default,Values=true --region ap-southeast-1 --query 'Vpcs[].VpcId' --output text
 ```
 
-Tìm: `ok    account <12 số> of mgmt, …` với đúng account management, rồi một id `vpc-…` (VPC mặc định, nơi instance tạm nằm). `FAIL` hay không có
-VPC mặc định: dừng, không chạy gì nữa, dán output cho AI. Mọi bước sau chạy trong **cùng terminal này**; các id tạo ra được ghi vào
-`$d/ids.sh`. Mở lại terminal giữa chừng: đặt lại các biến trên với `SVP_SESSION_DIR` là thư mục cũ, rồi `. "$d/ids.sh"`.
+Tìm: `ok    account <12 số> of mgmt, …` với đúng account management, rồi một id `vpc-…` (VPC mặc định, nơi instance tạm nằm). `FAIL` hay
+không có VPC mặc định: dừng, không chạy gì nữa, dán output cho AI. Mọi bước sau chạy trong **cùng terminal này**; các id tạo ra được ghi
+vào `$d/ids.sh`. Mở lại terminal giữa chừng: đặt lại các biến trên với `SVP_SESSION_DIR` là thư mục cũ, rồi `. "$d/ids.sh"`.
 
 ## 2. Đọc và bật opt-in loại tài nguyên
 
-Selection của plan cục bộ (bước 6) ghi rõ mẫu ARN của RDS và S3, nên nó chọn hai loại đó kể cả khi khoá opt-in là `false`: AWS chỉ áp opt-in
-cho selection chọn thuần theo tag
-([UpdateRegionSettings](https://docs.aws.amazon.com/aws-backup/latest/APIReference/API_UpdateRegionSettings.html)). Bước này vẫn đọc map để
-đối chiếu khoá với phụ lục §3 và bật hai khoá như account env. Lệnh đầu chỉ đọc; nếu `RDS` hay `S3` là `false`, lệnh ghi bật đúng hai khoá đó,
-mục "Gỡ" trả lại map như file `region-settings-before.json`:
+Selection của plan cục bộ (bước 6) ghi rõ mẫu ARN của RDS và S3, nên nó chọn hai loại đó kể cả khi khoá opt-in là `false`: AWS chỉ áp
+opt-in cho selection chọn thuần theo tag
+([UpdateRegionSettings](https://docs.aws.amazon.com/aws-backup/latest/APIReference/API_UpdateRegionSettings.html)). Bước này vẫn đọc map
+để đối chiếu khoá với phụ lục §3 và bật hai khoá như account env. Lệnh đầu chỉ đọc; nếu `RDS` hay `S3` là `false`, lệnh ghi bật đúng hai
+khoá đó, mục "Gỡ" trả lại map như file `region-settings-before.json`:
 
 ```sh
 AWS_PROFILE=anhnv-sso aws backup describe-region-settings --region ap-southeast-1 --output json | tee "$d/region-settings-before.json"
@@ -110,9 +116,10 @@ sang "Gỡ". Lỗi `AlreadyExistsException`, `EntityAlreadyExists` (sót của l
 
 ## 4. Tạo instance và bucket
 
-Lệnh ghi. Instance mã hoá bằng CMK, giữ backup tự động 1 ngày (PITR cần nó), không public, không deletion protection. Maintenance window đặt 12
-giờ sau, backup window của RDS 6 giờ sau: job RDS của AWS Backup không bắt đầu được trong giờ trước hay trong maintenance window. Bucket bật
-versioning (backup S3 cần), SSE-KMS mặc định với Bucket Key, ACL tắt như bucket của module `media`; vài object, có một `.m3u8`:
+Lệnh ghi. Instance mã hoá bằng CMK, giữ backup tự động 1 ngày (PITR cần nó), không public, không deletion protection. Maintenance window
+đặt 12 giờ sau, backup window của RDS 6 giờ sau: job RDS của AWS Backup không bắt đầu được trong giờ trước hay trong maintenance window.
+Bucket bật versioning (backup S3 cần), SSE-KMS mặc định với Bucket Key, ACL tắt như bucket của module `media`; vài object, có một
+`.m3u8`:
 
 ```sh
 aws/scripts/check-account.sh mgmt
@@ -159,15 +166,15 @@ AWS_PROFILE=anhnv-sso aws rds describe-db-instances --db-instance-identifier svp
   --query 'DBInstances[0].[DBInstanceStatus, LatestRestorableTime]' --output text
 ```
 
-Tìm: `available` và một thời điểm UTC. Waiter hết hạn (30 phút) mà chưa `available`: chạy lại lệnh đầu một lần, vẫn không thì dán output cho AI,
-sang "Gỡ".
+Tìm: `available` và một thời điểm UTC. Waiter hết hạn (30 phút) mà chưa `available`: chạy lại lệnh đầu một lần, vẫn không thì dán output
+cho AI, sang "Gỡ".
 
 ## 6. Tạo backup plan cục bộ
 
-Lệnh ghi. Rule `daily` cùng dạng **Lịch và retention** của ADR-0067 (start window 60 phút, completion window 180 phút, không continuous backup),
-trừ cron đặt khoảng 15 phút sau lúc này và retention 2 ngày. Selection cùng dạng selection `svp-<env>-tagged` của Backup policy (phụ lục §4):
-đúng hai mẫu ARN, instance RDS và bucket S3, cùng điều kiện tag `aws:ResourceTag/Backup` = `daily`; không `ListOfTags` (nó cộng thêm tài
-nguyên theo phép OR):
+Lệnh ghi. Rule `daily` cùng dạng **Lịch và retention** của ADR-0067 (start window 60 phút, completion window 180 phút, không continuous
+backup), trừ cron đặt khoảng 15 phút sau lúc này và retention 2 ngày. Selection cùng dạng selection `svp-<env>-tagged` của Backup policy
+(phụ lục §4): đúng hai mẫu ARN, instance RDS và bucket S3, cùng điều kiện tag `aws:ResourceTag/Backup` = `daily`; không `ListOfTags` (nó
+cộng thêm tài nguyên theo phép OR):
 
 ```sh
 aws/scripts/check-account.sh mgmt
@@ -188,15 +195,15 @@ AWS_PROFILE=anhnv-sso aws backup get-backup-selection --backup-plan-id "$plan_id
 jq -r '.BackupPlan.Rules[0] | [.RuleName, .ScheduleExpression, .StartWindowMinutes, .CompletionWindowMinutes] | @tsv' "$d/get-backup-plan.json"
 ```
 
-Tìm: dòng `cron(<phút> <giờ> * * ? *)`, `plan_id`, `selection_id`, rồi `daily  cron(…)  60  180`. Lỗi tham số ở `create-backup-selection`: dán
-lỗi và `$d/selection.json` cho AI, sang "Gỡ".
+Tìm: dòng `cron(<phút> <giờ> * * ? *)`, `plan_id`, `selection_id`, rồi `daily  cron(…)  60  180`. Lỗi tham số ở
+`create-backup-selection`: dán lỗi và `$d/selection.json` cho AI, sang "Gỡ".
 
 ## 7. Bắt đầu restore point-in-time
 
 Lệnh ghi. Không client nào ghi vào instance tạm, nên thời điểm khôi phục `T_r` là lúc này làm tròn lên giây kế; lệnh chờ tới khi
-`LatestRestorableTime` (LRT) ≥ `T_r` (RDS đẩy log giao dịch mỗi 5 phút), đọc LRT ngay trước khi gọi restore (T0). Bản khôi phục dùng subnet group,
-security group, parameter group, lớp của nguồn, một AZ, không public, chỉ tag `Project=svp` (không `Backup`, để plan không chọn nó). Lệnh này chạy
-trong lúc chờ job theo lịch (bước 8):
+`LatestRestorableTime` (LRT) ≥ `T_r` (RDS đẩy log giao dịch mỗi 5 phút), đọc LRT ngay trước khi gọi restore (T0). Bản khôi phục dùng
+subnet group, security group, parameter group, lớp của nguồn, một AZ, không public, chỉ tag `Project=svp` (không `Backup`, để plan không
+chọn nó). Lệnh này chạy trong lúc chờ job theo lịch (bước 8):
 
 ```sh
 tr=$(date -u -v+1S +%Y-%m-%dT%H:%M:%SZ); echo "T_r $tr"
@@ -230,16 +237,16 @@ done
 echo "t1=$(date -u +%Y-%m-%dT%H:%M:%SZ)" | tee -a "$d/pitr-times.txt"
 ```
 
-Tìm: các dòng `LRT` tăng tới lúc ≥ `T_r` (tối đa 25 phút; hết hạn mà LRT vẫn nhỏ hơn thì dán output cho AI, sang "Gỡ"), rồi `"creating"` và
-`TagList` chỉ có `Project=svp`. `TagList` có `Backup`: gỡ tag đó ngay
-(`AWS_PROFILE=anhnv-sso aws rds remove-tags-from-resource --resource-name <ARN svp-probe-pitr> --tag-keys Backup --region ap-southeast-1`) và
-báo AI. Rồi các dòng trạng thái tới `available` và dòng `t1=…`: lúc bản khôi phục dùng được, đo trước khi chờ job theo lịch (tối đa 60 phút;
-hết hạn mà chưa `available` thì `t1` không phải số đo: dán output cho AI, vẫn sang bước 8).
+Tìm: các dòng `LRT` tăng tới lúc ≥ `T_r` (tối đa 25 phút; hết hạn mà LRT vẫn nhỏ hơn thì dán output cho AI, sang "Gỡ"), rồi `"creating"`
+và `TagList` chỉ có `Project=svp`. `TagList` có `Backup`: gỡ tag đó ngay
+(`AWS_PROFILE=anhnv-sso aws rds remove-tags-from-resource --resource-name <ARN svp-probe-pitr> --tag-keys Backup --region ap-southeast-1`)
+và báo AI. Rồi các dòng trạng thái tới `available` và dòng `t1=…`: lúc bản khôi phục dùng được, đo trước khi chờ job theo lịch (tối đa
+60 phút; hết hạn mà chưa `available` thì `t1` không phải số đo: dán output cho AI, vẫn sang bước 8).
 
 ## 8. Chờ job theo lịch
 
-Job theo lịch bắt đầu trong start window (60 phút sau giờ cron) và chạy vài phút. Lệnh chờ tới khi plan đã tạo đủ hai job (instance và bucket)
-và cả hai ở trạng thái kết thúc, tối đa 110 phút:
+Job theo lịch bắt đầu trong start window (60 phút sau giờ cron) và chạy vài phút. Lệnh chờ tới khi plan đã tạo đủ hai job (instance và
+bucket) và cả hai ở trạng thái kết thúc, tối đa 110 phút:
 
 ```sh
 for i in $(seq 1 110); do
@@ -271,13 +278,13 @@ jq -r '.DBInstances[0] | [.DBInstanceStatus, .DBInstanceClass, .MultiAZ, .Public
 cat "$d/pitr-times.txt"
 ```
 
-Tìm: `available  db.t4g.micro  false  false  default  <ARN key svp-probe>`, rồi `tr`, `lrt`, `t0`, `t1`: `t0 − lrt` là RPO, `t1 − t0` là thời gian
-dựng instance khôi phục của lần thử.
+Tìm: `available  db.t4g.micro  false  false  default  <ARN key svp-probe>`, rồi `tr`, `lrt`, `t0`, `t1`: `t0 − lrt` là RPO, `t1 − t0` là
+thời gian dựng instance khôi phục của lần thử.
 
 ## 10. Job on-demand
 
-Lệnh ghi: một job cho instance, một cho bucket, vào `svp-probe` bằng role `svp-probe-backup`, như lệnh `backup` của script diễn tập. Chờ tới khi
-cả hai kết thúc (tối đa 60 phút), rồi đọc job, recovery point và metadata restore của từng cái:
+Lệnh ghi: một job cho instance, một cho bucket, vào `svp-probe` bằng role `svp-probe-backup`, như lệnh `backup` của script diễn tập. Chờ
+tới khi cả hai kết thúc (tối đa 60 phút), rồi đọc job, recovery point và metadata restore của từng cái:
 
 ```sh
 aws/scripts/check-account.sh mgmt
@@ -312,9 +319,9 @@ cả hai `COMPLETED`. Một job không `COMPLETED`: dán `$d/describe-backup-job
 
 ## 11. Restore item-level một object S3
 
-Như **Diễn tập object S3** của ADR-0067: ghi độ dài và SHA-256 của `media/probe/index.m3u8`, xoá nó (versioning để lại delete marker), restore
-đúng key đó vào chính bucket từ recovery point S3 của bước 10 bằng role Backup, rồi so lại. Metadata là bốn khoá của phụ lục §10 (`RestoreACLs`
-`false` vì bucket tắt ACL); `ItemsToRestore` là chuỗi JSON của danh sách S3 URI:
+Như **Diễn tập object S3** của ADR-0067: ghi độ dài và SHA-256 của `media/probe/index.m3u8`, xoá nó (versioning để lại delete marker),
+restore đúng key đó vào chính bucket từ recovery point S3 của bước 10 bằng role Backup, rồi so lại. Metadata là bốn khoá của phụ lục §10
+(`RestoreACLs` `false` vì bucket tắt ACL); `ItemsToRestore` là chuỗi JSON của danh sách S3 URI:
 
 ```sh
 k=media/probe/index.m3u8
@@ -349,8 +356,8 @@ SHA-256; ETag có thể khác (AWS Backup không giữ ETag). `start-restore-job
 
 ## 12. Copy vào vault khoá rồi xoá trong đó
 
-Lệnh ghi. Copy cùng account hai recovery point của bước 10 vào `svp-probe-locked` (retention 2 ngày, trong [min 1, max 7] của lock), chờ cả hai
-kết thúc (tối đa 60 phút), rồi xoá một bản copy: lock governance phải từ chối:
+Lệnh ghi. Copy cùng account hai recovery point của bước 10 vào `svp-probe-locked` (retention 2 ngày, trong [min 1, max 7] của lock), chờ
+cả hai kết thúc (tối đa 60 phút), rồi xoá một bản copy: lock governance phải từ chối:
 
 ```sh
 aws/scripts/check-account.sh mgmt
@@ -373,8 +380,8 @@ cat "$d/delete-locked.err"
 jq -r '[.Locked, .MinRetentionDays, .MaxRetentionDays] | map(tostring) | @tsv' "$d/describe-backup-vault-locked.json"
 ```
 
-Tìm: hai copy job `COMPLETED`, `exit` khác 0 với một lỗi nhắc vault lock, rồi `true  1  7`. `exit 0` (bản copy bị xoá được): phát hiện, báo AI.
-`copy` rỗng (không copy nào `COMPLETED`): dán `$d/list-copy-jobs.json`.
+Tìm: hai copy job `COMPLETED`, `exit` khác 0 với một lỗi nhắc vault lock, rồi `true  1  7`. `exit 0` (bản copy bị xoá được): phát hiện,
+báo AI. `copy` rỗng (không copy nào `COMPLETED`): dán `$d/list-copy-jobs.json`.
 
 ## 13. Thay định danh thật và dán output
 
@@ -413,14 +420,14 @@ Dán lại nguyên các file trong `$d/paste/`, mỗi file sinh ra ở:
 | `list-copy-jobs.json` | `backup list-copy-jobs` của vault `svp-probe-locked` | 12 |
 | `describe-backup-vault-locked.json`, `delete-locked.err` | `backup describe-backup-vault`; lỗi của `backup delete-recovery-point` dưới lock | 12 |
 
-Dòng `missing <file>`: bước sinh ra file đó chưa chạy hay đã lỗi; nói rõ khi dán. `grep` in một đường dẫn: file đó còn account thật, không dán,
-báo AI. Thư mục `.session/` git bỏ qua.
+Dòng `missing <file>`: bước sinh ra file đó chưa chạy hay đã lỗi; nói rõ khi dán. `grep` in một đường dẫn: file đó còn account thật,
+không dán, báo AI. Thư mục `.session/` git bỏ qua.
 
 ## Gỡ
 
-Lệnh ghi. Mục này đọc được từ đầu và chạy được dù bước nào đã lỗi hay chưa chạy tới: mỗi lệnh tìm tài nguyên theo tên `svp-probe*`, không dựa
-vào biến của các bước trên. Một lệnh lỗi `NotFound`, `ResourceNotFoundException`, `DBInstanceNotFound`, `NoSuchBucket`, `NoSuchEntity`: phần
-đó đã gỡ hay chưa từng tạo, chạy tiếp lệnh sau. Chạy theo thứ tự.
+Lệnh ghi. Mục này đọc được từ đầu và chạy được dù bước nào đã lỗi hay chưa chạy tới: mỗi lệnh tìm tài nguyên theo tên `svp-probe*`,
+không dựa vào biến của các bước trên. Một lệnh lỗi `NotFound`, `ResourceNotFoundException`, `DBInstanceNotFound`, `NoSuchBucket`,
+`NoSuchEntity`: phần đó đã gỡ hay chưa từng tạo, chạy tiếp lệnh sau. Chạy theo thứ tự.
 
 ### G1. Mở terminal
 
@@ -499,8 +506,8 @@ Lỗi `InvalidDBInstanceState` (instance đang `creating`, `modifying`): chờ v
 
 ### G5. Bỏ lock, xoá recovery point và hai vault
 
-Bỏ lock governance (quyền IAM của `anhnv-sso` đủ), xoá mọi recovery point của hai vault, chờ tới khi vault rỗng (snapshot RDS xoá mất vài phút,
-tối đa 20 phút), rồi xoá vault:
+Bỏ lock governance (quyền IAM của `anhnv-sso` đủ), xoá mọi recovery point của hai vault, chờ tới khi vault rỗng (snapshot RDS xoá mất
+vài phút, tối đa 20 phút), rồi xoá vault:
 
 ```sh
 aws/scripts/check-account.sh mgmt
@@ -602,8 +609,8 @@ AWS_PROFILE=anhnv-sso aws backup describe-region-settings --region ap-southeast-
 jq -S .ResourceTypeOptInPreference "$d/region-settings-before.json" | diff - "$d/region-settings-after.json" && echo "opt-in as before"
 ```
 
-Tìm: không dòng `LEFT` nào, dòng `role:` nhắc `NoSuchEntity`, rồi `opt-in as before`. Có dòng `LEFT` hay role còn: chạy lại mục con tương ứng
-của "Gỡ" (G2–G7), rồi khối này. Opt-in khác: chạy lại G9 (không có `region-settings-before.json` thì dán output cho AI).
+Tìm: không dòng `LEFT` nào, dòng `role:` nhắc `NoSuchEntity`, rồi `opt-in as before`. Có dòng `LEFT` hay role còn: chạy lại mục con
+tương ứng của "Gỡ" (G2–G7), rồi khối này. Opt-in khác: chạy lại G9 (không có `region-settings-before.json` thì dán output cho AI).
 
 ## Quét sót
 
@@ -615,3 +622,8 @@ Lượt quét phủ instance RDS, snapshot, backup tự động, bucket và CMK 
 `ok nothing left in account … but what it keeps` (exit 0), không dòng nào nhắc `svp-probe` ngoài dòng `pending deletion` của key. Có dòng
 `FAIL <loại>: N left`: chạy lệnh `delete:` in dưới mỗi tài nguyên, rồi chạy lại tới khi sạch. Dán lại toàn bộ output của "Kiểm sạch" và lượt
 quét này. **Lần thử chỉ xong khi "Kiểm sạch" không còn dòng `LEFT` và lượt quét exit 0.**
+
+## Khi một bước đỏ
+
+- Bắt đầu rồi thì kết thúc bằng mục "Gỡ", "Kiểm sạch" và "Quét sót" trong cùng ngày, kể cả khi một bước lỗi.
+- Mỗi bước nói lỗi nào thì dán gì cho AI và có đi tiếp hay sang "Gỡ"; mục "Gỡ" chạy được dù bước nào đã lỗi hay chưa chạy tới.

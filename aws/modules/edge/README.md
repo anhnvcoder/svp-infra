@@ -1,108 +1,41 @@
 # Module `edge`
 
-Đường vào công khai duy nhất của web và API ở stg, prd: hai distribution CloudFront `<name>-web` (tên `<domain>`) và `<name>-api` (tên
-`api.<domain>`), cùng đi qua một CloudFront VPC origin tới ALB internal `<name>-edge` ở các subnet edge, rồi tới pod Envoy trong target group
-`<name>-envoy`. Module giữ cert ACM, response headers policy, log chuẩn v2 và bản ghi DNS của hai tên. Thiết kế và nguồn:
-[ADR-0061](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0061-edge-cloudfront-waf-acm.md) §2–§5, §8, §11 và phụ lục của nó.
-Media (`media.<domain>`) ở module `media`; web ACL ở module `waf`, truyền vào qua `web_acl_arns`.
+Đường vào công khai của web và API của một env: distribution CloudFront `<name>-web` (tên `<domain>`) và `<name>-api` (tên
+`api.<domain>`) cùng đi qua một VPC origin tới ALB internal `<name>-edge` ở các subnet edge, rồi tới pod Envoy trong target group
+`<name>-envoy`; cộng cert ACM, response headers policy, log chuẩn v2 và bản ghi DNS của hai tên. Root `aws/envs/<env>` gọi module với
+web ACL của module `waf`; lý do, đường đi của request và thứ tự gỡ ở
+[chương 12. Media và edge](../../../docs/handbook/12-media-edge.md); test: `make test DIRS=aws/modules/edge`.
 
-## Luồng request
+## Ví dụ
 
-```mermaid
-sequenceDiagram
-    participant V as Người xem
-    participant CF as CloudFront svp-env-web, svp-env-api
-    participant ALB as ALB internal svp-env-edge
-    participant E as Pod Envoy (target group svp-env-envoy)
-    V->>CF: HTTPS, tên <domain> hay api.<domain>, cert ACM us-east-1
-    Note over CF: Web ACL của tên đó, thêm CloudFront-Viewer-Address
-    CF->>ALB: HTTPS qua VPC origin, Host của viewer, TLSv1.2 trở lên
-    Note over ALB: SG chỉ nhận 443 từ prefix list origin-facing của CloudFront
-    ALB->>E: HTTPS cổng 10443, cert CA nội bộ (ALB không kiểm)
-    E-->>V: Câu trả lời, CloudFront thêm security header
+Lời gọi trong `aws/envs/stg/main.tf`, giá trị là placeholder:
+
+```hcl
+module "edge" {
+  source = "../../modules/edge"
+
+  name                    = "svp-stg"
+  domain                  = "svp.example"
+  hosted_zone_id          = "Z<id>"
+  vpc_id                  = "vpc-<id>"
+  subnet_ids              = ["subnet-<a>", "subnet-<b>"]
+  node_security_group_id  = "sg-<node>"
+  alb_deletion_protection = false
+
+  web_acl_arns = {
+    web = "arn:aws:wafv2:us-east-1:000000000000:global/webacl/svp-stg-web/<id>"
+    api = "arn:aws:wafv2:us-east-1:000000000000:global/webacl/svp-stg-api/<id>"
+  }
+  log_delivery_destination_arn = "arn:aws:logs:us-east-1:000000000000:delivery-destination:svp-cloudfront-stg"
+}
 ```
 
-Envoy định tuyến theo Host, nên mọi behavior chuyển nguyên Host của viewer: CloudFront gửi Host đó làm SNI tới ALB và kiểm cert ALB theo nó, vì
-vậy cert ALB phủ cả `<domain>` lẫn `api.<domain>`. Pod Envoy vào target group nhờ `TargetGroupBinding` `svp-envoy` của chart `svp-cluster`
-(khoá `edgeTargetGroupArn` của values cluster là output `target_group_arn`).
+## Tham chiếu
 
-## Origin VPC
-
-- **ALB** `<name>-edge`: `internal = true`, mọi subnet của `subnet_ids` (tầng edge của module `network`: không node, không pod, nên mọi kết nối
-  tới Envoy từ dải này là của ALB), `drop_invalid_header_fields = true`, `desync_mitigation_mode = "defensive"`, deletion protection theo
-  `alb_deletion_protection`. Một listener duy nhất: HTTPS 443, `ELBSecurityPolicy-TLS13-1-2-Res-PQ-2025-09`, forward tới target group.
-- **Security group** `<name>-edge-*`: vào chỉ TCP 443 từ prefix list `com.amazonaws.global.cloudfront.origin-facing`; ra chỉ TCP 10443
-  (listener Envoy) và 19003 (readiness) tới SG node của module `eks`. Module thêm hai rule vào SG node cho đúng hai cổng đó từ SG ALB; module
-  `eks` không đổi. Prefix list, không group `CloudFront-VPCOrigins-Service-SG`: group đó do dịch vụ tạo sau VPC origin, nằm ngoài state và
-  "should not be edited" theo tài liệu VPC origins. Prefix list tính theo số mục tối đa của nó vào hạn mức rule của SG
-  ([tài liệu prefix list AWS-managed](https://docs.aws.amazon.com/vpc/latest/userguide/working-with-aws-managed-prefix-lists.html)): SG này
-  chỉ có một rule vào nên còn trong hạn mức mặc định.
-- **Target group** `<name>-envoy`: `target_type = "ip"`, HTTPS 443, health check HTTP cổng 19003 `/ready` (readiness của Envoy chỉ có HTTP).
-- **VPC origin** `<name>-edge`: ARN của ALB, `https-only`, `TLSv1.2`.
-- **Không tag `elbv2.k8s.aws/*`** trên ALB, listener, target group: policy IAM của Load Balancer Controller cho `RegisterTargets` trên mọi
-  target group không cần tag, còn `pre-destroy.sh` chờ tới khi hết load balancer, target group mang tag `elbv2.k8s.aws/cluster` (của controller).
-
-**Vì sao không NLB:** VPC origin không nhận NLB có listener TLS ("Network Load Balancers with TLS listeners cannot be added as origins"); NLB
-TCP thì Envoy phải giữ cert công khai. **Vì sao không access log ALB** (FSBP ELB.5) **và không web ACL regional** (ELB.16): ALB chỉ nhận từ
-CloudFront, mọi request đã có trong log CloudFront và log WAF. Xem lại khi cần thời gian xử lý của target theo request hay ALB nhận nguồn khác.
-
-## Distribution
-
-| | `<name>-web` | `<name>-api` |
-| --- | --- | --- |
-| Tên, cert viewer | `<domain>` | `api.<domain>` |
-| Behavior mặc định | `Managed-CachingDisabled`, mọi method | như web |
-| Behavior thêm | `/_next/static/*`: `Managed-CachingOptimized`, nén | — |
-| Origin request policy (mọi behavior) | `Managed-AllViewerAndCloudFrontHeaders-2022-06` | như web |
-| Response headers policy | `<name>-web` | `<name>-api` |
-| Web ACL | `web_acl_arns["web"]` | `web_acl_arns["api"]` |
-
-Chung: `redirect-to-https`, `http2and3`, IPv6, `PriceClass_All`, `sni-only`, `minimum_protocol_version = "TLSv1.2_2025"` (mới nhất còn nhận
-TLS 1.2 bên cạnh 1.3). Origin request policy managed chuyển mọi header, cookie, query của viewer và thêm `CloudFront-Viewer-Address`, header
-gateway đọc IP client; nó không vào cache key. `/_next/static/*` là file build có hash trong tên, cache được; trang và Server Action không cache.
-
-**Response headers policy** (giá trị và lý do: ADR-0061 §6):
-
-| Header | `<name>-web` | `<name>-api` |
-| --- | --- | --- |
-| `Strict-Transport-Security` | `max-age=63072000; includeSubDomains`, không `preload` | như web |
-| `X-Content-Type-Options` | `nosniff` | `nosniff` |
-| `X-Frame-Options` | `DENY` | `DENY` |
-| `Referrer-Policy` | `strict-origin-when-cross-origin` | như web |
-| `Content-Security-Policy` | — (web tự đặt CSP có nonce) | `default-src 'none'; frame-ancestors 'none'` |
-| Override | `false`: chỉ điền header câu trả lời còn thiếu | `true`: gateway không đặt header nào trong bảng |
-
-## Chứng chỉ
-
-Mỗi distribution một cert ACM ở `us-east-1` (đối số `region`) cho đúng tên của nó; ALB một cert ở region của provider cho `<domain>` cộng SAN
-`api.<domain>`. Cả ba ECDSA P-256 (`EC_prime256v1`), DNS validation. ACM cho một tên cùng một bản ghi CNAME validation ở mọi region của account,
-nên mỗi tên một bản ghi (`aws_route53_record.validation`), ba cert cùng chờ nó. Envoy dùng cert của CA nội bộ cert-manager: ALB không kiểm
-cert target.
-
-## Log
-
-Log chuẩn v2 (vended log của CloudWatch Logs): mỗi distribution một delivery source `ACCESS_LOGS` `<name>-<web|api>` ở `us-east-1` và một
-delivery tới `log_delivery_destination_arn`, delivery destination `svp-cloudfront-<env>` của account Log Archive (destination, policy và bucket
-do root `aws/log-archive` giữ). Đường object `{DistributionId}/{yyyy}/{MM}/{dd}/{HH}` kiểu Hive, dưới tiền tố `<account env>/` mà
-destination đặt. `record_fields` là danh sách tường minh ở `local.log_record_fields` của `main.tf`: mọi trường của ví dụ trong tài liệu
-standard logging v2 trừ `cs(Cookie)` (cookie phiên của web); module `media` dùng cùng danh sách.
-
-## DNS
-
-Bản ghi A và AAAA alias của `<domain>` tới `<name>-web`, `api.<domain>` tới `<name>-api`, trong zone `hosted_zone_id`; cùng hai bản ghi validation
-ACM. Chúng sống và gỡ theo buổi cùng root `aws/envs/<env>`.
-
-## Thứ tự gỡ và tài nguyên AWS tự tạo
-
-- Tham chiếu trong code quyết định thứ tự `terraform destroy`: bản ghi DNS và delivery log, rồi distribution (provider tắt distribution, chờ
-  `Deployed`, rồi xoá), rồi VPC origin (AWS từ chối xoá VPC origin còn được dùng: `CannotDeleteEntityWhileInUse` của API `DeleteVpcOrigin`),
-  rồi listener, ALB, target group, security group. Distribution tắt mất nhiều phút; ALB còn deletion protection thì destroy dừng ở ALB, phải
-  `apply` với `alb_deletion_protection = false` trước (`teardown.tfvars`).
-- **ENI và SG do CloudFront tạo:** sau khi có VPC origin, CloudFront tạo ENI do dịch vụ quản lý trong subnet edge và security group
-  `CloudFront-VPCOrigins-Service-SG` trong VPC (tài liệu "Restrict access with VPC origins"). Tài liệu không nói khi nào chúng mất sau khi xoá
-  VPC origin. ENI còn thì subnet edge, VPC không xoá được; SG còn thì VPC không xoá được. Script gỡ của buổi vì vậy chờ tới khi không còn ENI
-  nào trong subnet edge và không còn SG tên bắt đầu `CloudFront-VPCOrigins-Service-SG` trong VPC của env trước khi xoá mạng, và `sweep.sh` liệt kê
-  hai loại này nếu còn sót. Thời gian thật đo ở buổi đầu.
+- [Chương 12. Media và edge](../../../docs/handbook/12-media-edge.md): ghi chú thiết kế mà `main.tf`, `alb.tf`, `cloudfront.tf` trỏ tới.
+- [ADR-0061](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0061-edge-cloudfront-waf-acm.md) §2–§6, §8 và phụ lục:
+  distribution, VPC origin, TLS, header, log edge.
+- [`edge.md`](https://github.com/anhnvcoder/svp-backend/blob/main/docs/explanation/edge.md) của svp-backend: đường đi của một request.
 
 <!-- BEGIN_TF_DOCS -->
 ## Requirements

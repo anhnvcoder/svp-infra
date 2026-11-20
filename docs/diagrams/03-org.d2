@@ -1,0 +1,77 @@
+# Where each account of the organization sits and where each policy is attached: aws/org/organization.tf (OU and
+# accounts) and the targets in local.policies of aws/modules/org-policies/main.tf. A concept of the tree, not an API
+# flow: nesting is the OU hierarchy, and a policy of a container applies to all inside it.
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 0
+    dark-theme-id: 200
+    pad: 20
+  }
+}
+...@tokens
+
+direction: down
+
+title: "Tổ chức svp: account nằm ở OU nào, policy gắn ở đâu" {
+  shape: text
+  near: top-center
+  style: {font-size: 18; bold: true}
+}
+
+org: "Tổ chức svp" {
+  class: trust
+  style: {font-size: 15; bold: true}
+  label.near: top-left
+  grid-rows: 2
+  grid-gap: 40
+
+  mgmt: "Management account" {
+    class: governance
+    grid-rows: 3
+    grid-gap: 24
+    vertical-gap: 6
+    s1: "Organizations · Identity Center · trail svp-audit" {class: sub}
+    s2: "SCP, RCP không áp; declarative, tag policy có áp" {class: sub}
+    r: "aws/bootstrap · aws/org" {class: root}
+  }
+
+  root: "Root: SCP svp-* · RCP svp-data-perimeter · svp-ec2-baseline · svp-tags" {
+    class: governance
+    label.near: top-left
+    grid-columns: 2
+    grid-gap: 40
+
+    security: "OU Security" {
+      class: account
+      label.near: top-left
+      accounts: "Log Archive · Security Tooling · Backup" {
+        class: detection
+        grid-rows: 1
+        grid-gap: 24
+        s: "svp-log-archive · svp-security · svp-backup" {class: sub}
+      }
+    }
+
+    workloads: "OU Workloads" {
+      class: account
+      label.near: top-left
+      grid-columns: 2
+      grid-gap: 24
+      prod: "OU Prod: svp-prd" {
+        class: workload
+        grid-rows: 2
+        grid-gap: 24
+        vertical-gap: 6
+        s1: "SCP svp-prod-guardrails" {class: sub}
+        s2: "Backup policy svp-backup-prd" {class: sub}
+      }
+      nonprod: "OU NonProd: svp-stg" {
+        class: workload
+        grid-rows: 1
+        grid-gap: 24
+        s1: "Backup policy svp-backup-stg" {class: sub}
+      }
+    }
+  }
+}

@@ -1,75 +1,39 @@
 # Module `elasticache`
 
-Một replication group ElastiCache for Valkey cho một env: node-based, cluster mode tắt (client nói giao thức Valkey thường, không giao thức
-cluster, như Valkey local), chỉ nhận kết nối TLS, mỗi client đăng nhập một user RBAC chỉ vào được db và tiền tố khoá của nó. Thiết kế:
-[ADR-0053](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0053-msk-elasticache-valkey.md) §7, §9, §12; bảo trì, slow-log và alarm: [ADR-0058](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0058-managed-data-operations.md)
-§1, §2, §5.
+Một replication group ElastiCache for Valkey cho một env: cluster mode tắt, chỉ nhận TLS, mỗi client đăng nhập một user RBAC chỉ vào
+được db và tiền tố khoá của nó, mật khẩu sinh và ghi trong cùng apply mà không qua plan hay state, slow-log và alarm CloudWatch. Module
+ghi mật khẩu vào entry `valkey-users` mà module `external-secrets` tạo vỏ. Root `aws/envs/<env>` gọi module; lý do và bẫy ở
+[chương 11. Dữ liệu](../../../docs/handbook/11-data.md); test: `make test DIRS=aws/modules/elasticache`.
 
-Tạo:
+## Ví dụ
 
-- Cache subnet group (subnet database) và security group chỉ nhận TCP 6379 từ các security group truyền vào (`allowed_security_groups`, node
-  SG và cluster primary SG của EKS), không rule egress.
-- Parameter group họ `valkey<major>` (tên `<name>-valkey<major>`) với `maxmemory-policy noeviction`: khoá là bộ đếm rate limit, session,
-  cache mà service chờ đọc lại, đầy bộ nhớ thì lệnh ghi lỗi rõ thay vì âm thầm bỏ khoá (mặc định `volatile-lru`).
-- `aws_elasticache_replication_group` id `<name>`, `engine = "valkey"`, `engine_version` (mặc định `9.1`, tối thiểu 9.1: bản đầu có `db=`
-  trong ACL), `node_count` node `node_type`; `transit_encryption_mode = "required"` (RBAC cần TLS; kết nối không TLS bị từ chối),
-  at-rest bật (key AWS quản lý của ElastiCache), không AUTH token, không IAM; `snapshot_retention_limit = 0`, không final snapshot (dữ liệu
-  dựng lại được).
-- `automatic_failover_enabled` và `multi_az_enabled` bật khi `node_count` ≥ 2, tắt khi 1 node (không có replica để chuyển sang): suy ra
-  từ số node, không biến riêng, nên không có tổ hợp "Multi-AZ một node". stg 1 × `cache.t4g.micro`; prd 2 × `cache.m7g.large`.
-- Bốn `aws_elasticache_user` engine `valkey` và một `aws_elasticache_user_group` id `<name>` engine `valkey` gắn vào replication group.
-- Slow-log của engine gửi CloudWatch Logs, định dạng JSON, tới log group `/aws/elasticache/<name>/slow-log` do module tạo (retention
-  `slow_log_retention_days`; ElastiCache không tự tạo đích log). Ngưỡng slow-log là mặc định của engine (parameter group không đặt).
-- Alarm CloudWatch `<name>-<alarm>` của bảng ADR-0058 §2 (các dòng `valkey-*`): tag `Severity`, alarm `page` có URL runbook
-  `docs/runbooks/<alarm>.md` của repo code trong `alarm_description`, `alarm_actions` và `ok_actions` tới `alarm_topic_arn`.
+Lời gọi trong `aws/envs/stg/main.tf`, giá trị là placeholder (root đọc chúng từ `stg.tfvars`):
 
-## Bảo trì
+```hcl
+module "elasticache" {
+  source = "../../modules/elasticache"
 
-- `apply_immediately` không có mặc định, root đặt theo env: `false` giữ thay đổi tới cửa sổ bảo trì `sun:18:00-sun:19:00` UTC (01:00–02:00
-  thứ Hai giờ Singapore, cùng ở mọi env), và `plan` hiện thay đổi đó là đang chờ tới khi áp; `true` áp ngay, cho env sống một buổi không tới
-  cửa sổ nào.
-- Thay đổi nào chờ được cửa sổ, thay đổi nào áp ngay dù `false`, và thay đổi nào restart node: bảng của
-  [Modifying a cluster](https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/Clusters.Modify.html).
+  name                    = "svp-stg"
+  vpc_id                  = "vpc-<id>"
+  subnet_ids              = ["subnet-<a>", "subnet-<b>"]
+  allowed_security_groups = { node = "sg-<node>", cluster = "sg-<cluster>" }
+  node_type               = "cache.t4g.micro"
+  node_count              = 1
+  apply_immediately       = true
+  slow_log_retention_days = 1
+  password_version        = 1
+  valkey_users_secret_id  = "arn:aws:secretsmanager:ap-southeast-1:000000000000:secret:svp/stg/valkey-users-<suffix>"
+  alarm_topic_arn         = "arn:aws:sns:ap-southeast-1:000000000000:svp-stg-alarms"
+}
+```
 
-## Alarm
+## Tham chiếu
 
-- Cluster mode tắt: mỗi node là một cache cluster riêng tên `<name>-001`, `<name>-002`…; module sinh các tên từ `node_count` để plan biết trước,
-  alarm đọc mỗi node theo dimension `CacheClusterId` và gộp bằng metric math `MAX`: một alarm mỗi loại, đọc cả primary lẫn replica (sau failover
-  node nào cũng có thể là primary).
-- Ngưỡng, số chu kỳ, mức và nguồn ở ADR-0058 §2, §3; code giữ cùng số trong `alarms.tf`.
-
-Tên `<name>` (replication group id) vào log Certificate Transparency công khai qua cert TLS của node: chỉ đặt `svp-<env>`.
-
-## User
-
-| User (`user_name`) | `user_id` | Khoá trong entry | Access string |
-| ---- | ---- | ---- | ---- |
-| `svp-gateway` | `<name>-gateway` | `SVP_VALKEY_GATEWAY_PASSWORD` | `on ~svp:gw:* resetchannels db=10 -@all +select +client\|setinfo +eval +evalsha +time +get +set +del` |
-| `svp-feed-service` | `<name>-feed-service` | `SVP_VALKEY_FEED_SERVICE_PASSWORD` | `on ~svp:feed:* resetchannels db=14 -@all +select +client\|setinfo +get +set` |
-| `svp-web` | `<name>-web` | `SVP_VALKEY_WEB_PASSWORD` | `on ~svp:web:* resetchannels db=9 -@all +select +client\|setinfo +eval +get +set +del +exists` |
-| `svp-ops` | `<name>-ops` | `SVP_VALKEY_OPS_PASSWORD` | `on ~svp:* resetchannels db=9,10,14 -@all +select +ping +time +scan +get +mget +pttl (~svp:gw:rl:register:* resetchannels db=10 -@all +del) (~svp:feed:explore:* resetchannels db=14 -@all +del)` |
-
-- Access string nguyên văn ADR-0053 §9, cùng chuỗi với aclfile local (`backend/deploy/valkey/`). Đổi một quyền thì đổi cả hai nơi và ADR.
-- `user_id` duy nhất trong account và region, còn `user_name` (tên client đăng nhập) giống nhau ở mọi env, nên id mang tên env.
-- Không tạo user `default`: user group engine VALKEY không cần nó, và ElastiCache tắt `default` khi gắn group
-  ([RBAC](https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/Clusters.RBAC.html), đọc 2026-11-08).
-
-## Mật khẩu
-
-- Ephemeral `random_password` (32 ký tự, chỉ chữ và số: mật khẩu chèn thẳng, không thoát, vào `REDIS_URL` và aclfile) sinh mỗi lần plan,
-  apply, không lưu ở đâu; chỉ ghi qua đối số write-only: `passwords_wo` của `aws_elasticache_user` và `secret_string_wo` của
-  `aws_secretsmanager_secret_version`, nên không nằm trong plan hay state. Output không có mật khẩu nào.
-- Ephemeral của provider `random` chứ không `aws_secretsmanager_random_password`: cùng bảng ký tự, độ dài, và mock provider AWS của
-  `terraform test` không mở được ephemeral resource của nó.
-- Mỗi lần apply mật khẩu sinh lại, nhưng chỉ được ghi khi `password_version` đổi (`passwords_wo_version`, `secret_string_wo_version`). Bốn
-  user và entry `svp/<env>/valkey-users` (biến `valkey_users_secret_id`, vỏ do module `external-secrets` tạo) dùng cùng version và cùng lần
-  mở ephemeral, nên sau một apply trọn, user và entry cùng giá trị.
-- Apply dừng giữa chừng (vd. ElastiCache từ chối một access string, sửa chuỗi rồi apply lại) làm lệch: user nhận giá trị của lần mở mới,
-  entry giữ giá trị cũ vì version không đổi, và `plan` sau đó vẫn `No changes`; client bị từ chối. Gỡ: tăng `password_version` rồi apply.
-- Đổi mật khẩu: tăng `password_version` rồi apply; mọi user đổi cùng lúc vì entry là một. Đổi access string hay mật khẩu sửa user tại chỗ
-  (`access_string`, `passwords_wo_version` không buộc tạo lại), user group và replication group giữ nguyên; pod chưa đọc mật khẩu mới bị từ
-  chối ở kết nối mới tới khi restart.
-- `make eks-secrets` của repo code không ghi `valkey-users`: module này là nơi duy nhất ghi.
+- [Chương 11. Dữ liệu](../../../docs/handbook/11-data.md): ghi chú thiết kế mà `main.tf`, `alarms.tf` trỏ tới.
+- [ADR-0053](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0053-msk-elasticache-valkey.md) §7, §9, §12: replication
+  group, access string, mật khẩu.
+- [ADR-0058](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0058-managed-data-operations.md) §2, §5: bảng alarm, bảo trì,
+  slow-log.
 
 <!-- markdownlint-disable MD033 -->
 <!-- BEGIN_TF_DOCS -->
