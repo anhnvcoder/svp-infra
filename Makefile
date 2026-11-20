@@ -277,11 +277,9 @@ docs-check: ## markdownlint-cli2 + lychee --offline on the Markdown (DOCS='<file
 	[ $$rc = 0 ] || echo "FAIL: docs-check" >&2; \
 	exit $$rc
 
-# Diagrams: docs/diagrams/<name>.d2 is the source and <name>.svg is generated, never edited. tokens.d2 holds the shared
-# classes the diagrams import and is no diagram. The engine and the light and dark themes come from d2-config in each
-# file, so one SVG holds both themes; LAYOUT=<elk|tala> overrides the engine, OUT=<directory> writes there instead
-# (relative to this one), SUFFIX=<text> is added to the file names, and PNG=1 writes a PNG beside each SVG, to look at.
-# NAMES='<name …>' limits both targets to those diagrams, so parallel edits never rewrite each other's SVG.
+# docs/diagrams/<name>.d2 is the source, <name>.svg is generated; tokens.d2 holds shared classes. Engine and both themes
+# come from d2-config in each file. NAMES='<name …>' limits both targets (parallel edits never rewrite another SVG);
+# LAYOUT overrides the engine, OUT=<dir in repo> writes elsewhere, SUFFIX renames, PNG=1 adds a PNG to look at.
 DIAGRAMS_DIR := docs/diagrams
 NAMES ?=
 OUT ?=
