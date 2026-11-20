@@ -55,8 +55,8 @@ Người học chạy mọi lệnh; AI không chạy lệnh nào chạm account.
 
 ## Tham chiếu
 
-- [05. Bảo mật](../../docs/handbook/05-security.md): vì sao delegated admin, luồng cảnh báo, trạng thái chờ (ghi chú thiết kế mà
-  `main.tf`, `inspector.tf` trỏ tới).
+- [05. Bảo mật](../../docs/handbook/05-security.md): vì sao delegated admin, luồng cảnh báo; import, trạng thái chờ ở mục Đọc sâu
+  (ghi chú thiết kế mà `main.tf`, `inspector.tf` trỏ tới).
 - [ADR-0060](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0060-org-detection-logging.md): phát hiện, log, cảnh báo của
   tổ chức; event pattern và bảng giá ở phụ lục.
 - [ADR-0062](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0062-ecr-registry-ci-oidc.md) §10: quét ECR bằng Inspector.

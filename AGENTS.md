@@ -104,8 +104,9 @@ Quy ước chung (ngôn ngữ, tài liệu timeless, ADR, comment, Git, repo pub
 - **Card chạy song song** kiểm bằng `make check DIRS=<thư mục của mình>`: mỗi lượt chỉ ghi dưới thư mục đó, trừ cache provider và
   ruleset tflint `.plugin-cache/` dùng chung, ghi lần lượt qua khoá `.plugin-cache/lock` (mục "Chạy song song" của
   [`docs/reference/checks.md`](docs/reference/checks.md#chạy-song-song)).
-- **CI và hook:** `check.yml` chạy mỗi nhóm `check-*` của `Makefile` thành một job song song; target mới vào đúng một nhóm. Phút billable là
-  tổng phút các job (mỗi job làm tròn lên phút), không ít hơn một job tuần tự dù xong sớm hơn; repo public nên runner chuẩn miễn phí.
+- **CI và hook:** `check.yml` chạy mỗi nhóm `check-*` của `Makefile` thành một job song song; target mới vào đúng
+  một nhóm, trừ `docs-check`, `diagrams-check` chạy ở job `docs` riêng. Phút billable là tổng phút các job (mỗi job làm
+  tròn lên phút), không ít hơn một job tuần tự dù xong sớm hơn; repo public nên runner chuẩn miễn phí.
   `make hooks` bật hook `pre-commit` một lần mỗi clone (fmt, markdownlint, shellcheck, gitleaks trên file đã stage); phép chậm để CI.
 - **Git:** mọi thay đổi vào `main` qua PR có `infra-ok` xanh (từ khi bật ruleset), squash merge.
 - **Tiêu đề PR** thành tiêu đề commit squash, theo Conventional Commits: `<type>[(<scope>)][!]: <mô tả>`, `type` là một trong
@@ -116,5 +117,5 @@ Quy ước chung (ngôn ngữ, tài liệu timeless, ADR, comment, Git, repo pub
   chúng cần Code Owner duyệt.
 - **Workflow:** mọi workflow qua `make zizmor` sạch; ngoại lệ có chủ đích vào `.github/zizmor.yml`, mỗi mục một comment lý do.
 - **Sơ đồ:** PR đổi kiến trúc mà một sơ đồ `docs/diagrams/*.d2` tả (account, luồng, dịch vụ) thì sửa `.d2` đó và chạy `make diagrams`
-  trong cùng PR; không sửa SVG bằng tay (`make diagrams-check` đỏ khi SVG lệch nguồn). Cách viết:
-  [`docs/diagrams/README.md`](docs/diagrams/README.md).
+  trong cùng PR; không sửa SVG bằng tay (`make diagrams-check` đỏ khi SVG lệch nguồn). CI chỉ kiểm SVG khớp `.d2`; `.d2` khớp
+  Terraform do người viết và review kiểm. Cách viết: [`docs/diagrams/README.md`](docs/diagrams/README.md).

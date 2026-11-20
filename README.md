@@ -27,16 +27,10 @@ flowchart TD
 
 `aws/org` áp hai lượt, trước và sau `aws/log-archive`; bước của từng lượt ở runbook trong bảng [Bản đồ](#bản-đồ).
 
-Bảo mật xếp thành lớp theo đường một sự cố đi qua: quản trị và phòng ngừa chặn trước, rồi phát hiện, cảnh báo, điều tra, phục hồi:
+Bảo mật xếp thành sáu lớp bổ sung nhau: quản trị và phòng ngừa áp lên mọi workload; phát hiện (dẫn tới cảnh báo) và điều tra (dẫn
+tới phục hồi) chạy song song. Đây là sơ đồ khái niệm về trách nhiệm, không phải luồng API:
 
-```mermaid
-flowchart LR
-    Q["Quản trị<br/>Organizations, SCP, RCP,<br/>Identity Center"] --> P["Phòng ngừa<br/>IAM, mã hoá KMS,<br/>S3 BPA, IMDSv2"]
-    P --> D["Phát hiện<br/>GuardDuty, Inspector,<br/>Security Hub"]
-    D --> C["Cảnh báo<br/>EventBridge, SNS,<br/>Access Analyzer"]
-    C --> I["Điều tra<br/>CloudTrail, Config,<br/>Log Archive"]
-    I --> R["Phục hồi<br/>Backup chéo account,<br/>Vault Lock"]
-```
+![Sáu lớp bảo mật của svp và root dựng mỗi lớp](docs/diagrams/security-layers.svg)
 
 ## Bắt đầu
 

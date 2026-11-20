@@ -102,7 +102,7 @@ jobs:
         run: make "check-$GROUP"
 
   # The Markdown lint and internal links, and the D2 diagrams against their SVG, of every pull request, documentation
-  # only included: a change of docs/diagrams alone skips job check, so diagrams-check runs here as well.
+  # only included. diagrams-check runs here and in no group of job check, so each run renders the diagrams once.
   docs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10

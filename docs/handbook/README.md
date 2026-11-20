@@ -6,11 +6,11 @@ chọn và nó nối với đề AWS Certified Solutions Architect – Professio
 
 ## Đọc thế nào
 
-- **Lần đầu:** đọc [00. Tổng quan](00-tong-quan.md) cả chương, rồi theo số chương chỉ đọc khối **Tóm tắt** và dòng **Câu hỏi của
-  chương**. Sau một lượt đã có bức tranh: account nào, dịch vụ nào, sống lâu hay trong buổi, phí cỡ nào.
-- **Khi học SAP:** đọc đủ một chương. `## Dịch vụ` nói mỗi dịch vụ bắt được gì kèm ví dụ thật, ở đâu trong svp, tính phí theo gì;
-  `## Kịch bản` đi một tình huống thật từng bước; `## Cái giá và phương án khác` là phần đề hay hỏi; `## Liên hệ đề SAP` chép đúng Task,
-  Skill của đề.
+- **Lần đầu:** đọc [00. Tổng quan](00-tong-quan.md) cả chương, rồi theo số chương chỉ đọc `## Tổng quan` (lời thường, bảng câu hỏi →
+  dịch vụ, bảng account) và sơ đồ của `## Kiến trúc`. Sau một lượt đã có bức tranh: account nào, dịch vụ nào, sống lâu hay trong buổi.
+- **Khi học SAP:** đọc đủ một chương. `## Kịch bản thực tế` đi một tình huống thật từng bước; `## Các dịch vụ và cách svp dùng` nói mỗi
+  dịch vụ bắt được gì kèm ví dụ thật, ở đâu trong svp, tính phí theo gì; `## Thiết kế và đánh đổi` là phần đề hay hỏi;
+  `## Liên hệ đề SAP` chép đúng Task, Skill của đề và phân biệt các dịch vụ dễ nhầm.
 - **Khi chạy lại sau nhiều tháng:** chương tự đủ nghĩa, không giả định nhớ buổi nào. Cột Runbook ở bảng dưới trỏ checklist làm được từ đầu
   tới cuối; chương chỉ trả lời "vì sao bước này tồn tại".
 
@@ -50,12 +50,12 @@ Mọi chương cùng thứ tự mục, nên biết tìm gì ở đâu:
 
 | Mục | Trả lời |
 | --- | --- |
-| **Tóm tắt** | Dựng gì, vì sao, phí (số có nguồn) |
-| **Câu hỏi của chương** | Câu hỏi thiết kế chương trả lời |
-| `## Kiến trúc` | Sơ đồ chính: ranh giới account, luồng dữ liệu |
-| `## Dịch vụ` | Mỗi dịch vụ: làm gì kèm ví dụ thật, ở svp nằm đâu, tính phí theo gì, cái gì cố ý tắt |
-| Mục chủ đề | Lý do không gắn một dịch vụ (delegated admin, luồng secret…) |
-| `## Kịch bản` | Một tình huống thật của svp từng bước, đúng tên tài nguyên trong code |
-| `## Cái giá và phương án khác` | Lựa chọn của svp, cái giá, phương án khác, khi nào chọn nó |
-| `## Liên hệ đề SAP` | Task, Skill chép đúng từ hướng dẫn đề, kèm chỗ chương minh hoạ |
-| `## Làm và tra cứu` | Bước runbook, README root và module, ADR |
+| `## Tổng quan` | Phần này là gì, vì sao svp cần, sống thế nào giữa các buổi; câu hỏi → dịch vụ; account, region, root |
+| `## Kiến trúc` | Sơ đồ tổng quan ít nút; bảng thành phần chính |
+| `## Kịch bản thực tế` | Câu hỏi của chương và một tình huống thật của svp từng bước, đúng tên tài nguyên trong code |
+| `## Các dịch vụ và cách svp dùng` | Mỗi dịch vụ: làm gì kèm ví dụ thật, ở svp nằm đâu, tính phí theo gì, cái gì cố ý tắt |
+| `## Chi phí` | Phí giữa các buổi và trong buổi, mỗi số có nguồn |
+| `## Kiểm tra và vận hành` | Xem gì trên console, ở account và region nào, trạng thái mong đợi; bước runbook kiểm nó |
+| `## Thiết kế và đánh đổi` | Lý do không gắn một dịch vụ; lựa chọn của svp, cái giá, phương án khác |
+| `## Liên hệ đề SAP` | Task, Skill chép đúng từ hướng dẫn đề; tình huống đề → dịch vụ nên chọn |
+| `## Đọc sâu` | Chi tiết triển khai ngắn; link runbook, README root và module, ADR |

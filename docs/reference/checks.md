@@ -10,7 +10,7 @@ Chạy từ gốc repo, không cần credential AWS, cần Docker và mạng (re
 
 | Lệnh | Làm gì |
 | --- | --- |
-| `make check` | bốn nhóm `check-terraform`, `check-lint`, `check-test`, `check-scripts` rồi `docs-check`; target của mỗi nhóm ở dòng của nhóm trong `Makefile` (`make help` in ra) |
+| `make check` | bốn nhóm `check-terraform`, `check-lint`, `check-test`, `check-scripts` rồi `docs-check`, `diagrams-check`; target của mỗi nhóm ở dòng của nhóm trong `Makefile` (`make help` in ra) |
 | `make check-terraform` / `check-lint` / `check-test` / `check-scripts` | từng nhóm của `make check`, mỗi nhóm một job của CI |
 | `make hooks` / `make pre-commit [FILES='<file …>']` | bật hook / chạy phép kiểm nhanh của hook (mục [Hook pre-commit](#hook-pre-commit)) |
 | `make check DIRS="aws/modules/x aws/envs/stg"` | như trên, sáu phép Terraform chỉ trên các thư mục đó; thư mục không có, không có `*.tf` hay nằm ngoài repo thì dừng, nêu thư mục |
@@ -151,5 +151,6 @@ mặc định của biến.
 
 ## CI
 
-`check.yml` chạy mỗi nhóm `check-*` thành một job song song và `docs-check` thành job `docs`; check bắt buộc của ruleset `main` là
+`check.yml` chạy mỗi nhóm `check-*` thành một job song song và `docs-check`, `diagrams-check` thành job `docs` (chạy mọi PR, kể cả PR
+chỉ đổi tài liệu, nên mỗi lượt render sơ đồ một lần); check bắt buộc của ruleset `main` là
 `infra-ok`. Job, quyền, phút billable, tiêu đề PR và Scorecard: chương 14. CI <!-- link-chờ: docs/handbook/14-ci.md -->.

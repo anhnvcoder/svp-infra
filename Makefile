@@ -112,12 +112,12 @@ IS_MODULE = case "/$$d/" in (*/modules/*) true;; (*) false;; esac
 help: ## List the targets
 	@grep -hE '^[a-zA-Z0-9_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-15s %s\n", $$1, $$2}'
 
-check: check-terraform check-lint check-test check-scripts docs-check ## Every static check (narrow the Terraform ones with DIRS=<dir> ...)
+check: check-terraform check-lint check-test check-scripts docs-check diagrams-check ## Every static check (narrow the Terraform ones with DIRS=<dir> ...)
 
-# Each check-* group is one job of .github/workflows/check.yml, and docs-check is its job docs: a target added to a
-# group runs in CI with no change to the workflow. The groups are split by the time they take in CI.
+# Each check-* group is one job of .github/workflows/check.yml, and docs-check with diagrams-check is its job docs: a
+# target added to a group runs in CI with no change to the workflow. The groups are split by the time they take in CI.
 check-terraform: fmt-check validate tfdocs-check ## terraform fmt -check, init and validate, terraform-docs --output-check
-check-lint: tflint trivy diagrams-check ## tflint, trivy config, and the D2 diagrams against their SVG
+check-lint: tflint trivy ## tflint and trivy config
 check-test: test-guard test ## terraform test of the modules, and the self-test of its rules
 check-scripts: shellcheck zizmor session-test github-app-test ci-plan-test infracost-test ## Scripts and workflows: lint and self-tests
 
