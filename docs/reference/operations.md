@@ -140,7 +140,7 @@ ngay trong lệnh (`AWS_PROFILE=anhnv-stg ... --region ap-southeast-1`), không 
 Mỏng có chủ đích: secret và GlitchTip là target `make` của repo code, Argo CD là của Terraform; script chỉ chạy chúng theo thứ tự, có kiểm
 account và có giới hạn cho mỗi lần chờ. `secrets` chạy sau `tf.sh <env> env apply` và trước root gitops (nguồn của các Secret trong
 cluster có trước Argo CD); `wait` chạy sau `tf.sh <env> gitops apply`. Luồng secret của env:
-chương 10. EKS <!-- link-chờ: docs/handbook/10-eks.md -->.
+chương [10. EKS](../handbook/10-eks.md).
 
 ### `tf.sh`
 

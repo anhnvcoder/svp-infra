@@ -1,65 +1,40 @@
 # Module `external-secrets`
 
-Nguồn Secret của cluster EKS một env trong AWS Secrets Manager và quyền đọc chúng của External Secrets Operator (ESO): vỏ entry
-`svp/<env>/<entry>`, role IAM của controller ESO qua EKS Pod Identity và một role IAM cho SecretStore của mỗi namespace. Hai root env
-(`aws/envs/stg`, `aws/envs/prd`) gọi module với cùng đối số `env`, `cluster_name`, `grafana_operator` (cờ `managed_grafana` của env khác
-`off`, đọc qua module [`paid-features`](../paid-features/README.md)).
+Nguồn Secret của cluster EKS một env trong AWS Secrets Manager và quyền đọc chúng của External Secrets Operator: vỏ entry
+`svp/<env>/<entry>` (không giá trị, xoá ngay khi `destroy`), role `svp-<env>-external-secrets` của controller qua EKS Pod Identity và
+role `svp-<env>-external-secrets-<namespace>` chỉ `GetSecretValue` đúng các entry namespace đó dùng. Hai root `aws/envs/<env>` gọi
+module; luồng secret và kịch bản ở chương [10. EKS](../../../docs/handbook/10-eks.md); test: `make test DIRS=aws/modules/external-secrets`.
 
-## Entry
+## Ví dụ
 
-- Module chỉ tạo vỏ entry (`aws_secretsmanager_secret`), không có `aws_secretsmanager_secret_version`. Giá trị của `kafka-admin`,
-  `kafka-users` do module [`msk`](../msk/README.md), của `valkey-users` do module [`elasticache`](../elasticache/README.md) ghi trong cùng
-  apply với mật khẩu chúng đặt cho user, qua đối số write-only (root truyền ARN entry từ output `secret_arns`); giá trị của
-  `media-signing` (khoá ký URL premium của video-service: `MEDIA_SIGNING_KEY_ID`, `MEDIA_SIGNING_KEY`) chỉ do
-  `aws/scripts/media-signing-key.sh <env> activate <ô>` ghi; giá trị của entry khác do người học ghi bằng script `make eks-secrets` của repo
-  code sau khi apply root env. Không giá trị nào nằm trong plan hay state.
-- Mã hoá bằng key AWS quản lý của Secrets Manager: mọi người đọc đều là role của module này, key do khách hàng quản lý không vạch thêm ranh
-  giới nào mà thêm key policy và phí hằng tháng.
-- `recovery_window_in_days = 0`: `destroy` xoá entry ngay. Ngoại lệ của lab: env dựng lại mỗi buổi với cùng tên entry, entry còn chờ hết hạn
-  khôi phục sẽ chặn lần apply sau; giá trị được ghi lại ở buổi sau.
+Lời gọi trong `aws/envs/stg/main.tf`:
 
-## Ai đọc entry nào
+```hcl
+module "external_secrets" {
+  source = "../../modules/external-secrets"
 
-- Map namespace → entry (`local.namespace_entries` ở `main.tf`) là các `remoteRef` key của ExternalSecret mà chart `svp-cluster` của repo
-  code render với store `aws`, object store managed (`s3.mode: external`), Kafka và Valkey ngoài cluster
-  (`externalSecrets.localKafkaValkey: false`), Argo CD notifications, Grafana Operator và khoá ký media (`externalSecrets.mediaSigning`)
-  bật. Khi đó chart không render entry của object store trong cluster (`s3-root`, `s3-users`, `pg-backup-s3`) hay của CA local
-  (`local-ca`, `local-tls`), nên map không có chúng. Map chép từ render của `origin/main`, chart giải nén bằng `git archive` vào một thư
-  mục trống:
+  env              = "stg"
+  cluster_name     = "svp-stg"
+  grafana_operator = false
+}
+```
 
-  ```sh
-  helm template svp-cluster deploy/helm/svp-cluster --namespace svp --show-only templates/external-secrets.yaml \
-    --set externalSecrets.enabled=true --set externalSecrets.store=aws --set externalSecrets.prefix=svp/stg/ \
-    --set s3.mode=external --set externalSecrets.argocdNotifications=true --set externalSecrets.localKafkaValkey=false \
-    --set externalSecrets.grafanaOperator=true --set externalSecrets.mediaSigning=true \
-    --set externalSecrets.aws.region=ap-southeast-1 --set externalSecrets.aws.roles.<namespace>=<arn>   # mỗi namespace
-  ```
+`grafana_operator`: cờ `managed_grafana` của env khác `off` ([`paid-features`](../paid-features/README.md)). Map namespace → entry
+(`local.namespace_entries`, chép lại có chủ đích ở `tests/policies.tftest.hcl`) lấy từ render của chart `svp-cluster` ở `origin/main`,
+giải nén bằng `git archive` vào một thư mục trống:
 
-  Thêm Secret vào `files/external-secrets.yaml` của chart thì thêm entry vào map, nếu không ExternalSecret đó bị AWS từ chối.
-- `grafana_operator = false` (env không có workspace Grafana, cờ `managed_grafana` là `off`): map bỏ entry `grafana-operator` của
-  `svp-obs`, nên không có vỏ `svp/<env>/grafana-operator` và role `svp-obs` không đọc ARN đó; chart khi đó render không ExternalSecret
-  nào cho Grafana Operator (`grafanaUrl` rỗng). Mọi entry, namespace khác giữ nguyên.
-- Role controller `svp-<env>-external-secrets`: chỉ EKS Pod Identity assume được (principal `pods.eks.amazonaws.com`), trust đòi session
-  tag đúng cluster, namespace `external-secrets` và ServiceAccount `external-secrets` (controller của `base/external-secrets.yaml` trong
-  `svp-gitops`); association Pod Identity gắn ServiceAccount đó với role. Role không đọc entry nào, chỉ được `sts:AssumeRole` +
-  `sts:TagSession` lên năm role namespace (session tag của Pod Identity là transitive nên lần assume tiếp theo mang chúng theo và cần
-  `sts:TagSession`).
-- Role namespace `svp-<env>-external-secrets-<namespace>` (`svp`, `svp-data`, `svp-obs`, `keda`, `argocd`): chỉ tin role controller, chỉ được
-  `secretsmanager:GetSecretValue` trên đúng các entry namespace đó đọc. ExternalSecret đọc một key của entry không gọi API nào khác
-  (`DescribeSecret` chỉ khi `metadataPolicy: Fetch`, `ListSecrets`/`BatchGetSecretValue` chỉ với `dataFrom.find`, chart không dùng).
-  Output `roles` (namespace → ARN) là khoá `externalSecretsRoles` của cluster values.
-- Resource của policy là ARN entry viết theo tên, đuôi `-??????`: Secrets Manager gắn vào tên một dấu gạch và sáu ký tự ngẫu nhiên để thành
-  ARN, `??????` khớp đúng sáu ký tự đó nên mẫu chỉ khớp một entry (không `*`). ARN role cũng dựng từ tên. Nhờ vậy policy biết lúc `plan` và
-  test kiểm được nội dung; role namespace `depends_on` role controller vì IAM từ chối trust policy có principal chưa tồn tại.
+```sh
+helm template svp-cluster deploy/helm/svp-cluster --namespace svp --show-only templates/external-secrets.yaml \
+  --set externalSecrets.enabled=true --set externalSecrets.store=aws --set externalSecrets.prefix=svp/stg/ \
+  --set s3.mode=external --set externalSecrets.argocdNotifications=true --set externalSecrets.localKafkaValkey=false \
+  --set externalSecrets.grafanaOperator=true --set externalSecrets.mediaSigning=true \
+  --set externalSecrets.aws.region=ap-southeast-1 --set externalSecrets.aws.roles.<namespace>=<arn>   # mỗi namespace
+```
 
-## Test
+## Tham chiếu
 
-`tests/policies.tftest.hcl` (mock provider, chỉ `plan`) chép lại map namespace → entry và kiểm: tên entry, `recovery_window_in_days`, mỗi
-role namespace chỉ `GetSecretValue` đúng entry của mình (không `*`), trust của role namespace chỉ có role controller, trust của role
-controller chỉ Pod Identity với ba session tag, association và quyền assume của controller, chỉ role namespace `svp` đọc được
-`svp/<env>/media-signing-??????`; một run cho prd, một run `grafana_operator = false` (không entry, không quyền nào nhắc Grafana) và
-một run mỗi luật validation.
-Map được chép lại ở file test có chủ đích: đổi ai đọc entry nào thì phải đổi cả hai nơi.
+- [10. EKS](../../../docs/handbook/10-eks.md): ghi chú thiết kế mà `main.tf` trỏ tới (kịch bản, Luồng secret, Đọc sâu).
+- [ADR-0026](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0026-secrets-gitops.md): secret trên đường GitOps.
 
 <!-- markdownlint-disable MD033 -->
 <!-- BEGIN_TF_DOCS -->

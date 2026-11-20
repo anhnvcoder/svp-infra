@@ -2,7 +2,7 @@
 
 Trang này tra mọi phép kiểm tĩnh của repo: target `make` làm gì, image nào chạy nó, file cấu hình nào nó đọc, chạy song song an toàn ra
 sao, hook pre-commit và ngoại lệ trivy. Không phép nào ở đây chạm account AWS. Plan và chi phí trên PR:
-`docs/reference/ci.md` <!-- link-chờ: docs/reference/ci.md -->.
+[`docs/reference/ci.md`](ci.md).
 
 ## Bảng lệnh
 
@@ -22,6 +22,8 @@ Chạy từ gốc repo, không cần credential AWS, cần Docker và mạng (re
 | `make session-test` | tự kiểm script của `aws/scripts` với lệnh giả trên PATH, không account, cluster hay mạng: `session-test.sh` (mọi bước của buổi, khớp bảng bước của runbook buổi với `session.sh --print`), rồi mỗi `*-test.sh` còn lại; mỗi file lỗi một dòng `FAIL: <file>` |
 | `make zizmor` | lint bảo mật workflow bằng zizmor (`--persona=regular`), mọi finding làm đỏ; có `GH_TOKEN` thì chạy thêm audit online (impostor commit, action có lỗ hổng), không thì offline; `ZIZMOR_FORMAT=github` in annotation |
 | `make docs-check [DOCS='<file hay glob>']` | markdownlint-cli2 theo `.markdownlint.yaml`, rồi lychee `--offline --include-fragments` (link tương đối và anchor heading; link ra ngoài không kiểm), container `--network none`; mặc định mọi `.md` git theo dõi và file mới chưa theo dõi, trừ `.claude/` (cấu hình agent, không phải tài liệu của repo) |
+| `make diagrams [NAMES='<tên …>'] [PNG=1] [OUT=<thư mục>]` | D2 sinh `docs/diagrams/<tên>.svg` (theme sáng và tối trong một file) từ `<tên>.d2`, container ghim digest `--network none`; cờ và luật ở [`docs/diagrams/README.md`](../diagrams/README.md) |
+| `make diagrams-check [NAMES='<tên …>']` | sinh vào thư mục tạm và so với SVG đã commit; đỏ khi SVG lệch, thiếu, hay (khi không `NAMES`) SVG không còn `.d2` cùng tên |
 | `make lock [DIRS=<root>]` | `init -backend=false` rồi `terraform providers lock` cho ba nền tảng; module bị bỏ qua |
 | `make tfdocs` / `make tfdocs-check` | terraform-docs ghi / kiểm khối sinh (requirements, providers, resources, inputs, outputs) giữa `<!-- BEGIN_TF_DOCS -->` và `<!-- END_TF_DOCS -->` của `README.md` mỗi module; `tfdocs-check` đỏ khi README lệch `.tf`, root bị bỏ qua; container `--network none` |
 | `make test` | `terraform test` của mỗi module (`tests/*.tftest.hcl`): `init -backend=false` trong một container, rồi `terraform test` trong container `--network none` với image `TERRAFORM_IMAGE` ghim digest, chỉ thư mục module và cache provider được mount (chỉ đọc), không biến `AWS_*` nào (bỏ bằng `env -u`), không `~/.aws`, `.envrc`, `backend.hcl`; file test chỉ được nhận khi theo khuôn: đúng một dòng `mock_provider "aws" {`, mỗi `run "<tên>" {` có `command = plan` ở dòng không trống đầu tiên, không dòng nào khác bắt đầu bằng `run`, `mock_provider`, `provider`, `override_`, `module`, `command`, `/*`, không `alias`, `*/`, heredoc, symlink hay `*.tftest.json`; sai thì bị từ chối, nêu file và dòng; root bị bỏ qua |
@@ -68,7 +70,7 @@ Không target nào gọi `apply`, `destroy`, `import`, `output` hay `aws`. Chỉ
 | `CODEOWNERS` | đường có chủ: PR đổi chúng cần Code Owner duyệt (danh sách ở file) |
 | `LICENSE` | Apache-2.0 |
 
-Workflow, `infracost.yml`, `infracost-usage.yml`: `docs/reference/ci.md` <!-- link-chờ: docs/reference/ci.md -->.
+Workflow, `infracost.yml`, `infracost-usage.yml`: [`docs/reference/ci.md`](ci.md).
 
 ## Root và module
 
@@ -153,4 +155,4 @@ mặc định của biến.
 
 `check.yml` chạy mỗi nhóm `check-*` thành một job song song và `docs-check`, `diagrams-check` thành job `docs` (chạy mọi PR, kể cả PR
 chỉ đổi tài liệu, nên mỗi lượt render sơ đồ một lần); check bắt buộc của ruleset `main` là
-`infra-ok`. Job, quyền, phút billable, tiêu đề PR và Scorecard: chương 14. CI <!-- link-chờ: docs/handbook/14-ci.md -->.
+`infra-ok`. Job, quyền, phút billable, tiêu đề PR và Scorecard: chương [14. CI](../handbook/14-ci.md).

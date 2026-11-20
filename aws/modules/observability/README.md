@@ -1,128 +1,42 @@
 # Module `observability`
 
-Nơi nhận telemetry của một account env (`svp-stg`, `svp-prd`), gọi từ root `aws/accounts/<env>` ([README](../../accounts/README.md)) nên dữ
-liệu và cấu hình sống qua `destroy` của buổi: workspace Amazon Managed Service for Prometheus (AMP), log group ứng dụng, Transaction Search của
-X-Ray, khoá KMS của chúng và, theo cờ `managed_grafana`, workspace Amazon Managed Grafana (AMG; mục
-[Biến `grafana_enabled`](#biến-grafana_enabled)). Thiết kế và lý do từng giá trị:
-[ADR-0063](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0063-managed-observability.md) và phụ lục của nó (số § dưới đây là §
-của ADR). Output `amp_workspace_id`, `amp_endpoint`, `log_group_name`, `grafana_url` là các khoá `ampWorkspaceId`, `ampEndpoint`, `logGroup`,
-`grafanaUrl` của cluster values; root `aws/envs/<env>` đọc tài nguyên của module bằng data source theo tên, alias, và id workspace AMG
-qua SSM parameter `/svp/<env>/grafana-workspace-id` (cờ `off` thì không đọc, `grafanaUrl` rỗng).
+Nơi nhận telemetry của một account env (`svp-stg`, `svp-prd`): workspace AMP `svp-<env>`, log group `/svp/<env>/otel` và stream
+`otel-collector`, Transaction Search của X-Ray, key `alias/svp-<env>-observability`; khi `grafana_enabled`, workspace Amazon Managed Grafana
+`svp-<env>`, role của nó, hai gán nhóm, service account `svp-grafana-operator` và tham số SSM `/svp/<env>/grafana-workspace-id`.
+Root `aws/accounts/<env>` ([README](../../accounts/README.md)) gọi module nên metric, log, span sống qua `destroy` của buổi; luồng
+telemetry và lý do: [08. Account env](../../../docs/handbook/08-accounts.md#amazon-managed-service-for-prometheus). Test:
+`make test DIRS=aws/modules/observability`.
 
-## Luồng telemetry
+## Ví dụ
 
-```mermaid
-flowchart LR
-  svc["Service, web (OTLP)"] --> col["Collector svp-obs/otel-collector"]
-  agent["Prometheus agent svp-obs/kps-prometheus"] -->|"remote write, SigV4"| amp
-  col -->|"metric: remote write, SigV4"| amp[("Workspace AMP svp-#60;env#62;")]
-  col -->|"log: OTLP, SigV4"| logs[("Log group /svp/#60;env#62;/otel, stream otel-collector")]
-  col -->|"trace: OTLP, SigV4"| xray["X-Ray, Transaction Search"]
-  xray -->|"resource policy svp-#60;env#62;-xray-transaction-search"| spans[("Log group aws/spans")]
-  amp --> kms{{"KMS alias/svp-#60;env#62;-observability"}}
-  logs --> kms
-  amg["AMG svp-#60;env#62; (role svp-#60;env#62;-grafana)"] -->|"PromQL"| amp
-  amg -->|"Logs Insights"| logs
-  amg -->|"Logs Insights"| spans
-  user["Nhóm svp-platform-admins, svp-platform-viewers"] -->|"IAM Identity Center"| amg
-  op["Grafana Operator (service account svp-grafana-operator)"] -->|"dashboard, data source"| amg
+Lời gọi của `aws/accounts/stg/main.tf` (ở đó retention lấy từ `locals`, `grafana_enabled` tính từ cờ `managed_grafana` và
+`session_open`), giá trị là placeholder:
+
+```hcl
+module "observability" {
+  source = "../../modules/observability"
+
+  env                      = "stg"
+  amp_retention_days       = 31
+  log_retention_days       = 7
+  span_retention_days      = 7
+  platform_admin_group_id  = "<id nhóm svp-platform-admins>"
+  platform_viewer_group_id = "<id nhóm svp-platform-viewers>"
+  grafana_enabled          = false
+}
 ```
 
-Collector và Prometheus agent trong cluster ghi bằng role Pod Identity của module `eks`; cluster chỉ thu và gửi, dữ liệu nằm ở account env.
-Người dùng đăng nhập AMG bằng IAM Identity Center của org; AMG đọc AMP, CloudWatch bằng role của workspace. Trace xem ở trang Traces của
-CloudWatch (AMG không có data source `xray`: §3).
+Output `amp_workspace_id`, `amp_endpoint`, `log_group_name`, `grafana_url` là khoá `ampWorkspaceId`, `ampEndpoint`, `logGroup`,
+`grafanaUrl` của cluster values. Retention của `aws/spans` đặt tay một lần mỗi account bằng lệnh của output `spans_retention_command`.
 
-## Khoá KMS
+## Tham chiếu
 
-Key `alias/svp-<env>-observability` mã hoá workspace AMP và log group ứng dụng: xoay hằng năm, chờ 30 ngày khi xoá, `prevent_destroy` vì AMP gắn
-workspace với key mãi mãi, mất key là mất mọi metric (§1). Key policy không có principal ngoài account hay `*`:
-
-| Statement | Principal | Hành động | Điều kiện |
-| --- | --- | --- | --- |
-| `AccountAdministersKey` | account | nhóm "key administrators" của policy mặc định KMS, không mã hoá, giải mã | — |
-| `AccountUsesKeyThroughPrometheus` | account | `DescribeKey`, `CreateGrant`, `GenerateDataKey`, `Decrypt` | `kms:ViaService` AMP của region, `kms:CallerAccount` |
-| `AccountUsesKeyThroughLogs` | account | `Encrypt`, `Decrypt`, `ReEncrypt*`, `GenerateDataKey*`, `DescribeKey` | `kms:ViaService` CloudWatch Logs của region, `kms:CallerAccount` |
-| `LogsEncryptsApplicationLogGroup` | `logs.<region>.amazonaws.com` | như dòng trên | `kms:EncryptionContext:aws:logs:arn` là ARN của `/svp/<env>/otel` |
-
-Không principal nào của account dùng được key ngoài AMP và CloudWatch Logs; quyền thật của từng role (Collector, AMG) nằm ở policy IAM của nó.
-AMP tạo grant của mình lúc tạo workspace cho việc nội bộ của nó. Dịch vụ khác chỉ đọc được workspace đã mã hoá khi được dùng key
-([AMP, mã hoá lúc lưu](https://docs.aws.amazon.com/prometheus/latest/userguide/encryption-at-rest-Amazon-Service-Prometheus.html), bước 3):
-role của AMG có `kms:Decrypt`, `kms:DescribeKey` qua AMP, khớp statement `AccountUsesKeyThroughPrometheus`.
-
-## Workspace AMP
-
-Alias `svp-<env>`, mã hoá bằng key trên. Retention `amp_retention_days` (`aws_prometheus_workspace_configuration`); `rule_query_offset` giữ
-mặc định 60 s của workspace mới (§5). AMP không có endpoint OTLP: Collector và agent ghi bằng remote write (§1).
-
-Output `amp_endpoint` là `prometheus_endpoint` của workspace, URL gốc kết thúc bằng `/` (§12): hai trang tài liệu AWS tả dạng khác nhau, nên
-output có `precondition` theo đúng dạng của cluster values, lệch thì apply dừng ở đây. Test mocked không kiểm được giá trị này: lúc plan id
-workspace chưa có.
-
-## Log group ứng dụng
-
-`/svp/<env>/otel` lớp Standard (Live Tail dùng trong buổi; lớp không đổi được sau khi tạo), retention `log_retention_days`, mã hoá bằng key trên,
-cùng stream `otel-collector`: endpoint OTLP của CloudWatch Logs chỉ ghi vào stream có sẵn (§2).
-
-## Trace X-Ray
-
-Endpoint OTLP của X-Ray cần Transaction Search (§3). Module bật nó bằng ba tài nguyên:
-
-- Resource policy CloudWatch Logs `svp-<env>-xray-transaction-search`: `xray.amazonaws.com` được `logs:PutLogEvents` vào `aws/spans` và
-  `/aws/application-signals/data`, điều kiện `aws:SourceArn` X-Ray của account, `aws:SourceAccount`.
-- Đích segment `CloudWatchLogs` (`aws_xray_trace_segment_destination`). Gỡ tài nguyên này khỏi Terraform không đổi đích trên AWS.
-- Rule index `Default` 1 % (`aws_xray_indexing_rule`): phần X-Ray index miễn phí.
-
-### Bước tay: retention của `aws/spans`
-
-X-Ray tự tạo log group `aws/spans`; Terraform không tạo hay nhận được nó (API cấm tên bắt đầu `aws/`), và provider chưa có tham số khoá KMS của
-nó, nên group dùng mã hoá mặc định của CloudWatch Logs. Retention đặt bằng tay, một lần mỗi account, sau buổi đầu có span (lúc đó group mới có).
-Output `spans_retention_command` của root `aws/accounts/<env>` in sẵn lệnh với `span_retention_days`; người học chạy:
-
-```sh
-aws/scripts/check-account.sh <env>
-AWS_PROFILE=anhnv-<env> aws logs put-retention-policy --log-group-name aws/spans \
-  --retention-in-days <span_retention_days> --region ap-southeast-1
-```
-
-Kiểm: `AWS_PROFILE=anhnv-<env>-ro aws logs describe-log-groups --log-group-name-prefix aws/spans --region ap-southeast-1`, dán lại output, tìm
-`retentionInDays` bằng `span_retention_days`. Đổi `span_retention_days` thì chạy lại lệnh.
-
-## Grafana managed
-
-- Workspace `svp-<env>`: xác thực `AWS_SSO` (IAM Identity Center của org), quyền `CUSTOMER_MANAGED` (API chỉ tạo được loại này), data source
-  `PROMETHEUS`, `CLOUDWATCH`, phiên bản mới nhất AMG có lúc tạo. Không cấu hình VPC hay network access control: AMG gọi AMP, CloudWatch qua
-  endpoint AWS, không tới được dịch vụ chỉ có trong VPC (Pyroscope, GlitchTip) (§4).
-- Role `svp-<env>-grafana` (trust `grafana.amazonaws.com`, `aws:SourceAccount` là account env) chỉ đọc (§11): `aps:QueryMetrics`, `GetSeries`,
-  `GetLabels`, `GetMetricMetadata`, `ListRules`, `ListAlerts` trên workspace của env; `logs:StartQuery`, `GetQueryResults`, `GetLogGroupFields`
-  trên `/svp/<env>/otel`, `aws/spans` và log group của RDS, MSK, ElastiCache của env; trên key: `kms:Decrypt` qua CloudWatch Logs,
-  `kms:Decrypt`, `kms:DescribeKey` qua AMP (điều kiện `kms:ViaService`); `logs:StopQuery`, `logs:DescribeLogGroups`,
-  `cloudwatch:GetMetricData`, `cloudwatch:ListMetrics` trên `*` vì Service Authorization Reference không ghi resource type nào cho chúng.
-  Không hành động ghi nào.
-- Vai trò: `ADMIN` cho nhóm `platform_admin_group_id`, `VIEWER` cho nhóm `platform_viewer_group_id` (nhóm `svp-platform-admins`,
-  `svp-platform-viewers` của `aws/org`); id nhóm chỉ nằm ở `<env>.auto.tfvars` không commit.
-- Service account `svp-grafana-operator` vai trò `ADMIN` cho Grafana Operator: Operator tạo data source uid `prometheus`, `cloudwatch`, việc
-  chỉ `ADMIN` làm được (`EDITOR` không thêm, sửa được data source:
-  [vai trò của AMG](https://docs.aws.amazon.com/grafana/latest/userguide/Grafana-user-roles.html)). Cái giá: token quản được cả workspace;
-  module không tạo token, script buổi tạo token ngắn hạn mỗi buổi và ghi vào Secrets Manager, nên token không nằm trong state (§4).
-- SSM parameter `/svp/<env>/grafana-workspace-id` (`String`, tier `Standard`) giữ id workspace (`g-<id>`): root `aws/envs/<env>` đọc id ở đây,
-  nên workspace dựng lại mỗi buổi không cần sửa tfvars nào. Test mocked chỉ kiểm tên, kiểu, tier: lúc plan id workspace chưa có.
-
-### Biến `grafana_enabled`
-
-`grafana_enabled` (mặc định `true`) bật hay tắt cả phần AMG trên: workspace, role `svp-<env>-grafana` và policy của nó, hai gán nhóm, service
-account `svp-grafana-operator`, SSM parameter (`count` theo cờ, địa chỉ `[0]`). `false` thì output `grafana_url` là `null`; workspace AMP, key,
-log group, X-Ray và output khác giữ nguyên, không policy nào còn lại trỏ tới tài nguyên AMG. Root `aws/accounts/<env>` đặt giá trị theo cờ
-`managed_grafana` của `aws/paid-features.json` và biến `session_open`
-([ADR-0071](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0071-paid-features.md),
-[ADR-0078](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0078-paid-features-lean-defaults.md)): env có cờ `session` chỉ có
-AMG trong buổi, env có cờ `off` không bao giờ có.
-
-## Vòng đời
-
-Module sống ở root `aws/accounts/<env>`, không ở `aws/envs/<env>`: destroy của buổi, kể cả xoá hẳn env, không xoá workspace, log group, cài
-đặt X-Ray hay key; metric, log, span còn đọc được giữa các buổi. AMG sống giữa các buổi khi `grafana_enabled` luôn `true`; env tắt nó giữa
-các buổi thì dashboard dựng lại trong buổi, dữ liệu ở AMP và CloudWatch không đổi. Gỡ hẳn module là việc của root accounts, key giữ
-`prevent_destroy`.
+- [08. Account env](../../../docs/handbook/08-accounts.md): AMP, CloudWatch Logs, X-Ray, AMG; key, `aws/spans`, endpoint AMP ở mục Đọc
+  sâu (ghi chú thiết kế mà `main.tf` trỏ tới).
+- [ADR-0063](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0063-managed-observability.md): metric, log, trace, Grafana,
+  retention; key policy và nguồn ở
+  [phụ lục](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0063-managed-observability.md).
+- [`platform-setup.md`, bước (10)](../../../docs/runbooks/platform-setup.md#bước-10-retention-của-awsspans): retention của `aws/spans`.
 
 <!-- BEGIN_TF_DOCS -->
 ## Requirements

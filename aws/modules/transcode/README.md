@@ -1,50 +1,30 @@
 # Module `transcode`
 
-Transcode video của một env bằng AWS Elemental MediaConvert: queue on-demand, role mà job chạy với, rule EventBridge đưa trạng thái cuối của job
-vào hàng đợi SQS có dead-letter queue và alarm, cộng policy IAM (JSON) phần MediaConvert, `iam:PassRole`, SQS của bridge
-(`media-worker mediaconvert`). Thiết kế: [ADR-0066](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0066-mediaconvert-transcode.md)
-§1, §7, §9; bảng quyền, giá trị và nguồn ở
-[phụ lục ADR-0066](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0066-mediaconvert-transcode.md) (mục "Giá trị → nguồn",
-§7, §9, "Control FSBP"). Luồng của bridge (Probe, bản ghi job, quyết định kết quả) ở `docs/explanation/transcode.md` của repo code.
+Transcode video của một env bằng AWS Elemental MediaConvert: queue on-demand `svp-<env>`, role `svp-<env>-mediaconvert` mà job chạy
+với, rule EventBridge đưa trạng thái cuối của job vào SQS `svp-<env>-transcode-events` có dead-letter queue và alarm, cộng policy IAM
+(JSON) của bridge `media-worker mediaconvert`. Root `aws/envs/<env>` gọi module với ARN bucket và key của module `media`, topic của
+module `alarms`; lý do ở [chương 12. Media và edge](../../../docs/handbook/12-media-edge.md); test: `make test DIRS=aws/modules/transcode`.
 
-Root `aws/envs/<env>` gọi module với ARN hai bucket của module `media` và topic của module `alarms`. Mọi tài nguyên dùng region của provider, sống
-trong buổi và bị gỡ cùng root env; lúc không buổi chúng không tồn tại, nên không tốn gì.
+## Ví dụ
 
-## Tên tài nguyên
+Lời gọi trong `aws/envs/stg/main.tf`, giá trị là placeholder:
 
-| Tài nguyên | Tên |
-| --- | --- |
-| Queue MediaConvert (on-demand) | `svp-<env>` |
-| Role MediaConvert | `svp-<env>-mediaconvert` |
-| Rule EventBridge (bus mặc định) | `svp-<env>-mediaconvert-job-state` |
-| SQS standard của trạng thái job | `svp-<env>-transcode-events` |
-| Dead-letter queue | `svp-<env>-transcode-events-dlq` |
-| Alarm CloudWatch | `svp-<env>-transcode-events-dlq` |
+```hcl
+module "transcode" {
+  source = "../../modules/transcode"
 
-ARN của queue, role, rule và hai hàng đợi ghép từ partition, region, account và tên trong `locals` của `main.tf`, không đọc từ resource: policy và
-event pattern biết lúc `plan`, test mock khẳng định được từng giá trị. `depends_on` giữ thứ tự tạo mà tham chiếu bỏ đi: DLQ trước hàng đợi nguồn (SQS
-từ chối redrive tới queue chưa có), policy của hai hàng đợi trước đích của rule.
-
-## Queue MediaConvert
-
-On-demand (`pricing_plan = "ON_DEMAND"`): tính tiền theo phút output, không phí cố định; số job đồng thời theo hạn mức mặc định của queue
-on-demand (phụ lục, dòng "Job đồng thời"). Tier Basic hay Professional là thuộc tính của job (bridge đặt trong settings), không của queue.
-
-## Role MediaConvert
-
-- **Trust:** `mediaconvert.amazonaws.com`, `sts:AssumeRole`, `StringEquals` `aws:SourceAccount` là account và `ArnLike` `aws:SourceArn` là ARN queue
-  `svp-<env>`: cách tài liệu MediaConvert chống confused deputy, nên job của account hay queue khác không dùng được role.
-- **Quyền:** đúng bảng "Role MediaConvert" của phụ lục §9: `s3:GetObject` trên `<uploads>/uploads/*` (đọc input), `s3:PutObject` trên
-  `<media>/media/*` và `<media>/premium/*` (ghi output; video premium ghi dưới `premium/`,
-  [ADR-0073](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0073-premium-playback.md) §7; không `preview/*`: bản xem thử do
-  media-worker chép), `kms:Decrypt` trên `uploads_kms_key_arn` (bucket `uploads` mã hoá SSE-KMS bằng key của module `media`,
-  [ADR-0067](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0067-backup-dr.md) §8; `media` SSE-S3 nên ghi không cần quyền KMS).
-  Policy inline tên `s3`.
+  env                 = "stg"
+  uploads_bucket_arn  = "arn:aws:s3:::svp-stg-uploads-000000000000-ap-southeast-1"
+  uploads_kms_key_arn = "arn:aws:kms:ap-southeast-1:000000000000:key/<id>"
+  media_bucket_arn    = "arn:aws:s3:::svp-stg-media-000000000000-ap-southeast-1"
+  alarm_topic_arn     = "arn:aws:sns:ap-southeast-1:000000000000:svp-stg-alarms"
+}
+```
 
 ## Policy của bridge
 
-Output `bridge_policy_json` là các dòng MediaConvert, `iam:PassRole`, SQS của bảng "Quyền bridge" ở phụ lục §9; dòng S3 do module `media` giữ
-(`media_worker_policy_json`). Root env gộp hai JSON vào role Pod Identity `svp-<env>-media-worker`.
+Output `bridge_policy_json` là các dòng MediaConvert, `iam:PassRole`, SQS của bảng "Quyền bridge" ở phụ lục §9; dòng S3 do module `media`
+giữ (`media_worker_policy_json`). Root env gộp hai JSON vào role Pod Identity `svp-<env>-media-worker`.
 
 | Statement | Action | Resource | Điều kiện |
 | --- | --- | --- | --- |
@@ -54,39 +34,12 @@ Output `bridge_policy_json` là các dòng MediaConvert, `iam:PassRole`, SQS c�
 | `PassMediaConvertRole` | `iam:PassRole` | ARN role `svp-<env>-mediaconvert` | `StringEquals` `iam:PassedToService` `mediaconvert.amazonaws.com` |
 | `ConsumeJobStates` | `sqs:ReceiveMessage`, `sqs:DeleteMessage`, `sqs:ChangeMessageVisibility` | ARN `svp-<env>-transcode-events` | — |
 
-## Trạng thái job: EventBridge, SQS, DLQ
+## Tham chiếu
 
-- **Rule** trên bus mặc định khớp `source` `aws.mediaconvert`, `detail-type` `MediaConvert Job State Change`, `detail.status` `COMPLETE` hoặc
-  `ERROR`, `detail.queue` là ARN queue của env. `SUBMITTED`, `PROGRESSING` không quyết gì nên không vào hàng đợi.
-- **Đích** là `svp-<env>-transcode-events`, dead-letter của đích là DLQ: không có nó, EventBridge bỏ event khi hết số lần thử mặc định (phụ lục §7).
-- **Hàng đợi** standard, mã hoá SSE-SQS (không phí KMS). Redrive tới DLQ sau `maxReceiveCount` của `events.tf` (giá trị chọn ở phụ lục §7): message
-  bridge không hành động được (không phải JSON, job không thuộc queue, `UserMetadata` hay destination sai) bị nhận lại tới mức đó rồi vào DLQ. DLQ
-  giữ message lâu nhất SQS cho phép, để người vận hành chuyển về sau khi sửa nguyên nhân.
-- **Policy** của cả hai hàng đợi: chỉ `events.amazonaws.com` được `sqs:SendMessage`, với `ArnEquals` `aws:SourceArn` là ARN của rule; statement
-  `Deny` `sqs:*` khi `aws:SecureTransport` là `false`. Wildcard ở `Deny` chỉ mở rộng thứ bị cấm, không cấp quyền nào.
-- **Alarm** `svp-<env>-transcode-events-dlq`: `ApproximateNumberOfMessagesVisible` của DLQ (tối đa mỗi phút) lớn hơn 0 trong một chu kỳ; tag
-  `Severity` `page`, URL runbook `docs/runbooks/transcode-events-dlq.md` của repo code trong `alarm_description`, `alarm_actions` và `ok_actions` tới
-  `alarm_topic_arn`. Message trong DLQ là một video đứng ở `PROCESSING`.
-
-## Control FSBP
-
-Bảng của phụ lục ADR-0066 (mục "Control FSBP"); Security Hub không có control nào cho MediaConvert.
-
-| Control | Tiêu đề (tóm tắt) | FSBP | Kết quả | Lý do |
-| --- | --- | --- | --- | --- |
-| SQS.1 | Queue SQS mã hoá at rest | có | Đạt | SSE-SQS ở cả hai queue |
-| SQS.3 | Policy queue SQS không cho truy cập công khai | có | Đạt | Principal `events.amazonaws.com` với `aws:SourceArn` của rule |
-| SQS.2 | Queue SQS có tag | không | Đạt | `default_tags` của root |
-| EventBridge.3 | Custom event bus có resource policy | có | Không áp | Rule ở default bus |
-| IAM.1 | Policy không cho `"*"` quản trị | có | Đạt | Action liệt kê từng cái |
-| IAM.21 | Policy tự tạo không wildcard action theo dịch vụ | có | Đạt | Không `mediaconvert:*`, `sqs:*`, `s3:*` ở statement `Allow` |
-| CloudWatch.15 | Alarm có action | không | Đạt | Alarm DLQ gửi topic của module `alarms` |
-
-## Test
-
-`tests/transcode.tftest.hcl` (provider mock, chỉ `plan`) so từng statement của trust, policy role và policy bridge với bảng của phụ lục, nên thêm hay bớt
-một action, resource hay điều kiện làm test fail; kiểm event pattern, đích và dead-letter của rule, redrive và mã hoá của hai hàng đợi, policy hàng
-đợi, alarm, tên ở prd, và mỗi biến một lần validation từ chối.
+- [Chương 12. Media và edge](../../../docs/handbook/12-media-edge.md): ghi chú thiết kế mà `main.tf` trỏ tới.
+- [ADR-0066](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0066-mediaconvert-transcode.md) §1, §7, §9 và
+  [phụ lục](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0066-mediaconvert-transcode.md) (§7, §9, "Control
+  FSBP"): bảng quyền, giá trị, control.
 
 <!-- markdownlint-disable MD033 -->
 <!-- BEGIN_TF_DOCS -->

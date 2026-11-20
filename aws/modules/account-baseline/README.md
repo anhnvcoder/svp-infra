@@ -1,109 +1,51 @@
 # Module `account-baseline`
 
-Phần sống lâu hơn mọi buổi AWS của một account thành viên (`svp-stg`, `svp-prd`), gọi từ root `aws/accounts/<env>`
-([README](../../accounts/README.md)): state Terraform của mọi root chạy trong account đó, zone DNS của env (cùng `CAA`, DNSSEC, query log) và
-budget tháng.
+Phần sống lâu hơn mọi buổi của một account env (`svp-stg`, `svp-prd`): bucket state và key `alias/svp-tfstate` của mọi root trong
+account, hosted zone của env với `CAA` ở đỉnh, bản ghi uỷ quyền zone con, budget tháng; theo biến, DNSSEC với hai alarm `page` và query
+log của zone. Root `aws/accounts/<env>` ([README](../../accounts/README.md)) gọi module; vì sao từng phần:
+[08. Account env](../../../docs/handbook/08-accounts.md). Test: `make test DIRS=aws/modules/account-baseline`.
 
-Tạo:
+## Ví dụ
 
-- **KMS key `alias/svp-tfstate`** (xoay vòng tự động, chờ 30 ngày khi xoá, `prevent_destroy`). Key policy theo mẫu của tài liệu KMS
-  ([default key policy](https://docs.aws.amazon.com/kms/latest/developerguide/key-policy-default.html)): account quản trị key qua IAM với
-  nhóm quyền "key administrators" (không có quyền mã hoá, giải mã), nên admin nào của account (SvpAdmin, `OrganizationAccountAccessRole`)
-  cũng sửa lại được policy, key không bị khoá chết dù permission set bị đổi tên hay gỡ; mã hoá, giải mã chỉ cho role SSO của permission set
-  `SvpAdmin`, khớp bằng `ArnLike` `aws:PrincipalArn` với mẫu `AWSReservedSSO_SvpAdmin_*` (hậu tố ngẫu nhiên thay bằng `*`) theo
-  [IAM Identity Center](https://docs.aws.amazon.com/singlesignon/latest/userguide/referencingpermissionsets.html). Đường dẫn của role không
-  có đoạn region khi instance Identity Center ở `us-east-1`, và có đoạn region khi ở region khác; policy liệt kê cả hai dạng nên không phụ
-  thuộc instance nằm đâu. Chỉ IAM Identity Center tạo được role dưới `/aws-reserved/`. Không statement nào có principal `*`. Hệ quả: role chỉ được đọc hay liệt kê bucket không đọc được state (state chứa output, thuộc tính tài nguyên).
-  Ngoại lệ duy nhất là statement `CiPlanReadsState`: role `svp-ci-terraform-plan` của module [`ci-plan-role`](../ci-plan-role/README.md)
-  (khớp `ArnEquals` `aws:PrincipalArn`, ARN dựng từ account và tên cố định nên key policy không chờ role) chỉ được `kms:Decrypt`, chỉ khi
-  `kms:ViaService` là S3 của region và encryption context `aws:s3:arn` là ARN bucket state (S3 Bucket Key dùng ARN bucket), tức chỉ khi S3
-  giải mã object của bucket này cho role. Lý do:
-  [ADR-0076](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0076-terraform-plan-infracost-pr.md) §4.
-- **Bucket `svp-tfstate-<account>-<region>`**: versioning, mã hoá mặc định SSE-KMS bằng key trên (S3 Bucket Key bật để giảm request KMS),
-  chặn public, `BucketOwnerEnforced`, policy từ chối request không TLS, `prevent_destroy`.
-- **Hosted zone `zone_name`** của env: `aws.<domain>` ở prd (zone gốc của lab, DNS của domain cha uỷ quyền bằng bốn bản ghi `NS` tên
-  `aws`), `stg.aws.<domain>` ở stg (zone của prd uỷ quyền). Zone ở trên uỷ quyền bằng bốn name server của output `name_servers`.
-  Bản ghi của buổi (alias tới distribution, bản ghi validation ACM) do root `aws/envs/<env>` tạo; không gì trong cluster ghi zone.
-- **Bản ghi uỷ quyền zone con** (biến `delegated_subdomains`, mặc định rỗng: không bản ghi nào): mỗi mục một bản ghi `NS` TTL 172800 trong
-  zone của env, trỏ tới zone ở account khác, theo
-  [Route 53: tạo subdomain dùng Route 53 mà không chuyển domain cha](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/CreatingNewSubdomain.html).
-  TTL 172800 là giá trị hướng dẫn đó ghi cho bản ghi `NS`: name server của một zone được giữ không đổi.
-  Chỉ root `aws/accounts/prd` truyền biến này (zone `stg.aws.<domain>`). Tên mỗi mục phải là con thật của `zone_name`, đúng bốn name
-  server khác nhau. Lý do chọn mô hình này: [ADR-0051](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0051-dns-prd-apex.md).
-- **Bản ghi `CAA` ở đỉnh zone** (mọi env): `0 issue` và `0 issuewild` cho bốn CA của ACM `amazon.com`, `amazontrust.com`, `awstrust.com`,
-  `amazonaws.com` theo [ACM: CAA records](https://docs.aws.amazon.com/acm/latest/userguide/setup-caa.html), TTL 3 600. Chỉ CA của Amazon
-  được cấp cert cho tên trong zone; `issuewild` thiếu CA của ACM thì ACM không cấp cert wildcard. Chỉ cần ở đỉnh: CA tìm `CAA` của một tên
-  ngược lên tên cha tới khi gặp ([RFC 8659 §3](https://www.rfc-editor.org/rfc/rfc8659#section-3)). Zone stg là zone riêng nên có `CAA` riêng.
-- **DNSSEC** (biến `dnssec_enabled`, mặc định `false`; root prd bật): KMS key `us-east-1` `ECC_NIST_P256` `SIGN_VERIFY` (alias `alias/svp-dnssec`,
-  chờ 30 ngày khi xoá, `prevent_destroy`), key signing key `svp_<env>_ksk` luôn `ACTIVE`, zone ký (`aws_route53_hosted_zone_dnssec`). Tên KSK
-  dùng `_` vì Route 53 chỉ nhận chữ, số và `_` (3 tới 128 ký tự) theo
-  [API `CreateKeySigningKey`](https://docs.aws.amazon.com/Route53/latest/APIReference/API_CreateKeySigningKey.html). Key phải ở
-  `us-east-1` và đúng loại đó theo
-  [Route 53: customer managed key cho DNSSEC](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/dns-configuring-dnssec-cmk-requirements.html);
-  key bất đối xứng không xoay tự động. Key policy theo
-  [Route 53: quyền key cho DNSSEC](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/access-control-managing-permissions.html):
-  account quản trị key qua IAM; `dnssec-route53.amazonaws.com` được `kms:DescribeKey`, `kms:GetPublicKey`, `kms:Sign` với `aws:SourceAccount` là
-  account này và `aws:SourceArn` khớp `arn:aws:route53:::hostedzone/*`, và `kms:CreateGrant` với `kms:GrantIsForAWSResource`.
-- **Hai alarm DNSSEC** (cùng `dnssec_enabled`) ở `us-east-1`, namespace `AWS/Route53`, dimension `HostedZoneId`, Sum ≥ 1 trong 5 phút, tag
-  `Severity = page`, gửi `alarm_topic_arn` (topic `us-east-1` của module [`alarms`](../alarms/README.md) gọi với `region`; CloudWatch chỉ gửi
-  tới topic cùng region):
+Lời gọi của `aws/accounts/prd/main.tf` (stg bỏ năm đối số sau `budget_emails`), giá trị là placeholder:
 
-  | Alarm | Metric | Runbook |
-  | --- | --- | --- |
-  | `svp-<env>-dnssec-internal-failure` | `DNSSECInternalFailure` | [`dnssec-internal-failure.md`](https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks/dnssec-internal-failure.md) |
-  | `svp-<env>-dnssec-ksk-action-needed` | `DNSSECKeySigningKeysNeedingAction` | [`dnssec-ksk-action-needed.md`](https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks/dnssec-ksk-action-needed.md) |
+```hcl
+module "baseline" {
+  source = "../../modules/account-baseline"
 
-  Cả hai là `page`: KSK `ACTION_NEEDED` (key KMS không dùng được) làm zone ngừng phân giải khi chữ ký hết hạn.
-- **Query log** (biến `query_log_enabled`, mặc định `false`; root prd bật): log group `/aws/route53/<zone_name>` ở `us-east-1`, giữ 90 ngày,
-  resource policy `svp-route53-query-log` của CloudWatch Logs cho `route53.amazonaws.com` (`logs:CreateLogStream`, `logs:PutLogEvents` trên log
-  group đó, `aws:SourceAccount` là account này, `aws:SourceArn` là ARN của zone), rồi cấu hình query log của zone, theo
-  [Route 53: public DNS query logging](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/query-logs.html) (log group phải ở `us-east-1`).
-- **Budget `svp-<env>-monthly`**: chi phí của riêng account, email ở 50 %, 80 %, 100 % chi phí thực tế và 100 % dự báo (cùng mẫu budget
-  của `aws/bootstrap`, budget đó tính cả org).
-
-Zone prd ký, zone stg không ký: bản ghi `NS` uỷ quyền stg trong zone prd không có `DS` đi kèm, nên `stg.aws.<domain>` là uỷ quyền không an toàn
-hợp lệ (resolver kiểm DNSSEC trả lời không cờ `ad`, không lỗi). Lý do:
-[ADR-0061](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0061-edge-cloudfront-waf-acm.md) §11.
-
-Output `backend_hcl` là nội dung file `aws/backend-<env>.hcl` (git bỏ qua) mà mọi root của account đọc bằng `-backend-config`: `bucket`,
-`region`, `encrypt`, `kms_key_id`, `use_lockfile`; không có `key`, mỗi root tự đặt key state của mình. Output `state_bucket` và
-`state_kms_key_arn` (ARN dạng `key/<id>`, dạng duy nhất policy IAM khớp) là giá trị root truyền cho module `ci-plan-role`.
+  env                  = "prd"
+  account_id           = "000000000000"
+  region               = "ap-southeast-1"
+  zone_name            = "aws.svp.example"
+  budget_limit_usd     = 20
+  budget_emails        = ["<email>"]
+  delegated_subdomains = { "stg.aws.svp.example" = ["<ns-1>", "<ns-2>", "<ns-3>", "<ns-4>"] }
+  dnssec_enabled       = true
+  dnssec_signing       = true
+  alarm_topic_arn      = "arn:aws:sns:us-east-1:000000000000:svp-prd-dns-alarms"
+  query_log_enabled    = true
+}
+```
 
 ## Tắt ký DNSSEC
 
-Zone ký mà DNS cha còn bản ghi `DS` trỏ tới KSK thì mọi thay đổi làm chữ ký sai (tắt ký, xoá KSK, mất key KMS) khiến resolver kiểm DNSSEC trả
-`SERVFAIL` cho cả zone. Vì vậy module không bao giờ để Terraform xoá key KMS (`prevent_destroy`), và tắt ký chỉ qua `dnssec_signing`.
+Zone ký mà DNS cha còn bản ghi `DS` trỏ tới KSK thì mọi thay đổi làm chữ ký sai (tắt ký, xoá KSK, mất key KMS) khiến resolver kiểm
+DNSSEC trả `SERVFAIL` cho cả zone. Vì vậy module không bao giờ để Terraform xoá key KMS (`prevent_destroy`), và tắt ký chỉ qua
+`dnssec_signing` (`SIGNING` hay `NOT_SIGNING`; KSK vẫn `ACTIVE`, key vẫn giữ, vì Route 53 từ chối tắt KSK duy nhất của zone còn
+ký). Không bao giờ đặt `dnssec_enabled = false` khi key còn trong state: `prevent_destroy` làm plan lỗi.
 
-`dnssec_signing` (mặc định `true`, chỉ có nghĩa khi `dnssec_enabled`) đặt `signing_status` là `SIGNING` hay `NOT_SIGNING`; KSK vẫn `ACTIVE`, key
-KMS vẫn giữ. KSK không chuyển `INACTIVE` cùng lượt: Route 53 từ chối tắt KSK duy nhất của zone còn ký, và Terraform cập nhật KSK trước tài nguyên
-phụ thuộc nó.
+- **Đường lui** (gỡ `DS` ở DNS cha, chờ hết TTL của nó, `apply -var dnssec_signing=false` ở `aws/accounts/prd`, rồi PR đổi mặc định
+  của biến thành `false`): [`edge-setup.md`, Đường lui](../../../docs/runbooks/edge-setup.md#đường-lui).
+- **Gỡ hẳn** (hiếm, sau đường lui: bỏ key khỏi state, PR `dnssec_enabled = false`, lên lịch xoá key bằng tay):
+  [`edge-setup.md`, Gỡ hẳn](../../../docs/runbooks/edge-setup.md#gỡ-hẳn).
 
-**Đường lui** (root `aws/accounts/prd`, người học chạy; lệnh đủ ở runbook `edge-setup.md` của repo code):
+## Tham chiếu
 
-1. Gỡ bản ghi `DS` của `aws` ở DNS cha của `<domain>`.
-2. Chờ hết TTL của bản ghi `DS` đó.
-3. `terraform apply -var dnssec_signing=false` ở `aws/accounts/prd`.
-4. PR đổi mặc định của biến `dnssec_signing` trong `aws/accounts/prd/variables.tf` thành `false`, để lượt apply sau không ký lại.
-
-**Gỡ hẳn** (hiếm), chỉ sau khi zone đã `NOT_SIGNING` theo đường lui. Mọi lệnh chạy ở `aws/accounts/prd` với profile prd, sau khi
-`AWS_PROFILE=anhnv-prd aws sts get-caller-identity --region ap-southeast-1` cho đúng account prd:
-
-1. Bỏ key KMS và alias khỏi state (key và alias vẫn ở AWS):
-   `AWS_PROFILE=anhnv-prd terraform state rm 'module.baseline.aws_kms_key.dnssec[0]' 'module.baseline.aws_kms_alias.dnssec[0]'`.
-2. PR đổi `dnssec_enabled = true` thành `false` trong `aws/accounts/prd/main.tf`, rồi
-   `AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform plan -out=prd.tfplan` và `terraform apply prd.tfplan` với
-   cùng tiền tố: Terraform tắt DNSSEC của zone trước, rồi xoá KSK (provider tắt KSK đang `ACTIVE` trước khi xoá), cùng hai alarm. Giữa bước 1
-   và bước này không apply nào khác: config còn `dnssec_enabled = true` thì Terraform tạo key mới và thay KSK.
-3. Lên lịch xoá key qua alias của nó (`schedule-key-deletion` chỉ nhận id hay ARN của key):
-
-   ```sh
-   key=$(AWS_PROFILE=anhnv-prd aws kms describe-key --key-id alias/svp-dnssec --region us-east-1 --query KeyMetadata.KeyId --output text)
-   AWS_PROFILE=anhnv-prd aws kms schedule-key-deletion --key-id "$key" --pending-window-in-days 30 --region us-east-1
-   ```
-
-   Huỷ được trong 30 ngày: `AWS_PROFILE=anhnv-prd aws kms cancel-key-deletion --key-id "$key" --region us-east-1`.
-
-Không bao giờ đặt `dnssec_enabled = false` khi key còn trong state: `prevent_destroy` làm plan lỗi.
+- [08. Account env](../../../docs/handbook/08-accounts.md): state, zone, `CAA`, DNSSEC; key policy, TTL, vùng `us-east-1` ở mục Đọc sâu
+  (ghi chú thiết kế mà `kms.tf`, `dnssec.tf` trỏ tới).
+- [Phụ lục ADR-0061 §11](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0061-edge-cloudfront-waf-acm.md#11-dns):
+  DNS env, zone, DNSSEC, chuỗi tin cậy và nguồn tài liệu AWS.
+- [`edge-setup.md`, Alarm DNSSEC](../../../docs/runbooks/edge-setup.md#alarm-dnssec): hai alarm `page` và runbook của chúng.
 
 <!-- markdownlint-disable MD033 -->
 <!-- BEGIN_TF_DOCS -->

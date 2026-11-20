@@ -1,80 +1,41 @@
 # Module `msk`
 
-Một cluster Amazon MSK provisioned cho một env: broker Standard chế độ KRaft, client chỉ vào được bằng SASL/SCRAM-SHA-512 trên TLS cổng
-9096, mỗi client một user SCRAM. Thiết kế: [ADR-0053](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0053-msk-elasticache-valkey.md)
-§2, §5, §6, §12; tự tăng dung lượng và alarm: [ADR-0058](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0058-managed-data-operations.md)
-§1, §2, §4.
+Một cluster Amazon MSK provisioned cho một env: broker KRaft, client chỉ vào được bằng SASL/SCRAM-SHA-512 trên TLS cổng 9096, mỗi client
+một user SCRAM, mật khẩu sinh và ghi trong cùng apply mà không qua plan hay state, storage autoscaling và alarm CloudWatch. Module ghi
+mật khẩu vào hai entry `kafka-admin`, `kafka-users` mà module `external-secrets` tạo vỏ. Root `aws/envs/<env>` gọi module; lý do, cách
+đổi mật khẩu và bẫy ở [chương 11. Dữ liệu](../../../docs/handbook/11-data.md); test: `make test DIRS=aws/modules/msk`.
 
-Tạo:
+## Ví dụ
 
-- Security group chỉ nhận TCP 9096 từ các security group truyền vào (`allowed_security_groups`, node SG và cluster primary SG của EKS),
-  không rule egress: không cổng nào khác của MSK mở (9092 plaintext, 9094 TLS không user, 9098 IAM), nên client không lùi về đường khác được.
-- `aws_msk_cluster`: `broker_count` broker (bội số của số subnet, MSK chia đều broker cho các AZ; lab đặt một broker mỗi AZ), EBS
-  `broker_volume_size` GiB mỗi broker; xác thực chỉ SCRAM (`unauthenticated = false`, không IAM: ACL Kafka không áp lên danh tính IAM; không
-  mTLS); `client_broker = "TLS"`, `in_cluster = true`; at-rest bằng KMS key của module.
-- `aws_msk_configuration` tên `<name>-<phiên bản>` (ví dụ `svp-stg-4-1-x-kraft`): `auto.create.topics.enable=false`,
-  `allow.everyone.if.no.acl.found=true` (mặc định của MSK; MSK không cho đặt `super.users`, nên với `false` không user nào tạo được ACL đầu
-  tiên; Job init cấp `svp-admin` ALL trên cluster, mọi topic, group, transactional id trước mọi ACL khác, từ đó user khác chỉ có quyền được
-  cấp), `default.replication.factor`, `offsets.topic.replication.factor`, `transaction.state.log.replication.factor` bằng
-  `replication_factor`, `min.insync.replicas`, `transaction.state.log.min.isr` bằng `min_insync_replicas` (MSK để hai topic nội bộ ở 3 của
-  Apache Kafka, ít broker hơn thì không tạo được).
-- Một KMS key customer managed (symmetric, xoay vòng bật, deletion window 7 ngày, alias `alias/<name>-msk-scram`) cho secret SCRAM và volume
-  broker: MSK từ chối secret mã hoá bằng key AWS quản lý của Secrets Manager; secret trỏ key bằng ARN, không bằng alias.
-- Mỗi user một secret `AmazonMSK_<name>-<user>` (JSON `username`, `password`; `recovery_window_in_days = 0`) và một
-  `aws_msk_scram_secret_association` cho mọi secret.
-- Giá trị của hai entry External Secrets do module `external-secrets` tạo vỏ: `svp/<env>/kafka-admin` (khoá `SVP_KAFKA_ADMIN_PASSWORD`),
-  `svp/<env>/kafka-users` (khoá `SVP_KAFKA_<USER>_PASSWORD` của mọi user còn lại).
-- Log group `/aws/msk/<name>` với retention `broker_logs_retention_days`, chỉ khi `broker_logs_enabled` (MSK không tự tạo đích log; tạo ở
-  đây thì `destroy` gỡ được).
-- Storage autoscaling: `aws_appautoscaling_target` (`kafka:broker-storage:VolumeSize`, từ `broker_volume_size` tới `broker_volume_max_size`)
-  và policy target tracking `KafkaBrokerStorageUtilization` ở mức `broker_storage_target_utilization`, `disable_scale_in = true`.
-- Alarm CloudWatch `<name>-<alarm>` của bảng ADR-0058 §2 (các dòng `msk-*`): tag `Severity`, alarm `page` có URL runbook
-  `docs/runbooks/<alarm>.md` của repo code trong `alarm_description`, `alarm_actions` và `ok_actions` tới `alarm_topic_arn`.
+Lời gọi trong `aws/envs/stg/main.tf`, rút gọn (đối số log tuỳ chọn ở bảng Inputs), giá trị là placeholder:
 
-User: `svp-admin`, `svp-user-service`, `svp-video-service`, `svp-engagement-service`, `svp-feed-service`,
-`svp-media-worker`, `svp-dlq-replay` (lệnh phát lại DLQ), `svp-keda`, `svp-otelcol`; khoá trong entry là tên user bỏ
-`svp-`, viết hoa, `-` thành `_`, kẹp giữa `SVP_KAFKA_` và `_PASSWORD`, cùng tên biến của `.env` local.
+```hcl
+module "msk" {
+  source = "../../modules/msk"
 
-## Mật khẩu
+  name                    = "svp-stg"
+  vpc_id                  = "vpc-<id>"
+  subnet_ids              = ["subnet-<a>", "subnet-<b>"]
+  allowed_security_groups = { node = "sg-<node>", cluster = "sg-<cluster>" }
+  broker_count            = 2
+  broker_instance_type    = "kafka.t3.small"
+  broker_volume_max_size  = 20
+  replication_factor      = 2
+  min_insync_replicas     = 1
+  password_version        = 1
+  kafka_admin_secret_id   = "arn:aws:secretsmanager:ap-southeast-1:000000000000:secret:svp/stg/kafka-admin-<suffix>"
+  kafka_users_secret_id   = "arn:aws:secretsmanager:ap-southeast-1:000000000000:secret:svp/stg/kafka-users-<suffix>"
+  alarm_topic_arn         = "arn:aws:sns:ap-southeast-1:000000000000:svp-stg-alarms"
+}
+```
 
-- Ephemeral `random_password` (32 ký tự, chỉ chữ và số: mật khẩu chèn thẳng, không thoát, vào `password="…"` của JAAS, aclfile và URL) sinh
-  mỗi lần plan, apply, không lưu ở đâu; chỉ ghi qua đối số write-only `secret_string_wo` của `aws_secretsmanager_secret_version`, nên không
-  nằm trong plan hay state. Output không có mật khẩu nào.
-- Mỗi lần apply mật khẩu sinh lại, nhưng version write-only chỉ ghi khi `secret_string_wo_version` đổi. Mọi lần ghi (mọi secret
-  `AmazonMSK_*`, hai entry) dùng cùng `password_version` và cùng lần mở ephemeral, nên sau một apply trọn, secret SCRAM và entry cùng giá trị.
-- Các lần ghi lệch nhau khi apply dừng giữa chừng (một `PutSecretValue` lỗi, Ctrl-C) hay khi thêm user vào `local.users` trên env đang
-  sống: secret của user đó nhận giá trị của lần mở mới, còn `kafka-users`/`kafka-admin` đã ghi ở version cũ nên giữ giá trị cũ; user đó
-  đăng nhập SCRAM thất bại mà `plan` vẫn `No changes`. Gỡ: tăng `password_version` rồi apply, mọi lần ghi cùng chạy lại.
-- Đổi mật khẩu: tăng `password_version` rồi apply; mọi user đổi cùng lúc, vì `kafka-users` là một entry chung, đổi riêng một user sẽ ghi giá trị
-  mới của các user khác vào entry mà không ghi secret SCRAM của họ. MSK đồng bộ secret tới broker trong tối đa 10 phút: kết nối mới của pod
-  chưa đọc mật khẩu mới có thể bị từ chối trong lúc đó.
-- `make eks-secrets` của repo code không ghi `kafka-admin`, `kafka-users` nữa: module này là nơi duy nhất ghi.
+## Tham chiếu
 
-## Lưu ý vận hành
-
-- `aws_msk_scram_secret_association` giữ độc quyền danh sách secret của cluster: secret nào không có trong nó bị gỡ khỏi cluster. Mọi user ở
-  một resource; không tạo resource association thứ hai (hay `aws_msk_single_scram_secret_association`) cho cùng cluster.
-- Đổi `server_properties` (biến replication) tạo revision mới của configuration, MSK áp lên từng broker một (rolling restart); đổi dòng
-  phiên bản Kafka tạo configuration mới tên theo phiên bản trước khi cluster chuyển sang.
-- MSK gắn resource policy của nó vào mỗi secret `AmazonMSK_*`; module không quản policy đó.
-
-## Dung lượng broker
-
-- MSK tăng volume khi mức dùng vượt mức đích, mỗi lần max(10 GiB, 10 %), và không bao giờ giảm: dung lượng đã tăng giữ tới khi cluster bị xoá.
-  Sau một lần tăng, lần sau bị khoá 6 giờ, nên một env sống một buổi tăng được tối đa một lần
-  ([MSK automatic scaling](https://docs.aws.amazon.com/msk/latest/developerguide/msk-autoexpand.html)).
-- Volume đổi ngoài Terraform: `aws_msk_cluster` bỏ qua `volume_size` (`lifecycle.ignore_changes`), để apply sau không tìm cách thu nhỏ.
-  Đổi `broker_volume_size` sau khi cluster đã có thì chỉ đổi mức sàn của autoscaling, không đổi volume.
-- Policy tạo một alarm target tracking của Application Auto Scaling. Destroy xoá policy trước cluster; xoá cluster ngoài Terraform thì alarm đó
-  còn lại.
-
-## Alarm
-
-- Metric theo broker (dimension `Cluster Name`, `Broker ID`) gộp bằng metric math `MAX` qua mọi broker: một alarm mỗi loại, tên không đổi theo số
-  broker. Broker ID của MSK đánh từ 1 nên module sinh từ `broker_count`. `msk-cpu-high` cộng `CpuUser` và `CpuSystem` của từng broker trước `MAX`;
-  `msk-offline-partitions` đọc metric cấp cluster (chỉ `Cluster Name`).
-- Một alarm đọc tối đa 10 metric: precondition từ chối số broker làm `msk-cpu-high` vượt mức đó (từ 6 broker).
-- Ngưỡng, số chu kỳ, mức và nguồn ở ADR-0058 §2, §3; code giữ cùng số trong `alarms.tf`.
+- [Chương 11. Dữ liệu](../../../docs/handbook/11-data.md): ghi chú thiết kế mà `main.tf`, `alarms.tf` trỏ tới.
+- [ADR-0053](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0053-msk-elasticache-valkey.md) §2, §5, §6, §12: cluster,
+  user, replication, mật khẩu.
+- [ADR-0058](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0058-managed-data-operations.md) §2, §4: bảng alarm, storage
+  autoscaling.
 
 <!-- markdownlint-disable MD033 -->
 <!-- BEGIN_TF_DOCS -->
@@ -142,30 +103,3 @@ User: `svp-admin`, `svp-user-service`, `svp-video-service`, `svp-engagement-serv
 | bootstrap\_brokers | Bootstrap brokers for SASL/SCRAM over TLS, host:9096 of each broker separated by commas: key kafkaBrokers of the cluster values. |
 <!-- END_TF_DOCS -->
 <!-- markdownlint-enable MD033 -->
-
-## Giá trị theo env
-
-| Biến | stg | prd |
-| --- | --- | --- |
-| `name` | `svp-stg` | `svp-prd` |
-| `subnet_ids` | subnet database, 2 AZ (cùng subnet RDS) | subnet database, 3 AZ |
-| `allowed_security_groups` | `{ node = …, cluster = … }` của EKS | như stg |
-| `kafka_version` | `4.1.x.kraft` | `4.1.x.kraft` |
-| `broker_instance_type` | `kafka.t3.small` | `kafka.m7g.large` |
-| `broker_count` | `2` | `3` |
-| `broker_volume_size` | `10` | `10` |
-| `broker_volume_max_size` | `20` | `100` |
-| `alarm_topic_arn` | output topic của module `alarms` | như stg |
-| `replication_factor` / `min_insync_replicas` | `2` / `1` | `3` / `2` |
-| `broker_logs_enabled` / `broker_logs_retention_days` | `false` / — | `true` / `30` |
-| `kafka_admin_secret_id`, `kafka_users_secret_id` | `secret_arns["kafka-admin"]`, `secret_arns["kafka-users"]` của module `external-secrets` | như stg |
-
-Ba biến số broker, replication factor và min ISR không có mặc định: mỗi env ghi rõ, validation từ chối RF lớn hơn số broker, min ISR không nhỏ
-hơn RF (khi RF > 1) và số broker không chia hết số subnet.
-
-## Có thể sót sau destroy
-
-- **KMS key:** vào `PendingDeletion` 7 ngày, không tính phí lúc chờ; alias xoá ngay.
-- **Secret `AmazonMSK_*`:** xoá ngay (`recovery_window_in_days = 0`); destroy dở thì còn, quét Secrets Manager theo tiền tố `AmazonMSK_svp-`.
-- **Configuration MSK:** không xoá được khi cluster còn dùng; destroy dở (cluster chưa xoá xong) thì còn.
-- **Alarm target tracking** của storage autoscaling (`TargetTracking-arn:aws:kafka:…`): còn khi cluster bị xoá trước policy.

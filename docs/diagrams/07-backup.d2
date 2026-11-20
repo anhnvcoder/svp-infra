@@ -1,0 +1,87 @@
+# Where the copies of stg and prd live and who can delete them: the backup policies svp-backup-<env> of
+# aws/modules/org-policies (rule daily, copy action), the vault, key and role of aws/accounts/<env>/backup.tf, the copy
+# vaults with their governance locks and the key of aws/backup, applied from management through
+# OrganizationAccountAccessRole (aws/backup/providers.tf).
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 0
+    dark-theme-id: 200
+    pad: 20
+  }
+}
+...@tokens
+
+direction: down
+
+title: "Bản copy của stg, prd nằm ở đâu, ai xoá được" {
+  shape: text
+  near: top-center
+  style: {font-size: 18; bold: true}
+}
+
+mgmt: "Management" {
+  class: account
+  label.near: top-left
+
+  policy: "Backup policy svp-backup-<env>" {
+    class: governance
+    grid-rows: 3
+    grid-gap: 24
+    vertical-gap: 6
+    s1: "gắn OU Prod, NonProd · rule daily 18:00 UTC" {class: sub}
+    s2: "admin env đọc được plan, không sửa" {class: sub}
+    r: "aws/org · module org-policies" {class: root}
+  }
+  root: "Root aws/backup" {
+    class: workload
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "qua OrganizationAccountAccessRole" {class: sub}
+    r: "profile anhnv-sso" {class: root}
+  }
+}
+
+env: "svp-stg, svp-prd" {
+  class: account
+  label.near: top-left
+
+  data: "RDS, bucket uploads, media" {
+    class: data
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "tag Backup=daily · sống theo buổi" {class: sub}
+    r: "aws/envs/<env>" {class: root}
+  }
+  vault: "Vault svp-<env>" {
+    class: recovery
+    grid-rows: 3
+    grid-gap: 24
+    vertical-gap: 6
+    s1: "không lock · giữ stg 2, prd 35 ngày" {class: sub}
+    s2: "key alias/svp-<env>-backup · role svp-<env>-backup" {class: sub}
+    r: "aws/accounts/<env>" {class: root}
+  }
+}
+
+backup: "svp-backup" {
+  class: account
+  label.near: top-left
+
+  copy: "Vault svp-<env>-copy" {
+    class: recovery
+    grid-rows: 3
+    grid-gap: 24
+    vertical-gap: 6
+    s1: "Vault Lock governance: stg 1–7, prd 7–35 ngày" {class: sub}
+    s2: "key alias/svp-backup-copy · admin env không chạm được" {class: sub}
+    r: "aws/backup" {class: root}
+  }
+}
+
+mgmt.policy -> env.vault: "sinh plan svp-<env>" {class: control-flow}
+env.data -> env.vault: "recovery point" {class: data-flow}
+env.vault -> backup.copy: "copy job, mã hoá lại" {class: data-flow}
+mgmt.root -> backup.copy: "dựng, gỡ lock" {class: control-flow}

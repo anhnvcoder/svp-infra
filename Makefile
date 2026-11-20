@@ -309,7 +309,7 @@ diagrams: ## D2 to SVG (light and dark in one file) of docs/diagrams/*.d2 (NAMES
 	layout=; [ -z "$$LAYOUT" ] || layout="--layout=$$LAYOUT"; suffix=$$SUFFIX; png=; [ -z "$$PNG" ] || png=png; \
 	$(D2_RENDER)
 
-diagrams-check: ## Fails, naming the file, when a committed SVG differs from what its .d2 renders to
+diagrams-check: ## Fails, naming the file, when a committed SVG differs from what its .d2 renders to or has no .d2
 	@srcs=$$(if [ -n "$(NAMES)" ]; then for n in $(NAMES); do echo "$(DIAGRAMS_DIR)/$$n.d2"; done; \
 	  else ls $(DIAGRAMS_DIR)/*.d2 2>/dev/null | grep -v '/tokens\.d2$$'; fi); [ -n "$$srcs" ] || { echo "diagrams-check: no .d2 file"; exit 0; }; \
 	out=$$(mktemp -d) || exit 1; trap 'rm -rf "$$out"' EXIT; layout=; suffix=; png=; \
@@ -317,6 +317,9 @@ diagrams-check: ## Fails, naming the file, when a committed SVG differs from wha
 	for f in $$srcs; do \
 	  svg="$(DIAGRAMS_DIR)/$$(basename "$$f" .d2).svg"; \
 	  cmp -s "$$out/$$(basename "$$svg")" "$$svg" || { echo "FAIL: $$svg is out of date or missing (run make diagrams)" >&2; rc=1; }; \
+	done; \
+	[ -n "$(NAMES)" ] || for svg in $(DIAGRAMS_DIR)/*.svg; do \
+	  [ ! -f "$$svg" ] || [ -f "$${svg%.svg}.d2" ] || { echo "FAIL: $$svg has no .d2 source (restore it, or drop the SVG)" >&2; rc=1; }; \
 	done; exit $$rc
 
 # The session scripts reach the AWS account and the cluster when the learner runs them; their self-test puts fake aws,

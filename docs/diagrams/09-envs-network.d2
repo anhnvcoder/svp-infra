@@ -1,0 +1,132 @@
+# Overview of the VPC of an env (aws/modules/network, aws/modules/ssm-bastion, called by aws/envs/<env>): four subnet
+# tiers, which way each kind of traffic leaves or enters, the SSM tunnel to the private API endpoint of EKS and the
+# flow logs written to the bucket of the log archive account.
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 0
+    dark-theme-id: 200
+    pad: 20
+  }
+}
+...@tokens
+
+direction: down
+
+title: "Một VPC env chia thành tầng nào, và mỗi đường ra vào đi qua đâu?" {
+  shape: text
+  near: top-center
+  style: {font-size: 18; bold: true}
+}
+
+learner: "Máy người học" {
+  class: workload
+  grid-rows: 2
+  grid-gap: 24
+  vertical-gap: 6
+  s: "kubectl · script buổi · aws/gitops/<env>" {class: sub}
+  r: "127.0.0.1:<api_tunnel_port>" {class: root}
+}
+
+env: "svp-stg · svp-prd (ap-southeast-1)" {
+  class: account
+  label.near: top-left
+
+  ssm: "Session Manager" {
+    class: prevention
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "phiên port forwarding, IAM quyết ai mở" {class: sub}
+    r: "AWS-StartPortForwardingSessionToRemoteHost" {class: root}
+  }
+
+  cloudfront: "CloudFront" {
+    class: workload
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "web · api, qua VPC origin" {class: sub}
+    r: "aws/modules/edge" {class: root}
+  }
+
+  vpc: "VPC svp-<env> · stg 2 AZ, prd 3 AZ" {
+    class: region
+    label.near: top-left
+
+    edge: "Tầng edge" {
+      class: workload
+      grid-rows: 2
+      grid-gap: 24
+      vertical-gap: 6
+      s: "ALB internal · chỉ route local" {class: sub}
+      r: "edge_subnet_ids" {class: root}
+    }
+    private: "Tầng private" {
+      class: workload
+      grid-rows: 3
+      grid-gap: 24
+      vertical-gap: 6
+      s: "node, pod EKS · bastion SSM" {class: sub}
+      t: "endpoint private của API EKS" {class: sub}
+      r: "private_subnet_ids" {class: root}
+    }
+    endpoints: "VPC endpoint" {
+      class: prevention
+      grid-rows: 3
+      grid-gap: 24
+      vertical-gap: 6
+      s: "S3 gateway · interface tới API AWS" {class: sub}
+      t: "policy: interface chỉ account env, S3 chỉ bucket env" {class: sub}
+      r: "s3_endpoint_restricted" {class: root}
+    }
+    database: "Tầng database" {
+      class: data
+      grid-rows: 2
+      grid-gap: 24
+      vertical-gap: 6
+      s: "RDS · MSK · Valkey · chỉ route local" {class: sub}
+      r: "database_subnet_ids" {class: root}
+    }
+    public: "Tầng public" {
+      class: workload
+      grid-rows: 2
+      grid-gap: 24
+      vertical-gap: 6
+      s: "chỉ NAT gateway: stg một, prd mỗi AZ" {class: sub}
+      r: "single_nat_gateway" {class: root}
+    }
+  }
+}
+
+internet: "Đích ngoài AWS" {
+  class: workload
+  grid-rows: 2
+  grid-gap: 24
+  vertical-gap: 6
+  s: "GitHub · Sigstore · registry upstream" {class: sub}
+  r: "qua Internet Gateway" {class: root}
+}
+
+log: "svp-log-archive" {
+  class: account
+  label.near: top-left
+  flowlogs: "Flow log của VPC" {
+    class: investigation
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "mọi lưu lượng · Parquet" {class: sub}
+    r: "svp-flowlogs-<log>-ap-southeast-1" {class: root}
+  }
+}
+
+learner -> env.ssm: "tunnel" {class: data-flow}
+env.ssm -> env.vpc.private: "bastion → API · 443" {class: data-flow}
+env.cloudfront -> env.vpc.edge {class: data-flow}
+env.vpc.edge -> env.vpc.private: "tới pod Envoy" {class: data-flow}
+env.vpc.private -> env.vpc.database: "5432 · 9096 · 6379" {class: data-flow}
+env.vpc.private -> env.vpc.endpoints: "API AWS, S3" {class: data-flow}
+env.vpc.private -> env.vpc.public: "0.0.0.0/0" {class: data-flow}
+env.vpc.public -> internet {class: data-flow}
+env.vpc -> log.flowlogs: "flow log" {class: data-flow}

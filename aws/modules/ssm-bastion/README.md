@@ -1,38 +1,37 @@
 # Module `ssm-bastion`
 
-Đường của máy người học tới endpoint private của API Kubernetes khi endpoint công khai tắt (env prd): AWS Systems Manager Session Manager
-chuyển một cổng `127.0.0.1:<local_port>` của máy tới host của endpoint, cổng 443 (document `AWS-StartPortForwardingSessionToRemoteHost`), qua
-một instance nhỏ trong subnet private. SSM agent trên instance tự mở kết nối ra ngoài (tới endpoint công khai của Systems Manager qua NAT
-gateway), nên instance không nhận kết nối vào nào, không có khoá SSH, không có địa chỉ công khai; ai được mở phiên do IAM quyết, mỗi lần mở
-phiên nằm trong CloudTrail. Token Kubernetes đi trong tunnel là của người học (`aws eks get-token`), không phải của role instance.
+Đường của máy người học tới endpoint private của API Kubernetes: một instance `t4g.nano` trong subnet private, không cổng vào, không khoá
+SSH, không IP công khai, role chỉ có `AmazonSSMManagedInstanceCore`; Session Manager chuyển `127.0.0.1:<local_port>` tới host của
+endpoint, cổng 443. Module thêm rule cho security group của API nhận 443 từ bastion và xuất hai lệnh viết sẵn `tunnel_command`,
+`kubeconfig_command`. Root `aws/envs/<env>` gọi module ở `ssm-bastion.tf`; cách dùng, phí và lý do ở chương
+[09. Env và mạng](../../../docs/handbook/09-envs-network.md); test: `make test DIRS=aws/modules/ssm-bastion`.
 
-| Phần | Cấu hình |
-| --- | --- |
-| Instance | `t4g.nano` (Graviton), AMI Amazon Linux 2023 arm64 mới nhất lấy từ SSM parameter public `/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64` (image có sẵn SSM agent), không key pair, không IP công khai |
-| Metadata | chỉ IMDSv2 (`http_tokens = required`), hop limit 1 |
-| Đĩa | gp3 mã hoá (key mặc định `aws/ebs`) |
-| Role | `<name>-ssm-bastion`, chỉ EC2 assume, chỉ managed policy `AmazonSSMManagedInstanceCore` |
-| Security group | `<name>-ssm-bastion`: không luật vào; ra chỉ TCP 443 (Systems Manager, API). DNS của VPC, metadata, đồng bộ giờ đi tới địa chỉ link-local mà security group không lọc |
-| Security group của API | thêm luật vào TCP 443 từ security group của bastion (`api_security_group_id`, output `cluster_security_group_id` của module `eks`) |
+## Ví dụ
 
-Ngoại lệ trivy `AWS-0104` (ra 443 tới mọi địa chỉ): endpoint công khai của Systems Manager (`ssm`, `ssmmessages`, `ec2messages`) không có
-prefix list do AWS công bố; interface endpoint của ba dịch vụ giữ traffic trong VPC nhưng tính phí theo giờ mỗi dịch vụ mỗi AZ.
-`Scope: every environment`.
+Lời gọi trong `aws/envs/stg/ssm-bastion.tf`, giá trị là placeholder:
 
-## Dùng
+```hcl
+module "ssm_bastion" {
+  source = "../../modules/ssm-bastion"
 
-Máy người học cần AWS CLI và Session Manager plugin. Hai output là lệnh viết sẵn (có profile và region), chạy bằng `eval`:
+  name                  = "svp-stg"
+  account_id            = "000000000000"
+  region                = "ap-southeast-1"
+  aws_profile           = "anhnv-stg"
+  vpc_id                = "vpc-<id>"
+  subnet_id             = "subnet-<a>"
+  cluster_name          = "svp-stg"
+  cluster_endpoint      = "https://<id>.gr7.ap-southeast-1.eks.amazonaws.com"
+  api_security_group_id = "sg-<cluster>"
+  local_port            = 6444
+}
+```
 
-- `tunnel_command`: mở tunnel, chạy tới khi dừng (Ctrl-C); để nó chạy trong một terminal riêng.
-- `kubeconfig_command`: `aws eks update-kubeconfig` (context `<cluster_name>`), rồi `kubectl config set-cluster` đổi server của cluster đó thành
-  `https://127.0.0.1:<local_port>` và `tls-server-name` thành host của endpoint, nên `kubectl` vẫn kiểm chứng chỉ của API server theo tên thật.
-  `kubectl` chạy được khi tunnel đang mở.
+## Tham chiếu
 
-Cổng mặc định `6443` không trùng cluster k3d cục bộ (`6550`, `8443`); root GitOps của env dùng cùng cổng.
-
-## Chi phí
-
-`t4g.nano` theo giờ khi env chạy, cộng đĩa gp3 của AMI; Session Manager không tính phí. Số cụ thể ở phụ lục ADR của môi trường prd.
+- [09. Env và mạng](../../../docs/handbook/09-envs-network.md): kịch bản mở tunnel rồi `kubectl`, mục Session Manager, vì sao không
+  endpoint công khai.
+- [ADR-0048](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0048-prd-aws.md): API qua SSM port forwarding.
 
 <!-- markdownlint-disable MD033 -->
 <!-- BEGIN_TF_DOCS -->

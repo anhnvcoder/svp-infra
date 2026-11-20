@@ -1,42 +1,40 @@
 # Module `backup-vault`
 
-Các vault AWS Backup mã hoá bằng một KMS key customer managed, mỗi vault có vault lock governance và vault access policy
-tuỳ chọn. Thiết kế: [ADR-0067](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0067-backup-dr.md) §5, §6.
-Root `aws/accounts/<env>` gọi module cho vault env `svp-<env>` (không lock, không access policy: recovery point bị xoá
-mỗi cuối buổi); root `aws/backup` gọi module cho vault copy `svp-stg-copy`, `svp-prd-copy` (có lock, nhận copy từ đúng
-account env tương ứng).
+Các vault AWS Backup mã hoá bằng một KMS key customer managed mà root gọi giữ, mỗi vault có Vault Lock governance và vault access policy
+cho copy chéo account khi cần. Root `aws/backup` gọi module cho hai vault copy `svp-stg-copy`, `svp-prd-copy` (có lock, nhận copy từ đúng
+account env); root `aws/accounts/<env>` gọi cho vault env `svp-<env>` (không lock, không access policy). Vì sao key ở root, vì sao
+governance: [07. Backup](../../../docs/handbook/07-backup.md); test: `make test DIRS=aws/modules/backup-vault`.
 
-## Key đến từ root
+## Ví dụ
 
-Module nhận ARN key qua `kms_key_arn`, không tạo key. Key là tài nguyên của root vì Terraform không cho root đặt
-`lifecycle` lên resource nằm trong module: root `aws/backup` giữ key của vault copy bằng `prevent_destroy`, root env thì
-không. Key policy (statement chéo account cho account `svp-backup`) cũng do root viết. AWS Backup mã hoá recovery point
-lưu hay copy vào vault bằng key của vault đó, nên bản copy dùng được cả khi key nguồn đã xoá.
+Lời gọi của `aws/backup/main.tf` (ở đó `vaults` là `local.copy_vaults`), giá trị là placeholder:
 
-## Tạo
+```hcl
+module "vaults" {
+  source = "../modules/backup-vault"
 
-Mỗi khoá của `vaults` là tên một vault (luật tên của API AWS Backup: 2 tới 50 chữ, số, `-`, `_`), với:
+  kms_key_arn = "arn:aws:kms:ap-southeast-1:000000000000:key/<id>"
+  vaults = {
+    svp-stg-copy = {
+      lock                  = { min_retention_days = 1, max_retention_days = 7 }
+      copy_from_account_ids = ["000000000000"]
+    }
+    svp-prd-copy = {
+      lock                  = { min_retention_days = 7, max_retention_days = 35 }
+      copy_from_account_ids = ["000000000000"]
+    }
+  }
+}
+```
 
-- `aws_backup_vault` mã hoá bằng `kms_key_arn`.
-- `lock` khác `null`: `aws_backup_vault_lock_configuration` với `min_retention_days`, `max_retention_days`, không
-  `changeable_for_days`: lock ở chế độ governance, người có quyền IAM `backup:DeleteBackupVaultLockConfiguration` gỡ
-  được (gỡ lab); compliance không gỡ được sau grace time khi vault còn recovery point. Recovery point lưu vào vault phải
-  có retention trong [`min_retention_days`, `max_retention_days`]. Validation: hai số nguyên, `1 ≤ min ≤ max ≤ 36500`
-  (giới hạn của [`PutBackupVaultLockConfiguration`](https://docs.aws.amazon.com/aws-backup/latest/devguide/API_PutBackupVaultLockConfiguration.html)).
-- `copy_from_account_ids` không rỗng: vault access policy một statement `Allow` `backup:CopyIntoBackupVault`,
-  `Resource "*"`, principal `arn:aws:iam::<account>:root` của từng account đã cho, không điều kiện thêm. AWS Backup từ
-  chối mọi action khác từ account khác bất kể vault policy, nên policy không cần statement `Deny`. Role nguồn cần thêm
-  `backup:CopyIntoBackupVault` ở identity policy của nó.
+Vault env chỉ cần tên: `vaults = { "svp-<env>" = {} }`.
 
-Nguồn (đọc 2026-11-13): [Vault Lock](https://docs.aws.amazon.com/aws-backup/latest/devguide/vault-lock.html), [vault
-access policy](https://docs.aws.amazon.com/aws-backup/latest/devguide/create-a-vault-access-policy.html), [copy chéo
-account](https://docs.aws.amazon.com/aws-backup/latest/devguide/create-cross-account-backup.html),
-[CreateBackupVault](https://docs.aws.amazon.com/aws-backup/latest/devguide/API_CreateBackupVault.html).
+## Tham chiếu
 
-## Xoá
-
-AWS Backup chỉ xoá vault rỗng: destroy lỗi khi vault còn recovery point. Vault env được rút hết recovery point ở cuối
-buổi trước destroy; vault copy sống giữa các buổi, giữ bản copy theo retention.
+- [07. Backup](../../../docs/handbook/07-backup.md): Vault Lock, copy chéo account, key của vault; key ở root và vault chỉ xoá khi rỗng ở
+  mục Đọc sâu (ghi chú thiết kế mà `main.tf` trỏ tới).
+- [Phụ lục ADR-0067 §5](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0067-backup-dr.md#5-vault-copy-alarm): vault
+  access policy, lock, nguồn tài liệu AWS.
 
 <!-- markdownlint-disable MD033 -->
 <!-- BEGIN_TF_DOCS -->

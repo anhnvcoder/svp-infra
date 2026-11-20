@@ -1,0 +1,114 @@
+# Where the logs of every account land and how long they stay: local.buckets of aws/log-archive/main.tf (buckets,
+# regions, retention), kms.tf (one key per region, one alias), delivery-destinations.tf (CloudFront), and the reader
+# of aws/org/identity-center.tf (SvpLogReader). The sources are the trail of aws/org/audit-trail.tf, the recorders of
+# aws/baseline, the detectors of aws/security and the env modules network, waf, edge and media.
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 0
+    dark-theme-id: 200
+    pad: 20
+  }
+}
+...@tokens
+
+direction: down
+
+title: "Log của mọi account về đâu, giữ bao lâu, ai đọc được" {
+  shape: text
+  near: top-center
+  style: {font-size: 18; bold: true}
+}
+
+trail: "Trail tổ chức svp-audit" {
+  class: investigation
+  grid-rows: 2
+  grid-gap: 24
+  vertical-gap: 6
+  s: "sự kiện API của mọi account" {class: sub}
+  r: "management · aws/org" {class: root}
+}
+config: "AWS Config" {
+  class: investigation
+  grid-rows: 2
+  grid-gap: 24
+  vertical-gap: 6
+  s: "account có recorder, hai region" {class: sub}
+  r: "aws/baseline" {class: root}
+}
+guardduty: "GuardDuty" {
+  class: detection
+  grid-rows: 2
+  grid-gap: 24
+  vertical-gap: 6
+  s: "finding xuất từ delegated admin" {class: sub}
+  r: "svp-security · aws/security" {class: root}
+}
+env: "Env stg, prd" {
+  class: workload
+  grid-rows: 2
+  grid-gap: 24
+  vertical-gap: 6
+  s: "flow log VPC · log WAF · log CloudFront" {class: sub}
+  r: "aws/envs/<env>" {class: root}
+}
+
+archive: "svp-log-archive" {
+  class: account
+  label.near: top-left
+
+  home: "ap-southeast-1" {
+    class: region
+    label.near: top-left
+
+    audit: "Audit: 365 ngày" {
+      class: data
+      grid-rows: 4
+      grid-gap: 24
+      vertical-gap: 6
+      s1: "trail: Object Lock governance 365 ngày" {class: sub}
+      s2: "Config · GuardDuty · access log của bucket trail" {class: sub}
+      s3: "Glacier Instant Retrieval sau 90 ngày, trừ access log" {class: sub}
+      r: "SSE-KMS alias/svp-log-archive; access log SSE-S3" {class: root}
+    }
+    network: "Flow log: prd 90 ngày, stg 7 ngày" {
+      class: data
+      grid-rows: 2
+      grid-gap: 24
+      vertical-gap: 6
+      s: "svp-flowlogs-<log>-ap-southeast-1" {class: root}
+      r: "SSE-KMS alias/svp-log-archive" {class: root}
+    }
+  }
+
+  global: "us-east-1" {
+    class: region
+    label.near: top-left
+
+    edge: "Log WAF, CloudFront: prd 90 ngày, stg 7 ngày" {
+      class: data
+      grid-rows: 3
+      grid-gap: 24
+      vertical-gap: 6
+      s1: "CloudFront qua delivery destination svp-cloudfront-<env>" {class: sub}
+      s2: "aws-waf-logs-svp-… · svp-cloudfront-…" {class: root}
+      r: "SSE-KMS key us-east-1, cùng alias" {class: root}
+    }
+  }
+}
+
+reader: "Người học đọc log" {
+  class: workload
+  grid-rows: 2
+  grid-gap: 24
+  vertical-gap: 6
+  s: "permission set SvpLogReader, chỉ đọc" {class: sub}
+  r: "profile anhnv-log-ro" {class: root}
+}
+
+trail -> archive.home.audit {class: data-flow}
+config -> archive.home.audit {class: data-flow}
+guardduty -> archive.home.audit {class: data-flow}
+env -> archive.home.network {class: data-flow}
+env -> archive.global.edge {class: data-flow}
+archive -> reader: "đọc, giải mã qua S3" {class: data-flow}

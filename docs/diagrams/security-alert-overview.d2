@@ -35,7 +35,7 @@ env: "svp-stg · svp-prd" {
     grid-rows: 2
     grid-gap: 24
     vertical-gap: 6
-    c: "cờ security_hub = always" {class: sub}
+    c: "chỉ ở account bật nó" {class: sub}
     s: "nhận finding GuardDuty" {class: sub}
   }
 }
@@ -48,7 +48,7 @@ security: "svp-security" {
     grid-rows: 2
     grid-gap: 24
     vertical-gap: 6
-    c: "gom finding mọi account" {class: sub}
+    c: "gom finding từ account bật Security Hub" {class: sub}
     s: "HIGH, CRITICAL" {class: sub}
   }
   off: "GuardDuty của delegated admin" {
@@ -56,8 +56,8 @@ security: "svp-security" {
     grid-rows: 2
     grid-gap: 24
     vertical-gap: 6
-    c: "cờ security_hub = off" {class: sub}
-    s: "severity ≥ 7" {class: sub}
+    c: "nhận finding của mọi member" {class: sub}
+    s: "rule lấy account security_hub = off, severity ≥ 7" {class: sub}
   }
   events: "EventBridge" {
     class: alerting
@@ -86,9 +86,9 @@ email: "Email cảnh báo" {
   r: "security_alert_email" {class: sub}
 }
 
-env.guardduty -> env.hub {class: data-flow}
+env.guardduty -> env.hub: "security_hub = always" {class: data-flow}
 env.hub -> security.always {class: data-flow}
-env.guardduty -> security.off {class: data-flow}
+env.guardduty -> security.off: "mọi finding" {class: data-flow}
 security.always -> security.events {class: data-flow}
 security.off -> security.events {class: data-flow}
 security.events -> security.sns {class: data-flow}

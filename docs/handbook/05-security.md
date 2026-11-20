@@ -1,14 +1,13 @@
 # 05. Bảo mật
 
-← 04. Log Archive <!-- link-chờ: docs/handbook/04-log-archive.md --> · [Mục lục](README.md)
-· 06. Baseline <!-- link-chờ: docs/handbook/06-baseline.md --> →
+← [04. Log Archive](04-log-archive.md) · [Mục lục](README.md) · [06. Baseline](06-baseline.md) →
 
 ## Tổng quan
 
-Chương này dựng phần phát hiện và cảnh báo cho cả tổ chức. Các dịch vụ phát hiện không do từng account tự quản: một account bảo mật
-riêng giữ chúng cho mọi account khác, gom kết quả về một chỗ và gửi email khi có chuyện nghiêm trọng. Người quản trị một account
-workload có toàn quyền trong account đó, nhưng không phải là người nhận cảnh báo, và guardrail của tổ chức chặn họ tắt phát hiện hay
-sửa đường cảnh báo bằng quyền thường.
+Chương này dựng phần phát hiện và cảnh báo cho cả tổ chức, quản từ account bảo mật riêng `svp-security`. Các dịch vụ phát hiện không do
+từng account tự quản: `svp-security` giữ chúng cho mọi account khác, gom kết quả về một chỗ và gửi email khi có chuyện nghiêm trọng.
+Người quản trị một account workload có toàn quyền trong account đó, nhưng không phải là người nhận cảnh báo, và guardrail của tổ chức
+chặn họ tắt phát hiện hay sửa đường cảnh báo bằng quyền thường.
 
 svp cần phần này vì credential bị lộ hay cấu hình sai thường bị phát hiện muộn nhất đúng lúc không ai trực. Mọi thứ ở đây là dịch vụ
 managed, nên vẫn chạy khi không cluster nào chạy.
@@ -23,7 +22,7 @@ của account env, quét image) bật lại trong buổi bằng cờ chi phí.
 | Cấu hình của các account có đạt chuẩn bảo mật không? | AWS Security Hub CSPM |
 | Tài nguyên nào cho người ngoài tổ chức truy cập? | IAM Access Analyzer |
 | Một tài nguyên đã đổi cấu hình thế nào theo thời gian? | AWS Config |
-| Ai đã gọi API làm thay đổi đó? | AWS CloudTrail (trail tổ chức, chương 03. Tổ chức <!-- link-chờ: docs/handbook/03-org.md -->) |
+| Ai đã gọi API làm thay đổi đó? | AWS CloudTrail (trail tổ chức, chương [03. Tổ chức](03-org.md)) |
 | Khi có chuyện nghiêm trọng, ai được báo và bằng cách nào? | Amazon EventBridge, Amazon SNS (email) |
 
 | Account | Region | Vòng đời | Root Terraform |
@@ -39,10 +38,9 @@ của account env, quét image) bật lại trong buổi bằng cờ chi phí.
 *Sơ đồ khái niệm về trách nhiệm bảo mật, không phải luồng API: quản trị và phòng ngừa áp lên mọi workload; phát hiện và điều tra chạy
 song song trên cùng tài nguyên, mỗi nhánh dẫn tới việc của nó.*
 
-Chương này dựng lớp **Phát hiện** và **Cảnh báo**. Các lớp còn lại: quản trị ở chương 03. Tổ chức
-<!-- link-chờ: docs/handbook/03-org.md -->, phòng ngừa ở chương 06. Baseline <!-- link-chờ: docs/handbook/06-baseline.md -->, điều tra
-ở chương 04. Log Archive <!-- link-chờ: docs/handbook/04-log-archive.md -->, phục hồi ở chương 07. Backup
-<!-- link-chờ: docs/handbook/07-backup.md -->.
+Chương này dựng lớp **Phát hiện** và **Cảnh báo**. Các lớp còn lại: quản trị ở chương [03. Tổ chức](03-org.md), phòng ngừa ở
+chương [06. Baseline](06-baseline.md), điều tra ở chương [04. Log Archive](04-log-archive.md), phục hồi ở chương
+[07. Backup](07-backup.md).
 
 ![Finding của account env tới email: hai nhánh theo cờ security_hub](../diagrams/security-alert-overview.svg)
 
@@ -55,7 +53,7 @@ tiết kiệm vẫn có finding GuardDuty tới email qua delegated admin của 
 | GuardDuty | mọi account, hai region | Phát hiện hành vi lạ; finding của member về `svp-security` |
 | Security Hub CSPM | `svp-security` luôn bật; account khác theo cờ `security_hub` | Chấm cấu hình theo chuẩn, gom finding của dịch vụ khác; aggregator ở region nhà |
 | Inspector | `svp-security` và account có `inspector_ecr` khác `off`, region nhà | Quét CVE của image ECR |
-| Config aggregator `svp-org` | `svp-security`, region nhà | Gom lịch sử cấu hình từ account, region có recorder |
+| Config aggregator `svp-org` | `svp-security`, region nhà | Xem tập trung cấu hình và compliance của account, region có recorder |
 | Access Analyzer `svp-org` | `svp-security`, hai region | Báo tài nguyên cho principal ngoài tổ chức truy cập |
 | Rule `svp-security-*` | bus mặc định của mọi account | Chuyển sự kiện CloudTrail bảo mật sang bus `svp-security-events` |
 | Rule `svp-security-findings`, `-guardduty-findings`, `-notify` | `svp-security` | Lọc finding, sự kiện; viết một dòng; gửi topic |
@@ -69,8 +67,9 @@ vị trí; ranh giới tin cậy là account.
 
 **Câu hỏi của chương:** Một credential của account env bị dùng từ ngoài AWS thì ai biết, qua đường nào?
 
-Một node của cluster `svp-stg` bị chiếm; kẻ tấn công lấy credential tạm của role node qua IMDS rồi gọi API từ máy của họ. Cờ của file
-repo: `security_hub` của stg là `off`.
+Kịch bản giả định: một node của cluster `svp-stg` bị chiếm; kẻ tấn công lấy credential tạm của role node qua IMDS rồi gọi API từ máy
+của họ. Cờ của file repo: `security_hub` của stg là `off`. Kịch bản đi theo trường hợp GuardDuty sinh finding; finding không phải điều
+bảo đảm (bước 2).
 
 ```mermaid
 sequenceDiagram
@@ -81,7 +80,7 @@ sequenceDiagram
     participant SNS as SNS svp-security-alarms
     participant M as Hộp thư security_alert_email
     A->>GS: gọi API bằng credential của role node (CloudTrail ghi IP nguồn)
-    GS->>GA: finding UnauthorizedAccess:IAMUser/InstanceCredentialExfiltration.OutsideAWS, High
+    GS->>GA: nếu phát hiện: finding UnauthorizedAccess:IAMUser/InstanceCredentialExfiltration.OutsideAWS
     GA->>EB: sự kiện GuardDuty Finding, cùng region với lời gọi
     alt region nhà
         EB->>SNS: rule svp-security-guardduty-findings, input transformer
@@ -95,8 +94,11 @@ sequenceDiagram
 ```
 
 1. Kẻ tấn công gọi API từ IP ngoài AWS bằng credential của role node. CloudTrail của `svp-stg` ghi lời gọi.
-2. GuardDuty của `svp-stg` (nguồn CloudTrail, không cần protection plan) sinh finding
-   `UnauthorizedAccess:IAMUser/InstanceCredentialExfiltration.OutsideAWS`, mức High (severity 7–8,9).
+2. GuardDuty của `svp-stg` (nguồn CloudTrail, không cần protection plan) có thể sinh finding
+   `UnauthorizedAccess:IAMUser/InstanceCredentialExfiltration.OutsideAWS`, mức mặc định High
+   ([finding IAM](https://docs.aws.amazon.com/guardduty/latest/ug/guardduty_finding-types-iam.html)). Không phải lời gọi nào cũng thành
+   finding: GuardDuty có thể học nguồn gọi là hành vi quen và thôi sinh finding cho nó; finding khớp suppression rule bị lưu trữ ngay,
+   không tới EventBridge ([suppression rule](https://docs.aws.amazon.com/guardduty/latest/ug/findings_suppression-rule.html)).
 3. Finding đi về delegated admin `svp-security` ở cùng region; bus mặc định của `svp-security` nhận sự kiện `GuardDuty Finding`.
 4. Rule `svp-security-guardduty-findings` khớp vì `detail.accountId` là id của stg (cờ `off`) và `detail.severity` ≥ 7. Ở region nhà nó
    gửi topic qua input transformer; ở `us-east-1` nó chuyển sang bus `svp-security-events`, rule `svp-security-notify` gửi topic.
@@ -105,8 +107,9 @@ sequenceDiagram
    `svp-security-guardduty-findings` không khớp stg nữa, nên không có thư trùng.
 6. Người nhận thư là chủ hộp thư `security_alert_email`, không phải admin của stg. Role thường của stg không tắt được detector hay sửa rule
    `svp-security-*`: SCP `svp-protect-baseline` chặn các lệnh đó với mọi principal của account thành viên, trừ
-   `OrganizationAccountAccessRole` (mục [Phạm vi của SCP bảo vệ](#phạm-vi-của-scp-bảo-vệ)). Lần thử tắt cũng thành thư
-   (`svp-security-denied-detection`, `svp-security-alert-rules`).
+   `OrganizationAccountAccessRole` (mục [Phạm vi của SCP bảo vệ](#phạm-vi-của-scp-bảo-vệ)). Lần thử tắt bị từ chối khớp event pattern
+   của `svp-security-denied-detection` nên được chuyển tới đường cảnh báo; sửa rule, dù thành công hay bị từ chối, khớp
+   `svp-security-alert-rules`.
 7. Người học mở [`security-alert.md`](https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks/security-alert.md) từ URL trong
    thư; bản đủ của finding đọc trên GuardDuty của `svp-security` hay trong bucket GuardDuty của Log Archive.
 
@@ -139,8 +142,9 @@ suất xuất finding, mặc định 6 giờ (ADR-0060 §10). Runbook tạo find
 
 ### AWS Security Hub CSPM
 
-- **Làm gì:** chạy security check của các chuẩn trên tài nguyên của mọi account, mỗi check thành một finding của control ("control" là
-  một phép kiểm có id như `EC2.7`), và gom finding của GuardDuty, Inspector, Access Analyzer về một bảng. Ví dụ đời thực:
+- **Làm gì:** chạy security check của các chuẩn trên tài nguyên của các account đã bật Security Hub CSPM, mỗi check thành một finding
+  của control ("control" là một phép kiểm có id như `EC2.7`), và gom finding của GuardDuty, Inspector, Access Analyzer về một bảng. Ví
+  dụ đời thực:
   - `EC2.7`: EBS mã hoá mặc định chưa bật ở một region.
   - `S3.1`: account chưa bật S3 Block Public Access.
   - `CloudTrail.1`: không có trail đa region ghi cả sự kiện đọc và ghi.
@@ -157,11 +161,13 @@ suất xuất finding, mặc định 6 giờ (ADR-0060 §10). Runbook tạo find
 
 ### Amazon Inspector
 
-- **Làm gì:** quét image container tìm lỗ hổng phần mềm đã biết (CVE) khi push và quét lại khi có CVE mới, finding vào Security Hub qua
-  tích hợp sẵn. Ví dụ đời thực:
+- **Làm gì:** quét image container tìm lỗ hổng phần mềm đã biết (CVE) khi push và quét lại khi có CVE mới. Finding chỉ vào Security Hub
+  khi account nguồn bật Security Hub CSPM: tích hợp tự chạy từ lúc đó
+  ([tích hợp dịch vụ AWS](https://docs.aws.amazon.com/securityhub/latest/userguide/securityhub-internal-providers.html)). Ví dụ đời thực:
   - Finding loại Package Vulnerability: một thư viện trong image bên thứ ba kéo qua pull-through cache có CVE mức High.
   - CVE mới công bố cho package trong image đã quét: Inspector quét lại digest đó, không cần push lại.
-  - Finding của image cache nằm cạnh finding GuardDuty trên bảng Security Hub của `svp-security`, lọc theo account và repo.
+  - Ở account bật Security Hub CSPM, finding của image cache nằm cạnh finding GuardDuty trên bảng Security Hub của `svp-security`, lọc
+    theo account và repo.
 - **Ở svp:** chỉ ECR, chỉ region nhà, cờ `inspector_ecr`. Cấu hình tổ chức tự bật ECR cho account mới; enabler `security` và enabler
   `members` chỉ `["ECR"]`; liên kết thành viên `members` cho account `ACTIVE` khác `svp-security` có cờ khác `off` (với file của repo:
   `svp-log-archive`, `svp-backup`). Chế độ quét và filter repo đặt ở registry của account env (`aws/accounts/<env>`, quét nâng cao chỉ
@@ -173,16 +179,20 @@ suất xuất finding, mặc định 6 giờ (ADR-0060 §10). Runbook tạo find
 
 ### AWS Config (aggregator)
 
-- **Làm gì:** recorder ghi cấu hình của từng tài nguyên và mỗi lần nó đổi (configuration item); aggregator gom các bản ghi đó từ nhiều
-  account, region vào một chỗ để truy vấn. Config cho biết cấu hình đổi thế nào, không cho biết ai đổi: principal gọi API nằm ở sự kiện
-  CloudTrail cùng thời điểm. Control của Security Hub chạy trên rule Config, nên account bật Security Hub cần recorder. Ví dụ đời thực:
-  - Truy vấn nâng cao trên aggregator: mọi security group đang mở cổng 22 ra `0.0.0.0/0`, ở các account có recorder.
-  - Dòng thời gian cấu hình của một role: trust policy trước và sau mỗi lần đổi; người đổi đọc trên CloudTrail.
+- **Làm gì:** recorder của từng account ghi cấu hình của mỗi tài nguyên và mỗi lần nó đổi (configuration item), tức lịch sử cấu hình;
+  aggregator cho xem chỉ đọc, tập trung, cấu hình và compliance của nhiều account, region
+  ([aggregator](https://docs.aws.amazon.com/config/latest/developerguide/aggregate-data.html)). Config cho biết cấu hình đổi thế nào,
+  không cho biết ai đổi: principal gọi API nằm ở sự kiện CloudTrail cùng thời điểm. Control của Security Hub chạy trên rule Config, nên
+  account bật Security Hub cần recorder. Ví dụ đời thực:
+  - Truy vấn nâng cao trên aggregator: mọi security group đang mở cổng 22 ra `0.0.0.0/0`, ở các account có recorder. Truy vấn này đọc
+    trạng thái hiện tại, không đọc lịch sử hay tài nguyên đã xoá
+    ([truy vấn nâng cao](https://docs.aws.amazon.com/config/latest/developerguide/querying-AWS-resources.html)).
+  - Dòng thời gian cấu hình của một role, từ bản ghi của recorder: trust policy trước và sau mỗi lần đổi; người đổi đọc trên CloudTrail.
   - Rule service-linked tiền tố `securityhub-` do Security Hub tạo cho control của FSBP, CIS.
 - **Ở svp:** aggregator `svp-org` ở `svp-security`, nguồn tổ chức, mọi region (`all_regions = true`), role
   `svp-security-config-aggregator` với managed policy `AWSConfigRoleForOrganizations`. Aggregator chỉ có dữ liệu của account, region có
-  recorder. Recorder của từng account ở root `aws/baseline`, hai region, theo cờ `config_recording` (chương 06. Baseline
-  <!-- link-chờ: docs/handbook/06-baseline.md -->); với file của repo, giữa các buổi chỉ `svp-security` có recorder.
+  recorder. Recorder của từng account ở root `aws/baseline`, hai region, theo cờ `config_recording`
+  (chương [06. Baseline](06-baseline.md)); với file của repo, giữa các buổi chỉ `svp-security` có recorder.
 - **Phí theo:** aggregator không tính phí; recorder tính mỗi configuration item ghi và mỗi lần đánh giá rule.
 - **Cố ý tắt:** không conformance pack: chuẩn CIS của Security Hub đã đánh giá cùng các rule.
 
@@ -236,12 +246,12 @@ Sơ đồ chi tiết của hai nhánh, với rule, region và role:
 | --- | --- | --- | --- | --- |
 | Security Hub CSPM | security check, finding nhập | ~1,8 USD mỗi tháng ở `svp-security` | 1–3 USD mỗi buổi một env bật `security_hub` | ADR-0078 phụ lục "Tháng không buổi"; ADR-0060 phụ lục §12 "Thêm mỗi buổi" |
 | AWS Config (recorder) | configuration item, đánh giá rule | ~0,3 USD mỗi tháng ở `svp-security` | 2–4,5 USD mỗi buổi một env bật `config_recording` | như trên |
-| GuardDuty | event, GB log được phân tích, vCPU-tháng | ~2,4 USD mỗi tháng cho năm account; 30 ngày đầu dùng thử | ~0,5 USD mỗi buổi một env | ADR-0060 phụ lục §12 "Ước lúc không buổi", "Thêm mỗi buổi" |
+| GuardDuty | event, GB log được phân tích, vCPU-tháng | ~2,4 USD mỗi tháng cho năm account của ước tính (management, `svp-log-archive`, `svp-security`, `svp-stg`, `svp-prd`); `svp-backup` thêm ~0,05 USD; 30 ngày đầu dùng thử | ~0,5 USD mỗi buổi một env | ADR-0060 phụ lục §12 "Ước lúc không buổi", "Thêm mỗi buổi"; ADR-0078 phụ lục, dòng "Security Hub, Config của `svp-backup`" (GuardDuty) |
 | Inspector | image được quét | ~0,18 USD mỗi digest image bên thứ ba mới mỗi account | theo số image mới khi env bật `inspector_ecr`; không có số đo | ADR-0062 §11 |
 | Config aggregator, Access Analyzer truy cập ngoài | — | 0 | 0 | ADR-0060 phụ lục §12 "Ước lúc không buổi" |
 | EventBridge chéo account, SNS email, KMS key của topic | triệu sự kiện, nghìn thư, key-tháng | không có số đo | không có số đo | trang giá của dịch vụ |
 
-Tổng phí một buổi của cả lab, không đếm GuardDuty hai lần, ở chương 15. Chi phí <!-- link-chờ: docs/handbook/15-cost.md -->. Nguồn:
+Tổng phí một buổi của cả lab, không đếm GuardDuty hai lần, ở chương [15. Chi phí](15-cost.md). Nguồn:
 [ADR-0060 phụ lục](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0060-org-detection-logging.md) §12,
 [ADR-0078 phụ lục](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0078-paid-features-lean-defaults.md#chi-phí),
 [ADR-0062](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0062-ecr-registry-ci-oidc.md) §11.
@@ -261,18 +271,22 @@ Tổng phí một buổi của cả lab, không đếm GuardDuty hai lần, ở 
 | Rule cảnh báo | `svp-security` | `ap-southeast-1` | EventBridge → Rules, bus `default` và `svp-security-events` | Rule `svp-security-*` `Enabled` |
 | Subscription email | `svp-security` | `ap-southeast-1` | SNS → Topics → `svp-security-alarms` | Subscription `Confirmed` |
 
-Bảng trên là trạng thái mà code khai báo. Phần đã kiểm thật là phần runbook có bước:
+Bảng trên là trạng thái mà code khai báo. Runbook có bước kiểm cho nó:
 [`org-security-setup.md`, bước (5)](../runbooks/org-security-setup.md#bước-5-awssecurity) (áp, kiểm plan Inspector, xác nhận email,
-kiểm nhanh), mục 7a (`verify.sh` đọc dịch vụ bật, aggregator, analyzer) và 7e (cảnh báo thử tới hộp thư).
+kiểm nhanh), mục 7a (`verify.sh` đọc dịch vụ bật, aggregator, analyzer) và 7e (cảnh báo thử tới hộp thư). Có bước kiểm chưa phải đã
+kiểm: một phần chỉ coi là chạy khi bước đó ra đúng mong đợi và output được dán lại. Đường email nói riêng chỉ coi là chạy khi phép thử 7e
+cho đủ thư, vì chỉ phép thử đó đi qua policy của topic với EventBridge
+([tra cứu đường cảnh báo](../reference/security-alerts.md#rule-của-svp-security)).
 
 ## Thiết kế và đánh đổi
 
 ### Delegated admin ở account riêng
 
 Theo AWS Security Reference Architecture, công cụ bảo mật nằm ở một account riêng: admin của `svp-stg` có toàn quyền trong account của
-nó, nhưng finding của nó nằm ở `svp-security`, nơi admin đó không có quyền. Management chỉ chỉ định delegated admin (`aws/org`), không
-chạy dịch vụ: AWS khuyên management chạy ít nhất có thể. Lý do và phương án:
-[ADR-0060](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0060-org-detection-logging.md) §1.
+nó, nhưng finding của nó nằm ở `svp-security`, nơi admin đó không có quyền. Management không quản dịch vụ: nó chỉ định delegated admin
+(`aws/org`), còn cấu hình, finding và cảnh báo ở `svp-security`, vì AWS khuyên management chạy ít nhất có thể. Management vẫn là một
+account được giám sát: nó có detector GuardDuty làm member (mục [Đọc sâu](#đọc-sâu)) và Security Hub theo cờ như account khác. Lý do
+và phương án: [ADR-0060](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0060-org-detection-logging.md) §1.
 
 ### Phạm vi của SCP bảo vệ
 
@@ -281,7 +295,8 @@ rule và role `svp-security-*` (danh sách lệnh ở `aws/modules/org-policies/
 `OrganizationAccountAccessRole`. Ba giới hạn: role được miễn assume được từ management, nên ai có quyền admin ở management vẫn đổi được;
 SCP không áp lên management account và service-linked role
 ([SCP](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_scps.html)); SCP không liệt kê lệnh trên chính
-finding (lưu trữ finding GuardDuty, đổi workflow của finding Security Hub). Mọi lần thử bị chặn thành thư qua nhóm rule `denied-*`.
+finding (lưu trữ finding GuardDuty, đổi workflow của finding Security Hub). Các sự kiện bị từ chối khớp event pattern của nhóm rule
+`denied-*` được chuyển tới đường cảnh báo.
 
 ### Hai nhánh cảnh báo theo cờ `security_hub`
 
@@ -323,6 +338,9 @@ duy trì danh sách account `off` trong event pattern (root tự tính từ `pai
 | CVE trong image container ở ECR | Amazon Inspector | GuardDuty Runtime Monitoring bắt hành vi lúc chạy, không quét package |
 | Đánh giá liên tục theo CIS cho mọi account, một bảng chung | Security Hub CSPM | Conformance pack của Config đánh giá được nhưng không gom finding của GuardDuty, Inspector |
 | Gom log nhiều nguồn theo chuẩn mở để truy vấn, đưa vào SIEM | Amazon Security Lake (OCSF) | Security Hub CSPM gom finding, không gom log thô |
+| Ngăn admin của account thành viên tắt GuardDuty, Config hay sửa rule cảnh báo | SCP | IAM policy do chính admin đó sửa được; Config rule chỉ báo sau khi đã tắt |
+| Quản tập trung dịch vụ bảo mật cho cả tổ chức mà không vận hành từ management account | Delegated administrator ở account bảo mật | Chạy từ management: SCP không áp lên nó, quyền quá rộng; tự bật ở từng account thì không gom một chỗ |
+| Chuyển finding nghiêm trọng thành email cho người trực | EventBridge rule + SNS topic | Security Hub, GuardDuty không tự gửi email; CloudWatch alarm đo metric, không đọc nội dung finding |
 
 ## Đọc sâu
 
@@ -353,7 +371,8 @@ duy trì danh sách account `off` trong event pattern (root tự tính từ `pai
   ([gắn policy](https://docs.aws.amazon.com/securityhub/latest/userguide/create-associate-policy.html)): hết giờ chờ thì provider chỉ cảnh
   báo. GuardDuty áp `ALL` lên account có sẵn có thể mất tới 24 giờ
   ([auto-enable](https://docs.aws.amazon.com/guardduty/latest/ug/set-guardduty-auto-enable-preferences.html)): `FAIL` về member trong ngày
-  đầu ở bước kiểm của runbook là chờ.
+  đầu ở bước kiểm của runbook có thể là chờ đồng bộ, không phải mặc định là chờ. Đọc trạng thái member trên GuardDuty → Accounts; quá 24
+  giờ mà vẫn `FAIL` thì là lỗi thật.
 - Root chạy từ management (`anhnv-sso`): provider mặc định assume `OrganizationAccountAccessRole` của `svp-security` với phiên
   `svp-terraform`; provider `log_archive` chỉ đọc ARN dạng `key/<id>` của key Log Archive; provider `management` đọc tổ chức và bật
   detector của management. `svp-security` không có profile ghi hay bucket state riêng.

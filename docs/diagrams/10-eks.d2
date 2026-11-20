@@ -1,0 +1,96 @@
+# Overview of how a pod of an env gets AWS rights and its secrets (aws/modules/eks, aws/modules/external-secrets,
+# aws/envs/<env>/pod-identity.tf): the Pod Identity agent trades the ServiceAccount for a role through EKS Auth,
+# External Secrets reads Secrets Manager with the role of the namespace and writes the Secret the service reads.
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 0
+    dark-theme-id: 200
+    pad: 20
+  }
+}
+...@tokens
+
+direction: down
+
+title: "Pod trong cluster lấy quyền AWS và secret bằng đường nào?" {
+  shape: text
+  near: top-center
+  style: {font-size: 18; bold: true}
+}
+
+env: "svp-stg · svp-prd (ap-southeast-1)" {
+  class: account
+  label.near: top-left
+
+  cluster: "Cluster EKS svp-<env> · node system on-demand, node Karpenter" {
+    class: region
+    label.near: top-left
+
+    eso: "External Secrets Operator" {
+      class: workload
+      grid-rows: 2
+      grid-gap: 24
+      vertical-gap: 6
+      s: "SecretStore svp-store mỗi namespace" {class: sub}
+      r: "external-secrets/external-secrets" {class: root}
+    }
+    agent: "Pod Identity Agent" {
+      class: prevention
+      grid-rows: 2
+      grid-gap: 24
+      vertical-gap: 6
+      s: "add-on, mỗi node một agent" {class: sub}
+      r: "169.254.170.23:80" {class: root}
+    }
+    cp: "Control plane" {
+      class: governance
+      grid-rows: 2
+      grid-gap: 24
+      vertical-gap: 6
+      s: "API chỉ endpoint private · Secret mã hoá KMS" {class: sub}
+      r: "aws/modules/eks" {class: root}
+    }
+    video: "Pod video-service" {
+      class: workload
+      grid-rows: 2
+      grid-gap: 24
+      vertical-gap: 6
+      s: "env từ Secret video-service-env" {class: sub}
+      r: "svp/video-service" {class: root}
+    }
+  }
+
+  auth: "EKS Auth" {
+    class: prevention
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "AssumeRoleForPodIdentity · session tag" {class: sub}
+    r: "cluster, namespace, ServiceAccount" {class: root}
+  }
+  sm: "Secrets Manager" {
+    class: data
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "entry svp/<env>/pg-roles, kafka-users, …" {class: sub}
+    r: "đọc bằng role svp-<env>-external-secrets-<ns>" {class: root}
+  }
+  s3: "Amazon S3" {
+    class: data
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "bucket uploads, media của env" {class: sub}
+    r: "role svp-<env>-video-service" {class: root}
+  }
+}
+
+env.cluster.eso -> env.cluster.agent: "xin credential" {class: control-flow}
+env.cluster.video -> env.cluster.agent: "xin credential" {class: control-flow}
+env.cluster.agent -> env.auth: "đổi ServiceAccount lấy role" {class: control-flow}
+env.cluster.eso -> env.sm: "GetSecretValue" {class: data-flow}
+env.cluster.eso -> env.cluster.cp: "ghi Secret" {class: data-flow}
+env.cluster.cp -> env.cluster.video: "Secret vào env của pod" {class: data-flow}
+env.cluster.video -> env.s3 {class: data-flow}

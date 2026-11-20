@@ -1,66 +1,42 @@
 # Module `gitops-bridge`
 
-Giá trị của bootstrap GitOps trên một cluster EKS theo mẫu GitOps Bridge: Terraform cài Argo CD và đưa metadata của cluster vào label,
-annotation của cluster Secret của Argo CD; ApplicationSet `svp-bootstrap` đọc Secret đó và tạo Application gốc `svp-root`. Module không có
-resource hay data source của provider nào: nó chỉ tính những gì root [`aws/gitops/<env>`](../../gitops/README.md) áp vào cluster, nên
-`terraform test` kiểm được mọi giá trị với mock provider, không cần cluster.
+Tính mọi giá trị của bootstrap GitOps trên một cluster EKS theo mẫu GitOps Bridge: cluster Secret của Argo CD, ApplicationSet
+`svp-bootstrap`, release Argo CD, AppProject, namespace có Pod Security, địa chỉ API và commit bootstrap. Module không có resource hay
+data source của provider nào: root [`aws/gitops/<env>`](../../gitops/README.md) đọc nguồn và áp, nên `terraform test` kiểm mọi giá trị
+bằng mock provider, không cần cluster (`make test DIRS=aws/modules/gitops-bridge`). Lý do và luồng ở
+[chương 13. GitOps](../../../docs/handbook/13-gitops.md).
 
-## Đầu vào và đầu ra
+## Ví dụ
 
-| Đầu vào (root đọc) | Đầu ra (root áp) |
-| --- | --- |
-| `env`, `node_arch`, `cluster_values` (output của root env), `telegram_chat_id` | `cluster_secret`, `cluster_secret_annotations`: Secret `argocd/in-cluster` |
-| `cluster_endpoint`, `api_server_url` | `kubernetes_host`, `tls_server_name`: địa chỉ API của hai provider `helm`, `kubernetes` |
-| `main_commit`, `env_charts` (`envs/<env>/charts.yaml` ở `main`), `require_pinned_revision` | `bootstrap_revision`: commit bootstrap B |
-| `argocd_bootstrap` (`argocd/bootstrap.json` ở B), `argocd_values` | `argocd_release`: release Argo CD |
-| `app_projects` (`argocd/project.yaml` ở B) | `app_projects_release`: AppProject `svp`, `default` |
-| `svp_cluster_values_template` (`platforms/eks/svp-cluster.values.tpl` ở B), `cluster_values` | `svp_cluster_platform_values`, `platform_values_chart`: `valuesObject` của Application `svp-cluster` |
-| `namespace_manifests` (render `templates/namespaces.yaml` của chart `svp-cluster`) | `namespaces`, `argocd_namespace_values` |
-| | `root_release`: ApplicationSet `svp-bootstrap`; `resources_chart`, `gitops_repository` |
+Lời gọi trong `aws/gitops/stg/main.tf` (nội dung file từ `data "http"`, namespace từ `data "helm_template"`), giá trị placeholder:
 
-- **Commit bootstrap B:** `gitopsRevision` của `envs/<env>/charts.yaml` khi có, không thì `main_commit` (commit của `main` lúc plan).
-  `require_pinned_revision = true` (prd) làm plan dừng khi khoá vắng. Chỉ Argo CD, values của nó và AppProject đọc ở B; `svp-root` luôn theo
-  dõi `refs/heads/main`.
-- **Cluster Secret** `in-cluster` (namespace `argocd`, server `https://kubernetes.default.svc`): label `argocd.argoproj.io/secret-type: cluster`,
-  `svp.io/env`, `svp.io/platform: eks`, `svp.io/node-arch`; annotation `svp.io/cluster-values` (JSON của `cluster_values`) và
-  `svp.io/telegram-chat-id`.
-- **`cluster_values`** phải có đúng các khoá của hợp đồng `cluster.*` (output `cluster_values` của hai root env), mỗi khoá đúng loại: chuỗi,
-  `dbCidrs`, `edgeCidrs`, `s3Cidrs` là danh sách chuỗi, `externalSecretsRoles` là map chuỗi của đúng năm namespace `svp`, `svp-data`,
-  `svp-obs`, `keda`, `argocd`; `kafkaBrokers` là một chuỗi `host:9096,host:9096,…` như MSK trả, không phải danh sách. Các khoá có luật
-  dạng trong `variables.tf` (biểu thức chính quy khớp cả chuỗi) còn phải đúng dạng: `ecrRegistry` là host registry ECR private
-  `<account>.dkr.ecr.<region>.amazonaws.com`, `ampWorkspaceId` là `ws-<id>`, `ampEndpoint` là `prometheus_endpoint` của workspace AMP (kết thúc
-  bằng `/`), `logGroup` là `/svp/<env>/otel`, `grafanaUrl` là `https://` + endpoint của workspace AMG (không `/` cuối) hay
-  chuỗi rỗng khi cờ `managed_grafana` của env là `off`, `alarmTopicArn` là ARN topic `svp-<env>-alarms`, `mediaconvertQueueArn`
-  là ARN queue `svp-<env>` của MediaConvert, `mediaconvertRoleArn` là ARN role
-  `svp-<env>-mediaconvert`, `transcodeEventsQueueUrl` là URL hàng đợi SQS `svp-<env>-transcode-events`. Giá trị sai dạng dừng
-  plan, thay vì chỉ lộ ra trong cluster thành lỗi kéo image, ghi metric hay gửi cảnh báo.
-  Biến không khai kiểu object: đổi sang kiểu object sẽ âm thầm bỏ khoá thừa và báo khoá thiếu bằng lỗi kiểu thay vì luật kiểm.
-- **ApplicationSet `svp-bootstrap`:** cluster generator chọn Secret có label `svp.io/env`, `goTemplate` với `missingkey=error`; tạo
-  `svp-root` (project `svp`, label `svp.io/notify: root`, annotation `argocd.argoproj.io/compare-options: ServerSideDiff=false`, chart
-  `argocd/root` của `svp-gitops` ở `refs/heads/main`); `templatePatch` đặt `env`, `platform`, `nodeArch` từ label, `cluster` từ annotation,
-  và đăng ký Telegram khi có chat. `syncPolicy.preserveResourcesOnDeletion: true` để controller ApplicationSet không gắn finalizer vào
-  `svp-root`: xoá ApplicationSet không xoá dây chuyền.
-- **Namespace:** mỗi namespace phải có nhãn Pod Security `restricted` cho `enforce`, `audit`, `warn` với version `v1.<minor>`, và phải có
-  `argocd`; nếu không thì output `namespaces` dừng ở precondition.
-- **Chart `charts/resources`:** in nguyên văn danh sách manifest của value `resources`, như chart cùng tên của GitOps Bridge. AppProject và
-  ApplicationSet đi qua `helm_release` của chart này vì CRD của Argo CD chỉ có sau release Argo CD trong cùng lần apply: Helm chỉ cần CRD lúc
-  áp, `kubernetes_manifest` cần ngay lúc plan.
-- **Chart `charts/platform-values`:** render mẫu `platforms/eks/<tên>.values.tpl` của `svp-gitops` trên value `cluster` bằng `tpl`, như chart
-  `argocd/apps` ở đó render thành `valuesObject` của Application (render không ra map YAML thì fail). Root đặt kết quả sau mọi values file
-  của render namespace, đúng thứ tự Argo CD đọc.
-- **Provider `aws`** chỉ được khai trong `required_providers`, không dùng: `make test` bắt mỗi file test có `mock_provider "aws"`, và
-  Terraform chỉ nạp mock cho provider module có khai.
+```hcl
+module "gitops_bridge" {
+  source = "../../modules/gitops-bridge"
 
-## Test
+  env                         = "stg"
+  node_arch                   = "arm64"
+  cluster_values              = { name = "svp-stg", region = "ap-southeast-1" } # every key of the cluster.* contract
+  cluster_endpoint            = "https://<id>.gr7.ap-southeast-1.eks.amazonaws.com"
+  api_server_url              = "https://127.0.0.1:6444"
+  telegram_chat_id            = ""
+  main_commit                 = "<sha of main of svp-gitops>"
+  env_charts                  = "<envs/stg/charts.yaml>"
+  require_pinned_revision     = false
+  argocd_bootstrap            = "<argocd/bootstrap.json>"
+  argocd_values               = ["<base/argo-cd.yaml>", "<platforms/eks/argo-cd.yaml>"]
+  app_projects                = "<argocd/project.yaml>"
+  svp_cluster_values_template = "<platforms/eks/svp-cluster.values.tpl>"
+  namespace_manifests         = ["<namespace argocd>", "<namespaces of the project>"]
+}
+```
 
-`tests/bridge.tftest.hcl` (mock provider, chỉ `plan`) dùng fixture viết ngay trong file, đủ khoá của hợp đồng `cluster.*`. Run `stg` kiểm
-label, annotation, data của cluster Secret, ApplicationSet và tên `svp-root`, host và TLS server name khi không tunnel, nhãn Pod Security của
-namespace `argocd` và namespace dự án, values của chart `platform-values` (mẫu nguyên văn, đủ khoá `cluster_values`), release Argo CD,
-AppProject, B là `main_commit`. Run `prd` kiểm host loopback qua tunnel, TLS server
-name vẫn là host của endpoint, B là `gitopsRevision`, chat Telegram. Mỗi luật còn lại có một run với giá trị chỉ luật đó từ chối (env, kiến
-trúc, khoá thiếu, khoá thừa như `hostedZoneId`, sai loại, thiếu role namespace, URL không phải loopback, khoá ghim vắng hay không phải commit,
-namespace `baseline`, thiếu `argocd`, chart Argo CD lạ, thiếu AppProject); mỗi khoá có luật dạng trong `variables.tf` có ba
-run: thiếu, sai loại, sai dạng.
+## Tham chiếu
+
+- [Chương 13. GitOps](../../../docs/handbook/13-gitops.md): ranh giới Terraform và Argo CD, commit bootstrap, chart `resources` và
+  `platform-values`.
+- [README của `svp-gitops`](https://github.com/anhnvcoder/svp-gitops#hợp-đồng-giá-trị-cluster): bảng khoá của hợp đồng `cluster.*`.
+- [ADR-0050](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0050-bash-to-standard-tools.md) §1: chọn GitOps Bridge.
 
 <!-- BEGIN_TF_DOCS -->
 ## Requirements

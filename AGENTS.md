@@ -16,15 +16,16 @@ quyết định chung của lab nằm ở `docs/` của repo code (bản clone `
   `make pre-commit FILES='<file …>'` (phép kiểm của hook, không mạng), `make lock`, tức
   `terraform fmt`, `terraform init -backend=false`, `terraform validate`, `terraform providers lock`; `bash -n`,
   test script với lệnh giả trên PATH; `aws --version`.
-- **`terraform test` chỉ qua `make test`**, target tự ép ba điều kiện, không tin người viết test: (1) chạy trong container image Terraform
-  ghim digest (`TERRAFORM_IMAGE`) với `--network none`; (2) không truyền credential nào: `env -u` mọi biến `AWS_*`, không `-e AWS_*`, không
-  mount `~/.aws`, `.envrc`, `backend.hcl` (chỉ mount thư mục module và cache provider, cả hai chỉ đọc; module chứa `.envrc` hay
-  `backend.hcl` bị từ chối); (3) mỗi
-  `tests/*.tftest.hcl` có `mock_provider "aws"` và mọi `run` là `command = plan`, kiểm theo khuôn cố định (allowlist) chứ không dò từng cách viết
-  sai: đúng một dòng `mock_provider "aws" {` (hay `mock_provider "aws" {}`) đứng riêng; mỗi `run` mở bằng dòng `run "<tên>" {` (chữ, số, `_`, `-`)
-  và dòng không trống đầu tiên bên trong là `command = plan`; dòng khác bắt đầu bằng `run`, `mock_provider`, `provider`, `override_`, `module`,
-  `command` hay `/*`, dòng nào chứa `alias`, `*/` hay `<<` (heredoc), symlink trong thư mục module và `*.tftest.json` đều bị từ chối, target nêu
-  file và dòng. `make test-guard` kiểm chính ba điều kiện với `docker` giả. AI không chạy `terraform test` trần.
+- **`terraform test` chỉ qua `make test`**, target tự ép ba điều kiện, không tin người viết test: (1) chạy trong
+  container image Terraform ghim digest (`TERRAFORM_IMAGE`) với `--network none`; (2) không truyền credential nào:
+  `env -u` mọi biến `AWS_*`, không `-e AWS_*`, không mount `~/.aws`, `.envrc`, `backend.hcl` (chỉ mount thư mục module
+  và cache provider, cả hai chỉ đọc; module chứa `.envrc` hay `backend.hcl` bị từ chối); (3) mỗi `tests/*.tftest.hcl` có
+  `mock_provider "aws"` và mọi `run` là `command = plan`, kiểm theo khuôn cố định (allowlist) chứ không dò từng cách
+  viết sai: đúng một dòng `mock_provider "aws" {` (hay `mock_provider "aws" {}`) đứng riêng; mỗi `run` mở bằng dòng
+  `run "<tên>" {` (chữ, số, `_`, `-`) và dòng không trống đầu tiên bên trong là `command = plan`; dòng khác bắt đầu bằng
+  `run`, `mock_provider`, `provider`, `override_`, `module`, `command` hay `/*`, dòng nào chứa `alias`, `*/` hay `<<`
+  (heredoc), symlink trong thư mục module và `*.tftest.json` đều bị từ chối, target nêu file và dòng. `make test-guard`
+  kiểm chính ba điều kiện với `docker` giả. AI không chạy `terraform test` trần.
 - **AI không chạy lệnh nào chạm account AWS, kể cả chỉ đọc:** `terraform init` có backend, `plan`, `apply`, `destroy`, `import`,
   `state`, `output`, `test` trần (ngoài `make test`), `refresh`; `aws` (trừ `--version`); script hay chương trình dùng SDK AWS; script
   buổi và script dựng của `aws/scripts/` (`sso-profiles.sh`, `accounts.sh`, `tfvars.sh`, `verify.sh`, `preflight.sh`…: việc
@@ -76,30 +77,34 @@ quyết định chung của lab nằm ở `docs/` của repo code (bản clone `
 
 ## Quy ước
 
-Quy ước chung (ngôn ngữ, tài liệu timeless, ADR, comment, Git, repo public, phụ thuộc): [`CONTRIBUTING.md` của `anhnvcoder/.github`](https://github.com/anhnvcoder/.github/blob/main/CONTRIBUTING.md); dưới đây chỉ luật riêng của repo này.
+Quy ước chung (ngôn ngữ, tài liệu timeless, ADR, comment, Git, repo public, phụ thuộc): [`CONTRIBUTING.md` của
+`anhnvcoder/.github`](https://github.com/anhnvcoder/.github/blob/main/CONTRIBUTING.md); dưới đây chỉ luật riêng của repo
+này.
 
 - **Ngôn ngữ viết:** file `.md` viết tiếng Việt.
-- **Repo public, không commit:** state (`*.tfstate*`), plan (`*.tfplan`), `backend.hcl`, `backend-<env>.hcl`, `*.auto.tfvars` hay `terraform.tfvars` (chứa
-  account ID, IP, email, tên miền thật), override (`*_override.tf`), `.terraform/`, `.session/`. Ví dụ và test dùng `000000000000`,
-  `svp.example`, `<domain>`. Tên bucket theo `<tên>-<account>-<region>`, tính từ `var.account_id` lúc chạy, nên account thật vẫn không
-  nằm trong file commit nào.
-- **Alarm dịch vụ managed:** CloudWatch alarm nằm trong module của dịch vụ (biến `alarm_topic_arn`), tên `svp-<env>-<alarm>`, tag
-  `Severity`; alarm `page` có runbook cùng tên ở `docs/runbooks/` của repo code. Mọi alarm gửi topic của module `alarms`; email nhận alarm chỉ
-  qua `alarm_email` của `<env>.auto.tfvars` (không commit).
+- **Repo public, không commit:** state (`*.tfstate*`), plan (`*.tfplan`), `backend.hcl`, `backend-<env>.hcl`,
+  `*.auto.tfvars` hay `terraform.tfvars` (chứa account ID, IP, email, tên miền thật), override (`*_override.tf`),
+  `.terraform/`, `.session/`. Ví dụ và test dùng `000000000000`, `svp.example`, `<domain>`. Tên bucket theo
+  `<tên>-<account>-<region>`, tính từ `var.account_id` lúc chạy, nên account thật vẫn không nằm trong file commit nào.
+- **Alarm dịch vụ managed:** CloudWatch alarm nằm trong module của dịch vụ (biến `alarm_topic_arn`), tên
+  `svp-<env>-<alarm>`, tag `Severity`; alarm `page` có runbook cùng tên ở `docs/runbooks/` của repo code. Mọi alarm gửi
+  topic của module `alarms`; email nhận alarm chỉ qua `alarm_email` của `<env>.auto.tfvars` (không commit).
 - **Root và module:** thư mục dưới `modules/` là module (không commit lock file), thư mục `*.tf` khác là root (commit
   `.terraform.lock.hcl` ba nền tảng bằng `make lock DIRS=<root>`). Provider ghim trong lock của root; module registry ghim version chính
   xác. Root đặt `default_tags` `Project=svp`, `ManagedBy=terraform`, `Stack=<tên>` và `allowed_account_ids = [var.account_id]`.
 - **Root `github/`** (cài đặt GitHub của các repo trong `local.repositories` của `github/repositories.tf`, provider
   `integrations/github`): không provider AWS nên không `default_tags`, `allowed_account_ids`; `plan`, `apply` cần token GitHub admin và
   đăng nhập AWS (state ở bucket của `aws/bootstrap`), chỉ người học chạy.
-- **Ngoại lệ trivy** (luật đủ ở đầu `.trivyignore.yaml`): sửa được thì sửa. Finding trong `.tf` của repo bỏ qua bằng `#trivy:ignore:<id>`
-  ngay trên resource, lý do ở comment; finding trong module registry vào `.trivyignore.yaml` (`paths` không bao giờ là mọi file). Mỗi ngoại lệ
-  ghi phạm vi trong lý do, một dòng mỗi id: `Scope: every environment.` hay `Scope: stg only; prd: <prd làm gì thay>.`. `make trivy` quét
-  mỗi root với giá trị của env (`<root>/<env>.tfvars`), và ngoại lệ chỉ-stg không bao giờ che finding của prd: nó nằm ở lời gọi module trong
-  root stg, hay trong module với điều kiện trên thuộc tính khác nhau giữa hai env, đặt đúng giá trị của stg
-  (`#trivy:ignore:AWS-0039[create_kms_key=false]` của `aws/modules/eks/cluster.tf`). trivy khớp điều kiện trên thuộc tính chuỗi ở mọi nơi quét,
-  còn trên bool hay số chỉ khi quét chính module, nên root của env cần ngoại lệ như vậy lặp lại nó, không điều kiện, ở lời gọi module
-  của chính root đó. `.trivyignore.yaml` không có mục chỉ-stg nào (`paths` không phân biệt được env).
+- **Ngoại lệ trivy** (luật đủ ở đầu `.trivyignore.yaml`): sửa được thì sửa. Finding trong `.tf` của repo bỏ qua bằng
+  `#trivy:ignore:<id>` ngay trên resource, lý do ở comment; finding trong module registry vào `.trivyignore.yaml`
+  (`paths` không bao giờ là mọi file). Mỗi ngoại lệ ghi phạm vi trong lý do, một dòng mỗi id:
+  `Scope: every environment.` hay `Scope: stg only; prd: <prd làm gì thay>.`. `make trivy` quét mỗi root với giá trị của
+  env (`<root>/<env>.tfvars`), và ngoại lệ chỉ-stg không bao giờ che finding của prd: nó nằm ở lời gọi module trong root
+  stg, hay trong module với điều kiện trên thuộc tính khác nhau giữa hai env, đặt đúng giá trị của stg
+  (`#trivy:ignore:AWS-0039[create_kms_key=false]` của `aws/modules/eks/cluster.tf`). trivy khớp điều kiện trên thuộc
+  tính chuỗi ở mọi nơi quét, còn trên bool hay số chỉ khi quét chính module, nên root của env cần ngoại lệ như vậy lặp
+  lại nó, không điều kiện, ở lời gọi module của chính root đó. `.trivyignore.yaml` không có mục chỉ-stg nào (`paths`
+  không phân biệt được env).
 - **Docker** chỉ qua `Makefile` (`env -u DOCKER_DEFAULT_PLATFORM docker run …`, image ghim digest có dòng `# renovate:` ngay trên).
 - **Card chạy song song** kiểm bằng `make check DIRS=<thư mục của mình>`: mỗi lượt chỉ ghi dưới thư mục đó, trừ cache provider và
   ruleset tflint `.plugin-cache/` dùng chung, ghi lần lượt qua khoá `.plugin-cache/lock` (mục "Chạy song song" của

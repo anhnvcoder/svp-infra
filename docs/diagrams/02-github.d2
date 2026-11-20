@@ -1,0 +1,126 @@
+# Overview of root github/: Terraform on the learner's machine writes the settings that have a resource (repositories,
+# rulesets, environments) with its state in the bucket of aws/bootstrap; github-app.py writes and reads back what the
+# provider cannot hold (secrets, Apps, three repository settings).
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 0
+    dark-theme-id: 200
+    pad: 20
+  }
+}
+...@tokens
+
+direction: down
+
+title: "Cài đặt GitHub của các repo đi từ máy người học bằng hai đường nào, và cái gì không vào state?" {
+  shape: text
+  near: top-center
+  style: {font-size: 18; bold: true}
+}
+
+learner: "Máy người học: Terraform" {
+  class: workload
+  grid-rows: 3
+  grid-gap: 24
+  vertical-gap: 6
+  s: "make github-tfvars · make github-plan · make github-apply" {class: sub}
+  u: "token từ gh auth token · SSO anhnv-sso cho state" {class: sub}
+  r: "github/" {class: root}
+}
+
+script: "Máy người học: script" {
+  class: workload
+  grid-rows: 3
+  grid-gap: 24
+  vertical-gap: 6
+  s: "make github-app · github-settings · github-secrets" {class: sub}
+  u: "make github-check: chỉ đọc lại" {class: sub}
+  r: "github/scripts/github-app.py" {class: root}
+}
+
+mgmt: "management (ap-southeast-1)" {
+  class: account
+  label.near: bottom-left
+
+  state: "State của root" {
+    class: data
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "key github/terraform.tfstate · use_lockfile" {class: sub}
+    r: "bucket state của aws/bootstrap" {class: root}
+  }
+}
+
+github: "GitHub · tài khoản anhnvcoder, các repo public" {
+  class: trust
+  style: {font-size: 15; bold: true}
+  label.near: bottom-left
+
+  tf: "Có resource: Terraform giữ, plan thấy lệch" {
+    style: {fill: transparent; stroke: "#90A4AE"; stroke-width: 1; border-radius: 8; font-size: 14; bold: true}
+    label.near: top-left
+    grid-rows: 3
+    vertical-gap: 16
+    rulesets: "Ruleset" {
+      class: governance
+      grid-rows: 2
+      grid-gap: 24
+      vertical-gap: 6
+      s: "main: PR, check bắt buộc, chỉ squash · owners · tag" {class: sub}
+      r: "rulesets.tf" {class: root}
+    }
+    repo: "Repo và quyền Actions" {
+      class: prevention
+      grid-rows: 2
+      grid-gap: 24
+      vertical-gap: 6
+      s: "secret scanning · action chọn lọc, ghim SHA · token chỉ đọc" {class: sub}
+      r: "repositories.tf" {class: root}
+    }
+    envs: "Environment và biến" {
+      class: prevention
+      grid-rows: 2
+      grid-gap: 24
+      vertical-gap: 6
+      s: "promote · promote-prd · release · ecr-rescan · terraform-plan" {class: sub}
+      r: "environments.tf" {class: root}
+    }
+  }
+
+  out: "Không resource: script ghi, make github-check đọc lại" {
+    style: {fill: transparent; stroke: "#90A4AE"; stroke-width: 1; border-radius: 8; font-size: 14; bold: true}
+    label.near: top-left
+    grid-rows: 3
+    vertical-gap: 16
+    secrets: "Secret" {
+      class: data
+      grid-rows: 2
+      grid-gap: 24
+      vertical-gap: 6
+      s: "khoá App · account ID · INFRACOST_API_KEY" {class: sub}
+      r: "không bao giờ vào state" {class: root}
+    }
+    apps: "GitHub App" {
+      class: workload
+      grid-rows: 2
+      grid-gap: 24
+      vertical-gap: 6
+      s: "App từ manifest: promote · release-please · argocd-notifier" {class: sub}
+      r: "github/apps/*.json · Renovate của Mend cài tay" {class: root}
+    }
+    settings: "Cài đặt không có resource" {
+      class: detection
+      grid-rows: 2
+      grid-gap: 24
+      vertical-gap: 6
+      s: "duyệt PR fork · báo lỗ hổng riêng · CodeQL" {class: sub}
+      r: "make github-settings" {class: root}
+    }
+  }
+}
+
+learner -> mgmt.state: "state" {class: data-flow}
+learner -> github.tf: "plan, apply" {class: control-flow}
+script -> github.out: "ghi, đọc lại" {class: control-flow}

@@ -1,42 +1,33 @@
 # Module `paid-features`
 
-Module chỉ trả dữ liệu (không provider, không resource): đọc cờ chi phí của mọi account trong org từ file commit
-[`aws/paid-features.json`](../../paid-features.json), kiểm, rồi trả giá trị đủ của mọi cờ ở mọi account. Thiết kế, lý do và chi phí của từng
-cờ: [ADR-0071](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0071-paid-features.md). File JSON không có comment; lý do mỗi giá
-trị nằm ở ADR đó.
+Module chỉ trả dữ liệu, không provider, không resource: nhận cờ chi phí của mọi account từ file commit
+[`aws/paid-features.json`](../../paid-features.json), từ chối khoá, cờ, giá trị và tổ hợp sai bằng `validation` của biến `features`, rồi trả
+đủ mọi cờ ở mọi account (cờ hay account vắng trong file là `always`). Root `aws/security`, `aws/baseline`, `aws/accounts/<env>`,
+`aws/envs/<env>` gọi module này thay vì tự đọc JSON; script buổi đọc cùng file qua `paid_feature`, `session_features` của
+`aws/scripts/lib.sh`. Vì sao có cờ, giá trị nào ở account nào và cái giá: [15. Chi phí](../../../docs/handbook/15-cost.md); test:
+`make test DIRS=aws/modules/paid-features` (test chép giá trị của file vì `make test` chỉ mount thư mục module).
 
-Mọi root bật, tắt dịch vụ theo cờ gọi module này với `features = jsondecode(file("<đường tương đối tới aws/>paid-features.json"))`, không root
-nào tự đọc giá trị trong JSON: `aws/security` (Security Hub, Inspector), `aws/baseline` (AWS Config), `aws/accounts/<env>` (Amazon Managed
-Grafana, quét ECR), `aws/envs/<env>` (`managed_grafana`: ở `off` không đọc workspace, `grafanaUrl` của cụm là chuỗi
-rỗng). Script buổi đọc cùng file qua `paid_feature`, `session_features` của `aws/scripts/lib.sh`.
+## Ví dụ
 
-## Khối cờ
+Lời gọi trong `aws/security/main.tf`; root khác chỉ đổi đường tương đối tới `aws/`:
 
-File là object `{"<khoá account>": {"<cờ>": "<giá trị>"}}` và chỉ ghi giá trị khác `always`; account vắng, cờ vắng là
-`always` (giá trị production). Khoá account, tên cờ, tập giá trị và account đặt được của từng cờ do `validation` của
-biến `features` ở
-[`variables.tf`](variables.tf) giữ; tài nguyên mỗi cờ điều khiển ở
-[ADR-0071](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0071-paid-features.md).
+```hcl
+module "paid_features" {
+  source = "../modules/paid-features"
 
-## Kiểm
+  features = jsondecode(file("${path.root}/../paid-features.json"))
+}
+```
 
-`validation` của biến `features` dừng plan khi:
+Đọc kết quả: `module.paid_features.flags["stg"].managed_grafana` (`always`, `session` hay `off`),
+`module.paid_features.off_accounts.security_hub` (khoá account có cờ `off`, đã sắp xếp).
 
-- khoá account hay tên cờ ngoài tập khai báo (biến có kiểu `map(map(string))`, không `object`: Terraform bỏ thuộc tính mà kiểu `object` không
-  khai báo, nên cờ gõ sai sẽ âm thầm thành `always`);
-- giá trị ngoài tập của cờ;
-- cờ của Account env (Managed Grafana, Inspector ECR) có mặt ở account khác, kể cả khi giá trị là `always`;
-- tổ hợp cờ phụ thuộc nhau sai (Security Hub cần AWS Config đang ghi);
-- cờ của delegated administrator mà cả org dựa vào (Security Hub của `security`) bị tắt.
+## Tham chiếu
 
-## Output
-
-- `flags`: mọi khoá account, mỗi khoá đủ mọi cờ; cờ file không đặt là `always`.
-- `off_accounts`, `session_accounts`: mỗi cờ một danh sách khoá account (sắp xếp) có giá trị `off`, `session`; danh sách rỗng khi không account
-  nào.
-
-Test ở `tests/paid-features.tftest.hcl` (`make test`) chạy mỗi giá trị của mỗi cờ, toàn bộ giá trị của file và mỗi luật
-`validation`. `make test` chỉ mount thư mục module nên test chép lại giá trị của file thay vì đọc file.
+- [15. Chi phí](../../../docs/handbook/15-cost.md): ghi chú thiết kế mà `main.tf` và các root gọi module trỏ tới.
+- [`paid-features.md`](../../../docs/runbooks/paid-features.md): đổi một cờ, thứ tự áp các root.
+- [ADR-0071](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0071-paid-features.md),
+  [ADR-0078](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0078-paid-features-lean-defaults.md): quyết định và số tiền.
 
 <!-- markdownlint-disable MD033 -->
 <!-- BEGIN_TF_DOCS -->

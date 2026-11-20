@@ -14,7 +14,7 @@ Rule `svp-security-*` ở mỗi account chọn sự kiện CloudTrail trên bus 
 
 | Rule (module `security-baseline`) | Bắt gì | Region | Có ở |
 | --- | --- | --- | --- |
-| `svp-security-root-signin` | Root đăng nhập console | `root_signin_regions` (management: `us-east-1`, `us-east-2`, `us-west-2`) | mọi account |
+| `svp-security-root-signin` | Root đăng nhập console | `root_signin_regions` (management: `us-east-1`, `us-east-2`, `us-west-2`; thành viên: `us-east-1`) | mọi account |
 | `svp-security-trail` | Trail bị dừng, xoá, đổi, thành công hay bị từ chối | nhà, `us-east-1` | mọi account |
 | `svp-security-detection` | GuardDuty, Security Hub, Config, Access Analyzer bị tắt hay đổi | nhà, `us-east-1` | mọi account |
 | `svp-security-alert-rules` | Rule `svp-security-*` bị đổi, tắt, xoá | nhà, `us-east-1` | mọi account |
@@ -26,8 +26,12 @@ Rule `svp-security-*` ở mỗi account chọn sự kiện CloudTrail trên bus 
 - Nhóm `denied-*` có ở mọi account, kể cả stg, prd: lệnh bị guardrail từ chối luôn là thứ cần biết. `errorCode` khớp tiền tố
   `AccessDenied` (phủ cả `AccessDeniedException` của API JSON); `denied-storage` khớp thêm `Client.UnauthorizedOperation` của EC2, kể cả
   `--dry-run`.
-- `svp-security-root-signin`: CloudTrail ghi đăng nhập root ở `us-east-1`, `us-east-2` hay `us-west-2`
-  ([sự kiện đăng nhập][signin-events]); account thành viên chỉ cần `us-east-1` vì SCP chặn region khác.
+- `svp-security-root-signin`: CloudTrail ghi đăng nhập root của mọi account ở một trong `us-east-1`, `us-east-2`, `us-west-2`
+  ([sự kiện đăng nhập][signin-events]), và sự kiện tới bus mặc định của đúng region đó. Code đặt rule ở cả ba region cho management,
+  chỉ `us-east-1` cho account thành viên (`root_signin_regions` của `aws/baseline/main.tf`). SCP `svp-deny-other-regions` chặn lời gọi
+  API ở region khác, không chặn AWS ghi sự kiện đăng nhập ở đó, nên đăng nhập root của account thành viên được ghi ở `us-east-2` hay
+  `us-west-2` không khớp rule nào. Account thành viên không giữ mật khẩu root (root tập trung, `aws/org/root-access.tf`), nên đường này
+  hẹp, nhưng rule không phủ đủ ba region.
 - `svp-security-root-session` nhận cả sự kiện chỉ đọc (`ENABLED_WITH_ALL_CLOUDTRAIL_MANAGEMENT_EVENTS`): `AssumeRoot` có thể là sự kiện
   chỉ đọc, mà rule `ENABLED` chỉ nhận sự kiện ghi
   ([sự kiện quản lý của CloudTrail](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-service-event-cloudtrail-management.html)).
@@ -69,6 +73,12 @@ Rule `svp-security-*` ở mỗi account chọn sự kiện CloudTrail trên bus 
   [`security-alert.md`](https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks/security-alert.md).
 - Topic `svp-security-alarms` cho `events.amazonaws.com` `sns:Publish` khi `aws:SourceAccount` là `svp-security` và `aws:SourceArn` khớp
   `arn:aws:events:ap-southeast-1:<sec>:rule/*`. Key của topic cho nó `kms:Decrypt`, `kms:GenerateDataKey*` không điều kiện nguồn: SNS không
-  hỗ trợ điều kiện đó trong key policy khi EventBridge gửi vào topic mã hoá (module [`alarms`](../../aws/modules/alarms/README.md)).
+  hỗ trợ điều kiện đó trong key policy khi EventBridge gửi vào topic mã hoá
+  ([SNS và KMS](https://docs.aws.amazon.com/sns/latest/dg/sns-key-management.html); module
+  [`alarms`](../../aws/modules/alarms/README.md)).
+- Hai điều kiện nguồn trên topic policy là cấu hình code khai báo; policy mẫu của EventBridge cho SNS không có điều kiện
+  ([quyền SNS của EventBridge](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-use-resource-based.html)). Chỉ phép thử 7e của
+  [`org-security-setup.md`](../runbooks/org-security-setup.md#7e-cảnh-báo-thử) kiểm cả đường rule → topic → hộp thư:
+  đường email chỉ coi là chạy khi phép thử đó cho đủ thư. Thiếu thư của rule đã khớp thì đọc policy này trước.
 
 [signin-events]: https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-event-reference-aws-console-sign-in-events.html

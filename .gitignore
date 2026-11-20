@@ -50,3 +50,6 @@ github/.keys/
 
 # Python bytecode of github/scripts (py_compile, imports).
 __pycache__/
+
+# Diagram previews (make diagrams PNG=1 OUT=...); never committed.
+.diag-tmp*/

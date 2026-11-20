@@ -1,94 +1,41 @@
 # Module `registry`
 
-Registry ECR private của một account env (`svp-stg`, `svp-prd`), gọi từ root `aws/accounts/<env>`
-([README](../../accounts/README.md)) nên sống qua `destroy` của buổi: repo phát hành, pull-through cache cho image bên
-thứ ba, quét image cache (Inspector hay quét cơ bản theo cờ `inspector_ecr`, mục [Quét](#quét)), IAM OIDC provider của
-GitHub Actions và các role CI chép bản phát hành vào registry. Thiết kế và lý do từng giá trị:
-[ADR-0062](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0062-ecr-registry-ci-oidc.md) và phụ lục của nó (số § dưới đây là § của
-ADR). Host registry (output `registry_host`) là khoá `ecrRegistry` của cluster values.
+Registry ECR private của một account env (`svp-stg`, `svp-prd`): repo phát hành theo `local.release_repositories`, rule pull-through
+cache theo `local.cache_rules` cùng vỏ secret và repository creation template, cấu hình quét image cache, key `alias/svp-<env>-ecr`, IAM
+OIDC provider của GitHub Actions và mỗi mục của `ci_roles` một role chép bản phát hành. Root `aws/accounts/<env>`
+([README](../../accounts/README.md)) gọi module nên registry sống qua `destroy` của buổi; luồng image và lý do:
+[08. Account env](../../../docs/handbook/08-accounts.md#amazon-ecr-repo-phát-hành-quét). Test: `make test DIRS=aws/modules/registry`.
 
-## Luồng image
+## Ví dụ
 
-```mermaid
-flowchart LR
-  ci["images.yml: build, ký, attest"] -->|push| ghcr[("GHCR ghcr.io/anhnvcoder")]
-  ghcr -->|"ecr-copy.sh copy (role svp-ci-ecr-release-*)"| stg[("ECR svp-stg: svp-backend/*, svp-frontend/web")]
-  ghcr -->|"promote-prd (role svp-ci-ecr-promote)"| prd[("ECR svp-prd: repo phát hành")]
-  stg -->|kéo theo digest| nodeS[Node EKS stg]
-  prd -->|kéo theo digest| nodeP[Node EKS prd]
-  nodeS -->|"#60;prefix#62;/... (Kyverno đổi tham chiếu)"| cache[("ECR: repo cache ghcr, docker-hub, quay, k8s, ecr-public")]
-  cache -->|"lần đầu: ECR kéo upstream"| up[Registry upstream]
+Lời gọi của `aws/accounts/stg/main.tf` (ở đó `ci_roles` là `local.ci_roles`, `enhanced_scanning` đọc cờ `inspector_ecr`), giá trị là
+placeholder:
+
+```hcl
+module "registry" {
+  source = "../../modules/registry"
+
+  env = "stg"
+  ci_roles = {
+    svp-ci-ecr-release-backend = {
+      subject      = "repo:<owner>@<owner-id>/svp-backend@<repo-id>:ref:refs/heads/main"
+      repositories = ["svp-backend/*"]
+      delete       = false
+    }
+  }
+  enhanced_scanning = false
+}
 ```
 
-CI build một lần, đẩy GHCR, rồi chép cùng digest kèm mọi referrer (chữ ký, SBOM, `vuln`, provenance) vào repo cùng tên ở ECR stg; vào prd chỉ
-qua job `promote-prd` có người duyệt. Node kéo image phát hành theo digest từ ECR của account mình. Image bên thứ ba đi qua repo cache: policy
-Kyverno của chart `svp-policy` đổi tham chiếu sang `<registry_host>/<prefix>/...`, node nhập image lần đầu bằng quyền của module `eks`.
+Thêm service ở `files/sources.json` của chart `svp-policy` thì thêm repo ở `local.release_repositories` (`main.tf`), nếu không bước chép
+vào ECR bị từ chối. Giá trị secret cache (khoá `username`, `accessToken`) do người học ghi bằng `aws/scripts/cache-secrets.sh`.
 
-## Repo phát hành
+## Tham chiếu
 
-- Một repo mỗi service của `files/sources.json` (chart `svp-policy`), tên là đường GHCR bỏ `ghcr.io/anhnvcoder/` (`local.release_repositories`
-  ở `main.tf`). Thêm service ở `sources.json` thì thêm repo ở đây, nếu không bước chép vào ECR bị từ chối.
-- Tag `IMMUTABLE` (đạt ECR.2); mã hoá KMS bằng key `alias/svp-<env>-ecr` (§2).
-- **Không lifecycle policy:** bản phát hành chép theo digest, không tag, nên rule `untagged` hay `any` nào cũng chọn được image đang chạy hay
-  đích rollback. ECR.3 FAILED ở repo này là chấp nhận có lý do; GC theo tập digest đang dùng là việc sau (§2).
-- Không vào filter quét của registry (Inspector hay quét cơ bản): CI quét trước khi đẩy, rescan hằng ngày, admission đòi
-  `vuln` mới; ECR.1 FAILED ở repo này là chấp nhận (§10).
-  trivy AWS-0030 được bỏ qua ngay trên resource với cùng lý do: cấu hình quét của registry, `ENHANCED` hay `BASIC`, chọn repo được quét thay
-  cho thiết lập quét của từng repo (API cũ AWS đang bỏ).
-
-## Key KMS
-
-Key `alias/svp-<env>-ecr` mã hoá mọi repo, cả repo cache: xoay hằng năm, chờ 30 ngày khi xoá, `prevent_destroy` vì mất key thì không kéo lại
-được image nào. Key policy là policy mặc định của KMS: account quản trị và dùng key qua IAM, không principal ngoài account, không `*`. ECR dùng
-key qua grant nó tạo cho mỗi repo, nên role đẩy, kéo không cần quyền KMS (§5); chỉ role tạo repo của template cần quyền tạo grant.
-
-## Pull-through cache
-
-- Năm rule, tiền tố → upstream ở `local.cache_rules` (`main.tf`); output `cache_prefixes` là danh sách tiền tố cho quyền của role node.
-- GHCR và Docker Hub đòi đăng nhập: module chỉ tạo vỏ secret `ecr-pullthroughcache/ghcr`, `ecr-pullthroughcache/docker-hub`, không
-  `aws_secretsmanager_secret_version`. Người học ghi giá trị (khoá `username`, `accessToken`) và xoay theo runbook (§6). Secret mã hoá bằng key
-  AWS quản lý của Secrets Manager: ECR không nhận key do khách hàng quản lý cho secret này.
-- Repository creation template mỗi tiền tố, chỉ áp cho repo do cache tạo (`PULL_THROUGH_CACHE`): mã hoá KMS bằng cùng key; tag `MUTABLE` vì
-  tag bất biến chặn ECR cập nhật tag đã cache (ECR.2 FAILED ở repo cache là chấp nhận); lifecycle xoá image không được kéo 30 ngày
-  (`sinceImagePulled`): upstream còn bản gốc, buổi sau làm nóng lại (§6, §7).
-- Template có KMS cần role ECR assume để tạo repo: `svp-<env>-ecr-template` (trust `ecr.amazonaws.com`), chỉ `ecr:CreateRepository`,
-  `ecr:TagResource` dưới năm tiền tố cache và `kms:CreateGrant`, `kms:RetireGrant`, `kms:DescribeKey` trên đúng key.
-
-## Quét
-
-`aws_ecr_registry_scanning_configuration` có một rule với filter `<tiền tố>/*` cho năm tiền tố cache; biến `enhanced_scanning` chọn kiểu quét:
-
-- `true` (mặc định; env có `inspector_ecr` `always`, như prd trong buổi prd): `ENHANCED` (Amazon Inspector),
-  `CONTINUOUS_SCAN`. Inspector bật cho account qua delegated admin ở
-  `aws/security/inspector.tf`; finding vào Security Hub (§10).
-- `false`: quét cơ bản của ECR, `BASIC` với `SCAN_ON_PUSH`, miễn phí, cho account tắt quét ECR của Inspector. Root `aws/accounts/<env>`
-  truyền `false` khi cờ `inspector_ecr` của env là `off` trong `aws/paid-features.json`. Thứ tự áp khi đổi cờ và cái giá (finding Inspector
-  của account mất khi tắt, image mới chỉ có quét cơ bản):
-  [ADR-0071](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0071-paid-features.md) §4.
-
-## Role CI
-
-- IAM OIDC provider `token.actions.githubusercontent.com`, audience `sts.amazonaws.com`, không thumbprint: IAM xác minh GitHub bằng CA tin cậy.
-- Mỗi mục của `ci_roles` thành một role cùng tên, phiên tối đa 1 giờ. Trust: chỉ provider trên, `StringEquals` trên `aud` và trên `sub` đúng
-  một chuỗi (`subject`). Validation từ chối `sub` có ký tự đại diện hay dạng khác `ref:refs/heads/<nhánh>`, `environment:<tên>`. Root truyền
-  `sub` dạng bất biến `repo:<owner>@<owner-id>/<repo>@<repo-id>:...` (hai repo đã đổi tên, §5).
-- Quyền (policy inline `ecr-push`): `ecr:GetAuthorizationToken` trên `*` (API không nhận resource) và quyền đẩy, đọc lại trên đúng ARN repo của
-  `repositories` (tên repo phát hành hay cả nhóm `svp-backend/*`); `delete = true` thêm `ecr:BatchDeleteImage` trên cùng ARN để role rescan gỡ
-  `vuln` cũ. Không action có `*`, không quyền KMS. Bộ role của từng env (bảng **Role CI ECR** của §5) nằm trong `locals` của root.
-- ARN repo và ARN provider dựng từ tên, không lấy từ resource, nên policy biết lúc `plan` và test đọc được; role `depends_on` provider vì IAM
-  từ chối trust policy có principal chưa tồn tại.
-- Output `github_oidc_provider_arn` (cũng dựng từ tên, `depends_on` provider) là principal cho role OIDC của module khác trong account, như
-  role plan của [`ci-plan-role`](../ci-plan-role/README.md): một account chỉ có một provider cho mỗi URL.
-
-## Test
-
-`tests/registry.tftest.hcl` (mock provider, chỉ `plan`) với bộ `ci_roles` ví dụ của stg và prd kiểm: repo phát hành đúng danh sách, bất biến,
-mã hoá KMS; key xoay, key policy chỉ account; module không khai báo lifecycle policy nào và template chỉ áp cho repo cache; năm rule cache,
-secret, template, cấu hình quét; trust mỗi role đúng `aud` và một `sub`, prd không có role nhận `ref:refs/heads/main`; mỗi role đúng bộ quyền
-đẩy, `BatchDeleteImage` chỉ khi `delete`, không action `*`, resource `*` chỉ với `ecr:GetAuthorizationToken`, role của một repo nguồn không chạm
-repo của repo kia (trừ `svp-ci-ecr-promote`, được mọi repo phát hành); một run mỗi giá trị của `enhanced_scanning` (chỉ kiểu và tần suất quét
-đổi; filter, repo, key, rule cache giữ); rồi một run mỗi luật validation. ARN của key và secret chưa biết lúc
-`plan`, nên test kiểm loại mã hoá và tên secret thay vì ARN.
+- [08. Account env](../../../docs/handbook/08-accounts.md): repo phát hành, quét, pull-through cache, role CI; key, template, ARN dựng
+  từ tên ở mục Đọc sâu (ghi chú thiết kế mà `main.tf` và test trỏ tới).
+- [ADR-0062](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0062-ecr-registry-ci-oidc.md): registry, cache, bảng **Role CI
+  ECR** (§5), quét (§10); policy và nguồn ở phụ lục của nó.
 
 <!-- markdownlint-disable MD033 -->
 <!-- BEGIN_TF_DOCS -->

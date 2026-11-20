@@ -1,0 +1,109 @@
+# What of an environment outlives the session's destroy and who uses it: the root aws/accounts/<env> calls the modules
+# account-baseline (state bucket, KMS key, hosted zone, DNSSEC of prd), registry (ECR, pull-through cache, OIDC
+# provider, CI roles), observability (AMP, log group, X-Ray, AMG by flag) and ci-plan-role; aws/envs/<env> finds them by
+# name and alias. The parent DNS delegates aws.<domain> with NS records aws; the prd zone delegates stg.aws.<domain>.
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 0
+    dark-theme-id: 200
+    pad: 20
+  }
+}
+...@tokens
+
+direction: down
+
+title: "Cái gì của stg, prd sống qua destroy của buổi, và ai dùng nó" {
+  shape: text
+  near: top-center
+  style: {font-size: 18; bold: true}
+}
+
+outside: "Ngoài AWS" {
+  class: trust
+  style: {font-size: 15; bold: true}
+  label.near: top-left
+
+  github: "GitHub Actions" {
+    class: workload
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "svp-backend, svp-frontend: images.yml · svp-infra: plan.yml" {class: sub}
+    r: "token OIDC, không access key" {class: sub}
+  }
+  parent: "DNS cha của <domain>" {
+    class: governance
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "4 bản ghi NS aws · bản ghi DS aws (prd ký)" {class: sub}
+    r: "Cloudflare, việc tay" {class: sub}
+  }
+}
+
+env: "svp-stg, svp-prd (mỗi account một bộ, sống suốt lab)" {
+  class: account
+  label.near: top-left
+
+  ci: "Role CI" {
+    class: prevention
+    grid-rows: 3
+    grid-gap: 24
+    vertical-gap: 6
+    s1: "IAM OIDC provider · svp-ci-ecr-* · svp-ci-terraform-plan" {class: sub}
+    s2: "trust đúng một sub · phiên 1 giờ" {class: sub}
+    r: "module registry, ci-plan-role" {class: root}
+  }
+  dns: "Zone Route 53" {
+    class: governance
+    grid-rows: 3
+    grid-gap: 24
+    vertical-gap: 6
+    s1: "prd aws.<domain> uỷ quyền stg.aws.<domain>" {class: sub}
+    s2: "CAA ở đỉnh · prd: DNSSEC, query log" {class: sub}
+    r: "module account-baseline" {class: root}
+  }
+  registry: "Registry ECR" {
+    class: data
+    grid-rows: 3
+    grid-gap: 24
+    vertical-gap: 6
+    s1: "repo phát hành IMMUTABLE · rule pull-through cache" {class: sub}
+    s2: "quét image cache: BASIC hay Inspector theo cờ" {class: sub}
+    r: "module registry" {class: root}
+  }
+  obs: "Telemetry" {
+    class: investigation
+    grid-rows: 3
+    grid-gap: 24
+    vertical-gap: 6
+    s1: "AMP · CloudWatch Logs · X-Ray · AMG theo cờ" {class: sub}
+    s2: "metric stg 31, prd 150 ngày; log, span stg 7, prd 30" {class: sub}
+    r: "module observability" {class: root}
+  }
+  state: "State Terraform" {
+    class: recovery
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "bucket svp-tfstate-<account>-<region> · KMS alias/svp-tfstate" {class: sub}
+    r: "module account-baseline" {class: root}
+  }
+  session: "Cluster và dịch vụ của buổi" {
+    class: workload
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "EKS, RDS, edge · dựng và gỡ mỗi buổi" {class: sub}
+    r: "aws/envs/<env>, aws/gitops/<env>" {class: root}
+  }
+}
+
+outside.github -> env.ci: "AssumeRoleWithWebIdentity" {class: control-flow}
+env.ci -> env.registry: "chép bản phát hành theo digest" {class: data-flow}
+outside.parent -> env.dns: "uỷ quyền, chuỗi tin cậy" {class: control-flow}
+env.registry -> env.session: "node kéo theo digest" {class: data-flow}
+env.session -> env.obs: "metric, log, trace" {class: data-flow}
+env.session -> env.state: "state của root buổi" {class: data-flow}

@@ -10,20 +10,9 @@ này dựng chỗ để chạy. Thiết kế và lý do:
 
 Phần sống lâu (tổ chức, log, bảo mật, backup, nền của mỗi account env) áp một lần và ở lại giữa các buổi. Phần tính tiền theo giờ (VPC,
 EKS, dữ liệu, edge, Argo CD) dựng rồi gỡ trong một buổi. Root áp lần đầu theo thứ tự dưới đây, thứ tự mà các runbook dựng một lần nối
-nhau. Mỗi nút ghi tên root, account nó áp vào và việc chính; `ENV` là `stg` hay `prd`.
+nhau. Mỗi khối ghi tên root, account nó áp vào và việc chính; `ENV` là `stg` hay `prd`.
 
-```mermaid
-flowchart TD
-    B["aws/bootstrap<br/>management<br/>bucket state, KMS key, budget"] --> G["github<br/>management (state), GitHub<br/>repo, ruleset, environment"]
-    G --> O["aws/org<br/>management<br/>Organizations, OU, SCP, RCP, Identity Center, trail"]
-    O --> L["aws/log-archive<br/>svp-log-archive<br/>bucket log của tổ chức, KMS key"]
-    L --> S["aws/security<br/>svp-security<br/>GuardDuty, Security Hub, Inspector, cảnh báo"]
-    S --> BL["aws/baseline<br/>mọi account<br/>S3 BPA, EBS mã hoá, Config"]
-    BL --> BK["aws/backup<br/>svp-backup<br/>vault copy có vault lock"]
-    BK --> A["aws/accounts/ENV<br/>svp-ENV, sống lâu<br/>state, zone, ECR, AMP, vault env"]
-    A --> E["aws/envs/ENV<br/>svp-ENV, trong buổi<br/>VPC, EKS, RDS, MSK, ElastiCache, edge"]
-    E --> GO["aws/gitops/ENV<br/>cluster EKS, trong buổi<br/>Argo CD, ApplicationSet"]
-```
+![Thứ tự áp: mỗi root áp vào account nào và dựng gì](docs/diagrams/readme-apply-flow.svg)
 
 `aws/org` áp hai lượt, trước và sau `aws/log-archive`; bước của từng lượt ở runbook trong bảng [Bản đồ](#bản-đồ).
 
@@ -46,20 +35,20 @@ của account đích.
 
 | Root | Account | Chương | Runbook |
 | --- | --- | --- | --- |
-| [`aws/bootstrap`](aws/bootstrap/README.md) | management | 01. Bootstrap <!-- link-chờ: docs/handbook/01-bootstrap.md --> | [`org-security-setup.md`](docs/runbooks/org-security-setup.md) |
-| [`github`](github/README.md) | management (state), GitHub | 02. GitHub <!-- link-chờ: docs/handbook/02-github.md --> | [`github-setup.md`](docs/runbooks/github-setup.md) |
-| [`aws/org`](aws/org/README.md) | management | 03. Tổ chức <!-- link-chờ: docs/handbook/03-org.md --> | [`org-security-setup.md`](docs/runbooks/org-security-setup.md) |
-| [`aws/log-archive`](aws/log-archive/README.md) | `svp-log-archive`, qua role | 04. Log Archive <!-- link-chờ: docs/handbook/04-log-archive.md --> | [`org-security-setup.md`](docs/runbooks/org-security-setup.md) |
-| [`aws/security`](aws/security/README.md) | `svp-security`, qua role | 05. Bảo mật <!-- link-chờ: docs/handbook/05-security.md --> | [`org-security-setup.md`](docs/runbooks/org-security-setup.md) |
-| [`aws/baseline`](aws/baseline/README.md) | mọi account, qua role | 06. Baseline <!-- link-chờ: docs/handbook/06-baseline.md --> | [`org-security-setup.md`](docs/runbooks/org-security-setup.md) |
-| [`aws/backup`](aws/backup/README.md) | `svp-backup`, qua role | 07. Backup <!-- link-chờ: docs/handbook/07-backup.md --> | [`backup-setup.md`](docs/runbooks/backup-setup.md) |
-| [`aws/accounts/<env>`](aws/accounts/README.md) | `svp-stg`, `svp-prd`, sống lâu | 08. Account env <!-- link-chờ: docs/handbook/08-accounts.md --> | `accounts-setup.md` <!-- link-chờ: docs/runbooks/accounts-setup.md -->, [`edge-setup.md`](docs/runbooks/edge-setup.md), [`platform-setup.md`](docs/runbooks/platform-setup.md) |
-| `aws/envs/<env>` ([stg](aws/envs/stg/README.md), [prd](aws/envs/prd/README.md)) | `svp-<env>`, trong buổi | 09–12: mạng, EKS, dữ liệu, media và edge <!-- link-chờ: docs/handbook/09-envs-network.md --> | [`session-stg.md`](docs/runbooks/session-stg.md), [`session-prd.md`](docs/runbooks/session-prd.md) |
-| [`aws/gitops/<env>`](aws/gitops/README.md) | cluster EKS của `svp-<env>`, trong buổi | 13. GitOps <!-- link-chờ: docs/handbook/13-gitops.md --> | [`session-stg.md`](docs/runbooks/session-stg.md), [`session-prd.md`](docs/runbooks/session-prd.md) |
-| `.github/workflows/`, `ci/` | GitHub Actions; role plan chỉ đọc ở `svp-<env>` | 14. CI <!-- link-chờ: docs/handbook/14-ci.md --> | [`github-setup.md`](docs/runbooks/github-setup.md) |
-| [`aws/paid-features.json`](aws/paid-features.json) | mọi account | 15. Chi phí <!-- link-chờ: docs/handbook/15-cost.md --> | [`paid-features.md`](docs/runbooks/paid-features.md) |
+| [`aws/bootstrap`](aws/bootstrap/README.md) | management | [01. Bootstrap](docs/handbook/01-bootstrap.md) | [`org-security-setup.md`](docs/runbooks/org-security-setup.md) |
+| [`github`](github/README.md) | management (state), GitHub | [02. GitHub](docs/handbook/02-github.md) | [`github-setup.md`](docs/runbooks/github-setup.md) |
+| [`aws/org`](aws/org/README.md) | management | [03. Tổ chức](docs/handbook/03-org.md) | [`org-security-setup.md`](docs/runbooks/org-security-setup.md) |
+| [`aws/log-archive`](aws/log-archive/README.md) | `svp-log-archive`, qua role | [04. Log Archive](docs/handbook/04-log-archive.md) | [`org-security-setup.md`](docs/runbooks/org-security-setup.md) |
+| [`aws/security`](aws/security/README.md) | `svp-security`, qua role | [05. Bảo mật](docs/handbook/05-security.md) | [`org-security-setup.md`](docs/runbooks/org-security-setup.md) |
+| [`aws/baseline`](aws/baseline/README.md) | mọi account, qua role | [06. Baseline](docs/handbook/06-baseline.md) | [`org-security-setup.md`](docs/runbooks/org-security-setup.md) |
+| [`aws/backup`](aws/backup/README.md) | `svp-backup`, qua role | [07. Backup](docs/handbook/07-backup.md) | [`backup-setup.md`](docs/runbooks/backup-setup.md) |
+| [`aws/accounts/<env>`](aws/accounts/README.md) | `svp-stg`, `svp-prd`, sống lâu | [08. Account env](docs/handbook/08-accounts.md) | [`accounts-setup.md`](docs/runbooks/accounts-setup.md), [`edge-setup.md`](docs/runbooks/edge-setup.md), [`platform-setup.md`](docs/runbooks/platform-setup.md) |
+| `aws/envs/<env>` ([stg](aws/envs/stg/README.md), [prd](aws/envs/prd/README.md)) | `svp-<env>`, trong buổi | [09–12: mạng, EKS, dữ liệu, media và edge](docs/handbook/09-envs-network.md) | [`session-stg.md`](docs/runbooks/session-stg.md), [`session-prd.md`](docs/runbooks/session-prd.md) |
+| [`aws/gitops/<env>`](aws/gitops/README.md) | cluster EKS của `svp-<env>`, trong buổi | [13. GitOps](docs/handbook/13-gitops.md) | [`session-stg.md`](docs/runbooks/session-stg.md), [`session-prd.md`](docs/runbooks/session-prd.md) |
+| `.github/workflows/`, `ci/` | GitHub Actions; role plan chỉ đọc ở `svp-<env>` | [14. CI](docs/handbook/14-ci.md) | [`github-setup.md`](docs/runbooks/github-setup.md) |
+| [`aws/paid-features.json`](aws/paid-features.json) | mọi account | [15. Chi phí](docs/handbook/15-cost.md) | [`paid-features.md`](docs/runbooks/paid-features.md) |
 
-Phí giữ giữa các buổi và phí một buổi của mỗi root: chương 15. Chi phí <!-- link-chờ: docs/handbook/15-cost.md -->.
+Phí giữ giữa các buổi và phí một buổi của mỗi root: chương [15. Chi phí](docs/handbook/15-cost.md).
 
 ## Cài đặt
 
@@ -88,7 +77,7 @@ Mỗi target làm gì, chạy song song, hook pre-commit, ngoại lệ trivy: [`
 Đủ ở [`AGENTS.md`](AGENTS.md); năm luật chính:
 
 - **Chỉ người học chạy lệnh chạm account** (`plan`, `apply`, `destroy`, `aws`, script của `aws/scripts/`), bằng SSO, sau
-  `aws/scripts/check-account.sh`. AI chỉ chạy phép kiểm tĩnh của `make check`.
+  `aws/scripts/check-account.sh`. AI chỉ chạy phép kiểm tĩnh (danh sách đủ ở `AGENTS.md`).
 - **Repo public, không commit** state, plan, `backend*.hcl`, `*.auto.tfvars`, `.terraform/`, `.session/`; ví dụ dùng `000000000000`,
   `svp.example`. Không account ID, IP, email hay tên miền thật nào ở đây.
 - **Guardrail của tổ chức** ([`org-policies`](aws/modules/org-policies/README.md)): account thành viên không tạo được IAM user, không tắt
@@ -103,7 +92,7 @@ Mỗi target làm gì, chạy song song, hook pre-commit, ngoại lệ trivy: [`
 - [`docs/handbook/`](docs/handbook/README.md): giải thích, một chương mỗi bước của luồng áp (Explanation).
 - [`docs/runbooks/`](docs/runbooks/README.md): việc từng bước, theo thứ tự làm (How-to).
 - `docs/reference/`: tra cứu, [`checks.md`](docs/reference/checks.md) (lệnh kiểm), [`operations.md`](docs/reference/operations.md)
-  (profile, biến, script, đọc plan), `ci.md` <!-- link-chờ: docs/reference/ci.md --> (plan và chi phí trên PR).
+  (profile, biến, script, đọc plan), [`ci.md`](docs/reference/ci.md) (plan và chi phí trên PR).
 - `docs/diagrams/`: sơ đồ AWS, nhúng ở chương 00 và các chương liên quan.
 - README của mỗi root và module: tài nguyên, đầu vào, đầu ra. ADR và explanation chung của lab ở `docs/` của svp-backend.
 
@@ -114,11 +103,11 @@ Code trỏ ghi chú thiết kế bằng dòng `Design notes: README.md`. File n�
 | --- | --- |
 | `Makefile`, `.trivyignore.yaml` | [`docs/reference/checks.md`](docs/reference/checks.md) |
 | `aws/scripts/*.sh` | [`docs/reference/operations.md`](docs/reference/operations.md) (script, bảng env, `tf.sh`); thứ tự gỡ, đường backup: [chương 00](docs/handbook/00-tong-quan.md#các-đường-của-một-buổi) |
-| `.github/workflows/*.yml`, `ci/*.sh`, `infracost.yml`, `infracost-usage.yml` | 14. CI <!-- link-chờ: docs/handbook/14-ci.md -->, `docs/reference/ci.md` <!-- link-chờ: docs/reference/ci.md --> |
+| `.github/workflows/*.yml`, `ci/*.sh`, `infracost.yml`, `infracost-usage.yml` | [14. CI](docs/handbook/14-ci.md), [`docs/reference/ci.md`](docs/reference/ci.md) |
 
 **Khoá Infracost** (`ci/infracost.sh` đòi `INFRACOST_API_KEY`): đăng ký, đặt vào secret và xoay theo runbook
-[`github-setup.md`](docs/runbooks/github-setup.md) mục "Khoá Infracost" <!-- link-chờ: docs/runbooks/github-setup.md#khoá-infracost -->;
-chạy `make infracost` trên máy với khoá của CLI: `docs/reference/ci.md` <!-- link-chờ: docs/reference/ci.md -->.
+[`github-setup.md`](docs/runbooks/github-setup.md) [mục "Khoá Infracost"](docs/runbooks/github-setup.md#khoá-infracost);
+chạy `make infracost` trên máy với khoá của CLI: [`docs/reference/ci.md`](docs/reference/ci.md).
 
 ## Đóng góp
 

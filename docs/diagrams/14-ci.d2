@@ -1,0 +1,121 @@
+# Overview of the workflows a pull request of svp-infra starts (.github/workflows/*.yml): the two required checks run
+# with no credential, plan.yml alone reaches the env account through OIDC after the learner approves environment
+# terraform-plan, cost.yml prices the HCL through the Infracost API. scorecard.yml never runs on a pull request.
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 0
+    dark-theme-id: 200
+    pad: 20
+  }
+}
+...@tokens
+
+direction: down
+
+title: "Một PR của svp-infra chạy những workflow nào, và chỉ cái nào chạm account AWS?" {
+  shape: text
+  near: top-center
+  style: {font-size: 18; bold: true}
+}
+
+github: "GitHub Actions · repo public, runner ubuntu-24.04" {
+  class: trust
+  style: {font-size: 15; bold: true}
+  label.near: top-left
+
+  pr: "Pull request từ chính repo" {
+    class: workload
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "người học hay Renovate đổi aws/ · ci/ · Makefile" {class: sub}
+    r: "PR từ fork: không secret, không plan" {class: root}
+  }
+
+  gates: "Cổng PR · không credential AWS, không secret" {
+    class: prevention
+    grid-rows: 3
+    grid-gap: 24
+    vertical-gap: 6
+    s: "check.yml: changes → check (mỗi nhóm một job) · docs → infra-ok" {class: sub}
+    t: "pr-title.yml: tiêu đề theo Conventional Commits" {class: sub}
+    r: "infra-ok · pr-title (check bắt buộc của ruleset main)" {class: root}
+  }
+
+  plan: "Plan trên PR · chỉ thông tin" {
+    class: detection
+    grid-rows: 3
+    grid-gap: 24
+    vertical-gap: 6
+    s: "plan.yml: gate → plan (mỗi env) → plan-comment" {class: sub}
+    t: "environment terraform-plan: người học duyệt từng lượt" {class: sub}
+    r: "make ci-plan · ci/terraform-plan.sh" {class: root}
+  }
+
+  cost: "Chi phí trên PR · chỉ thông tin" {
+    class: alerting
+    grid-rows: 3
+    grid-gap: 24
+    vertical-gap: 6
+    s: "cost.yml: infracost → infracost-comment" {class: sub}
+    t: "secret repo INFRACOST_API_KEY, đọc HCL, không AWS" {class: sub}
+    r: "make infracost · ci/infracost.sh" {class: root}
+  }
+
+  comments: "Comment dính trên PR" {
+    class: workload
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "tóm tắt plan đã che · bảng chi phí base và PR" {class: sub}
+    r: "marker svp-terraform-plan · infracost --behavior update" {class: root}
+  }
+}
+
+env: "svp-stg · svp-prd (ap-southeast-1)" {
+  class: account
+  label.near: bottom-left
+
+  role: "Role svp-ci-terraform-plan" {
+    class: governance
+    grid-rows: 3
+    grid-gap: 24
+    vertical-gap: 6
+    s: "trust một sub: environment terraform-plan · phiên 1 giờ" {class: sub}
+    t: "ReadOnlyAccess · Deny dữ liệu workload, ghi state" {class: sub}
+    r: "aws/accounts/<env> · module ci-plan-role" {class: root}
+  }
+  state: "Bucket state của env" {
+    class: data
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "đọc hai khoá state qua S3 + KMS · không khoá, không ghi" {class: sub}
+    r: "svp-tfstate-<account>-ap-southeast-1" {class: root}
+  }
+}
+
+pricing: "Bên ngoài: Infracost" {
+  class: trust
+  style: {font-size: 15; bold: true}
+  label.near: bottom-left
+
+  p: "Cloud Pricing API" {
+    class: workload
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "nhận thuộc tính tính giá, trả giá theo region" {class: sub}
+    r: "không plan, state hay credential AWS" {class: root}
+  }
+}
+
+github.pr -> github.gates: {class: control-flow}
+github.pr -> github.plan: {class: control-flow}
+github.pr -> github.cost: {class: control-flow}
+github.plan -> env.role: "token OIDC → AssumeRoleWithWebIdentity" {class: control-flow}
+env.role -> env.state: "state pull, plan -lock=false" {class: data-flow}
+github.cost -> pricing.p: "breakdown base, PR" {class: data-flow}
+github.plan -> github.comments: "tóm tắt đã che" {class: data-flow}
+github.cost -> github.comments: "diff.json" {class: data-flow}

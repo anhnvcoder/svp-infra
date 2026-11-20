@@ -3,7 +3,7 @@
 Baseline bảo mật của một account: S3 Block Public Access cấp account, EBS mã hoá mặc định ở hai region, AWS Config ghi liên tục theo
 `config_recording`, và rule EventBridge `svp-security-*` chuyển sự kiện bảo mật sang bus `svp-security-events` của `svp-security` qua role
 `svp-security-forwarder`. Root `aws/baseline` gọi module đúng một lần mỗi account, chạy từ management qua `OrganizationAccountAccessRole`
-(management: phiên SSO). Phần baseline giải thích ở chương 06. Baseline <!-- link-chờ: docs/handbook/06-baseline.md -->, bảng
+(management: phiên SSO). Phần baseline giải thích ở chương [06. Baseline](../../../docs/handbook/06-baseline.md), bảng
 rule ở [tra cứu đường cảnh báo](../../../docs/reference/security-alerts.md#rule-chuyển-sự-kiện); test:
 `make test DIRS=aws/modules/security-baseline`.
 
@@ -32,7 +32,7 @@ module "stg" {
 
 - [Rule và đường cảnh báo bảo mật](../../../docs/reference/security-alerts.md): rule theo input, bộ lọc phiên Terraform của
   `svp-security-admin-*` (ghi chú thiết kế mà `events.tf` trỏ tới), link event pattern đủ; lý do ở chương 05.
-- Chương 06. Baseline <!-- link-chờ: docs/handbook/06-baseline.md -->: S3 Block Public Access, EBS mã hoá, recorder Config (ghi chú
+- Chương [06. Baseline](../../../docs/handbook/06-baseline.md): S3 Block Public Access, EBS mã hoá, recorder Config (ghi chú
   thiết kế mà `main.tf`, `config.tf` trỏ tới).
 
 <!-- markdownlint-disable MD033 -->

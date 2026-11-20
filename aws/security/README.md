@@ -46,12 +46,10 @@ Người học chạy mọi lệnh; AI không chạy lệnh nào chạm account.
 
 - Áp lần đầu (sau `aws/log-archive` và `aws/org` đủ, trước `aws/baseline`):
   [`org-security-setup.md`, bước (5)](../../docs/runbooks/org-security-setup.md#bước-5-awssecurity).
-- Đổi cờ `security_hub` hay `inspector_ecr`: runbook đổi cờ, mục thứ tự apply cờ
-  <!-- link-chờ: docs/runbooks/paid-features.md -->.
-- Tổ chức đã áp root này trước khi có Inspector: runbook dựng nền tảng, mục thêm Inspector
-  <!-- link-chờ: docs/runbooks/platform-setup.md -->.
+- Đổi cờ `security_hub` hay `inspector_ecr`: [runbook đổi cờ, mục thứ tự apply cờ](../../docs/runbooks/paid-features.md).
+- Tổ chức đã áp root này trước khi có Inspector: [runbook dựng nền tảng, mục thêm Inspector](../../docs/runbooks/platform-setup.md).
 - Trong buổi: không chạy root này; finding của buổi đọc trên Security Hub của `svp-security` theo runbook buổi.
-- Gỡ có chủ đích (lab kết thúc): runbook gỡ lab <!-- link-chờ: docs/runbooks/lab-teardown.md -->.
+- Gỡ có chủ đích (lab kết thúc): [runbook gỡ lab](../../docs/runbooks/lab-teardown.md).
 
 ## Tham chiếu
 
