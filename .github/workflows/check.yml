@@ -101,7 +101,8 @@ jobs:
           ZIZMOR_FORMAT: github
         run: make "check-$GROUP"
 
-  # The Markdown lint and internal links of every pull request, documentation only included.
+  # The Markdown lint and internal links, and the D2 diagrams against their SVG, of every pull request, documentation
+  # only included: a change of docs/diagrams alone skips job check, so diagrams-check runs here as well.
   docs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -111,7 +112,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - run: make docs-check
+      - run: make docs-check diagrams-check
 
   # The required check: green only when every job above succeeded; check stands for all its groups, any one failing
   # fails it. The one skip accepted is check's on a pull request job changes found documentation only; any other skip,

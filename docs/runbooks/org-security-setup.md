@@ -1,25 +1,93 @@
 # Runbook: áp nền bảo mật cấp org lần đầu
 
-Áp lần đầu nền bảo mật của tổ chức AWS theo AWS Security Reference Architecture: hai account mới `svp-log-archive`, `svp-security`, OU
-`Security`, `Workloads/Prod`, `Workloads/NonProd`, policy của tổ chức, root tập trung, permission set chỉ đọc, dịch vụ phát hiện (cả Amazon
-Inspector quét ECR của account thành viên), baseline của mọi account của tổ chức (bảng "Áp gì ở account nào" của
-[README `aws/baseline`](../../aws/baseline/README.md#áp-gì-ở-account-nào)); rồi kiểm dịch vụ bật, guardrail chặn đúng và cảnh báo tới email.
-Security Hub CSPM, AWS Config recorder và Inspector ECR của từng account theo cờ của
-[`aws/paid-features.json`](../../aws/paid-features.json) ([ADR-0071](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0071-paid-features.md));
-mong đợi dưới đây tính theo file của repo: mọi account trừ `svp-security` (delegated admin) tắt Security Hub và Config,
-stg và prd tắt thêm Inspector ECR
-([ADR-0078](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0078-paid-features-lean-defaults.md) §1). Đổi
-cờ sau khi đã áp: [`paid-features.md`](paid-features.md).
-Thiết kế: [ADR-0059](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0059-org-structure-guardrails.md) (account, OU, policy, root
-tập trung, permission set, baseline), [ADR-0060](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0060-org-detection-logging.md)
-(phát hiện, log, cảnh báo, chi phí) và [ADR-0062](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0062-ecr-registry-ci-oidc.md)
-§10 (Inspector). Tổ chức đã áp trước khi có Inspector: thêm nó theo [`platform-setup.md`](platform-setup.md#thứ-tự-áp-lần-đầu), bước (1), (2).
-Bước (4) tạo luôn account `svp-backup` và Backup policy của tổ chức; phần còn lại của backup (root `aws/backup`, vault, restore) làm sau
-runbook này, theo [`backup-setup.md`](backup-setup.md#thứ-tự-áp-lần-đầu).
+[Mục lục](README.md) · github-setup, bước 1–6 <!-- link-chờ: docs/runbooks/github-setup.md --> →
 
-**Người học chạy mọi lệnh ở đây.** AI không chạy lệnh nào chạm account, kể cả lệnh chỉ đọc; AI đọc output dán lại. Lệnh `plan`, `apply` và
-mong đợi của từng plan nằm ở README của root; runbook này giữ thứ tự, điểm dừng và phần kiểm sau áp. Mọi lệnh chạy từ gốc repo này (`infra/`)
-trừ chỗ ghi `cd`. Bước nào đỏ thì dừng ở đó, dán output, không đi tiếp.
+> **Tóm tắt**
+>
+> - **Làm gì:** áp lần đầu nền bảo mật của tổ chức theo AWS Security Reference Architecture: ba account `svp-log-archive`,
+>   `svp-security`, `svp-backup`, OU `Security`, `Workloads/Prod`, `Workloads/NonProd`, policy của tổ chức, root tập trung, permission set
+>   chỉ đọc, dịch vụ phát hiện (cả Amazon Inspector quét ECR), baseline của mọi account; rồi kiểm dịch vụ bật, guardrail chặn đúng và cảnh
+>   báo tới email.
+> - **Khi nào và bao lâu:** một lần khi dựng tổ chức, trước mọi buổi: root `aws/envs/<env>` ghi flow log, log WAF vào bucket của
+>   `svp-log-archive` và cần `SVP_AWS_LOG_ACCOUNT_ID`, nên buổi stg, prd chỉ chạy được sau bước (1)–(3). Bước (7) chạy sau bước (6) ít
+>   nhất 30 phút, có mục đọc lại hôm sau (GuardDuty, Security Hub nhận account có sẵn tới 24 giờ).
+> - **Phí trong lúc chạy:** từ bước (5) dịch vụ phát hiện tính tiền mỗi tháng kể cả khi không buổi; bước (1), (3), (6) thêm KMS key. Tháng
+>   không buổi của cả tổ chức với cờ của repo ~31,1 USD ở tháng đầu, ~39,4 USD ở tháng thứ sáu
+>   ([ADR-0078 §8](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0078-paid-features-lean-defaults.md#8-chi-phí)).
+
+**Người học chạy mọi lệnh ở đây.** AI không chạy lệnh nào chạm account, kể cả lệnh chỉ đọc; AI đọc output dán lại. Mọi lệnh chạy từ gốc
+repo này (`infra/`) trừ chỗ ghi `cd`. Bước nào đỏ thì dừng ở đó, dán output, không đi tiếp. Mong đợi dưới đây tính theo cờ của
+[`aws/paid-features.json`](../../aws/paid-features.json): mọi account trừ `svp-security` (delegated admin) tắt Security Hub và Config,
+stg và prd tắt thêm Inspector ECR
+([ADR-0078](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0078-paid-features-lean-defaults.md) §1); đổi cờ sau khi đã áp:
+[`paid-features.md`](paid-features.md). Bước (4) tạo luôn `svp-backup` và Backup policy; phần còn lại của backup làm sau runbook này,
+theo backup-setup, Thứ tự áp lần đầu <!-- link-chờ: docs/runbooks/backup-setup.md#thứ-tự-áp-lần-đầu -->. Tổ chức đã áp trước khi có
+Inspector: platform-setup, bước (1), (2) <!-- link-chờ: docs/runbooks/platform-setup.md#thứ-tự-áp-lần-đầu -->. Vì sao từng phần:
+chương 03 tới 06 của [handbook](../handbook/README.md).
+
+## Điều kiện trước
+
+- [ ] **Code trên `main`**: `git switch main && git pull --ff-only` trong bản clone này; các root `aws/log-archive`, `aws/security`,
+  `aws/baseline` và thay đổi của `aws/org`, `aws/bootstrap` đã merge.
+- [ ] **Giá trị ngoài repo** (không commit, mỗi file tạo từ `.example` cùng thư mục):
+  - `aws/org/org.auto.tfvars`: `account_emails` với hai khoá mới `log-archive`, `security`, mỗi khoá một email chưa account AWS nào dùng, kể
+    cả account đã đóng hay `SUSPENDED`; `security_contact`; `sso_user_name`, `sso_region` (README `aws/org`, mục Chuẩn bị).
+    Chép file mẫu bằng `aws/scripts/tfvars.sh example aws/org`, rồi điền bằng editor (mục [Điền giá trị lần đầu](#điền-giá-trị-lần-đầu)).
+  - `aws/security/security.auto.tfvars`: `security_alert_email`, hộp thư nhận mọi cảnh báo bảo mật (tạo ở bước (5)).
+  - `aws/baseline/baseline.auto.tfvars`: `sso_region` bằng giá trị của `org.auto.tfvars`.
+- [ ] **Budget đủ** cho phí giữ của tổ chức cộng các buổi trong tháng: lệnh đọc ở cuối mục [Mở terminal](#mở-terminal). Bảng giá:
+  [ADR-0060 §12](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0060-org-detection-logging.md#12-chi-phí-liên-tục) và
+  [phụ lục](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0060-org-detection-logging.md#12-chi-phí-liên-tục);
+  Inspector tính theo digest image được quét ở registry của account env
+  ([ADR-0062 §11](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0062-ecr-registry-ci-oidc.md#11-chi-phí-registry));
+  account có cờ `off` không trả phần đó ([bảng tháng không buổi của
+  ADR-0071](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0071-paid-features.md#bảng-tháng-không-buổi)).
+
+### Điền giá trị lần đầu
+
+- `security_contact`: một người thật, vì AWS gửi thông báo bảo mật và gọi theo số này. Số điện thoại dạng quốc tế `+84…` (không số 0 đầu,
+  không khoảng trắng), email là hộp thư người đó đọc hằng ngày.
+- Email root của mỗi account mới: alias Gmail `<gmail>+svp-<tên>@gmail.com` dùng được (thư vào hộp thư gốc), miễn là chưa từng dùng cho
+  account AWS nào, kể cả account đã đóng. Mỗi account một alias riêng, vì email root không đổi và không dùng lại được.
+- Quy ước alias cho hộp thư nhận cảnh báo, để lọc theo nguồn: `+svp-security-alerts` cho `security_alert_email` (cảnh báo bảo mật của
+  org), `+svp-<env>-alarms` cho `alarm_email` của env (alarm của env và alarm DNSSEC của prd, ví dụ `+svp-prd-alarms`).
+- Domain của env (`aws/scripts/tfvars.sh env <env>` hỏi `domain`): tên hosted zone của env đó, không phải domain gốc: prd là zone gốc
+  `aws.<domain>`, stg là `stg.` cộng zone gốc (`stg.aws.<domain>`).
+
+## Mở terminal
+
+Đăng nhập SSO của management, kiểm biến account và account của profile; chạy lại khối này mỗi khi mở terminal mới.
+
+```sh
+cd infra
+AWS_PROFILE=anhnv-sso aws sso login --region us-east-1
+printf 'mgmt …%s stg …%s prd …%s\n' "${SVP_AWS_MGMT_ACCOUNT_ID: -4}" "${SVP_AWS_STG_ACCOUNT_ID: -4}" \
+  "${SVP_AWS_PRD_ACCOUNT_ID: -4}"   # từ .envrc (direnv)
+export SVP_SESSION_DIR="$PWD/.session/$(date -u +%Y%m%dT%H%M%SZ)"  # check-account.sh ghi mốc ở đây
+aws/scripts/check-account.sh mgmt
+```
+
+- **Mong đợi:** `ok    account <12 số> of mgmt, arn:aws:sts::<12 số>:assumed-role/AWSReservedSSO_…`.
+- **Việc tay:** profile `anhnv-sso` và phiên SSO chưa có thì làm Profile gốc <!-- link-chờ: aws/org/README.md#profile-gốc-anhnv-sso -->
+  trước. Biến account nạp qua direnv từ `.envrc` ở thư mục chứa các clone
+  ([`operations.md`](../reference/operations.md#biến-account-và-direnv)); chưa có file thì tạo theo trang đó, với ba biến trên đọc trên
+  trang SSO (`SVP_AWS_MGMT_ACCOUNT_ID` luôn gõ tay: `check-account.sh` đối chiếu nó với account thật). Từ bước (2) thêm
+  `SVP_AWS_LOG_ACCOUNT_ID`, `SVP_AWS_SECURITY_ACCOUNT_ID` vào `.envrc`; khi `svp-backup` đã có, `eval "$(aws/scripts/accounts.sh)"` đặt
+  các biến thành viên còn lại, thêm chúng vào file.
+- **Bẫy:** lần dựng đầu chỉ có ba biến trên, vì `aws/scripts/accounts.sh` đòi đủ năm account thành viên mà `svp-backup` chỉ có sau bước
+  (4). Mọi lệnh ghi của bước (1)–(6) chạy bằng `anhnv-sso` (root `aws/log-archive`, `aws/security`, `aws/baseline` vào account đích qua
+  `OrganizationAccountAccessRole`); trước mỗi bước, chạy lại `check-account.sh mgmt`.
+
+Budget tổng của org:
+
+```sh
+AWS_PROFILE=anhnv-sso aws budgets describe-budget --account-id "$SVP_AWS_MGMT_ACCOUNT_ID" --budget-name svp-monthly --region us-east-1 \
+  --query 'Budget.BudgetLimit' --output text
+```
+
+- **Mong đợi:** hạn mức ít nhất bằng phí giữ của tổ chức (dòng **Phí** của Tóm tắt) cộng các buổi dự kiến trong tháng.
+- **Việc tay:** thấp hơn thì đổi `budget_limit_usd` của `aws/bootstrap/bootstrap.auto.tfvars` trước bước (1).
+- **Bẫy:** hạn mức thấp làm email cảnh báo 80 %, 100 % tới liên tục dù không có gì sai, và người học quen bỏ qua cảnh báo thật.
 
 ## Thứ tự áp lần đầu
 
@@ -47,82 +115,11 @@ flowchart TD
   [README, Bước (4)](../../aws/org/README.md#bước-4-đủ-root). Dán lại: **plan đủ** (điểm dừng), `Apply complete!`,
   `No changes.`, `get-trail-status`.
 - **(5)** `aws/security`: GuardDuty, Security Hub CSPM, Config aggregator, Access Analyzer, Inspector ECR theo cờ,
-  bus, SNS; xác nhận email; [README, Apply](../../aws/security/README.md#apply-bước-5-của-thứ-tự-áp-lần-đầu). Dán lại:
+  bus, SNS; xác nhận email; [Bước (5)](#bước-5-awssecurity). Dán lại:
   dòng `Plan:`, `Apply complete!`, output mục "Kiểm nhanh".
 - **(6)** `aws/baseline`; [README, Apply lần đầu](../../aws/baseline/README.md#apply-lần-đầu). Dán lại: output mục "Kiểm
   cái đã có", dòng `Plan:`, `Apply complete!`.
 - **(7)** —; [Bước (7)](#bước-7-kiểm-sau-áp). Dán lại: output từng mục.
-
-## Trước khi bắt đầu
-
-1. **Code trên `main`**: `git switch main && git pull --ff-only` trong bản clone này. Các root `aws/log-archive`, `aws/security`,
-   `aws/baseline` và thay đổi của `aws/org`, `aws/bootstrap` đã merge.
-2. **Giá trị ngoài repo** (không commit, mỗi file tạo từ `.example` cùng thư mục):
-   - `aws/org/org.auto.tfvars`: `account_emails` với hai khoá mới `log-archive`, `security`, mỗi khoá một email chưa account AWS nào dùng, kể
-     cả account đã đóng hay `SUSPENDED`; `security_contact`; `sso_user_name`, `sso_region` (README `aws/org`, mục Chuẩn bị).
-     Chép file mẫu bằng `aws/scripts/tfvars.sh example aws/org`, rồi điền bằng editor (xem "Điền giá trị lần đầu" dưới).
-   - `aws/security/security.auto.tfvars`: `security_alert_email`, hộp thư nhận mọi cảnh báo bảo mật.
-   - `aws/baseline/baseline.auto.tfvars`: `sso_region` bằng giá trị của `org.auto.tfvars`.
-3. **Chi phí liên tục**: từ bước (5) dịch vụ phát hiện tính tiền mỗi tháng ở mọi account của tổ chức, kể cả khi không có buổi; bước (1),
-   (3), (6) thêm KMS key. Đọc bảng ở [ADR-0060 §12](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0060-org-detection-logging.md#12-chi-phí-liên-tục)
-   và [phụ lục](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0060-org-detection-logging.md#12-chi-phí-liên-tục).
-   Inspector tính theo digest image được quét ở registry của account env (không có registry thì $0):
-   [ADR-0062 §11](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0062-ecr-registry-ci-oidc.md#11-chi-phí-registry).
-   Account có cờ `off` không trả phần đó:
-   [bảng tháng không buổi của
-   ADR-0071](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0071-paid-features.md#bảng-tháng-không-buổi);
-   tháng không buổi với file của repo ở
-   [ADR-0078](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0078-paid-features-lean-defaults.md) §8.
-   Budget tổng của org phải đủ cho khoản đó cộng các buổi: lệnh đọc ở cuối mục [Mở terminal](#mở-terminal) (cần biến và phiên SSO của mục đó).
-4. **Phụ thuộc buổi**: từ khi code này ở `main`, root `aws/envs/stg`, `aws/envs/prd` ghi flow log và log WAF vào bucket của `svp-log-archive`
-   và cần `SVP_AWS_LOG_ACCOUNT_ID`. Buổi stg, prd chỉ chạy được sau khi bước (1)–(3) đã áp.
-
-### Điền giá trị lần đầu
-
-- `security_contact`: một người thật, vì AWS gửi thông báo bảo mật và gọi theo số này. Số điện thoại dạng quốc tế `+84…` (không số 0 đầu,
-  không khoảng trắng), email là hộp thư người đó đọc hằng ngày.
-- Email root của mỗi account mới: alias Gmail `<gmail>+svp-<tên>@gmail.com` dùng được (thư vào hộp thư gốc), miễn là chưa từng dùng cho
-  account AWS nào, kể cả account đã đóng. Mỗi account một alias riêng, vì email root không đổi và không dùng lại được.
-- Quy ước alias cho hộp thư nhận cảnh báo, để lọc theo nguồn: `+svp-security-alerts` cho `security_alert_email` (cảnh báo bảo mật của
-  org), `+svp-<env>-alarms` cho `alarm_email` của env (alarm của env và alarm DNSSEC của prd, ví dụ `+svp-prd-alarms`).
-- Domain của env (`aws/scripts/tfvars.sh env <env>` hỏi `domain`): tên hosted zone của env đó, không phải domain gốc: prd là zone gốc
-  `aws.<domain>`, stg là `stg.` cộng zone gốc (`stg.aws.<domain>`).
-
-## Mở terminal
-
-```sh
-cd infra
-AWS_PROFILE=anhnv-sso aws sso login --region us-east-1
-printf 'mgmt …%s stg …%s prd …%s\n' "${SVP_AWS_MGMT_ACCOUNT_ID: -4}" "${SVP_AWS_STG_ACCOUNT_ID: -4}" \
-  "${SVP_AWS_PRD_ACCOUNT_ID: -4}"   # từ .envrc (direnv)
-export SVP_SESSION_DIR="$PWD/.session/$(date -u +%Y%m%dT%H%M%SZ)"                                      # check-account.sh ghi mốc ở đây
-aws/scripts/check-account.sh mgmt
-```
-
-Tìm `ok    account <12 số> of mgmt, arn:aws:sts::<12 số>:assumed-role/AWSReservedSSO_…`. Profile `anhnv-sso` và phiên
-SSO chưa có thì làm [Profile gốc](../../aws/org/README.md#profile-gốc-anhnv-sso) trước. Biến account đã nạp qua direnv từ
-`.envrc` ở thư mục chứa các clone ([README](../../README.md#plan-và-apply)); chưa có file thì tạo theo README,
-với ba biến trên đọc trên trang SSO (`SVP_AWS_MGMT_ACCOUNT_ID` luôn gõ tay: `check-account.sh` đối chiếu nó với account thật). Lần dựng
-đầu chỉ có ba biến đó, vì `aws/scripts/accounts.sh` đòi đủ năm account thành viên mà `svp-backup` chỉ có sau bước (4). Từ bước (2) thêm
-hai biến `SVP_AWS_LOG_ACCOUNT_ID`, `SVP_AWS_SECURITY_ACCOUNT_ID` vào `.envrc`. Mở lại terminal giữa chừng: direnv nạp lại biến, chạy lại
-`check-account.sh mgmt`; khi `svp-backup` đã có, `eval "$(aws/scripts/accounts.sh)"` đặt các biến thành viên còn lại, thêm chúng vào
-file. Mọi lệnh ghi của bước (1)–(6) chạy bằng `anhnv-sso` (root `aws/log-archive`, `aws/security`,
-`aws/baseline` vào account đích qua `OrganizationAccountAccessRole`); trước mỗi bước,
-chạy lại `check-account.sh mgmt`.
-
-Budget tổng của org (điều 3 của mục Trước khi bắt đầu):
-
-```sh
-AWS_PROFILE=anhnv-sso aws budgets describe-budget --account-id "$SVP_AWS_MGMT_ACCOUNT_ID" --budget-name svp-monthly --region us-east-1 \
-  --query 'Budget.BudgetLimit' --output text
-```
-
-Hạn mức thấp hơn ước của ADR cộng chi phí buổi trong tháng: đổi `budget_limit_usd` của `aws/bootstrap/bootstrap.auto.tfvars` trước bước (1).
-Hạn mức tháng nên bằng ít nhất phí giữ cả org giữa các buổi (dịch vụ phát hiện, KMS key, lưu log; ~$31,1 ở tháng đầu,
-~$39,4 ở tháng thứ sáu theo
-[ADR-0078 §8](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0078-paid-features-lean-defaults.md#8-chi-phí))
-cộng các buổi dự kiến trong tháng. Đặt thấp hơn thì email cảnh báo 80 %, 100 % tới liên tục dù không có gì sai, và người
-học quen bỏ qua cảnh báo thật.
 
 ## Cái đã có trước khi áp
 
@@ -201,21 +198,130 @@ profile còn lại: đặt biến rồi chạy lại). Dán các dòng `ok    ac
 
 ## Bước (5): `aws/security`
 
-**Điểm dừng chi phí.** Từ apply này GuardDuty tính tiền mỗi tháng ở mọi account, Security Hub CSPM và Config ở account
-có cờ `always` (với file của repo chỉ `svp-security`; mục Trước khi bắt đầu, điều 3). Áp khi đã chọn thời điểm.
+Bật GuardDuty, Security Hub CSPM, Inspector ECR, Config aggregator và Access Analyzer cho cả tổ chức từ `svp-security`, cùng đường
+EventBridge → SNS tới email ([05. Bảo mật](../handbook/05-security.md)). Root đọc cờ `security_hub`, `inspector_ecr`: account `off` gắn
+policy `svp-security-off`, không có liên kết Inspector, và có rule `svp-security-guardduty-findings` giữ email finding GuardDuty của nó.
+
+**Điểm dừng chi phí.** Từ apply này GuardDuty tính tiền mỗi tháng ở mọi account, Security Hub CSPM và Config ở account có cờ `always`
+(với file của repo chỉ `svp-security`). Áp khi đã chọn thời điểm.
+
+- [ ] Bước (3) xong: bucket `svp-guardduty-…`, key `alias/svp-log-archive` với key policy cho GuardDuty của `svp-security`.
+- [ ] Bước (4) xong: trusted access, `svp-security` là delegated admin của GuardDuty (hai region), Security Hub, Inspector, Config, Access
+  Analyzer, và service-linked role `AWSServiceRoleForAccessAnalyzer` ở management. Thiếu thì plan dừng ở data source
+  `aws_guardduty_detector` (không có detector) hay apply lỗi quyền delegated admin.
+- [ ] Biến `SVP_AWS_MGMT_ACCOUNT_ID` (gõ tay), `SVP_AWS_SECURITY_ACCOUNT_ID`, `SVP_AWS_LOG_ACCOUNT_ID` đã đặt (từ output của bước (2);
+  `SVP_AWS_STG_ACCOUNT_ID`, `SVP_AWS_PRD_ACCOUNT_ID` cho bước (6) đọc trên trang SSO). Lần dựng đầu `aws/scripts/accounts.sh` in
+  `FAIL  no account svp-backup in the organization` và không đặt gì ([Mở terminal](#mở-terminal)).
 
 ```sh
 aws/scripts/check-account.sh mgmt
 cd aws/security
 ```
 
-Theo [README, Apply](../../aws/security/README.md#apply-bước-5-của-thứ-tự-áp-lần-đầu): giá trị cá nhân, plan, apply,
-**xác nhận email SNS** (thư "AWS Notification - Subscription Confirmation" tới `security_alert_email`: mở thư, bấm **Confirm
-subscription**; chưa bấm thì không cảnh báo nào tới. `verify.sh subscriptions mgmt` kiểm, mong mọi subscription có ARN thật, không còn
-`PendingConfirmation`), kiểm nhanh. Root đọc cờ `security_hub`, `inspector_ecr`: account `off` gắn policy
-`svp-security-off`, không có liên kết Inspector, và có rule `svp-security-guardduty-findings` giữ email finding
-GuardDuty của nó (mục Cờ chi phí của [README `aws/security`](../../aws/security/README.md#cờ-chi-phí)). `cd ../..` khi
-xong.
+- **Mong đợi:** `ok    account <12 số> of mgmt, arn:aws:sts::<12 số>:assumed-role/AWSReservedSSO_…`; `FAIL  profile anhnv-sso is account …`
+  thì dừng.
+
+### 5a. Giá trị cá nhân và init
+
+Tạo `security.auto.tfvars` (git bỏ qua) giữ hộp thư nhận cảnh báo, rồi `init` với backend của management.
+
+```sh
+../scripts/tfvars.sh example aws/security
+AWS_PROFILE=anhnv-sso terraform init -backend-config=../backend.hcl
+```
+
+- **Mong đợi:** lệnh đầu chép `security.auto.tfvars.example` thành `security.auto.tfvars` (mode 600) khi file chưa có, không ghi đè, và
+  in một dòng `note` cho mỗi giá trị còn `<…>`. `init` đã chạy sẵn cho mọi root của management ở bước (1) (`aws/scripts/tfvars.sh init`).
+- **Việc tay:** sửa `security_alert_email` trong editor: hộp thư nhận mọi cảnh báo bảo mật (alias `+svp-security-alerts`, mục
+  [Điền giá trị lần đầu](#điền-giá-trị-lần-đầu)). Giá trị cá nhân giữ tay, không commit.
+
+### 5b. Plan
+
+```sh
+AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" TF_VAR_security_account_id="$SVP_AWS_SECURITY_ACCOUNT_ID" \
+  TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" terraform plan -out=security.tfplan
+```
+
+- **Mong đợi:** với `aws/paid-features.json` của repo `Plan: 1 to import, 56 to add, 1 to change, 0 to destroy`: mỗi region của hai region
+  một cấu hình tổ chức, sáu protection plan, một publishing destination, một detector management, một member, một analyzer, một rule
+  `svp-security-guardduty-findings`; bốn tài nguyên Security Hub, policy `svp-security-off` và năm association (management,
+  `svp-log-archive`, `svp-backup`, `svp-stg`, `svp-prd`); cấu hình tổ chức Inspector, hai liên kết thành viên (`svp-log-archive`,
+  `svp-backup`), enabler `members`; role, policy attachment và aggregator Config; bus, policy bus, hai rule, hai target; target topic và
+  target bus của rule GuardDuty, role `svp-security-guardduty-forwarder` và policy của nó; năm tài nguyên của module `alarms`. Import và
+  đổi là enabler `security`. File cờ khác thì tính lại: mỗi account `off` của `security_hub` một association, mỗi account thành viên có
+  `inspector_ecr` khác `off` một liên kết.
+- **Kiểm:** phần Inspector theo [5c](#5c-kiểm-plan-inspector).
+- **Bẫy:** dừng và dán plan lại nếu có dòng `destroy`, hay `aws_guardduty_detector` nào khác `aws_guardduty_detector.management`.
+
+### 5c. Kiểm plan Inspector
+
+- `aws_inspector2_enabler.security` mang dòng `(imported from "<security>-ECR")`; `account_ids` giữ đúng id của `svp-security`,
+  `resource_types` bỏ các loại khác `"ECR"` (`EC2`, `LAMBDA`, `LAMBDA_CODE`…) và giữ `"ECR"`. `account_ids` cũ rỗng là Inspector chưa
+  bật ở `svp-security`: `aws/org` chưa chỉ định delegated admin, dừng.
+- `aws_inspector2_member_association.members` và `account_ids` của `aws_inspector2_enabler.members` đúng id của các account thành viên
+  khác `svp-security` có `inspector_ecr` khác `off` (`svp-log-archive`, `svp-backup` với file của repo; thêm `svp-prd` khi prd vắng khỏi
+  file).
+
+### 5d. Apply
+
+```sh
+AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" TF_VAR_security_account_id="$SVP_AWS_SECURITY_ACCOUNT_ID" \
+  TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" terraform apply security.tfplan
+rm security.tfplan
+```
+
+- **Mong đợi:** `Apply complete!`; bật cấu hình tập trung và gắn policy có thể mất vài phút.
+- **Bẫy:** `DataUnavailableException` (dữ liệu tổ chức còn đồng bộ sau bước (4)): đợi vài phút rồi chạy lại plan và apply.
+  `ConflictException: Access Analyzer Service Linked Role is not in the organizational management account` ở
+  `aws_accessanalyzer_analyzer.org`: management chưa có role; apply `aws/org` theo mục Thêm service-linked role Access Analyzer
+  <!-- link-chờ: docs/runbooks/org-security-setup.md#bước-4-awsorg-đủ -->, rồi plan và apply lại root này (plan chỉ còn hai analyzer và
+  phần chưa tạo).
+
+### 5e. Xác nhận email SNS
+
+Apply tạo subscription ở `PendingConfirmation`; topic không gửi gì tới khi người nhận bấm link xác nhận.
+
+```sh
+../scripts/verify.sh subscriptions mgmt
+```
+
+- **Việc tay:** mở thư "AWS Notification - Subscription Confirmation" gửi tới `security_alert_email` (xem cả thư rác), bấm **Confirm
+  subscription**. Giữ tay vì token nằm trong thư, không có API.
+- **Mong đợi:** `ok    topic svp-security-alarms: every subscription is confirmed`, mọi subscription có ARN thật.
+- **Bẫy:** `FAIL  topic svp-security-alarms: a subscription is still PendingConfirmation` là chưa bấm link. Token của link chỉ dùng được
+  hai ngày và SNS xoá subscription chưa xác nhận sau 48 giờ: quá hạn thì apply lại root để AWS gửi thư mới.
+
+### 5f. Kiểm nhanh
+
+Chỉ đọc; cần profile `anhnv-sso` và bốn profile chỉ đọc của bước (4)
+(`sso-profiles.sh write` <!-- link-chờ: docs/runbooks/org-security-setup.md#bước-4-awsorg-đủ -->), cùng năm biến
+`SVP_AWS_MGMT_ACCOUNT_ID`, `SVP_AWS_STG_ACCOUNT_ID`, `SVP_AWS_PRD_ACCOUNT_ID`, `SVP_AWS_LOG_ACCOUNT_ID`, `SVP_AWS_SECURITY_ACCOUNT_ID`.
+Từ `infra/aws/security`:
+
+```sh
+../scripts/verify.sh org
+```
+
+- **Mong đợi:** mỗi kiểm một dòng `ok`, `FAIL` hay `note`; một `FAIL` không dừng kiểm sau, cuối cùng
+  `FAIL  N check(s) failed, each named above` và exit 1. Phần của root này:
+  - `7a: GuardDuty in <region>: auto-enable ALL, …, findings PUBLISHING`: mỗi region, cấu hình tổ chức và sáu protection plan `ALL`, mọi
+    account `ACTIVE` trừ `svp-security` là member, destination `PUBLISHING`.
+  - `7a: Access Analyzer svp-org ACTIVE in <region>`: analyzer tổ chức.
+  - `7a: Security Hub is CENTRAL ENABLED, …`: cấu hình tập trung; association của root và của account có `security_hub` `off`.
+  - `7a: every source of the Config aggregator svp-org is SUCCEEDED, …`: sau khi bước (6) bật recorder; script bỏ qua nguồn của account
+    có `config_recording` `off` (không recorder thì aggregator không nhận dữ liệu mới, không phải lỗi).
+  - `7a: Inspector scans only ECR in …`: chỉ ECR bật; thành viên là account có `inspector_ecr` khác `off`.
+- **Bẫy:** lần dựng đầu lệnh chạy trước bước (6), nên các kiểm cần `aws/baseline` báo `FAIL` là mong đợi:
+  `FAIL  <profile> <region>: no Config recorder with CONTINUOUS recording` (hay `… is not recording …`) của `anhnv-security-ro` (account
+  có `config_recording` `off` in `note … config_recording is off`), `FAIL  7a: Config aggregator sources not SUCCEEDED: …` và
+  `FAIL  7a: rule svp-security-admin-sso not found …`. Bước (7) chạy lại `verify.sh org` sau bước (6), khi các dòng đó phải `ok`.
+  Account mới có thể cần tới 24 giờ mới hiện đủ member (`PENDING` ở association cũng vậy): `FAIL` ở các dòng đó trong ngày đầu thì chạy
+  lại sau.
+- **Việc tay:** dòng `note  7a: Security score` chỉ bảng điều khiển của Security Hub trên console của `svp-security` (profile
+  `anhnv-security-ro`), không có API đọc điểm: đọc bằng mắt.
+- **Dán lại:** dòng `Plan:`, `Apply complete!`, mọi dòng `FAIL` và `note` của lệnh trên. Cảnh báo thử và phép thử guardrail ở bước (7).
+
+`cd ../..` về `infra/` khi xong.
 
 ## Bước (6): `aws/baseline`
 
@@ -267,8 +373,8 @@ account của profile và in `ok    profile <tên> is the account of <tên>`; d�
   hai OU kiểm ở `verify.sh backup` ([`backup-setup.md`](backup-setup.md)). Thiếu hay thừa một policy:
   `FAIL  7a: policies wrong (apply aws/org): <target> <type> is '<có>', not '<mong>'`.
 - **7a** `GuardDuty in <region>`, `Access Analyzer svp-org ACTIVE`, `Security Hub is CENTRAL ENABLED`, `every source of
-  the Config aggregator`, `Inspector scans only ECR`: các dịch vụ của [`aws/security`, Kiểm
-  nhanh](../../aws/security/README.md#6-kiểm-nhanh). GuardDuty chỉ đòi `ALL` cho member và cho sáu feature mà
+  the Config aggregator`, `Inspector scans only ECR`: các dịch vụ của [bước (5), Kiểm
+  nhanh](#5f-kiểm-nhanh). GuardDuty chỉ đòi `ALL` cho member và cho sáu feature mà
   `aws/security` quản (`local.guardduty_features` của `guardduty.tf`); feature AWS thêm sau (ví dụ `AI_PROTECTION` ở
   `NONE`) chỉ là dòng `note  7a: GuardDuty in <region>: features outside aws/security, left as AWS sets them: …`.
 - **7a** `every ACTIVE account but svp-security is a Security Hub member as its cost flag says`: account có
@@ -471,8 +577,8 @@ Finding của Inspector vào Security Hub như GuardDuty nhưng không tới ema
 đọc chúng ở phép kiểm (a) của mục [Phép kiểm nền tảng managed](session-stg.md#phép-kiểm-nền-tảng-managed) của runbook buổi (account có
 `inspector_ecr` `always`).
 
-Dán danh sách tiêu đề và giờ nhận, cùng nguyên văn một thư (che account). Thiếu thư nào: đọc lại subscription (README `aws/security`, mục
-5), rồi dán lệnh của probe đó và giờ chạy; rule nguồn, account, region theo phụ lục
+Dán danh sách tiêu đề và giờ nhận, cùng nguyên văn một thư (che account). Thiếu thư nào: đọc lại subscription
+([5e](#5e-xác-nhận-email-sns)), rồi dán lệnh của probe đó và giờ chạy; rule nguồn, account, region theo phụ lục
 [ADR-0060 §10](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0060-org-detection-logging.md#10-đường-cảnh-báo).
 Finding mẫu ở lại tới khi GuardDuty tự xoá (90 ngày); đổi trạng thái nó theo runbook `security-alert.md`.
 
@@ -543,7 +649,8 @@ qua retention) làm mất lịch sử audit còn trong hạn.
 
 - Lỗi ở `plan`: không có gì đổi trên account; đọc lỗi, sửa nguyên nhân (biến terminal, file `.auto.tfvars`, phiên SSO), chạy lại đúng bước.
 - Lỗi giữa `apply`: phần đã tạo nằm trong state; `plan` lại cùng root chỉ còn phần chưa tạo. Dán lỗi và plan mới trước khi apply lại;
-  `-target`, áp code của PR chưa merge: [README, Khi apply lỗi giữa chừng](../../README.md#khi-apply-lỗi-giữa-chừng). Đọc plan gọn mà
-  không để file lộ account ID: [README, Đọc plan an toàn](../../README.md#đọc-plan-an-toàn).
+  `-target`, áp code của PR chưa merge:
+  [`operations.md`, Khi apply lỗi giữa chừng](../reference/operations.md#khi-apply-lỗi-giữa-chừng). Đọc plan gọn mà không để file lộ
+  account ID: [`operations.md`, Đọc plan an toàn](../reference/operations.md#đọc-plan-an-toàn).
 - Plan có `destroy` hay `-/+` ở tổ chức, account, bucket hay key có sẵn: dừng, không apply, dán plan. `-/+` lặp lại ở mọi plan là lỗi code.
 - Mất đường vào (Identity Center hỏng, phiên SSO không đăng nhập được): [`break-glass.md`](break-glass.md).

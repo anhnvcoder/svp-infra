@@ -2,16 +2,18 @@
 
 File này theo định dạng [AGENTS.md](https://agents.md): luật làm việc cho mọi agent.
 
-Đọc trước khi làm bất cứ việc gì: [`README.md`](README.md) (bố cục, lệnh kiểm, luật an toàn) và
+Đọc trước khi làm bất cứ việc gì: [`README.md`](README.md) (bản đồ root, lệnh kiểm, luật an toàn; tra cứu đủ ở
+[`docs/reference/checks.md`](docs/reference/checks.md), [`docs/reference/operations.md`](docs/reference/operations.md)) và
 [ADR-0034](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0034-aws-stage7.md) (thiết kế hạ tầng AWS). Thiết kế và
 quyết định chung của lab nằm ở `docs/` của repo code (bản clone `<workspace>/backend`); đổi một quyết định đã chốt thì đề xuất kèm ADR ở đó.
 
 ## An toàn cloud
 
 - **AI chỉ chạy:** `make check` (các nhóm `check-terraform`, `check-lint`, `check-test`, `check-scripts` và từng target của chúng:
-  `fmt-check`, `validate`, `tflint`, `tfdocs-check`, `trivy`, `shellcheck`, `zizmor`, `docs-check`, `session-test`, `test-guard`, `test`,
-  `ci-plan-test`, `infracost-test`), `make fmt`, `make tfdocs` (terraform-docs, chỉ đọc `.tf`), `make shellcheck SH='<file …>'` (một
-  script đang sửa), `make pre-commit FILES='<file …>'` (phép kiểm của hook, không mạng), `make lock`, tức
+  `fmt-check`, `validate`, `tflint`, `tfdocs-check`, `trivy`, `shellcheck`, `zizmor`, `docs-check`, `diagrams-check`,
+  `session-test`, `test-guard`, `test`, `ci-plan-test`, `infracost-test`), `make fmt`, `make tfdocs` (terraform-docs, chỉ đọc `.tf`),
+  `make diagrams` (D2, chỉ đọc `.d2`), `make shellcheck SH='<file …>'` (một script đang sửa),
+  `make pre-commit FILES='<file …>'` (phép kiểm của hook, không mạng), `make lock`, tức
   `terraform fmt`, `terraform init -backend=false`, `terraform validate`, `terraform providers lock`; `bash -n`,
   test script với lệnh giả trên PATH; `aws --version`.
 - **`terraform test` chỉ qua `make test`**, target tự ép ba điều kiện, không tin người viết test: (1) chạy trong container image Terraform
@@ -32,8 +34,8 @@ quyết định chung của lab nằm ở `docs/` của repo code (bản clone `
   ghi cài đặt GitHub (`github-settings`, `github-secrets`, `infracost-key`, `github-tfvars`, `github-plan`, `github-apply`,
   `github-app`, `github-app-key`) là của người học; AI chỉ chạy `make github-app-test` và `make github-check` (chỉ đọc).
 - **Mọi lệnh chạm account do người học chạy** theo script và runbook viết sẵn, mỗi bước một khối, nói rõ cần dán lại output nào và tìm gì
-  trong đó. Mỗi account một biến account (export trong terminal, không ghi vào file nào) và profile SSO (bảng ở mục "Plan và apply" của
-  `README.md`):
+  trong đó. Mỗi account một biến account (export trong terminal, không ghi vào file nào) và profile SSO (bảng đủ ở mục "Account và
+  profile" của [`docs/reference/operations.md`](docs/reference/operations.md#account-và-profile)):
 
   | Account | Profile ghi | Profile chỉ đọc | Biến account | Root |
   | --- | --- | --- | --- | --- |
@@ -100,7 +102,8 @@ Quy ước chung (ngôn ngữ, tài liệu timeless, ADR, comment, Git, repo pub
   của chính root đó. `.trivyignore.yaml` không có mục chỉ-stg nào (`paths` không phân biệt được env).
 - **Docker** chỉ qua `Makefile` (`env -u DOCKER_DEFAULT_PLATFORM docker run …`, image ghim digest có dòng `# renovate:` ngay trên).
 - **Card chạy song song** kiểm bằng `make check DIRS=<thư mục của mình>`: mỗi lượt chỉ ghi dưới thư mục đó, trừ cache provider và
-  ruleset tflint `.plugin-cache/` dùng chung, ghi lần lượt qua khoá `.plugin-cache/lock` (mục "Lệnh kiểm" của `README.md`).
+  ruleset tflint `.plugin-cache/` dùng chung, ghi lần lượt qua khoá `.plugin-cache/lock` (mục "Chạy song song" của
+  [`docs/reference/checks.md`](docs/reference/checks.md#chạy-song-song)).
 - **CI và hook:** `check.yml` chạy mỗi nhóm `check-*` của `Makefile` thành một job song song; target mới vào đúng một nhóm. Phút billable là
   tổng phút các job (mỗi job làm tròn lên phút), không ít hơn một job tuần tự dù xong sớm hơn; repo public nên runner chuẩn miễn phí.
   `make hooks` bật hook `pre-commit` một lần mỗi clone (fmt, markdownlint, shellcheck, gitleaks trên file đã stage); phép chậm để CI.
@@ -112,3 +115,6 @@ Quy ước chung (ngôn ngữ, tài liệu timeless, ADR, comment, Git, repo pub
   `.trivyignore.yaml`, `github/`, `aws/`, `ci/`; PR đổi
   chúng cần Code Owner duyệt.
 - **Workflow:** mọi workflow qua `make zizmor` sạch; ngoại lệ có chủ đích vào `.github/zizmor.yml`, mỗi mục một comment lý do.
+- **Sơ đồ:** PR đổi kiến trúc mà một sơ đồ `docs/diagrams/*.d2` tả (account, luồng, dịch vụ) thì sửa `.d2` đó và chạy `make diagrams`
+  trong cùng PR; không sửa SVG bằng tay (`make diagrams-check` đỏ khi SVG lệch nguồn). Cách viết:
+  [`docs/diagrams/README.md`](docs/diagrams/README.md).

@@ -1,0 +1,38 @@
+# Security in layers: which layer stops, finds or undoes an incident, and which Terraform root builds that layer.
+vars: {
+  d2-config: {
+    theme-id: 0
+    dark-theme-id: 200
+  }
+}
+...@tokens
+
+direction: down
+
+title: "Một sự cố đi qua sáu lớp nào, root nào dựng mỗi lớp" {
+  shape: text
+  near: top-center
+  style: {font-size: 20; bold: true}
+}
+
+before: "Trước sự cố" {
+  class: trust
+  label.near: top-left
+  governance: "Quản trị\nOrganizations, SCP, RCP, Identity Center\naws/org" {class: governance}
+  prevention: "Phòng ngừa\nIAM, mã hoá KMS, S3 BPA, IMDSv2\naws/org, aws/baseline" {class: prevention}
+}
+
+after: "Sau sự cố" {
+  class: trust
+  label.near: top-left
+  detection: "Phát hiện\nGuardDuty, Inspector, Security Hub CSPM\naws/security, 2 region" {class: detection}
+  alerting: "Cảnh báo\nEventBridge, SNS, Access Analyzer\naws/security, aws/baseline" {class: alerting}
+  investigation: "Điều tra\nCloudTrail, Config, Log Archive\naws/org, aws/baseline, aws/log-archive" {class: investigation}
+  recovery: "Phục hồi\nAWS Backup chéo account, Vault Lock\naws/backup, aws/accounts/ENV" {class: recovery}
+}
+
+before.governance -> before.prevention: "guardrail" {class: control-flow}
+before.prevention -> after.detection: "lọt qua" {class: data-flow}
+after.detection -> after.alerting: "finding" {class: data-flow}
+after.alerting -> after.investigation: "email" {class: data-flow}
+after.investigation -> after.recovery: "khôi phục" {class: data-flow}

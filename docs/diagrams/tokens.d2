@@ -1,0 +1,46 @@
+# Shared design tokens of the D2 diagrams: a diagram pulls them in with `...@tokens` at its root and tags nodes and
+# edges with `class`. Pastel fills with dark text stay readable in the light and the dark theme of the same SVG.
+classes: {
+  # One class per function of a security layer or a workload.
+  governance: {
+    style: {fill: "#E8EAF6"; stroke: "#3949AB"; font-color: "#1A1A1A"; border-radius: 6}
+  }
+  prevention: {
+    style: {fill: "#E1F5FE"; stroke: "#0277BD"; font-color: "#1A1A1A"; border-radius: 6}
+  }
+  detection: {
+    style: {fill: "#E8F5E9"; stroke: "#2E7D32"; font-color: "#1A1A1A"; border-radius: 6}
+  }
+  alerting: {
+    style: {fill: "#FFF8E1"; stroke: "#EF6C00"; font-color: "#1A1A1A"; border-radius: 6}
+  }
+  investigation: {
+    style: {fill: "#F3E5F5"; stroke: "#7B1FA2"; font-color: "#1A1A1A"; border-radius: 6}
+  }
+  recovery: {
+    style: {fill: "#E0F2F1"; stroke: "#00796B"; font-color: "#1A1A1A"; border-radius: 6}
+  }
+  workload: {
+    style: {fill: "#ECEFF1"; stroke: "#455A64"; font-color: "#1A1A1A"; border-radius: 6}
+  }
+  data: {
+    style: {fill: "#FBE9E7"; stroke: "#D84315"; font-color: "#1A1A1A"; border-radius: 6}
+  }
+
+  # An AWS account: a solid rounded container with no fill, so the theme colours its label and the page shows through.
+  account: {
+    style: {fill: transparent; stroke: "#607D8B"; stroke-width: 2; border-radius: 12; bold: true}
+  }
+  # A trust boundary (organization, VPC, another party's network): dashed, so it never reads as an account.
+  trust: {
+    style: {fill: transparent; stroke: "#90A4AE"; stroke-width: 2; stroke-dash: 6; border-radius: 12}
+  }
+
+  # An arrow carries data (solid) or control: an API call, a policy, a trigger (dashed).
+  data-flow: {
+    style: {stroke-width: 2}
+  }
+  control-flow: {
+    style: {stroke-width: 2; stroke-dash: 5; animated: false}
+  }
+}
