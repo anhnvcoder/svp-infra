@@ -142,7 +142,7 @@ plan() {
 records() {
   local root=$1 module type name action file
   jq -r '.resource_changes[]? | select(.mode == "managed")
-    | [(.module_address // "" | capture("^(?<m>module\\.[A-Za-z0-9_-]+)")?.m // "-"), .type, .name,
+    | [((.module_address // "" | capture("^(?<m>module\\.[A-Za-z0-9_-]+)") | .m)? // "-"), .type, .name,
        (if .change.importing then "import" else .change.actions | if . == ["create"] then "create"
          else join("-") end end)] | @tsv' "$work/plan.json" >"$work/changes.tsv"
   while IFS=$'\t' read -r module type name action; do
