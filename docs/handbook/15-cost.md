@@ -33,7 +33,8 @@ khoảng một ngày, không phải cuối tháng.
 
 ## Kiến trúc
 
-![Bốn chốt giữ hoá đơn của svp nhỏ](../diagrams/15-cost.svg)
+![Bốn chốt giữ hoá đơn của svp nhỏ](../diagrams/15-cost.svg#gh-light-mode-only)
+![Bốn chốt giữ hoá đơn của svp nhỏ](../diagrams/15-cost-dark.svg#gh-dark-mode-only)
 
 *Sơ đồ khái niệm về bốn chốt, không phải luồng API: mỗi khối là một chốt ở một thời điểm, mũi tên nét liền là đường của tiền (phí đổ
 vào hoá đơn gộp, hoá đơn tới chốt báo tiền rồi tới email), nét đứt là thay đổi mà người học áp. Số tiền: bảng [Chi phí](#chi-phí).*

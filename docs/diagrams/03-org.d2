@@ -4,8 +4,6 @@
 vars: {
   d2-config: {
     layout-engine: elk
-    theme-id: 0
-    dark-theme-id: 200
     pad: 20
   }
 }
@@ -45,6 +43,7 @@ org: "Tổ chức svp" {
     security: "OU Security" {
       class: account
       label.near: top-left
+      style.font-color: "#1A1A1A"
       accounts: "Log Archive · Security Tooling · Backup" {
         class: detection
         grid-rows: 1
@@ -56,6 +55,7 @@ org: "Tổ chức svp" {
     workloads: "OU Workloads" {
       class: account
       label.near: top-left
+      style.font-color: "#1A1A1A"
       grid-columns: 2
       grid-gap: 24
       prod: "OU Prod: svp-prd" {

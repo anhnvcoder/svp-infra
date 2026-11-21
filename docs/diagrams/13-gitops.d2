@@ -4,14 +4,10 @@
 vars: {
   d2-config: {
     layout-engine: elk
-    theme-id: 0
-    dark-theme-id: 200
     pad: 20
   }
 }
 ...@tokens
-
-direction: down
 
 title: "Terraform cài gì một lần mỗi buổi, rồi Argo CD tự kéo phần còn lại từ đâu?" {
   shape: text
@@ -19,90 +15,123 @@ title: "Terraform cài gì một lần mỗi buổi, rồi Argo CD tự kéo ph�
   style: {font-size: 18; bold: true}
 }
 
-learner: "Máy người học" {
-  class: workload
-  grid-rows: 4
-  grid-gap: 24
-  vertical-gap: 6
-  s: "Terraform · tf.sh <env> gitops" {class: sub}
-  u: "đọc state root env: cluster_endpoint · cluster_values" {class: sub}
-  t: "qua tunnel SSM, cổng 6444 stg · 6443 prd" {class: sub}
-  r: "aws/gitops/<env>" {class: root}
-}
-
-github: "GitHub · repo public, đọc không credential" {
-  class: trust
-  style: {font-size: 15; bold: true}
-  label.near: top-left
-
-  gitops: "svp-gitops" {
-    class: data
-    grid-rows: 2
-    grid-gap: 24
-    vertical-gap: 6
-    s: "argocd/ · base/ · platforms/ · envs/<env>/" {class: sub}
-    r: "main, commit bootstrap B" {class: root}
-  }
-  backend: "svp-backend" {
-    class: data
-    grid-rows: 2
-    grid-gap: 24
-    vertical-gap: 6
-    s: "chart deploy/helm/*" {class: sub}
-    r: "revision của envs/<env>/charts.yaml" {class: root}
-  }
-}
-
-env: "svp-stg · svp-prd (ap-southeast-1)" {
-  class: account
-  label.near: top-left
-
-  cluster: "cluster EKS svp-<env>, API private" {
-    class: region
+all: "" {
+  grid-rows: 3
+  grid-columns: 1
+  grid-gap: 0
+  style: {stroke: transparent; fill: transparent}
+  github: "GitHub · repo public, đọc không credential" {
+    class: trust
+    style: {font-size: 15; bold: true}
     label.near: top-left
+    grid-rows: 1
+    grid-columns: 3
+    grid-gap: 60
 
-    argocd: "Argo CD" {
-      class: workload
+    gsp: "" {width: 120; style: {stroke: transparent; fill: transparent}}
+    backend: "svp-backend" {
+      class: data
       grid-rows: 2
       grid-gap: 24
       vertical-gap: 6
-      s: "namespace Pod Security · release argocd · AppProject svp" {class: sub}
-      r: "helm_release.argocd" {class: root}
+      s: "chart deploy/helm/*" {class: sub}
+      r: "revision của\nenvs/<env>/charts.yaml" {class: root}
     }
-    secret: "Cluster Secret in-cluster" {
-      class: prevention
+    gitops: "svp-gitops" {
+      class: data
       grid-rows: 2
       grid-gap: 24
       vertical-gap: 6
-      s: "nhãn svp.io/env · node-arch · annotation cluster-values" {class: sub}
-      r: "kubernetes_secret_v1.cluster" {class: root}
+      s: "argocd/ · base/ · platforms/\n· envs/<env>/" {class: sub}
+      r: "main, commit bootstrap B" {class: root}
     }
-    appset: "ApplicationSet svp-bootstrap" {
-      class: governance
-      grid-rows: 2
-      grid-gap: 24
-      vertical-gap: 6
-      s: "cluster generator → Application svp-root" {class: sub}
-      r: "helm_release.root" {class: root}
+  }
+  vsp: "" {height: 110; style: {stroke: transparent; fill: transparent}}
+  mid: "" {
+    grid-rows: 1
+    grid-columns: 3
+    grid-gap: 0
+    style: {stroke: transparent; fill: transparent}
+    lcol: "" {
+      grid-rows: 3
+      grid-columns: 1
+      grid-gap: 0
+      style: {stroke: transparent; fill: transparent}
+      l1: "" {height: 200; style: {stroke: transparent; fill: transparent}}
+      learner: "Máy người học" {
+        class: workload
+        grid-rows: 4
+        grid-gap: 24
+        vertical-gap: 6
+        s: "Terraform · tf.sh <env>\ngitops" {class: sub}
+        u: "đọc state root env:\ncluster_endpoint ·\ncluster_values" {class: sub}
+        t: "qua tunnel SSM, cổng 6444\nstg · 6443 prd" {class: sub}
+        r: "aws/gitops/<env>" {class: root}
+      }
+      l2: "" {height: 200; style: {stroke: transparent; fill: transparent}}
     }
-    apps: "Ứng dụng của env" {
-      class: workload
-      grid-rows: 2
-      grid-gap: 24
-      vertical-gap: 6
-      s: "svp-root → svp-apps → một Application mỗi component" {class: sub}
-      r: "Argo CD sync theo wave" {class: root}
+    hsp: "" {width: 240; style: {stroke: transparent; fill: transparent}}
+    env: "svp-stg · svp-prd (ap-southeast-1)" {
+      class: account
+      label.near: top-right
+
+      cluster: "cluster EKS svp-<env>, API private" {
+        class: region
+        label.near: top-right
+        grid-rows: 3
+        grid-columns: 2
+        grid-gap: 50
+        horizontal-gap: 70
+
+        argocd: "Argo CD" {
+          class: workload
+          grid-rows: 2
+          grid-gap: 24
+          vertical-gap: 6
+          s: "namespace Pod Security ·\nrelease argocd · AppProject\nsvp" {class: sub}
+          r: "helm_release.argocd" {class: root}
+        }
+
+        apps: "Ứng dụng của env" {
+          class: workload
+          grid-rows: 2
+          grid-gap: 24
+          vertical-gap: 6
+          s: "svp-root → svp-apps → một\nApplication mỗi component" {class: sub}
+          r: "Argo CD sync theo wave" {class: root}
+        }
+
+        appset: "ApplicationSet svp-bootstrap" {
+          class: governance
+          grid-rows: 2
+          grid-gap: 24
+          vertical-gap: 6
+          s: "cluster generator →\nApplication svp-root" {class: sub}
+          r: "helm_release.root" {class: root}
+        }
+        e1: "" {style: {stroke: transparent; fill: transparent}}
+
+        secret: "Cluster Secret in-cluster" {
+          class: prevention
+          grid-rows: 2
+          grid-gap: 24
+          vertical-gap: 6
+          s: "nhãn svp.io/env · node-arch\n· annotation cluster-values" {class: sub}
+          r: "kubernetes_secret_v1.cluster" {class: root}
+        }
+        e2: "" {style: {stroke: transparent; fill: transparent}}
+      }
     }
   }
 }
 
-github.gitops -> learner: "file bootstrap ở B" {class: data-flow}
-github.backend -> learner: "chart svp-cluster: render namespace" {class: data-flow}
-learner -> env.cluster.argocd: "1. cài Argo CD" {class: control-flow}
-learner -> env.cluster.secret: "2. Secret" {class: control-flow}
-learner -> env.cluster.appset: "3. ApplicationSet" {class: control-flow}
-env.cluster.secret -> env.cluster.appset: "nhãn, annotation" {class: data-flow}
-env.cluster.appset -> env.cluster.apps: "tạo svp-root" {class: control-flow}
-github.gitops -> env.cluster.argocd: "kéo main mỗi 60 s" {class: data-flow}
-github.backend -> env.cluster.argocd: "chart" {class: data-flow}
-env.cluster.argocd -> env.cluster.apps: "sync" {class: control-flow}
+all.github.gitops -> all.mid.lcol.learner: "file bootstrap ở B" {class: data-flow}
+all.github.backend -> all.mid.lcol.learner: "chart\nsvp-cluster:\nrender namespace" {class: data-flow}
+all.mid.lcol.learner -> all.mid.env.cluster.argocd: "1. cài Argo CD" {class: control-flow}
+all.mid.lcol.learner -> all.mid.env.cluster.secret: "2. Secret" {class: control-flow}
+all.mid.lcol.learner -> all.mid.env.cluster.appset: "3.\nApplicationSet" {class: control-flow}
+all.mid.env.cluster.secret -> all.mid.env.cluster.appset: "nhãn, annotation" {class: data-flow}
+all.mid.env.cluster.appset -> all.mid.env.cluster.apps: "tạo svp-root" {class: control-flow}
+all.github.gitops -> all.mid.env.cluster.argocd: "kéo main\nmỗi 60 s" {class: data-flow}
+all.github.backend -> all.mid.env.cluster.argocd: "chart" {class: data-flow}
+all.mid.env.cluster.argocd -> all.mid.env.cluster.apps: "sync" {class: control-flow}

@@ -34,7 +34,8 @@ Phần này sống suốt lab: áp một lần (hai lượt), sau đó chỉ đ�
 
 ## Kiến trúc
 
-![Tổ chức svp: account nằm ở OU nào, policy gắn ở đâu](../diagrams/03-org.svg)
+![Tổ chức svp: account nằm ở OU nào, policy gắn ở đâu](../diagrams/03-org.svg#gh-light-mode-only)
+![Tổ chức svp: account nằm ở OU nào, policy gắn ở đâu](../diagrams/03-org-dark.svg#gh-dark-mode-only)
 
 *Sơ đồ khái niệm về cây tổ chức và nơi gắn policy, không phải luồng API.* Policy gắn ở root áp cho mọi account bên dưới; policy gắn ở
 OU `Prod` chỉ thêm cho `svp-prd`. SCP và RCP không áp lên management account; declarative policy và tag policy có áp.

@@ -277,9 +277,10 @@ docs-check: ## markdownlint-cli2 + lychee --offline on the Markdown (DOCS='<file
 	[ $$rc = 0 ] || echo "FAIL: docs-check" >&2; \
 	exit $$rc
 
-# docs/diagrams/<name>.d2 is the source, <name>.svg is generated; tokens.d2 holds shared classes. Engine and both themes
-# come from d2-config in each file. NAMES='<name …>' limits both targets (parallel edits never rewrite another SVG);
-# LAYOUT overrides the engine, OUT=<dir in repo> writes elsewhere, SUFFIX renames, PNG=1 adds a PNG to look at.
+# docs/diagrams/<name>.d2 is the source; <name>.svg (light) and <name>-dark.svg (dark) are generated, the page picks
+# one by the GitHub theme (docs/diagrams/README.md); tokens.d2 holds shared classes. Themes come from here, not the
+# file; --scale 1 gives the SVG its own size, so a page never stretches it. NAMES='<name …>' limits both targets,
+# LAYOUT overrides the engine, OUT=<dir in repo> writes elsewhere, SUFFIX renames, PNG=1 adds a PNG per theme.
 DIAGRAMS_DIR := docs/diagrams
 NAMES ?=
 OUT ?=
@@ -287,19 +288,21 @@ SUFFIX ?=
 LAYOUT ?=
 PNG ?=
 
-# Renders every diagram into $$out with $$layout, $$suffix and $$png set by the caller; a diagram without a dark theme
-# is an error, since the SVG would show a white box on a dark page. The container has no network.
+# Renders every diagram twice into $$out with $$layout, $$suffix and $$png set by the caller: <name>$$suffix.<ext> in
+# theme 0 and <name>$$suffix-dark.<ext> in theme 200. The container has no network.
 D2_RENDER = \
 	for f in $$srcs; do \
 	  n=$$(basename "$$f" .d2); echo "d2 $$n"; \
-	  for ext in svg $$png; do \
-	    msg=$$($(DOCKER) --network none --entrypoint d2 -v "$(CURDIR)/$(DIAGRAMS_DIR):/work:ro" -v "$$out:/out" -w /work \
-	      $(D2_IMAGE) $$layout "$$n.d2" "/out/$$n$$suffix.$$ext" 2>&1) || { echo "$$msg" >&2; echo "FAIL: d2 $$f" >&2; exit 1; }; \
+	  for variant in light dark; do \
+	    theme=0; tail=; [ $$variant = light ] || { theme=200; tail=-dark; }; \
+	    for ext in svg $$png; do \
+	      msg=$$($(DOCKER) --network none --entrypoint d2 -v "$(CURDIR)/$(DIAGRAMS_DIR):/work:ro" -v "$$out:/out" -w /work \
+	        $(D2_IMAGE) --theme $$theme --scale 1 $$layout "$$n.d2" "/out/$$n$$suffix$$tail.$$ext" 2>&1) || { echo "$$msg" >&2; echo "FAIL: d2 $$f" >&2; exit 1; }; \
+	    done; \
 	  done; \
-	  grep -q prefers-color-scheme "$$out/$$n$$suffix.svg" || { echo "FAIL: $$f has no dark theme (dark-theme-id in d2-config)" >&2; exit 1; }; \
 	done
 
-diagrams: ## D2 to SVG (light and dark in one file) of docs/diagrams/*.d2 (NAMES=, LAYOUT=, OUT=<dir>, SUFFIX=, PNG=1)
+diagrams: ## D2 to SVG (light and -dark) of docs/diagrams/*.d2 (NAMES=, LAYOUT=, OUT=<dir>, SUFFIX=, PNG=1)
 	@srcs=$$(if [ -n "$(NAMES)" ]; then for n in $(NAMES); do echo "$(DIAGRAMS_DIR)/$$n.d2"; done; \
 	  else ls $(DIAGRAMS_DIR)/*.d2 2>/dev/null | grep -v '/tokens\.d2$$'; fi); [ -n "$$srcs" ] || { echo "diagrams: no .d2 file"; exit 0; }; \
 	dir=$${OUT:-$(DIAGRAMS_DIR)}; \
@@ -309,17 +312,20 @@ diagrams: ## D2 to SVG (light and dark in one file) of docs/diagrams/*.d2 (NAMES
 	layout=; [ -z "$$LAYOUT" ] || layout="--layout=$$LAYOUT"; suffix=$$SUFFIX; png=; [ -z "$$PNG" ] || png=png; \
 	$(D2_RENDER)
 
-diagrams-check: ## Fails, naming the file, when a committed SVG differs from what its .d2 renders to or has no .d2
+diagrams-check: ## Fails, naming the file, when a committed SVG (light or -dark) differs from its .d2's render or has no .d2
 	@srcs=$$(if [ -n "$(NAMES)" ]; then for n in $(NAMES); do echo "$(DIAGRAMS_DIR)/$$n.d2"; done; \
 	  else ls $(DIAGRAMS_DIR)/*.d2 2>/dev/null | grep -v '/tokens\.d2$$'; fi); [ -n "$$srcs" ] || { echo "diagrams-check: no .d2 file"; exit 0; }; \
 	out=$$(mktemp -d) || exit 1; trap 'rm -rf "$$out"' EXIT; layout=; suffix=; png=; \
 	$(D2_RENDER); rc=0; \
 	for f in $$srcs; do \
-	  svg="$(DIAGRAMS_DIR)/$$(basename "$$f" .d2).svg"; \
-	  cmp -s "$$out/$$(basename "$$svg")" "$$svg" || { echo "FAIL: $$svg is out of date or missing (run make diagrams)" >&2; rc=1; }; \
+	  for tail in "" -dark; do \
+	    svg="$(DIAGRAMS_DIR)/$$(basename "$$f" .d2)$$tail.svg"; \
+	    cmp -s "$$out/$$(basename "$$svg")" "$$svg" || { echo "FAIL: $$svg is out of date or missing (run make diagrams)" >&2; rc=1; }; \
+	  done; \
 	done; \
 	[ -n "$(NAMES)" ] || for svg in $(DIAGRAMS_DIR)/*.svg; do \
-	  [ ! -f "$$svg" ] || [ -f "$${svg%.svg}.d2" ] || { echo "FAIL: $$svg has no .d2 source (restore it, or drop the SVG)" >&2; rc=1; }; \
+	  src="$${svg%.svg}"; src="$${src%-dark}.d2"; \
+	  [ ! -f "$$svg" ] || [ -f "$$src" ] || { echo "FAIL: $$svg has no .d2 source (restore it, or drop the SVG)" >&2; rc=1; }; \
 	done; exit $$rc
 
 # The session scripts reach the AWS account and the cluster when the learner runs them; their self-test puts fake aws,

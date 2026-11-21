@@ -31,7 +31,8 @@ Phần này sống theo buổi: apply ngay sau root env, gỡ ngay trước root
 
 ## Kiến trúc
 
-![Terraform cài gì một lần mỗi buổi, rồi Argo CD tự kéo phần còn lại từ đâu?](../diagrams/13-gitops.svg)
+![Terraform cài gì một lần mỗi buổi, rồi Argo CD tự kéo phần còn lại từ đâu?](../diagrams/13-gitops.svg#gh-light-mode-only)
+![Terraform cài gì một lần mỗi buổi, rồi Argo CD tự kéo phần còn lại từ đâu?](../diagrams/13-gitops-dark.svg#gh-dark-mode-only)
 
 Mũi tên nét đứt là điều khiển (Terraform áp, Argo CD sync), nét liền là dữ liệu. Terraform chạy trên máy người học và chỉ tới được API
 qua tunnel SSM; Argo CD chạy trong cluster và tự đọc GitHub qua NAT. Sau ba bước áp, Terraform không tham gia đường phát hành nào nữa.

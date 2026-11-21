@@ -32,7 +32,8 @@ backup (chương [07. Backup](07-backup.md)).
 
 ## Kiến trúc
 
-![Pod của env tới dữ liệu bằng đường nào, và ai báo khi dữ liệu sắp hỏng?](../diagrams/11-data.svg)
+![Pod của env tới dữ liệu bằng đường nào, và ai báo khi dữ liệu sắp hỏng?](../diagrams/11-data.svg#gh-light-mode-only)
+![Pod của env tới dữ liệu bằng đường nào, và ai báo khi dữ liệu sắp hỏng?](../diagrams/11-data-dark.svg#gh-dark-mode-only)
 
 Ba kho nằm ở subnet database của VPC (không route ra Internet): stg 2 AZ, prd 3 AZ. Security group của mỗi kho chỉ nhận đúng một
 cổng từ node SG và cluster primary SG của EKS, không rule egress. Mật khẩu Kafka và Valkey đi một chiều: Terraform ghi vào

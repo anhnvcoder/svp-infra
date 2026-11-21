@@ -204,8 +204,9 @@ AWS_PROFILE=anhnv-prd kubectl --context svp-prd -n argocd get applications.argop
 ## Chạy tay một root (không qua script)
 
 Khi cần chạy `terraform` trần ở root env (đọc plan từng bước, kiểm một lỗi). Script `tf.sh` vẫn là đường chính của buổi: nó thêm kiểm
-account, biến, mốc `timeline.tsv` và các kiểm mốc mà lệnh trần không có. Khối dưới **thay** bước 6–8, không chạy sau chúng: `cp` ghi đè
-`prd.auto.tfvars` mà `tfvars.sh env prd` đã chuẩn bị, và `export SVP_SESSION_DIR` mới tách `timeline.tsv` sang thư mục buổi khác.
+account, biến, mốc `timeline.tsv` và các kiểm mốc mà lệnh trần không có. Khối dưới **thay** bước 6–9 (init, khoá ký, plan và apply), không
+chạy sau chúng: `cp` ghi đè `prd.auto.tfvars` mà `tfvars.sh env prd` đã chuẩn bị, và `export SVP_SESSION_DIR` mới tách `timeline.tsv` sang
+thư mục buổi khác.
 
 Kiểm account trước (cột `Account` phải bằng `$SVP_AWS_PRD_ACCOUNT_ID`, `Arn` là role SSO `SvpAdmin`; khác thì dừng):
 

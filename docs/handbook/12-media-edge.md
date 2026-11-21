@@ -5,9 +5,9 @@
 ## Tổng quan
 
 Chương này dựng đường vào của người xem và đường đi của video. Người xem chỉ tới svp qua CloudFront, với ba tên: `<domain>` (web),
-`api.<domain>` (API), `media.<domain>` (video), trong đó `<domain>` là tên zone của env (`aws.svp.example` ở prd,
-`stg.aws.svp.example` ở stg); mỗi tên một distribution có tường lửa WAF riêng. Web và API đi tiếp vào VPC tới một load
-balancer không có địa chỉ công khai; video đọc từ S3. Không load balancer nào mở ra Internet.
+`api.<domain>` (API), `media.<domain>` (video), trong đó `<domain>` là biến `domain` của env, thường là tên zone của env (`aws.<domain>` ở
+prd, `stg.aws.<domain>` ở stg, theo domain gốc của các runbook); mỗi tên một distribution có tường lửa WAF riêng. Web và API đi tiếp vào VPC
+tới một load balancer không có địa chỉ công khai; video đọc từ S3. Không load balancer nào mở ra Internet.
 
 svp cần phần này vì đây là chỗ duy nhất người lạ chạm vào hệ thống: request xấu bị chặn ở edge trước khi tới VPC, cert HTTPS do AWS
 cấp và gia hạn, video được cache gần người xem. Video premium chỉ phát cho người có vé: API ký URL từng rendition, CloudFront kiểm chữ
@@ -37,7 +37,8 @@ Log Archive (chương [04. Log Archive](04-log-archive.md)).
 
 ## Kiến trúc
 
-![Video đi từ lúc tải lên tới lúc người xem phát qua những chặng nào?](../diagrams/12-media-edge.svg)
+![Video đi từ lúc tải lên tới lúc người xem phát qua những chặng nào?](../diagrams/12-media-edge.svg#gh-light-mode-only)
+![Video đi từ lúc tải lên tới lúc người xem phát qua những chặng nào?](../diagrams/12-media-edge-dark.svg#gh-dark-mode-only)
 
 Ba distribution và ba web ACL cùng tên `svp-<env>-web`, `-api`, `-media`. Web và API dùng chung VPC origin `svp-<env>-edge` tới ALB
 internal ở tầng subnet edge ([09. Env và mạng](09-envs-network.md)), rồi tới pod Envoy mà `TargetGroupBinding` của chart `svp-cluster`

@@ -5,14 +5,10 @@
 vars: {
   d2-config: {
     layout-engine: elk
-    theme-id: 0
-    dark-theme-id: 200
     pad: 20
   }
 }
 ...@tokens
-
-direction: down
 
 title: "Baseline tới từng account bằng đường nào, ai không gỡ được" {
   shape: text
@@ -20,66 +16,81 @@ title: "Baseline tới từng account bằng đường nào, ai không gỡ đư
   style: {font-size: 18; bold: true}
 }
 
-mgmt: "Management" {
-  class: account
-  label.near: top-left
-
-  root: "Root aws/baseline" {
-    class: workload
-    grid-rows: 3
-    grid-gap: 24
-    vertical-gap: 6
-    s1: "một provider, một lời gọi module mỗi account" {class: sub}
-    s2: "baseline của management: phiên SSO, không role" {class: sub}
-    r: "profile anhnv-sso" {class: root}
-  }
-  scp: "SCP svp-protect-baseline" {
-    class: governance
+all: "" {
+  grid-rows: 1
+  grid-columns: 3
+  grid-gap: 70
+  style: {stroke: transparent; fill: transparent}
+  mgmt: "Management" {
+    class: account
+    label.near: top-left
     grid-rows: 2
-    grid-gap: 24
-    vertical-gap: 6
-    s: "gắn root của tổ chức, không áp lên management" {class: sub}
-    r: "aws/org · module org-policies" {class: root}
+    grid-columns: 1
+    grid-gap: 40
+
+    root: "Root aws/baseline" {
+      class: workload
+      grid-rows: 3
+      grid-gap: 24
+      vertical-gap: 6
+      s1: "một provider, một lời gọi\nmodule mỗi account" {class: sub}
+      s2: "baseline của management:\nphiên SSO, không role" {class: sub}
+      r: "profile anhnv-sso" {class: root}
+    }
+    scp: "SCP svp-protect-baseline" {
+      class: governance
+      grid-rows: 2
+      grid-gap: 24
+      vertical-gap: 6
+      s: "gắn root của tổ chức, không\náp lên management" {class: sub}
+      r: "aws/org · module\norg-policies" {class: root}
+    }
+  }
+  member: "Mỗi account thành viên" {
+    class: account
+    label.near: top-left
+    grid-rows: 2
+    grid-columns: 1
+    grid-gap: 40
+
+    role: "OrganizationAccountAccessRole" {
+      class: governance
+      grid-rows: 1
+      grid-gap: 24
+      s: "phiên svp-terraform; role\nduy nhất SCP miễn" {class: sub}
+    }
+    baseline: "Baseline của account" {
+      class: prevention
+      grid-rows: 3
+      grid-gap: 24
+      vertical-gap: 6
+      s1: "S3 Block Public Access cấp\naccount" {class: sub}
+      s2: "EBS mã hoá mặc định, hai\nregion; CMK alias/svp-ebs ở\nstg, prd" {class: sub}
+      s3: "Config recorder theo cờ\nconfig_recording · rule\nsvp-security-*" {class: sub}
+    }
+  }
+  extr: "" {
+    grid-rows: 2
+    grid-columns: 1
+    grid-gap: 40
+    style: {stroke: transparent; fill: transparent}
+    bucket: "Bucket svp-config-…" {
+      class: data
+      grid-rows: 1
+      grid-gap: 24
+      s: "svp-log-archive,\nap-southeast-1" {class: sub}
+    }
+    bus: "Bus svp-security-events" {
+      class: alerting
+      grid-rows: 1
+      grid-gap: 24
+      s: "svp-security, ap-southeast-1" {class: sub}
+    }
   }
 }
 
-member: "Mỗi account thành viên" {
-  class: account
-  label.near: top-left
-
-  role: "OrganizationAccountAccessRole" {
-    class: governance
-    grid-rows: 1
-    grid-gap: 24
-    s: "phiên svp-terraform; role duy nhất SCP miễn" {class: sub}
-  }
-  baseline: "Baseline của account" {
-    class: prevention
-    grid-rows: 3
-    grid-gap: 24
-    vertical-gap: 6
-    s1: "S3 Block Public Access cấp account" {class: sub}
-    s2: "EBS mã hoá mặc định, hai region; CMK alias/svp-ebs ở stg, prd" {class: sub}
-    s3: "Config recorder theo cờ config_recording · rule svp-security-*" {class: sub}
-  }
-}
-
-bucket: "Bucket svp-config-…" {
-  class: data
-  grid-rows: 1
-  grid-gap: 24
-  s: "svp-log-archive, ap-southeast-1" {class: sub}
-}
-
-bus: "Bus svp-security-events" {
-  class: alerting
-  grid-rows: 1
-  grid-gap: 24
-  s: "svp-security, ap-southeast-1" {class: sub}
-}
-
-mgmt.root -> member.role: "assume role" {class: control-flow}
-member.role -> member.baseline: "áp" {class: control-flow}
-mgmt.scp -> member.baseline: "chặn sửa, trừ role đó" {class: control-flow}
-member.baseline -> bucket: "lịch sử cấu hình" {class: data-flow}
-member.baseline -> bus: "sự kiện bảo mật" {class: data-flow}
+all.mgmt.root -> all.member.role: "assume role" {class: control-flow}
+all.member.role -> all.member.baseline: "áp" {class: control-flow}
+all.mgmt.scp -> all.member.baseline: "chặn sửa, trừ\nrole đó" {class: control-flow}
+all.member.baseline -> all.extr.bucket: "lịch sử cấu hình" {class: data-flow}
+all.member.baseline -> all.extr.bus: "sự kiện bảo mật" {class: data-flow}
