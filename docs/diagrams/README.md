@@ -64,18 +64,23 @@ ngang, GitHub thu xuống vừa cột chữ nên chữ nhỏ hơn cỡ thật.
 
 ## Nhúng vào trang
 
-Mỗi sơ đồ có hai SVG, mỗi file một theme, và trang nhúng cả hai:
+Mỗi sơ đồ có hai SVG, mỗi file một theme, và trang nhúng cả hai bằng một thẻ `<picture>`; đường dẫn tương đối tính từ trang nhúng:
 
-```md
-![<câu hỏi>](../diagrams/<tên>.svg#gh-light-mode-only)
-![<câu hỏi>](../diagrams/<tên>-dark.svg#gh-dark-mode-only)
+```html
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../diagrams/<tên>-dark.svg">
+  <img src="../diagrams/<tên>.svg" alt="<câu hỏi của sơ đồ>">
+</picture>
 ```
+
+Đặt một dòng trống trước và sau khối để khối HTML không nuốt đoạn văn bên cạnh.
 
 - **Vì sao không một SVG chứa cả hai theme.** SVG trong thẻ `<img>` chọn theme theo `prefers-color-scheme` của hệ điều hành, không theo
   theme người dùng chọn trong GitHub: máy sáng mà GitHub tối thì hình vẫn sáng, nền trắng trên trang tối.
-- **Vì sao hậu tố `#gh-light-mode-only`, `#gh-dark-mode-only`.** Đây là cách GitHub tài liệu hoá để chọn ảnh theo theme của nó, cùng với
-  `<picture>`. `.markdownlint.yaml` bật `no-inline-html` (MD033), nên dùng cú pháp Markdown thuần. Chỗ khác GitHub (xem trước trong
-  editor) hiện cả hai ảnh.
+- **Vì sao `<picture>`, không hậu tố riêng của GitHub trên URL ảnh** (kiểu `#gh-…-mode-only`). Loại hậu tố này chỉ GitHub hiểu; xem trước
+  trong editor hay trình xem markdown khác hiện cả hai ảnh liền nhau. `<picture>` là HTML: GitHub chọn nguồn theo theme của nó, editor
+  theo theme của editor hay hệ điều hành, trình không hiểu `<source>` hiện bản sáng. `.markdownlint.yaml` bật `no-inline-html` (MD033) và
+  chỉ cho ba thẻ `picture`, `source`, `img` (`allowed_elements`).
 - **Cỡ.** `make diagrams` truyền `--scale 1` nên SVG mang `width`, `height` của cỡ thật, không `width` trên thẻ ảnh. GitHub chỉ thu hình
   rộng hơn cột chữ, không phóng hình nhỏ hơn.
 - Hai file cùng tên gốc, hậu tố `-dark`; `diagrams-check` kiểm cả hai và coi `<tên>-dark.svg` không còn `<tên>.d2` là mồ côi.

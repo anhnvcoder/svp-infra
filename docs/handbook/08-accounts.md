@@ -39,8 +39,10 @@ Managed Grafana, image Inspector quét) đi theo cờ của `aws/paid-features.j
 
 ## Kiến trúc
 
-![Cái gì của stg, prd sống qua destroy của buổi, và ai dùng nó](../diagrams/08-accounts.svg#gh-light-mode-only)
-![Cái gì của stg, prd sống qua destroy của buổi, và ai dùng nó](../diagrams/08-accounts-dark.svg#gh-dark-mode-only)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../diagrams/08-accounts-dark.svg">
+  <img src="../diagrams/08-accounts.svg" alt="Cái gì của stg, prd sống qua destroy của buổi, và ai dùng nó">
+</picture>
 
 Mỗi account env có đúng một bộ các khối trên. CI ở GitHub vào account bằng token OIDC, không access key. DNS cha (Cloudflare) uỷ quyền
 zone prd; zone prd uỷ quyền zone stg. Cluster của buổi kéo image từ registry, gửi telemetry vào AMP, CloudWatch Logs, X-Ray, và state
