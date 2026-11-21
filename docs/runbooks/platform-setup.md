@@ -63,7 +63,7 @@ flowchart TD
   B5["(5) aws/accounts/stg, prd: vỏ secret cache trước, rồi registry, OIDC, role CI, AMP, log group, X-Ray, AMG khi managed_grafana always"] --> B6
   B6["(6) credential pull-through cache (giữa hai lượt apply của 5)"] --> B7
   B7["(7) secret SVP_AWS_STG_ACCOUNT_ID, SVP_AWS_PRD_ACCOUNT_ID ở svp-backend, svp-frontend"] --> B8
-  B8["(8) quota chu kỳ luật AMP 15 s ở hai account"] --> B9
+  B8["(8) quota EC2 ở hai account; chu kỳ luật AMP 15 s chỉ ở prd"] --> B9
   B9["(9) đăng nhập AMG của env có managed_grafana always"] --> B10
   B10["(10) sau buổi đầu có span: retention aws/spans"]
 ```
@@ -298,8 +298,12 @@ ENV=<stg|prd>`, thứ tự ở [`github-setup.md`](github-setup.md#environment-t
 
 ## Bước (8): quota chu kỳ luật AMP
 
-Chart ghi `interval: 15s` vào mỗi nhóm luật như k3d; AMP mặc định tối thiểu 30 s, chỉnh được qua quota "Rule evaluation interval"
-([AMP quotas](https://docs.aws.amazon.com/prometheus/latest/userguide/AMP_quotas.html)). Cùng lệnh đọc mọi quota của `quota_table` trong
+Chart ghi value `rules.amp.interval` vào `interval` của mỗi nhóm luật: mặc định `15s` như k3d, prd chạy giá trị này; overlay stg của
+`svp-gitops` đặt `30s`
+([ADR-0080](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0080-amp-rule-interval-stg.md)).
+AMP mặc định tối thiểu 30 s, chỉnh được qua quota "Rule evaluation interval"
+([AMP quotas](https://docs.aws.amazon.com/prometheus/latest/userguide/AMP_quotas.html)): stg chạy với quota mặc định, chỉ prd cần
+quota 15 s. Cùng lệnh đọc mọi quota của `quota_table` trong
 `aws/scripts/preflight.sh` (một nguồn cho mọi runbook): EC2 vCPU on-demand và Spot, Elastic IP, chu kỳ luật AMP; account mới có quota
 EC2 mặc định (5 cho mỗi mã ở `ap-southeast-1`), chưa đủ cho buổi. Mức vCPU của prd cộng thêm `limits.cpu` của NodePool đọc từ
 `origin/main` của `svp-gitops`. Mỗi account (stg rồi prd):
@@ -309,27 +313,28 @@ aws/scripts/preflight.sh quotas stg
 aws/scripts/preflight.sh quotas stg request
 ```
 
-- **Mong đợi:** lệnh đầu in mỗi quota một dòng: `ok    <mã> <tên>: <giá trị> (min|max <cần>)` khi đủ, dòng của AMP là `ok    L-… AMP rule
-  evaluation interval (seconds): 15.0 (max 15)`; `FAIL  <mã> <tên>: <giá trị>, needs min|max <cần>: run preflight.sh quotas <env>
-  request` khi thiếu. Lệnh sau là lệnh duy nhất ghi: mỗi quota thiếu một yêu cầu, in `note  <mã> <tên>: <giá trị>, asked for <cần> (<id>
-  PENDING|CASE_OPENED): wait for APPROVED, then run quotas again`; quota đã có yêu cầu mở thì `note  … a request is already open … not
-  sent again`.
+- **Mong đợi:** lệnh đầu in mỗi quota một dòng: `ok    <mã> <tên>: <giá trị> (min|max <cần>)` khi đủ, dòng của AMP ở stg
+  là `ok    L-… AMP rule evaluation interval (seconds): 30.0 (max 30)` (quota mặc định), ở prd `… 15.0 (max 15)`; `FAIL  <mã> <tên>:
+  <giá trị>, needs min|max <cần>: run preflight.sh quotas <env> request` khi thiếu. Lệnh sau là lệnh duy nhất ghi: mỗi quota thiếu
+  một yêu cầu, in `note  <mã> <tên>: <giá trị>, asked for <cần> (<id> PENDING|CASE_OPENED): wait for APPROVED, then run quotas again`;
+  quota đã có yêu cầu mở thì `note  … a request is already open … not sent again`.
 - **Kiểm:** chờ `APPROVED` (account mới thường vài giờ tới 1–2 ngày) rồi chạy lại lệnh đầu tới khi mọi dòng `ok`. Mỗi yêu cầu thành một
   case loại "Service limits" trong Support Center của account đó.
-- **Bẫy:** quota AMP bị Service Quotas từ chối: mục dưới.
+- **Bẫy:** quota AMP của prd bị Service Quotas từ chối: mục dưới.
 
 ### Khi Service Quotas từ chối: mở case Support
 
 Quota này là chu kỳ **tối thiểu**, xin 15 là xin giảm, nên API Service Quotas từ chối (script in `FAIL  service-quotas
 request-service-quota-increase …` với `IllegalArgumentException … greater than the default quota value of 30.0`). Đường còn lại là một
-case Support, gói Basic mở được loại này. Mỗi account một case (quota tính theo account):
+case Support, gói Basic mở được loại này. Quota tính theo account, nên chỉ `svp-prd` cần case; stg chạy với quota mặc định. Case đã
+mở ở stg không cần huỷ: quota được duyệt vẫn đạt `max 30` của stg.
 
-1. Đăng nhập AWS access portal, chọn đúng account (`svp-stg`, rồi `svp-prd`), role `SvpAdmin`. Case mở ở account nào thì chỉ quota của
+1. Đăng nhập AWS access portal, chọn account `svp-prd`, role `SvpAdmin`. Case mở ở account nào thì chỉ quota của
    account đó đổi.
 2. Mở [Support Center](https://support.console.aws.amazon.com/support/home), **Create case**, chọn **Service limit increase** (không chọn
    Technical: gói Basic không mở được).
 3. Điền: Service **Service Limit Increase**, Category **General**, Severity **General question**; Contact method **Web**.
-4. Subject, Description chép từ khối dưới, thay `<env>`. Mã quota lấy ở dòng `L-…` mà `preflight.sh quotas <env>` in (`L-8DEDEE8E` ở
+4. Subject, Description chép từ khối dưới. Mã quota lấy ở dòng `L-…` mà `preflight.sh quotas prd` in (`L-8DEDEE8E` ở
    `ap-southeast-1`).
 
    ```text
@@ -342,7 +347,7 @@ case Support, gói Basic mở được loại này. Mỗi account một case (qu
    Current value: 30 seconds (default)
    Requested value: 15 seconds
 
-   Use case: the alerting and recording rules of our AMP workspace (environment <env>) use a 15 second evaluation
+   Use case: the alerting and recording rules of our AMP workspace (environment prd) use a 15 second evaluation
    interval, the same as the self-managed Prometheus they come from, so that alert latency and recording rule
    resolution stay the same on AMP. The workspace has few rule groups and a small number of series.
 
@@ -352,13 +357,13 @@ case Support, gói Basic mở được loại này. Mỗi account một case (qu
    ```
 
 5. **Submit**. Ghi id case vào thư mục buổi, không vào file commit (một file cho mọi case Support, cả case xác minh CloudFront):
-   `printf '%s\t<env>\tamp-rule-interval\t<case-id>\n' "$(date -u +%FT%TZ)" >>"$SVP_SESSION_DIR/support-cases.tsv"` (ngoài buổi: ghi chú
+   `printf '%s\tprd\tamp-rule-interval\t<case-id>\n' "$(date -u +%FT%TZ)" >>"$SVP_SESSION_DIR/support-cases.tsv"` (ngoài buổi: ghi chú
    của người học).
 
-- **Mong đợi:** AWS trả lời qua email root của account đó và ở **Your support cases**. Sáng hôm sau `aws/scripts/preflight.sh quotas
-  <env>` in `ok    L-… AMP rule evaluation interval (seconds): 15.0 (max 15)`.
-- **Bẫy:** case bị từ chối: không chạy buổi có luật trên AMP; báo AI (ADR-0063 §5: quyết lại bằng ADR mới, không chạy với 30 s). Buổi stg
-  đầu kiểm chu kỳ thật ở phép kiểm cảnh báo của runbook buổi.
+- **Mong đợi:** AWS trả lời qua email root của account prd và ở **Your support cases**. Sáng hôm sau `aws/scripts/preflight.sh quotas
+  prd` in `ok    L-… AMP rule evaluation interval (seconds): 15.0 (max 15)`.
+- **Bẫy:** case bị từ chối: không chạy buổi prd có luật trên AMP; báo AI (quyết lại bằng ADR mới, không chạy prd với 30 s). Buổi prd kiểm
+  chu kỳ thật ở phép kiểm (d) của runbook buổi prd (mong đợi chu kỳ `15`); stg chạy `30` nên không chứng minh gì cho prd.
 
 ### Xác minh CloudFront của account workload
 

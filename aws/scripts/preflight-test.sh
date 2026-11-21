@@ -154,7 +154,11 @@ expect "quotas stg without the NodePool file: note and the floor 10 (12 is enoug
   sh -c 'grep -q "^note  no limits.cpu in " "$1" && grep -q "^ok    L-34B43A08" "$2"' _ "$err" "$out"
 quotas_ok
 sel service-quotas_get-service-quota "--quota-code L-AMP1" "30.0"
-fails "quotas stg: AMP rule interval 30 against max 15" 'L-AMP1 AMP rule evaluation interval (seconds): 30.0, needs max 15' run quotas stg
+expect "quotas stg: AMP rule interval 30 at the default quota is ok (max 30)" \
+  sh -c 'bash "$1/preflight.sh" quotas stg >"$2" 2>"$3" && grep -qx "ok    L-AMP1 AMP rule evaluation interval (seconds): 30.0 (max 30)" "$2"' _ "$here" "$out" "$err"
+sel service-quotas_list-requested-service-quota-change-history-by-quota "--quota-code L-AMP1" "r-15\tCASE_OPENED\t15.0"
+expect "quotas stg: AMP 30 with a 15 s request open is still ok, no FAIL" \
+  sh -c 'bash "$1/preflight.sh" quotas stg >"$2" 2>"$3" && grep -q "^ok    L-AMP1 .*: 30.0 (max 30)" "$2" && ! grep -q "^FAIL" "$3"' _ "$here" "$out" "$err"
 ans service-quotas_list-aws-default-service-quotas ""
 fails "quotas stg: no AMP quota named like the runbook says" "hold 0 line" run quotas stg
 quotas_ok
@@ -163,6 +167,10 @@ expect "quotas prd: the prd rows only (no Spot), all with anhnv-prd" \
   sh -c 'grep -q "^ok    L-0263D0A3 Elastic IP: 5.0 (min 3)" "$1" && ! grep -q L-34B43A08 "$2" && ! grep -v "^anhnv-prd " "$3"' _ "$out" "$log" "$log.profiles"
 sel service-quotas_get-service-quota "--quota-code L-1216C47A" "46.0"
 expect "quotas prd: 46 vCPU on-demand is enough" sh -c 'bash "$1/preflight.sh" quotas prd >"$2" 2>&1 && grep -q "^ok    L-1216C47A .*: 46.0 (min 46)" "$2"' _ "$here" "$out"
+sel service-quotas_get-service-quota "--quota-code L-AMP1" "30.0"
+fails "quotas prd: AMP rule interval 30 against max 15" \
+  'L-AMP1 AMP rule evaluation interval (seconds): 30.0, needs max 15: run preflight.sh quotas prd request' run quotas prd
+sel service-quotas_get-service-quota "--quota-code L-AMP1" "15.0"
 SVP_GITOPS_DIR=$work/none run quotas prd 2>/dev/null && true
 expect "quotas prd without the NodePool file: note and the floor 16" \
   sh -c 'grep -q "^note  no limits.cpu in envs/prd/svp-cluster.yaml or platforms/eks/svp-cluster.yaml" "$1" && grep -q "^ok    L-1216C47A .*(min 16)" "$2"' _ "$err" "$out"
@@ -191,7 +199,16 @@ ans service-quotas_get-service-quota "10.0"
 ans service-quotas_list-requested-service-quota-change-history-by-quota ""
 ans service-quotas_request-service-quota-increase "r-9\tPENDING"
 run quotas stg request || true
-expect "quotas stg request: AMP interval asked for 15" grep -q 'request-service-quota-increase --service-code aps --quota-code L-AMP1 --desired-value 15 ' "$log"
+expect "quotas stg request: the AMP interval at 30 is not asked for" \
+  sh -c 'grep -q "^ok    L-AMP1 .*: 30.0 (max 30)" "$1" && ! grep -q "request-service-quota-increase --service-code aps" "$2"' _ "$out" "$log"
+sel_reset
+sel service-quotas_get-service-quota "--quota-code L-AMP1" "30.0"
+ans service-quotas_list-aws-default-service-quotas "L-AMP1\tRule evaluation interval\t30.0\tTrue"
+ans service-quotas_get-service-quota "10.0"
+ans service-quotas_list-requested-service-quota-change-history-by-quota ""
+ans service-quotas_request-service-quota-increase "r-9\tPENDING"
+run quotas prd request || true
+expect "quotas prd request: AMP interval asked for 15" grep -q 'request-service-quota-increase --service-code aps --quota-code L-AMP1 --desired-value 15 ' "$log"
 sel_reset
 quotas_ok
 fails "quotas stg with SVP_AWS_STG_ACCOUNT_ID of another account" 'profile anhnv-stg is account .111111111111.' renv SVP_AWS_STG_ACCOUNT_ID=999999999999 bash "$here/preflight.sh" quotas stg

@@ -283,7 +283,9 @@ Dán danh sách panel trống theo dashboard (rỗng là đạt).
 
 Loại: `lõi`.
 
-(d) Cảnh báo và canary (ADR-0063 §5, §8). Luật của chart ở AMP, chu kỳ 15 s (quota của bước (8) của
+(d) Cảnh báo và canary (ADR-0063 §5, §8,
+[ADR-0080](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0080-amp-rule-interval-stg.md)).
+Luật của chart ở AMP, chu kỳ 30 s của overlay stg (quota mặc định, bước (8) của
 [`platform-setup.md`](platform-setup.md#bước-8-quota-chu-kỳ-luật-amp)), Alertmanager của AMP gửi SNS:
 
 ```sh
@@ -294,7 +296,7 @@ AWS_PROFILE=anhnv-stg aws amp describe-alert-manager-definition --workspace-id "
 amp_get api/v1/rules | jq -r '.data.groups[] | "\(.name) \(.interval) \(.rules | length)"'
 ```
 
-Mong hai namespace `svp-alerts`, `slo-generated` `ACTIVE`; `ACTIVE`; mỗi nhóm luật một dòng chu kỳ `15`. Namespace `CREATION_FAILED` (chu
+Mong hai namespace `svp-alerts`, `slo-generated` `ACTIVE`; `ACTIVE`; mỗi nhóm luật một dòng chu kỳ `30`. Namespace `CREATION_FAILED` (chu
 kỳ dưới quota) hay thiếu: dán output và `AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp-obs describe
 rulegroupsnamespaces.prometheusservice.services.k8s.aws`.
 

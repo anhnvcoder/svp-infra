@@ -191,8 +191,8 @@ Account dùng chung giữ giá trị của file suốt buổi. Buổi kết thú
   `DS` ở DNS cha); file có sẵn từ trước còn dòng `acme_email` thì xoá như điều kiện 5 của stg.
 - [ ] **Nền tảng managed đã áp** theo [`platform-setup.md`](platform-setup.md#thứ-tự-áp-lần-đầu) tới hết bước (9) cho account prd, như
   [điều kiện 8 của stg](session-stg.md#điều-kiện-trước): registry, cache có credential, AMP, log group
-  `/svp/prd/otel`, quota chu kỳ luật 15 s (AMG `svp-prd` có từ bước đổi cờ trước buổi); role `svp-ci-ecr-promote` có, nên `promote-prd`
-  của cổng dưới chép được image vào ECR prd.
+  `/svp/prd/otel`, quota chu kỳ luật 15 s, riêng prd vì stg chạy 30 s với quota mặc định (AMG `svp-prd` có từ bước đổi cờ trước
+  buổi); role `svp-ci-ecr-promote` có, nên `promote-prd` của cổng dưới chép được image vào ECR prd.
 - [ ] **Backup đã áp** theo [`backup-setup.md`](backup-setup.md#thứ-tự-áp-lần-đầu), như [điều kiện 10 của
       stg](session-stg.md#điều-kiện-trước), với Backup policy `svp-backup-prd` gắn OU `Prod`, vault
   `svp-prd-copy`, vault `svp-prd` cùng role `svp-prd-backup` và opt-in của `aws/accounts/prd`.
