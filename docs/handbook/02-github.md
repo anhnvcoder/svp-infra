@@ -32,7 +32,8 @@ và đọc lại; README của root liệt kê từng thứ và lý do.
 
 ## Kiến trúc
 
-![Cài đặt GitHub của các repo đi từ máy người học bằng hai đường nào, và cái gì không vào state?](../diagrams/02-github.svg)
+![Cài đặt GitHub của repo đi từ máy người học bằng hai đường nào, cái gì không vào state?](../diagrams/02-github.svg#gh-light-mode-only)
+![Cài đặt GitHub của repo đi từ máy người học bằng hai đường nào, cái gì không vào state?](../diagrams/02-github-dark.svg#gh-dark-mode-only)
 
 Mũi tên nét đứt là điều khiển, nét liền là dữ liệu. Cột trái của GitHub là cái Terraform giữ: `plan` so code với GitHub và thấy mọi
 lệch. Cột phải là cái script `github/scripts/github-app.py` ghi một lần rồi `make github-check` đọc lại. Không cài đặt nào do CI áp.

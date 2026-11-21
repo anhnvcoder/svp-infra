@@ -33,7 +33,8 @@ của account env, quét image) bật lại trong buổi bằng cờ chi phí.
 
 ## Kiến trúc
 
-![Sáu lớp bảo mật của svp và root dựng mỗi lớp](../diagrams/security-layers.svg)
+![Sáu lớp bảo mật của svp và root dựng mỗi lớp](../diagrams/security-layers.svg#gh-light-mode-only)
+![Sáu lớp bảo mật của svp và root dựng mỗi lớp](../diagrams/security-layers-dark.svg#gh-dark-mode-only)
 
 *Sơ đồ khái niệm về trách nhiệm bảo mật, không phải luồng API: quản trị và phòng ngừa áp lên mọi workload; phát hiện và điều tra chạy
 song song trên cùng tài nguyên, mỗi nhánh dẫn tới việc của nó.*
@@ -42,7 +43,8 @@ Chương này dựng lớp **Phát hiện** và **Cảnh báo**. Các lớp còn
 chương [06. Baseline](06-baseline.md), điều tra ở chương [04. Log Archive](04-log-archive.md), phục hồi ở chương
 [07. Backup](07-backup.md).
 
-![Finding của account env tới email: hai nhánh theo cờ security_hub](../diagrams/security-alert-overview.svg)
+![Finding của account env tới email: hai nhánh theo cờ security_hub](../diagrams/security-alert-overview.svg#gh-light-mode-only)
+![Finding của account env tới email: hai nhánh theo cờ security_hub](../diagrams/security-alert-overview-dark.svg#gh-dark-mode-only)
 
 Cờ `security_hub` của `aws/paid-features.json` chọn nhánh: account bật Security Hub CSPM gửi finding qua aggregator, account tắt nó để
 tiết kiệm vẫn có finding GuardDuty tới email qua delegated admin của GuardDuty. Với file của repo, stg và prd đi nhánh `off`.
@@ -228,7 +230,8 @@ suất xuất finding, mặc định 6 giờ (ADR-0060 §10). Runbook tạo find
 
 Sơ đồ chi tiết của hai nhánh, với rule, region và role:
 
-![Một finding của account env tới email bằng đường nào](../diagrams/security-finding-to-email.svg)
+![Một finding của account env tới email bằng đường nào](../diagrams/security-finding-to-email.svg#gh-light-mode-only)
+![Một finding của account env tới email bằng đường nào](../diagrams/security-finding-to-email-dark.svg#gh-dark-mode-only)
 
 ### Amazon SNS
 

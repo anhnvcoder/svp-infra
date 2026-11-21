@@ -187,8 +187,7 @@ GuardDuty, mỗi region một lần (`ap-southeast-1` và `us-east-1`, nơi nằ
   rồi chạy lại.
 - **Việc tay:** dán toàn bộ output. Của finding, chỉ mức HIGH, CRITICAL tới email (cả finding phát sinh trong lúc gỡ), qua rule
   `svp-security-guardduty-findings` (dòng chung `svp-security: GuardDuty Finding …` cho finding ở `us-east-1`); mức thấp hơn
-  (ngoài `[SAMPLE]`) đối chiếu thời điểm với `timeline.tsv` (diễn tập, đo) rồi xử lý theo mục "Đọc bảng Security Hub định kỳ" của
-  runbook
+  (ngoài `[SAMPLE]`) đối chiếu thời điểm với `timeline.tsv` (diễn tập, đo) rồi xử lý theo mục "Đọc bảng Security Hub định kỳ" của runbook
   [`security-alert.md`](https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks/security-alert.md#đọc-bảng-security-hub-định-kỳ).
 
 ### Control Security Hub của buổi

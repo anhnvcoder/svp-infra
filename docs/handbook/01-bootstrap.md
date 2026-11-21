@@ -28,7 +28,8 @@ không tốn tiền.
 
 ## Kiến trúc
 
-![Bootstrap giữ state cho các root của management và báo tiền của cả tổ chức](../diagrams/01-bootstrap.svg)
+![Bootstrap giữ state cho các root của management và báo tiền của cả tổ chức](../diagrams/01-bootstrap.svg#gh-light-mode-only)
+![Bootstrap giữ state cho các root của management và báo tiền của cả tổ chức](../diagrams/01-bootstrap-dark.svg#gh-dark-mode-only)
 
 State của root env (`aws/envs/<env>`, `aws/gitops/<env>`) không ở đây: mỗi account env có bucket riêng do `aws/accounts/<env>` tạo
 (chương [08. Account env](08-accounts.md)). Bucket của management chỉ giữ state của các root chạy bằng

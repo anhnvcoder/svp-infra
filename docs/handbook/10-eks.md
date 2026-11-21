@@ -30,7 +30,8 @@ ghi lại ở buổi sau. Registry, telemetry và khoá mà các role trong clus
 
 ## Kiến trúc
 
-![Pod trong cluster lấy quyền AWS và secret bằng đường nào?](../diagrams/10-eks.svg)
+![Pod trong cluster lấy quyền AWS và secret bằng đường nào?](../diagrams/10-eks.svg#gh-light-mode-only)
+![Pod trong cluster lấy quyền AWS và secret bằng đường nào?](../diagrams/10-eks-dark.svg#gh-dark-mode-only)
 
 Mũi tên nét đứt là lời xin quyền, nét liền là dữ liệu. Pod không gọi STS hay Secrets Manager bằng credential của node: agent Pod
 Identity đổi ServiceAccount của pod lấy phiên tạm của đúng một role. External Secrets đọc entry bằng role của namespace rồi ghi

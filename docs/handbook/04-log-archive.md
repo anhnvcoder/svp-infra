@@ -30,7 +30,8 @@ lab kết thúc, có chủ đích.
 
 ## Kiến trúc
 
-![Log của mọi account về đâu, giữ bao lâu, ai đọc được](../diagrams/04-log-archive.svg)
+![Log của mọi account về đâu, giữ bao lâu, ai đọc được](../diagrams/04-log-archive.svg#gh-light-mode-only)
+![Log của mọi account về đâu, giữ bao lâu, ai đọc được](../diagrams/04-log-archive-dark.svg#gh-dark-mode-only)
 
 Mỗi nguồn ghi bằng principal dịch vụ của nó (`cloudtrail.amazonaws.com`, `config.amazonaws.com`, `guardduty.amazonaws.com`,
 `delivery.logs.amazonaws.com`); bucket policy chỉ nhận đúng dịch vụ đó, từ tổ chức này, qua TLS. Không principal IAM nào của account

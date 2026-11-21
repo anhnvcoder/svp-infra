@@ -12,14 +12,16 @@ Phần sống lâu (tổ chức, log, bảo mật, backup, nền của mỗi acc
 EKS, dữ liệu, edge, Argo CD) dựng rồi gỡ trong một buổi. Root áp lần đầu theo thứ tự dưới đây, thứ tự mà các runbook dựng một lần nối
 nhau. Mỗi khối ghi tên root, account nó áp vào và việc chính; `ENV` là `stg` hay `prd`.
 
-![Thứ tự áp: mỗi root áp vào account nào và dựng gì](docs/diagrams/readme-apply-flow.svg)
+![Thứ tự áp: mỗi root áp vào account nào và dựng gì](docs/diagrams/readme-apply-flow.svg#gh-light-mode-only)
+![Thứ tự áp: mỗi root áp vào account nào và dựng gì](docs/diagrams/readme-apply-flow-dark.svg#gh-dark-mode-only)
 
 `aws/org` áp hai lượt, trước và sau `aws/log-archive`; bước của từng lượt ở runbook trong bảng [Bản đồ](#bản-đồ).
 
 Bảo mật xếp thành sáu lớp bổ sung nhau: quản trị và phòng ngừa áp lên mọi workload; phát hiện (dẫn tới cảnh báo) và điều tra (dẫn
 tới phục hồi) chạy song song. Đây là sơ đồ khái niệm về trách nhiệm, không phải luồng API:
 
-![Sáu lớp bảo mật của svp và root dựng mỗi lớp](docs/diagrams/security-layers.svg)
+![Sáu lớp bảo mật của svp và root dựng mỗi lớp](docs/diagrams/security-layers.svg#gh-light-mode-only)
+![Sáu lớp bảo mật của svp và root dựng mỗi lớp](docs/diagrams/security-layers-dark.svg#gh-dark-mode-only)
 
 ## Bắt đầu
 

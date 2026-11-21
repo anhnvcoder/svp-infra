@@ -3,14 +3,10 @@
 vars: {
   d2-config: {
     layout-engine: elk
-    theme-id: 0
-    dark-theme-id: 200
     pad: 20
   }
 }
 ...@tokens
-
-direction: down
 
 title: "Thứ tự áp: mỗi root áp vào account nào và dựng gì" {
   shape: text
@@ -18,102 +14,120 @@ title: "Thứ tự áp: mỗi root áp vào account nào và dựng gì" {
   style: {font-size: 18; bold: true}
 }
 
-lasting: "Sống lâu, áp một lần, ở lại giữa các buổi" {
-  class: group
-  label.near: top-left
-  bootstrap: "aws/bootstrap" {
-    class: workload
+all: "" {
+  grid-rows: 2
+  grid-columns: 1
+  grid-gap: 70
+  style: {stroke: transparent; fill: transparent}
+  lasting: "Sống lâu, áp một lần, ở lại giữa các buổi" {
+    class: group
+    label.near: top-left
     grid-rows: 3
-    grid-gap: 24
-    vertical-gap: 6
-    a: "management" {class: root}
-    w: "Bucket state · KMS key · budget · Cost Anomaly Detection" {class: sub}
+    grid-columns: 3
+    grid-gap: 50
+    bootstrap: "aws/bootstrap" {
+      class: workload
+      grid-rows: 3
+      grid-gap: 24
+      vertical-gap: 6
+      a: "management" {class: root}
+      w: "Bucket state · KMS key ·\nbudget · Cost Anomaly\nDetection" {class: sub}
+    }
+
+    github: "github" {
+      class: workload
+      grid-rows: 3
+      grid-gap: 24
+      vertical-gap: 6
+      a: "management (state) ·\nGitHub" {class: root}
+      w: "Repo · ruleset · environment\n· cài đặt GitHub" {class: sub}
+    }
+
+    org: "aws/org" {
+      class: governance
+      grid-rows: 3
+      grid-gap: 24
+      vertical-gap: 6
+      a: "management" {class: root}
+      w: "Organizations · OU · SCP ·\nRCP · Identity Center ·\ntrail" {class: sub}
+    }
+
+    baseline: "aws/baseline" {
+      class: prevention
+      grid-rows: 3
+      grid-gap: 24
+      vertical-gap: 6
+      a: "mọi account (qua role)" {class: root}
+      w: "S3 BPA · EBS mã hoá · Config" {class: sub}
+    }
+
+    security: "aws/security" {
+      class: detection
+      grid-rows: 3
+      grid-gap: 24
+      vertical-gap: 6
+      a: "svp-security (qua role)" {class: root}
+      w: "GuardDuty · Security Hub ·\nInspector · cảnh báo" {class: sub}
+    }
+
+    logarchive: "aws/log-archive" {
+      class: investigation
+      grid-rows: 3
+      grid-gap: 24
+      vertical-gap: 6
+      a: "svp-log-archive (qua role)" {class: root}
+      w: "Bucket log của tổ chức · KMS\nkey" {class: sub}
+    }
+
+    backup: "aws/backup" {
+      class: recovery
+      grid-rows: 3
+      grid-gap: 24
+      vertical-gap: 6
+      a: "svp-backup (qua role)" {class: root}
+      w: "Vault copy có Vault Lock" {class: sub}
+    }
+
+    accounts: "aws/accounts/ENV" {
+      class: workload
+      grid-rows: 3
+      grid-gap: 24
+      vertical-gap: 6
+      a: "svp-stg · svp-prd" {class: root}
+      w: "State · zone · ECR · AMP ·\nvault env" {class: sub}
+    }
   }
-  github: "github" {
-    class: workload
-    grid-rows: 3
-    grid-gap: 24
-    vertical-gap: 6
-    a: "management (state) · GitHub" {class: root}
-    w: "Repo · ruleset · environment · cài đặt GitHub" {class: sub}
-  }
-  org: "aws/org" {
-    class: governance
-    grid-rows: 3
-    grid-gap: 24
-    vertical-gap: 6
-    a: "management" {class: root}
-    w: "Organizations · OU · SCP · RCP · Identity Center · trail" {class: sub}
-  }
-  logarchive: "aws/log-archive" {
-    class: investigation
-    grid-rows: 3
-    grid-gap: 24
-    vertical-gap: 6
-    a: "svp-log-archive (qua role)" {class: root}
-    w: "Bucket log của tổ chức · KMS key" {class: sub}
-  }
-  security: "aws/security" {
-    class: detection
-    grid-rows: 3
-    grid-gap: 24
-    vertical-gap: 6
-    a: "svp-security (qua role)" {class: root}
-    w: "GuardDuty · Security Hub · Inspector · cảnh báo" {class: sub}
-  }
-  baseline: "aws/baseline" {
-    class: prevention
-    grid-rows: 3
-    grid-gap: 24
-    vertical-gap: 6
-    a: "mọi account (qua role)" {class: root}
-    w: "S3 BPA · EBS mã hoá · Config" {class: sub}
-  }
-  backup: "aws/backup" {
-    class: recovery
-    grid-rows: 3
-    grid-gap: 24
-    vertical-gap: 6
-    a: "svp-backup (qua role)" {class: root}
-    w: "Vault copy có Vault Lock" {class: sub}
-  }
-  accounts: "aws/accounts/ENV" {
-    class: workload
-    grid-rows: 3
-    grid-gap: 24
-    vertical-gap: 6
-    a: "svp-stg · svp-prd" {class: root}
-    w: "State · zone · ECR · AMP · vault env" {class: sub}
+  session: "Trong buổi, dựng rồi gỡ" {
+    class: group
+    label.near: top-left
+    grid-rows: 1
+    grid-columns: 2
+    grid-gap: 70
+    envs: "aws/envs/ENV" {
+      class: data
+      grid-rows: 3
+      grid-gap: 24
+      vertical-gap: 6
+      a: "svp-ENV" {class: root}
+      w: "VPC · EKS · RDS · MSK ·\nElastiCache · edge" {class: sub}
+    }
+    gitops: "aws/gitops/ENV" {
+      class: workload
+      grid-rows: 3
+      grid-gap: 24
+      vertical-gap: 6
+      a: "cluster EKS của svp-ENV" {class: root}
+      w: "Argo CD · ApplicationSet" {class: sub}
+    }
   }
 }
 
-session: "Trong buổi, dựng rồi gỡ" {
-  class: group
-  label.near: top-left
-  envs: "aws/envs/ENV" {
-    class: data
-    grid-rows: 3
-    grid-gap: 24
-    vertical-gap: 6
-    a: "svp-ENV" {class: root}
-    w: "VPC · EKS · RDS · MSK · ElastiCache · edge" {class: sub}
-  }
-  gitops: "aws/gitops/ENV" {
-    class: workload
-    grid-rows: 3
-    grid-gap: 24
-    vertical-gap: 6
-    a: "cluster EKS của svp-ENV" {class: root}
-    w: "Argo CD · ApplicationSet" {class: sub}
-  }
-}
-
-lasting.bootstrap -> lasting.github {class: control-flow}
-lasting.github -> lasting.org {class: control-flow}
-lasting.org -> lasting.logarchive {class: control-flow}
-lasting.logarchive -> lasting.security {class: control-flow}
-lasting.security -> lasting.baseline {class: control-flow}
-lasting.baseline -> lasting.backup {class: control-flow}
-lasting.backup -> lasting.accounts {class: control-flow}
-lasting.accounts -> session.envs {class: control-flow}
-session.envs -> session.gitops {class: control-flow}
+all.lasting.bootstrap -> all.lasting.github: {class: control-flow}
+all.lasting.github -> all.lasting.org: {class: control-flow}
+all.lasting.org -> all.lasting.logarchive: {class: control-flow}
+all.lasting.logarchive -> all.lasting.security: {class: control-flow}
+all.lasting.security -> all.lasting.baseline: {class: control-flow}
+all.lasting.baseline -> all.lasting.backup: {class: control-flow}
+all.lasting.backup -> all.lasting.accounts: {class: control-flow}
+all.lasting.accounts -> all.session.envs: {class: control-flow}
+all.session.envs -> all.session.gitops: {class: control-flow}

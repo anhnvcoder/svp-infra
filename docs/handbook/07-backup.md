@@ -33,7 +33,8 @@ cùng đường bằng job theo yêu cầu, đo thời gian khôi phục, rồi 
 
 ## Kiến trúc
 
-![Bản copy của stg, prd nằm ở đâu, ai xoá được](../diagrams/07-backup.svg)
+![Bản copy của stg, prd nằm ở đâu, ai xoá được](../diagrams/07-backup.svg#gh-light-mode-only)
+![Bản copy của stg, prd nằm ở đâu, ai xoá được](../diagrams/07-backup-dark.svg#gh-dark-mode-only)
 
 Backup policy của tổ chức sinh plan trong account env; plan chụp tài nguyên có tag vào vault env, rồi copy sang vault khoá ở `svp-backup`.
 Root `aws/backup` chạy bằng `anhnv-sso` ở management; provider duy nhất của nó assume `OrganizationAccountAccessRole` của `svp-backup`,

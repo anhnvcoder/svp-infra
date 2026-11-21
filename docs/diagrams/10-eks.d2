@@ -4,14 +4,10 @@
 vars: {
   d2-config: {
     layout-engine: elk
-    theme-id: 0
-    dark-theme-id: 200
     pad: 20
   }
 }
 ...@tokens
-
-direction: down
 
 title: "Pod trong cluster lấy quyền AWS và secret bằng đường nào?" {
   shape: text
@@ -22,19 +18,53 @@ title: "Pod trong cluster lấy quyền AWS và secret bằng đường nào?" {
 env: "svp-stg · svp-prd (ap-southeast-1)" {
   class: account
   label.near: top-left
+  grid-rows: 1
+  grid-columns: 3
+  grid-gap: 60
+
+  s3: "Amazon S3" {
+    class: data
+    grid-rows: 2
+    grid-gap: 24
+    vertical-gap: 6
+    s: "bucket uploads, media của\nenv" {class: sub}
+    r: "role\nsvp-<env>-video-service" {class: root}
+  }
 
   cluster: "Cluster EKS svp-<env> · node system on-demand, node Karpenter" {
     class: region
     label.near: top-left
+    grid-rows: 2
+    grid-columns: 2
+    grid-gap: 60
+
+    cp: "Control plane" {
+      class: governance
+      grid-rows: 2
+      grid-gap: 24
+      vertical-gap: 6
+      s: "API chỉ endpoint private ·\nSecret mã hoá KMS" {class: sub}
+      r: "aws/modules/eks" {class: root}
+    }
 
     eso: "External Secrets Operator" {
       class: workload
       grid-rows: 2
       grid-gap: 24
       vertical-gap: 6
-      s: "SecretStore svp-store mỗi namespace" {class: sub}
+      s: "SecretStore svp-store mỗi\nnamespace" {class: sub}
       r: "external-secrets/external-secrets" {class: root}
     }
+
+    video: "Pod video-service" {
+      class: workload
+      grid-rows: 2
+      grid-gap: 24
+      vertical-gap: 6
+      s: "env từ Secret\nvideo-service-env" {class: sub}
+      r: "svp/video-service" {class: root}
+    }
+
     agent: "Pod Identity Agent" {
       class: prevention
       grid-rows: 2
@@ -43,54 +73,39 @@ env: "svp-stg · svp-prd (ap-southeast-1)" {
       s: "add-on, mỗi node một agent" {class: sub}
       r: "169.254.170.23:80" {class: root}
     }
-    cp: "Control plane" {
-      class: governance
-      grid-rows: 2
-      grid-gap: 24
-      vertical-gap: 6
-      s: "API chỉ endpoint private · Secret mã hoá KMS" {class: sub}
-      r: "aws/modules/eks" {class: root}
-    }
-    video: "Pod video-service" {
-      class: workload
-      grid-rows: 2
-      grid-gap: 24
-      vertical-gap: 6
-      s: "env từ Secret video-service-env" {class: sub}
-      r: "svp/video-service" {class: root}
-    }
+
+    grid-columns: 2
+    grid-gap: 60
   }
 
-  auth: "EKS Auth" {
-    class: prevention
+  extr: "" {
     grid-rows: 2
-    grid-gap: 24
-    vertical-gap: 6
-    s: "AssumeRoleForPodIdentity · session tag" {class: sub}
-    r: "cluster, namespace, ServiceAccount" {class: root}
-  }
-  sm: "Secrets Manager" {
-    class: data
-    grid-rows: 2
-    grid-gap: 24
-    vertical-gap: 6
-    s: "entry svp/<env>/pg-roles, kafka-users, …" {class: sub}
-    r: "đọc bằng role svp-<env>-external-secrets-<ns>" {class: root}
-  }
-  s3: "Amazon S3" {
-    class: data
-    grid-rows: 2
-    grid-gap: 24
-    vertical-gap: 6
-    s: "bucket uploads, media của env" {class: sub}
-    r: "role svp-<env>-video-service" {class: root}
+    grid-columns: 1
+    grid-gap: 40
+    style: {stroke: transparent; fill: transparent}
+    sm: "Secrets Manager" {
+      class: data
+      grid-rows: 2
+      grid-gap: 24
+      vertical-gap: 6
+      s: "entry svp/<env>/pg-roles,\nkafka-users, …" {class: sub}
+      r: "đọc bằng role\nsvp-<env>-external-secrets-<ns>" {class: root}
+    }
+    auth: "EKS Auth" {
+      class: prevention
+      grid-rows: 2
+      grid-gap: 24
+      vertical-gap: 6
+      s: "AssumeRoleForPodIdentity ·\nsession tag" {class: sub}
+      r: "cluster, namespace,\nServiceAccount" {class: root}
+    }
   }
 }
 
-env.cluster.eso -> env.cluster.agent: "xin credential" {class: control-flow}
-env.cluster.video -> env.cluster.agent: "xin credential" {class: control-flow}
-env.cluster.agent -> env.auth: "đổi ServiceAccount lấy role" {class: control-flow}
-env.cluster.eso -> env.sm: "GetSecretValue" {class: data-flow}
+env.cluster.eso -> env.cluster.agent: "xin\ncredential" {class: control-flow}
+env.cluster.video -> env.cluster.agent: "xin\ncredential" {class: control-flow}
+env.cluster.agent -> env.extr.auth: "đổi\nServiceAccount\nlấy role" {class: control-flow}
+env.cluster.eso -> env.extr.sm: "GetSecretValue" {class: data-flow}
 env.cluster.eso -> env.cluster.cp: "ghi Secret" {class: data-flow}
-env.cluster.cp -> env.cluster.video: "Secret vào env của pod" {class: data-flow}
-env.cluster.video -> env.s3 {class: data-flow}
+env.cluster.cp -> env.cluster.video: "Secret vào\nenv của pod" {class: data-flow}
+env.cluster.video -> env.s3: {class: data-flow}

@@ -59,13 +59,12 @@ Kiểm đủ mười một điều kiện trước bước 1. Điều kiện 1, 
 - [ ] **1. Account stg đã có baseline.** Root `aws/org` đã tạo account `svp-stg` và gán permission set `SvpAdmin`; profile `anhnv-stg` đã
   ghi bằng `aws/scripts/sso-profiles.sh write` ([`org-security-setup.md`, 4c](org-security-setup.md#4c-profile-của-account-thành-viên));
   baseline `aws/accounts/stg` đã apply (bucket state, KMS key `alias/svp-tfstate`, zone `stg.aws.<domain>`, budget).
-  - **Việc tay:** zone đó là zone con của zone `aws.<domain>` của account prd: được uỷ quyền bằng bản ghi `NS` của
-    `delegated_subdomains` ở `aws/accounts/prd`, còn `aws.<domain>` bằng bốn bản ghi `NS` `aws` ở DNS cha của domain
-    ([`accounts-setup.md`, bước (5)](accounts-setup.md#bước-5-uỷ-quyền-zone-của-env)). Bước tay này một lần, không nằm trong buổi.
-    Account mới còn phải được AWS xác minh trước khi tạo tài nguyên CloudFront, và quota EC2 đủ cho node của env: chưa xác minh thì
-    `apply` đỏ ở `aws_cloudfront_distribution` với `AccessDenied: Your account must be verified before you can add new CloudFront
-    resources`, khi EKS, RDS đã chạy và tính tiền. Mở case AWS Support từ account stg (Account and billing, kèm dòng lỗi và RequestID
-    nếu có) và chờ xác nhận trước buổi đầu.
+  - **Việc tay:** zone đó là zone con của zone `aws.<domain>` của account prd: được uỷ quyền bằng bản ghi `NS` của `delegated_subdomains` ở
+    `aws/accounts/prd`, còn `aws.<domain>` bằng bốn bản ghi `NS` `aws` ở DNS cha của domain ([`accounts-setup.md`, bước
+    (5)](accounts-setup.md#bước-5-uỷ-quyền-zone-của-env)). Bước tay này một lần, không nằm trong buổi. Account mới còn phải được AWS xác
+    minh trước khi tạo tài nguyên CloudFront, và quota EC2 đủ cho node của env: chưa xác minh thì `apply` đỏ ở `aws_cloudfront_distribution`
+    với `AccessDenied: Your account must be verified before you can add new CloudFront resources`, khi EKS, RDS đã chạy và tính tiền. Mở
+    case AWS Support từ account stg (Account and billing, kèm dòng lỗi và RequestID nếu có) và chờ xác nhận trước buổi đầu.
   - **Bẫy:** `check-dns.sh` đỏ thì quay lại `accounts-setup.md`, không bắt đầu buổi. Không gỡ baseline stg giữa các buổi: zone stg dựng
     lại có name server mới, phải `apply` lại `aws/accounts/prd` mới phân giải được.
   - **Kiểm:** distribution media đăng ký gói CloudFront flat-rate Free: account đang dùng AWS Free Tier không đăng ký được, và mỗi
@@ -396,7 +395,8 @@ Bước tay chen giữa các bước script: đọc [Cờ chi phí của buổi]
 API](session-stg-deploy.md#tunnel-tới-api-sau-bước-9-trước-bước-11) sau bước 9 và trước bước 11, [Làm nóng
 cache](session-stg-deploy.md#làm-nóng-cache-sau-bước-11-trước-bước-12) sau bước 11 và trước bước 12, sinh clip của [Transcode
 (b)–(e)](session-stg-check-edge-media.md#phép-kiểm-transcode) trong lúc chờ bước 9, phép kiểm của bước 16 (năm trang
-`session-stg-check-<nhóm>.md`, bảng dưới), [đọc bản copy](session-stg-drills.md#1719-diễn-tập-khôi-phục) sau bước 17, [finding bảo
+`session-stg-check-<nhóm>.md`, bảng dưới; giờ chạy của từng phép ở "Điều kiện trước" của trang), [đọc bản
+copy](session-stg-drills.md#1719-diễn-tập-khôi-phục) sau bước 17, [finding bảo
 mật](session-stg-drills.md#finding-bảo-mật-của-buổi-sau-bước-19-trước-bước-20) trước bước 20, chạy lại truy vấn dữ liệu sau bước 31 ([Kết
 thúc buổi](#kết-thúc-buổi), khi buổi đã ghi nó).
 
