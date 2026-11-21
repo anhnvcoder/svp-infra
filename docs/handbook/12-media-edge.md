@@ -37,8 +37,10 @@ Log Archive (chương [04. Log Archive](04-log-archive.md)).
 
 ## Kiến trúc
 
-![Video đi từ lúc tải lên tới lúc người xem phát qua những chặng nào?](../diagrams/12-media-edge.svg#gh-light-mode-only)
-![Video đi từ lúc tải lên tới lúc người xem phát qua những chặng nào?](../diagrams/12-media-edge-dark.svg#gh-dark-mode-only)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../diagrams/12-media-edge-dark.svg">
+  <img src="../diagrams/12-media-edge.svg" alt="Video đi từ lúc tải lên tới lúc người xem phát qua những chặng nào?">
+</picture>
 
 Ba distribution và ba web ACL cùng tên `svp-<env>-web`, `-api`, `-media`. Web và API dùng chung VPC origin `svp-<env>-edge` tới ALB
 internal ở tầng subnet edge ([09. Env và mạng](09-envs-network.md)), rồi tới pod Envoy mà `TargetGroupBinding` của chart `svp-cluster`

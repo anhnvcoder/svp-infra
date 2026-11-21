@@ -32,8 +32,10 @@ vault backup) ở root `aws/accounts/<env>` và root này chỉ đọc chúng. s
 
 ## Kiến trúc
 
-![Một VPC env chia thành tầng nào, và mỗi đường ra vào đi qua đâu?](../diagrams/09-envs-network.svg#gh-light-mode-only)
-![Một VPC env chia thành tầng nào, và mỗi đường ra vào đi qua đâu?](../diagrams/09-envs-network-dark.svg#gh-dark-mode-only)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../diagrams/09-envs-network-dark.svg">
+  <img src="../diagrams/09-envs-network.svg" alt="Một VPC env chia thành tầng nào, và mỗi đường ra vào đi qua đâu?">
+</picture>
 
 Mỗi tầng có route table và NACL riêng. Chỉ tầng public có route tới Internet Gateway, và trong đó chỉ có NAT gateway; tầng edge và tầng
 database chỉ có route `local`. Không load balancer nào internet-facing: người xem vào qua CloudFront tới ALB internal ở tầng edge

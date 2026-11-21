@@ -52,8 +52,10 @@ Cách sinh và kiểm các trang draw.io: [`docs/diagrams/README.md`](../diagram
 Thứ tự áp lần đầu, từ root đầu tiên tới root của buổi; `ENV` là `stg` hay `prd`. `aws/org` áp hai lượt, trước và sau
 `aws/log-archive`.
 
-![Thứ tự áp: mỗi root áp vào account nào và dựng gì](../diagrams/readme-apply-flow.svg#gh-light-mode-only)
-![Thứ tự áp: mỗi root áp vào account nào và dựng gì](../diagrams/readme-apply-flow-dark.svg#gh-dark-mode-only)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../diagrams/readme-apply-flow-dark.svg">
+  <img src="../diagrams/readme-apply-flow.svg" alt="Thứ tự áp: mỗi root áp vào account nào và dựng gì">
+</picture>
 
 | Phần | Root | Sống | Vì sao |
 | --- | --- | --- | --- |

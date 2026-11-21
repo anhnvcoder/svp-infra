@@ -30,8 +30,10 @@ buổi chỉ `svp-security` ghi, và account env bật lại trong buổi bằng
 
 ## Kiến trúc
 
-![Baseline tới từng account bằng đường nào, ai không gỡ được](../diagrams/06-baseline.svg#gh-light-mode-only)
-![Baseline tới từng account bằng đường nào, ai không gỡ được](../diagrams/06-baseline-dark.svg#gh-dark-mode-only)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../diagrams/06-baseline-dark.svg">
+  <img src="../diagrams/06-baseline.svg" alt="Baseline tới từng account bằng đường nào, ai không gỡ được">
+</picture>
 
 Root `aws/baseline` chạy bằng `anhnv-sso` ở management. Provider của management không assume role; provider của mỗi account thành viên
 assume `OrganizationAccountAccessRole` của account đó. Mỗi account đúng một lời gọi module
