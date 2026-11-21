@@ -82,8 +82,8 @@ Kiểm đủ mười một điều kiện trước bước 1. Điều kiện 1, 
     trả `ResourceNotFoundException`, script in `ok    account plan of stg is PAID (member of an organization, no account plan)`: cũng đạt.
     `quotas` đọc mỗi quota một dòng `ok    <mã> <tên>: <giá trị> (min|max <cần>)`: on-demand chuẩn (`L-1216C47A`) cho nhóm node hệ thống
     tới `system_node_max_size` (2 × số AZ node `m7g.large`, 2 vCPU mỗi node) cộng bastion `t4g.nano` (2 vCPU), Spot chuẩn (`L-34B43A08`)
-    cho `limits.cpu` của NodePool (`envs/stg/svp-cluster.yaml` của `svp-gitops`, số ở ADR-0056 §2), và quota chu kỳ luật AMP. Số cần ở
-    `quota_table` của script.
+    cho `limits.cpu` của NodePool (`envs/stg/svp-cluster.yaml` của `svp-gitops`, số ở ADR-0056 §2), và quota chu kỳ luật AMP: quota mặc
+    định đạt, dòng `ok    <mã> AMP rule evaluation interval (seconds): 30.0 (max 30)`. Số cần ở `quota_table` của script.
   - **Bẫy:** `FAIL  N CloudFront plan(s) left in stg …`: gói sót của buổi trước hay của lần thử ở console giữ một suất và distribution của
     nó: huỷ theo mục [Lệnh xoá tay theo loại](#lệnh-xoá-tay-theo-loại) (CloudFront) rồi chạy lại. `FAIL  account plan of stg is FREE`:
     account còn ở AWS Free Tier, apply sẽ đỏ ở gói: không bắt đầu buổi, dán output cho AI. `FAIL  <mã> …: needs min <cần>: run
@@ -146,22 +146,22 @@ Kiểm đủ mười một điều kiện trước bước 1. Điều kiện 1, 
   - **Bẫy:** thiếu delivery destination thì `apply` đỏ ở `aws_cloudwatch_log_delivery`.
 - [ ] **8. Nền tảng managed đã áp** theo [`platform-setup.md`](platform-setup.md#thứ-tự-áp-lần-đầu) tới hết bước (9): registry, pull-through
   cache có credential, workspace AMP, log group `/svp/stg/otel` của `aws/accounts/stg` (root env đọc chúng bằng data source; AMG theo cờ
-  `managed_grafana`, mục [Cờ chi phí của buổi](#cờ-chi-phí-của-buổi)), quota chu kỳ luật AMP 15 s đã duyệt, secret CI đã đặt. Một lần,
-  không nằm trong buổi.
-  - **Bẫy:** thiếu một phần thì `plan` dừng ở data source hay precondition; thiếu quota thì luật không lên AMP.
+  `managed_grafana`, mục [Cờ chi phí của buổi](#cờ-chi-phí-của-buổi)), quota EC2 đã duyệt, secret CI đã đặt. Một lần, không trong buổi.
+  - **Bẫy:** thiếu một phần thì `plan` dừng ở data source hay precondition. Luật AMP chạy 30 s (quota mặc định), không cần case Support.
 - [ ] **9. Chart có nền tảng managed.** `revision` của `envs/stg/charts.yaml` (lệnh của điều kiện 2) là commit của repo code có Collector
-  theo nền tảng và value `canaryPrometheus`.
-  - **Kiểm** (hai dòng `ok`):
+  theo nền tảng, value `canaryPrometheus` và `rules.amp.interval`.
+  - **Kiểm** (ba dòng `ok`):
 
     ```sh
     rev=$(git -C ../gitops show origin/main:envs/stg/charts.yaml | sed -n 's/^revision: *//p')
     git -C ../backend fetch origin
     git -C ../backend cat-file -e "$rev:deploy/observability/otelcol/k8s-eks.yaml" && echo ok
     git -C ../backend show "$rev:deploy/helm/svp-service/values.yaml" | grep -q '^canaryPrometheus:' && echo ok
+    git -C ../backend show "$rev:deploy/helm/svp-observability/values.yaml" | grep -q '^ *interval: 15s' && echo ok
     ```
 
   - **Bẫy:** chart cũ bỏ qua values eks mới: không metric, log, trace vào dịch vụ managed, image kéo thẳng upstream, canary hỏi
-    Prometheus không còn trả lời.
+    Prometheus không còn trả lời; chart chưa có `rules.amp.interval` thì luật ra 15 s, dưới quota, namespace `CREATION_FAILED`.
 - [ ] **10. Backup đã áp** theo [`backup-setup.md`](backup-setup.md#thứ-tự-áp-lần-đầu): account `svp-backup` và biến
   `SVP_AWS_BACKUP_ACCOUNT_ID`, Backup policy `svp-backup-stg` gắn OU `NonProd` (plan `svp-stg` của account), vault `svp-stg-copy` ở
   `svp-backup`, vault `svp-stg` cùng role `svp-stg-backup` và opt-in ở `aws/accounts/stg`, profile `anhnv-backup-ro`. Một lần, không nằm
