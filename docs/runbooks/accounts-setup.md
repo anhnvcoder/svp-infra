@@ -80,20 +80,22 @@ Bucket state chưa có, nên lần đầu chạy trên state local: file overrid
 ```sh
 printf 'terraform {\n  backend "local" {}\n}\n' > local_override.tf
 AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform init
-AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform plan -out=stg.tfplan
+AWS_PROFILE=anhnv-stg \
+TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" \
+  terraform plan -input=false -out=stg.tfplan
+AWS_PROFILE=anhnv-stg terraform show -no-color stg.tfplan > "$SVP_SESSION_DIR/stg-plan.txt"
 ```
 
-- **Mong đợi** (số ứng với `aws/paid-features.json` của repo: `managed_grafana` của stg và prd là `off`): ở stg `Plan: 68 to add, 0 to
-  change, 0 to destroy`: 11 của `module.baseline` (key và alias, bucket cùng 5 cấu hình, zone, bản ghi `caa`, budget; không bản ghi
-  `delegation`), 43 của `module.registry`, `module.observability` (danh sách ở [N1](#n1-phần-của-root-và-số-tài-nguyên); không phần AMG),
-  9 của `backup.tf`, 4 của `module.ci_plan_role` và 1 `aws_iam_service_linked_role.spot`. Ở prd `Plan: 79 to add, 0 to change, 0 to
-  destroy`: 41 của hai module đó, 11 của `module.baseline`, 9 của `backup.tf`, 4 của `module.ci_plan_role`, thêm 6 của DNSSEC
-  (`aws_kms_key.dnssec` và alias ở `us-east-1`, `aws_route53_key_signing_key.this`, `aws_route53_hosted_zone_dnssec.this`, hai
-  `aws_cloudwatch_metric_alarm.dnssec`), 3 của query log (log group, resource policy, `aws_route53_query_log.this`) và 5 của `module.alarms`
-  (key, alias, topic, topic policy, subscription email).
+- **Mong đợi:** `Plan: <n> to add, 0 to change, 0 to destroy` với `<n>` bằng tổng `to add` của mục
+  [`aws/accounts/stg`](../reference/inventory.md#awsaccountsstg) (hay [`aws/accounts/prd`](../reference/inventory.md#awsaccountsprd))
+  ở inventory: cột "Phần" chia số đó theo `module.baseline`, `module.registry`, `module.observability`, `backup.tf`, `module.ci_plan_role`
+  và `main.tf` (role Spot ở stg). Inventory tính theo `aws/paid-features.json` của repo (`managed_grafana` của stg, prd là `off`, nên không
+  có phần AMG). Ở prd, plan của bước này không có bản ghi `delegation` mà inventory đếm (`delegated_subdomains` còn trống tới bước (5)):
+  số `to add` kém inventory một.
 
 ```sh
-AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform apply stg.tfplan
+AWS_PROFILE=anhnv-stg terraform apply -input=false stg.tfplan && rm stg.tfplan
 ../../scripts/tfvars.sh backend stg
 ```
 
@@ -103,14 +105,17 @@ AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_
   console): nhập role vào state rồi `plan` lại:
 
   ```sh
-  AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" \
-    terraform import aws_iam_service_linked_role.spot \
+  AWS_PROFILE=anhnv-stg \
+  TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+  TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" \
+    terraform import -input=false aws_iam_service_linked_role.spot \
     "arn:aws:iam::$SVP_AWS_STG_ACCOUNT_ID:role/aws-service-role/spot.amazonaws.com/AWSServiceRoleForEC2Spot"
   ```
 
   Mong `Plan: 0 to add, 1 to change, 0 to destroy`: `aws_iam_service_linked_role.spot` sửa tại chỗ (`~`), `tags_all` thêm bốn tag của
   `default_tags` (`Project`, `Env`, `ManagedBy`, `Stack`); role có mô tả thì thêm dòng `description` về `null` (code không đặt mô tả). Có
-  thay đổi khác thì dừng, dán plan; không thì apply plan đó, và plan lần hai phải là `No changes.`.
+  thay đổi khác thì dừng, dán plan; không thì apply plan đó (hai lệnh `plan`, `show` đầu bước, rồi `apply`), và plan lần hai phải là
+  `No changes.`.
 - **Bẫy:** apply đỏ ở `aws_ecr_pull_through_cache_rule` của `ghcr` hay `docker-hub` với `SecretNotFoundException` hay
   `UnableToAccessSecretException`: hai secret `ecr-pullthroughcache/*` đã tạo nhưng chưa có giá trị. Ghi credential theo
   [`platform-setup.md`, bước (6)](platform-setup.md#bước-6-credential-của-pull-through-cache) rồi `plan`, `apply` lại; lệnh `-target`
@@ -129,17 +134,22 @@ AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform outp
 ## Bước (4): chuyển state vào bucket
 
 ```sh
-rm local_override.tf stg.tfplan
+rm local_override.tf
 # init hỏi có chép state lên bucket không: trả lời yes
 AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform init -migrate-state -backend-config=../../backend-stg.hcl
-AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" \
-  terraform plan    # mong đợi: No changes.
+AWS_PROFILE=anhnv-stg \
+TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" \
+  terraform plan -input=false   # mong đợi: No changes.
 AWS_PROFILE=anhnv-stg aws s3api head-object --region ap-southeast-1 \
   --bucket "$(AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform output -raw state_bucket)" \
   --key aws/accounts/stg/terraform.tfstate --query '{SSE:ServerSideEncryption,Key:SSEKMSKeyId}'
 ```
 
 - **Mong đợi:** `init` chép state lên bucket; `plan` là `No changes.`; `head-object` in `SSE` `aws:kms` và `Key` là ARN của key state.
+- **Bẫy profile mặc định:** từ bước này state nằm trong bucket của account env. Lệnh thiếu dòng `AWS_PROFILE=anhnv-<env>` chạy bằng
+  `anhnv-sso`, mặc định của `.envrc`, nên ra `AccessDenied` trên bucket state hay key KMS của account env. Mọi lệnh ở root của account
+  env ghi profile của env ngay trong lệnh; gặp lỗi này thì thêm dòng đó rồi chạy lại.
 - **Việc tay:** cả ba đúng thì xoá state local còn lại: `rm -f terraform.tfstate terraform.tfstate.backup`, rồi `cd ../../..` về `infra/`.
 
 ## Bước (5): uỷ quyền zone của env
@@ -194,18 +204,22 @@ cd ../../..
 aws/scripts/tfvars.sh delegation
 cd aws/accounts/prd
 ../../scripts/check-account.sh prd
-AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform plan -out=prd.tfplan
+AWS_PROFILE=anhnv-prd \
+TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" \
+TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" \
+  terraform plan -input=false -out=prd.tfplan
+AWS_PROFILE=anhnv-prd terraform show -no-color prd.tfplan > "$SVP_SESSION_DIR/prd-plan.txt"
 ```
 
 - **Mong đợi:** `tfvars.sh delegation` đọc zone stg từ `zone_name` của `stg.auto.tfvars`, bốn name server từ output `name_servers` của
   `aws/accounts/stg`, đặt lại cả biến `delegated_subdomains` của file prd thành đúng mục đó, không đổi dòng khác (`ok    …
-  delegated_subdomains: zone of stg, 4 name servers written`). Plan: `Plan: 1 to add, 0 to change, 0 to destroy`, đúng
-  `module.baseline.aws_route53_record.delegation["stg.aws.<domain>"]`.
+  delegated_subdomains: zone of stg, 4 name servers written`). Plan chỉ thêm một tài nguyên, đúng
+  `module.baseline.aws_route53_record.delegation["stg.aws.<domain>"]`, không `change` hay `destroy`.
 - **Bẫy:** output không đúng bốn tên DNS thì `FAIL  output name_servers of aws/accounts/stg has N names, not 4` và không ghi gì.
   Validation của biến chỉ chạy lúc `plan`: tên không phải con của zone prd hay số name server khác bốn thì dừng ở đó.
 
 ```sh
-AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform apply prd.tfplan && rm prd.tfplan
+AWS_PROFILE=anhnv-prd terraform apply -input=false prd.tfplan && rm prd.tfplan
 ns=$(cd ../stg && AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform output -json name_servers | jq -r '.[]' | sort)
 for r in 1.1.1.1 8.8.8.8; do
   diff <(dig NS stg.aws.<domain> +short @"$r" | sed 's/\.$//' | sort) <(echo "$ns") && echo "$r: delegation OK"
@@ -223,7 +237,7 @@ Gỡ rồi dựng lại baseline stg cho zone stg bốn name server mới. Bản
    [`lab-teardown.md`, `aws/accounts/<env>`](lab-teardown.md#awsaccountsenv) (mong `0 to add, 0 to change, 1 to destroy`, đúng bản ghi
    `delegation` đó).
 2. Gỡ baseline stg theo các bước còn lại của mục đó, rồi dựng lại từ bước (1) của runbook này.
-3. Thêm lại mục bằng `aws/scripts/tfvars.sh delegation` và làm lại 5b (plan mong `1 to add, 0 to change, 0 to destroy`).
+3. Thêm lại mục bằng `aws/scripts/tfvars.sh delegation` và làm lại 5b (plan chỉ thêm bản ghi `delegation`, không `change` hay `destroy`).
 
 Từ bước 1 tới khi apply ở bước 3 xong, `stg.aws.<domain>` không phân giải.
 
@@ -260,6 +274,8 @@ Mọi thứ của runbook này sống suốt lab. Gỡ hẳn một env (bucket, 
 ## Khi một bước đỏ
 
 - Lỗi ở `plan`: không gì đổi trên account; sửa nguyên nhân (biến terminal, `.auto.tfvars`, phiên SSO), chạy lại đúng bước.
+- `Error acquiring the state lock` kèm Lock ID (thường sau Ctrl+C một lệnh đang chờ nhập):
+  [`operations.md`, Khoá state kẹt](../reference/operations.md#khoá-state-kẹt).
 - Lỗi giữa `apply`: phần đã tạo nằm trong state; `plan` lại chỉ còn phần chưa tạo. Dán lỗi và plan mới trước khi apply lại;
   `-target`: [`operations.md`, Khi apply lỗi giữa chừng](../reference/operations.md#khi-apply-lỗi-giữa-chừng).
 - Plan có `destroy` hay `-/+` ở zone, bucket, key có sẵn: dừng, không apply, dán plan.
@@ -274,24 +290,21 @@ Khi account đã apply một bản trước của root này, và root nay có ph
 
 #### N1. Phần của root và số tài nguyên
 
-| Phần | Tài nguyên | stg | prd |
-| --- | --- | --- | --- |
-| `CAA` | `module.baseline.aws_route53_record.caa` | 1 | 1 |
-| DNSSEC, query log của zone prd | 6 của DNSSEC, 3 của query log, 5 của `module.alarms` ([bước (3)](#bước-3-apply-lần-đầu-state-local)) | — | 14 |
-| Registry, observability | `module.registry`, `module.observability` (danh sách dưới bảng) | 43 | 41 |
-| Backup | 9 của `backup.tf` ([`backup-setup.md`, bước (6)](backup-setup.md#bước-6-awsaccountsstg-awsaccountsprd)) | 9 | 9 |
-| Role plan của CI | `module.ci_plan_role`: `aws_iam_role.this`, `aws_iam_role_policy_attachment.read_only`, `aws_iam_role_policy.read`, `aws_iam_role_policy.deny` | 4 | 4 |
-| Role Spot | `aws_iam_service_linked_role.spot` | 1 | — |
+Số tài nguyên mỗi phần nằm ở bảng "Phần" của mục [`aws/accounts/stg`](../reference/inventory.md#awsaccountsstg) và
+[`aws/accounts/prd`](../reference/inventory.md#awsaccountsprd) trong inventory (account trống chạy lần đầu). Nâng cấp account đã có một
+phần: lấy bảng theo phần, trừ phần account đã có. Các phần:
 
-- `module.registry` (stg 34, prd 32): key KMS và alias, 8 `aws_ecr_repository.release` (`local.release_repositories`),
-  `aws_ecr_registry_scanning_configuration.this`, 5 `aws_ecr_pull_through_cache_rule.this`, 2 `aws_secretsmanager_secret.cache`, 5
-  `aws_ecr_repository_creation_template.cache`, role `svp-<env>-ecr-template` và policy của nó, `aws_iam_openid_connect_provider.github`,
-  mỗi role của `ci_roles` một `aws_iam_role.ci` và một `aws_iam_role_policy.ci` (stg 4, prd 3).
-- `module.observability` (stg 9, prd 9 với file của repo): key KMS và alias, workspace AMP và `aws_prometheus_workspace_configuration`, log
-  group `/svp/<env>/otel` và stream `otel-collector`, `aws_cloudwatch_log_resource_policy.xray_spans`,
-  `aws_xray_trace_segment_destination.this`, `aws_xray_indexing_rule.default`; khi cờ `managed_grafana` của env là `always` (env vắng khỏi
-  file), hay `session` và buổi đang mở, thêm 7 của AMG: role `svp-<env>-grafana` và policy, workspace, hai `aws_grafana_role_association`,
-  service account `svp-grafana-operator`, tham số SSM `/svp/<env>/grafana-workspace-id`.
+| Phần | Gồm |
+| --- | --- |
+| `module.baseline` | key và bucket state, zone, `CAA`; ở prd thêm DNSSEC, query log của zone |
+| `module.alarms` (chỉ prd) | key, topic, subscription email của alarm DNS |
+| `module.registry`, `module.observability` | ECR, cache, role CI; AMP, log group, X-Ray (cờ `managed_grafana` thêm phần AMG) |
+| `backup.tf`, `module.backup_vault` | vault, key của env ([`backup-setup.md`](backup-setup.md#bước-6-awsaccountsstg-awsaccountsprd)) |
+| `module.ci_plan_role` | role plan chỉ đọc của CI |
+| `main.tf` (chỉ stg) | `aws_iam_service_linked_role.spot` |
+
+Số repo `release` và `ci_roles` của registry theo `local.release_repositories` và `ci_roles` ở `locals` của root: inventory đếm theo
+code hiện tại; registry có từ trước khi `local.release_repositories` thêm repo thì chỉ thiếu một `aws_ecr_repository.release` mỗi repo mới.
 
 #### N2. Điều kiện
 
@@ -312,25 +325,41 @@ Từ `infra/`:
 cd aws/accounts/stg
 ../../scripts/check-account.sh stg
 AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform init -backend-config=../../backend-stg.hcl
-AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform plan -out=stg.tfplan
+AWS_PROFILE=anhnv-stg \
+TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" \
+  terraform plan -input=false -out=stg.tfplan
+AWS_PROFILE=anhnv-stg terraform show -no-color stg.tfplan > "$SVP_SESSION_DIR/stg-plan.txt"
 ```
 
 - **Mong đợi:** `check-account.sh` in `ok    account … of stg, …AWSReservedSSO_SvpAdmin_…`. Plan chỉ thêm (`0 to destroy`); mọi tài nguyên
-  thuộc một phần của bảng N1; phần nào có trong plan thì đủ số ở cột của env; số `to add` bằng tổng các phần đó. Thay đổi duy nhất được
-  phép là `1 to change` khi phần role plan có trong plan: `module.baseline.aws_kms_key.state` sửa tại chỗ, chỉ `policy` thêm statement
-  `CiPlanReadsState`.
-- **Kiểm:** account chỉ có baseline (cùng `CAA` và, ở prd, DNSSEC, query log): stg `Plan: 57 to add, 1 to change, 0 to destroy`, prd
-  `Plan: 54 to add, 1 to change, 0 to destroy`. Đã có registry, observability: stg `14 to add`, prd `13 to add` (backup, role plan, ở stg
-  role Spot), cùng `1 to change`. Đã có cả backup: stg `5 to add`, prd `4 to add`, cùng `1 to change`. Registry có từ trước khi
-  `local.release_repositories` thêm repo: phần registry chỉ thiếu một `aws_ecr_repository.release` mỗi repo mới.
-- **Bẫy:** dừng (không apply, dán plan) nếu có `change`, `destroy`, tài nguyên ngoài bảng hay phần thiếu tài nguyên; trừ khi account đã có
+  thuộc một phần của bảng N1; phần account chưa có thì plan thêm đủ số của nó ở inventory, và `to add` bằng tổng các phần đó. Riêng
+  `module.baseline`, `module.alarms` của account đời đầu (chỉ có baseline cũ) thì chỉ thêm phần còn thiếu, không đủ số inventory:
+  - `module.baseline`: `aws_route53_record.caa`; ở prd còn 6 tài nguyên DNSSEC (`aws_kms_key.dnssec[0]`, `aws_kms_alias.dnssec[0]`,
+    `aws_route53_key_signing_key.this[0]`, `aws_route53_hosted_zone_dnssec.this[0]`, hai `aws_cloudwatch_metric_alarm.dnssec`) và 3 query
+    log (`aws_cloudwatch_log_group.query_log[0]`, `aws_cloudwatch_log_resource_policy.query_log[0]`, `aws_route53_query_log.this[0]`);
+  - `module.alarms` (chỉ prd): đủ 5 (key, alias, topic, policy của topic, subscription email).
+
+  Thay đổi được phép, tối đa `2 to change`, chỉ hai sửa tại chỗ:
+  - `module.baseline.aws_kms_key.state` khi phần role plan có trong plan: chỉ `policy` thêm statement `CiPlanReadsState`;
+  - `module.baseline.aws_budgets_budget.monthly`: chỉ `limit_amount`, về giá trị mà `budget_limit_usd` của `<env>.auto.tfvars` cho.
+- **Kiểm:** `to add` bằng tổng các phần của [`aws/accounts/<env>`](../reference/inventory.md#awsaccountsstg) trong inventory, trừ tài
+  nguyên account đã có. Ví dụ prd đời đầu chỉ có baseline cũ (11 tài nguyên, gồm bản ghi `delegation` của bước (5)): 80 − 11 = 69 trước
+  khi áp 5a, tức 15 của baseline, alarms ở trên (1 + 6 + 3 + 5) cộng 54 của `backup.tf` 8, `module.backup_vault` 1,
+  `module.ci_plan_role` 4, `module.observability` 9, `module.registry` 32; sau 5a (hai secret cache đã có) còn 67 cho 5b. Cùng tối đa
+  `2 to change`, `0 to destroy`.
+- **Bẫy:** lệnh thiếu `AWS_PROFILE=anhnv-<env>`: [bẫy profile mặc định của bước (4)](#bước-4-chuyển-state-vào-bucket). Dừng (không apply,
+  dán plan) nếu có `change` ngoài hai sửa trên, `destroy`, `-/+`, hay tài nguyên ngoài bảng và ngoài danh sách tài nguyên còn thiếu ở
+  trên; trừ khi account đã có
   AMG mà cờ `managed_grafana` của env là `session` hay `off`, hay đã quét `ENHANCED` mà cờ `inspector_ecr` là `off`: plan còn xoá, sửa
   đúng phần đổi cờ, áp theo [`paid-features.md`](paid-features.md#awsaccountsenv).
 
 ```sh
-AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform apply stg.tfplan && rm stg.tfplan
-AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" \
-  terraform plan    # expect: No changes.
+AWS_PROFILE=anhnv-stg terraform apply -input=false stg.tfplan && rm stg.tfplan
+AWS_PROFILE=anhnv-stg \
+TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" \
+  terraform plan -input=false   # expect: No changes.
 ```
 
 #### N4. Việc sau apply của từng phần

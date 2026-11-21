@@ -1,5 +1,5 @@
 # The cost flags of every account of the organization, read from aws/paid-features.json by each root that switches a
-# paid service: no provider, no resource. Design notes: aws/modules/paid-features/README.md.
+# paid service: no provider, no resource. Design notes: docs/handbook/15-cost.md.
 
 locals {
   accounts = ["backup", "log-archive", "mgmt", "prd", "security", "stg"]

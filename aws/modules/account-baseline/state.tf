@@ -8,7 +8,8 @@ locals {
 resource "aws_s3_bucket" "state" {
   bucket = local.state_bucket
 
-  # Losing this bucket loses the state of every root of the account. Removing it on purpose: aws/accounts/README.md.
+  # Losing this bucket loses the state of every root of the account. Removing it on purpose:
+  # docs/runbooks/lab-teardown.md#awsaccountsenv.
   lifecycle {
     prevent_destroy = true
   }

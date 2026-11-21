@@ -40,7 +40,7 @@ while read -r name var; do
   # list-accounts keeps a closed account for 90 days, so one rebuilt under the same name is no duplicate of it; a name
   # held by closed accounts alone still fails below, as not ACTIVE.
   case $(grep -c . <<<"$rows" || true) in
-    0) fail "no account $name in the organization: apply aws/org first (README.md of aws/org)" ;;
+    0) fail "no account $name in the organization: apply aws/org first (docs/runbooks/org-security-setup.md, step (2))" ;;
     1) ;;
     *)
       live=$(grep -vE ' (CLOSED|SUSPENDED|PENDING_CLOSURE)$' <<<"$rows" || true)

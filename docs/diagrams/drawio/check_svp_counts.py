@@ -6,7 +6,7 @@ and every other kind on the page. Offline: the sizes come from aws/envs/<env>/<e
 variables.tf (build_svp.envs()), never from a plan.
 The drawing is read back from the file, so a spec that draws the wrong number fails here even though it read the right size.
 
-    python3 .claude/skills/aws-drawio-diagram/scripts/check_svp_counts.py [docs/diagrams/svp-aws.drawio]
+    python3 docs/diagrams/drawio/check_svp_counts.py [docs/diagrams/svp-aws.drawio]
 Exits 1 on any mismatch.
 """
 from __future__ import annotations
@@ -16,7 +16,7 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from build_svp import OUT, envs, expected, org_expected  # noqa: E402
+from build_svp import OUT, envs, expected, org_expected  # noqa: E402  (also puts the skill's scripts on sys.path)
 from check_diagram import kind_counts  # noqa: E402
 
 

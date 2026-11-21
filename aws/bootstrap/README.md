@@ -5,6 +5,9 @@
 
 Giải thích: [01. Bootstrap](../../docs/handbook/01-bootstrap.md).
 
+Chạy root này tạo gì: mục [`aws/bootstrap`](../../docs/reference/inventory.md#awsbootstrap) của
+[inventory](../../docs/reference/inventory.md) (số tài nguyên theo phần, theo loại, kèm sơ đồ).
+
 ## Dựng gì
 
 Mọi tài nguyên mang tag `Stack=bootstrap` (script quét sót của buổi bỏ qua tag này) và sống suốt lab.

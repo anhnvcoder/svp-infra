@@ -1,6 +1,6 @@
 # Rules on the default bus of each region that forward security events to the bus svp-security-events of the
 # Security Tooling account. Rule and role names start with svp-security- because the baseline service control policy
-# protects that prefix. Design notes: aws/modules/security-baseline/README.md.
+# protects that prefix. Design notes: docs/reference/security-alerts.md.
 
 locals {
   api_call = "AWS API Call via CloudTrail"

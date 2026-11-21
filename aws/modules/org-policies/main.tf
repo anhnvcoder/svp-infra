@@ -3,6 +3,27 @@ locals {
   # from there alone (the ACM certificate and the WAF web ACL of CloudFront, IAM Identity Center of this organization).
   allowed_regions = ["ap-southeast-1", "us-east-1"]
 
+  # CloudTrail also records a root console sign-in in these two regions, so every account keeps the rule
+  # svp-security-root-signin there: the region deny leaves that one rule open in them.
+  root_signin_regions = ["us-east-2", "us-west-2"]
+  root_signin_rule_arns = [
+    for r in local.root_signin_regions : "arn:aws:events:${r}:*:rule/svp-security-root-signin"
+  ]
+
+  # What Terraform calls to create, read, change and delete the rule, its target and its tags, and what the read-only
+  # profiles call to check it; each takes the rule as its resource.
+  root_signin_rule_actions = [
+    "events:DeleteRule",
+    "events:DescribeRule",
+    "events:ListTagsForResource",
+    "events:ListTargetsByRule",
+    "events:PutRule",
+    "events:PutTargets",
+    "events:RemoveTargets",
+    "events:TagResource",
+    "events:UntagResource",
+  ]
+
   # Global services, and the few global calls of regional services, whose requests carry us-east-1 or another region no
   # matter where the caller works: denying them by region would break IAM, Organizations, Route 53, CloudFront, WAF for
   # CloudFront, Budgets, STS, Support, IAM Identity Center and the console. Verbatim the NotAction list of
@@ -115,7 +136,7 @@ locals {
 
   # One daily backup plan per env, with the retention in days of the env vault and of the copy in svp-backup. Every
   # retention is at least 2 days: the previous recovery point outlives the latest finish of the next one (24 hours
-  # plus both windows), so a completed point is always there. Design notes: README.md.
+  # plus both windows), so a completed point is always there. Design notes: docs/handbook/03-org.md.
   backup_region               = "ap-southeast-1"
   backup_start_window_minutes = 60
   backup_completion_minutes   = 180
@@ -172,7 +193,7 @@ locals {
   # Every policy of the organization, by key, with its type and the one target it is attached to. Service and resource
   # control policies are deny-only: FullAWSAccess and RCPFullAWSAccess, which AWS attaches to every root, OU and
   # account, keep granting what IAM allows, and these take away what no member account may do whatever its IAM says.
-  # Neither type reaches the management account; declarative and tag policies do. Design notes: README.md
+  # Neither type reaches the management account; declarative and tag policies do. Design notes: docs/handbook/03-org.md
   policies = {
     # A member account that leaves takes itself out of every policy and out of the organization trail.
     "deny-leave-organization" = {
@@ -221,15 +242,29 @@ locals {
     "deny-other-regions" = {
       type        = "SERVICE_CONTROL_POLICY"
       target_id   = var.root_id
-      description = "Member accounts can use only ap-southeast-1 and us-east-1, global services aside."
+      description = "Member accounts can use only ap-southeast-1 and us-east-1, global services and the root sign-in rule aside."
       content = jsonencode({
         Version = "2012-10-17"
         Statement = [
           {
             Sid       = "DenyOtherRegions"
             Effect    = "Deny"
-            NotAction = local.global_actions
+            NotAction = concat(local.global_actions, local.root_signin_rule_actions)
             Resource  = "*"
+            Condition = {
+              StringNotEquals = {
+                "aws:RequestedRegion" = local.allowed_regions
+              }
+            }
+          },
+          {
+            # The rule actions the first statement leaves out stay denied on every other resource. A Deny with
+            # NotResource, not an Allow: FullAWSAccess is the allow, and only a deny can narrow it. Each rule ARN
+            # names its region, so no other region opens.
+            Sid         = "DenyOtherRegionsButRootSigninRule"
+            Effect      = "Deny"
+            Action      = local.root_signin_rule_actions
+            NotResource = local.root_signin_rule_arns
             Condition = {
               StringNotEquals = {
                 "aws:RequestedRegion" = local.allowed_regions

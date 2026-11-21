@@ -5,6 +5,9 @@
 
 Giải thích: [04. Log Archive](../../docs/handbook/04-log-archive.md).
 
+Chạy root này tạo gì: mục [`aws/log-archive`](../../docs/reference/inventory.md#awslog-archive) của
+[inventory](../../docs/reference/inventory.md) (số tài nguyên theo phần, theo loại, kèm sơ đồ).
+
 ## Dựng gì
 
 `<log>` là id của `svp-log-archive`, tính lúc chạy; root khác suy cùng tên bucket từ id đó, không đọc state của root này. Mọi tài nguyên

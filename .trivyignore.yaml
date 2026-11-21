@@ -15,5 +15,5 @@
 # A `Scope: stg only` exception never hides a finding of prd: it sits where only stg's values reach it, either on a
 # module call in the stg root or in a module with a condition on the attribute that differs between the envs. This file
 # holds no stg-only entry: `paths` cannot tell the envs apart, as both roots call the same registry modules.
-# Design notes: README.md.
+# Design notes: docs/reference/checks.md.
 misconfigurations: []

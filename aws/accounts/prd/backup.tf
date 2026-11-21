@@ -1,6 +1,6 @@
 # The vault the backup policy of the organization writes into, its key, the opt-in of the account and the role AWS
 # Backup assumes for every job of the account. Recovery points here are removed at the end of each session; the copies
-# that outlive the account's own data sit in the locked vaults of svp-backup. Design notes: aws/accounts/README.md.
+# that outlive the account's own data sit in the locked vaults of svp-backup. Design notes: docs/handbook/07-backup.md.
 
 data "aws_partition" "backup" {}
 

@@ -96,6 +96,7 @@ data "http" "argocd_values" {
 
 ################################################################################
 # Namespaces with Pod Security restricted, from templates/namespaces.yaml of chart svp-cluster
+# (istio-system privileged, as the module's privileged_namespaces list allows)
 ################################################################################
 
 # argocd alone, for Argo CD's first pod.

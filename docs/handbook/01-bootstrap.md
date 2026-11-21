@@ -72,6 +72,8 @@ an toàn khi bước đó bị bỏ.
 - **Làm gì:** giữ file state của mỗi root và một lock file cạnh nó trong lúc lệnh chạy. Ví dụ đời thực:
   - Hai terminal cùng `plan` `aws/org`: lệnh sau báo `Error acquiring the state lock` vì lock file `aws/org/terraform.tfstate.tflock`
     đang có.
+  - Ctrl+C một `plan` đang chờ nhập biến để lock file lại, và lệnh sau báo cùng lỗi: cách gỡ ở
+    [`operations.md`, Khoá state kẹt](../reference/operations.md#khoá-state-kẹt).
   - Một `apply` lỗi làm state sai: versioning còn bản trước, chép lại được.
   - Một request HTTP không TLS tới bucket bị statement `DenyInsecureTransport` của bucket policy từ chối.
 - **Ở svp:** bucket `svp-tfstate-<account>-ap-southeast-1` ở management; versioning, SSE-KMS mặc định với S3 Bucket Key, chặn public,

@@ -1,10 +1,13 @@
 # `aws/baseline`: baseline bảo mật của mọi account và CMK EBS
 
 **Account** management, và mỗi account thành viên qua `OrganizationAccountAccessRole` (đọc thêm key của `svp-log-archive`) · **region**
-`ap-southeast-1` và `us-east-1` (management thêm `us-east-2`, `us-west-2`, `sso_region`) · **profile** `anhnv-sso` · **state** bucket
-của `aws/bootstrap`, key `aws/baseline/terraform.tfstate`
+`ap-southeast-1` và `us-east-1`; `us-east-2`, `us-west-2` (rule đăng nhập root); management thêm `sso_region` · **profile**
+`anhnv-sso` · **state** bucket của `aws/bootstrap`, key `aws/baseline/terraform.tfstate`
 
 Giải thích: [06. Baseline](../../docs/handbook/06-baseline.md).
+
+Chạy root này tạo gì: mục [`aws/baseline`](../../docs/reference/inventory.md#awsbaseline) của
+[inventory](../../docs/reference/inventory.md) (số tài nguyên theo phần, theo loại, kèm sơ đồ).
 
 ## Dựng gì
 
@@ -18,7 +21,8 @@ Mọi tài nguyên mang tag `Stack=security-baseline` (SCP `svp-protect-baseline
 | `data.aws_kms_alias.log_archive` | `svp-log-archive` | ARN `key/<id>` của key Log Archive cho delivery channel của Config |
 
 Khác biệt giữa account là dữ liệu của `local.accounts` trong [`main.tf`](main.tf): stg, prd dùng CMK EBS và tắt rule `admin-*`;
-management có thêm rule tổ chức, phiên root, Identity Center (ở `sso_region`) và rule đăng nhập root ở ba region. Đích của mọi rule là bus
+management có thêm rule tổ chức, phiên root, Identity Center (ở `sso_region`). Mọi account có rule đăng nhập root ở ba region
+(`local.root_signin_regions`), nên `aws/org` phải áp SCP mở rule đó ở `us-east-2`, `us-west-2` trước. Đích của mọi rule là bus
 `svp-security-events` của `svp-security`, recorder giao về bucket `svp-config-<log>-ap-southeast-1`; root suy cả hai từ id account,
 không đọc state của `aws/security`, `aws/log-archive`. Output: `ebs_kms_key_arns`.
 

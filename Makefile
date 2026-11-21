@@ -10,7 +10,7 @@
 # Parallel runs: `make check DIRS=<dir>` writes below <dir> only the .terraform.lock.hcl of a module, and the plugin
 # cache that every run shares only gains the versions it lacks, one writer at a time (CACHE_LOCK), so runs on two
 # different directories can go side by side.
-# Design notes: README.md.
+# Design notes: docs/reference/checks.md.
 
 # renovate: datasource=docker depName=hashicorp/terraform
 TERRAFORM_IMAGE  := hashicorp/terraform:1.15.8@sha256:7ae513256f7ce67879e218ae8593d6fbe216ec9e123abe6c94e4e10704857963
@@ -107,7 +107,7 @@ IS_MODULE = case "/$$d/" in (*/modules/*) true;; (*) false;; esac
 .PHONY: help check check-terraform check-lint check-test check-scripts hooks pre-commit \
 	fmt-check fmt validate tflint tfdocs tfdocs-check trivy shellcheck zizmor docs-check diagrams diagrams-check session-test test-guard test lock \
 	github-app-test github-check github-app github-app-key github-settings github-secrets infracost-key github-tfvars \
-	github-plan github-apply ci-plan ci-plan-test infracost infracost-comment infracost-test
+	github-plan github-apply ci-plan ci-plan-test infracost infracost-comment infracost-test inventory inventory-check inventory-test
 
 help: ## List the targets
 	@grep -hE '^[a-zA-Z0-9_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-15s %s\n", $$1, $$2}'
@@ -118,8 +118,8 @@ check: check-terraform check-lint check-test check-scripts docs-check diagrams-c
 # target added to a group runs in CI with no change to the workflow. The groups are split by the time they take in CI.
 check-terraform: fmt-check validate tfdocs-check ## terraform fmt -check, init and validate, terraform-docs --output-check
 check-lint: tflint trivy ## tflint and trivy config
-check-test: test-guard test ## terraform test of the modules, and the self-test of its rules
-check-scripts: shellcheck zizmor session-test github-app-test ci-plan-test infracost-test ## Scripts and workflows: lint and self-tests
+check-test: test-guard test inventory-check ## terraform test of the modules and the self-test of its rules; the inventory against the roots
+check-scripts: shellcheck zizmor session-test github-app-test ci-plan-test infracost-test inventory-test ## Scripts and workflows: lint and self-tests
 
 # The pre-commit hook of `make hooks` runs make pre-commit; a hook already there that is not this one is left alone.
 # git rev-parse --git-path resolves the hooks directory of a worktree and core.hooksPath. Every worktree of the clone
@@ -519,6 +519,19 @@ test-guard: ## Self-test of the rules of make test, with a fake docker (no conta
 	[ "$$mounts" = "$$want" ] || fail "terraform test mounts more than its data directory, the module and the provider cache (read-only): $$line"; \
 	case "$$line" in (*" $(TERRAFORM_IMAGE) "*) ;; (*) fail "terraform test does not run TERRAFORM_IMAGE: $$line";; esac; \
 	case "$(TERRAFORM_IMAGE)" in (*@sha256:*) ;; (*) fail "TERRAFORM_IMAGE is not pinned by digest";; esac
+
+# What each root creates on an empty account, from a plan of terraform test against mock providers (ci/inventory/):
+# docs/reference/inventory.md and docs/diagrams/inventory/. The plans run on a copy of the repository without its
+# personal files, under the rules of make test (no network but init, no credential); inventory-test checks them.
+inventory: ## Write docs/reference/inventory.md and docs/diagrams/inventory/ from mock plans of every root (no network, no credential)
+	@TERRAFORM_IMAGE='$(TERRAFORM_IMAGE)' D2_IMAGE='$(D2_IMAGE)' bash ci/inventory.sh write
+
+inventory-check: ## Fails, naming the file, when the inventory page or a diagram of it differs from what make inventory writes
+	@TERRAFORM_IMAGE='$(TERRAFORM_IMAGE)' D2_IMAGE='$(D2_IMAGE)' bash ci/inventory.sh check
+
+inventory-test: ## Self-test of ci/inventory.sh with a fake docker (no container, network or credential)
+	@echo "inventory-test"; \
+	bash ci/inventory-test.sh >/dev/null || { echo "FAIL: inventory-test (bash ci/inventory-test.sh prints every check)" >&2; exit 1; }
 
 lock: ## Write the lock file of each root in DIRS (default: every root) with hashes for LOCK_PLATFORMS
 	@dirs=$$($(LIST_DIRS)) || exit 1; \

@@ -7,7 +7,7 @@ resource "aws_organizations_organization" "this" {
   # A principal missing here would be turned off by the next apply, those the services enable themselves included:
   # sso and cloudtrail were on before; account for the alternate contacts, iam for centralized root access, ec2 for the
   # declarative policy, backup for the backup policies, and the detection services delegated-admins.tf registers.
-  # Design notes: README.md.
+  # Design notes: docs/handbook/03-org.md.
   aws_service_access_principals = [
     "access-analyzer.amazonaws.com",
     "account.amazonaws.com",

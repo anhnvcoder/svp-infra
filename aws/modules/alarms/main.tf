@@ -1,5 +1,5 @@
 # The SNS topic the alarms of an env (or the security events of the organization) notify, encrypted with a key of the
-# module, and its email subscription. Design notes: aws/modules/alarms/README.md.
+# module, and its email subscription. Design notes: docs/handbook/11-data.md.
 
 data "aws_partition" "current" {}
 

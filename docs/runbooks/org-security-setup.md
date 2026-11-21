@@ -166,23 +166,35 @@ Bucket chưa có, nên chạy trên state local: file override (git bỏ qua) th
 
 ```sh
 printf 'terraform {\n  backend "local" {}\n}\n' > local_override.tf
-AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform init
+AWS_PROFILE=anhnv-sso \
+TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
+  terraform init
 AWS_PROFILE=anhnv-sso aws ce get-anomaly-monitors --region us-east-1 \
   --query 'AnomalyMonitors[].{Name:MonitorName,Type:MonitorType,Dimension:MonitorDimension,Arn:MonitorArn}' --output table
 ```
 
 - **Bẫy:** account chỉ có một monitor `DIMENSIONAL`/`SERVICE`, mà AWS tự tạo `Default-Services-Monitor` khi Cost Explorer bật (không
-  nhận quản thì `apply` lỗi `Limit exceeded on dimensional spend monitor creation`). Lệnh in một monitor như vậy thì trước `plan` chạy
-  `AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform import aws_ce_anomaly_monitor.services <Arn>`.
+  nhận quản thì `apply` lỗi `Limit exceeded on dimensional spend monitor creation`). Lệnh in một monitor như vậy thì trước `plan` chạy:
+
+  ```sh
+  AWS_PROFILE=anhnv-sso \
+  TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
+    terraform import -input=false aws_ce_anomaly_monitor.services <Arn>
+  ```
 
 ```sh
-AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform plan -out=bootstrap.tfplan
+AWS_PROFILE=anhnv-sso \
+TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
+  terraform plan -input=false -out=bootstrap.tfplan
+AWS_PROFILE=anhnv-sso terraform show -no-color bootstrap.tfplan > "$SVP_SESSION_DIR/bootstrap-plan.txt"
 ```
 
-- **Mong đợi:** `Plan: 14 to add, 0 to change, 0 to destroy`; đã nhận quản monitor thì `13 to add` và monitor đổi tên tại chỗ (`~`).
+- **Mong đợi:** `Plan: <n> to add, 0 to change, 0 to destroy` với `<n>` bằng tổng `to add` của mục
+  [`aws/bootstrap`](../reference/inventory.md#awsbootstrap) ở inventory (account trống chạy lần đầu); đã nhận quản monitor thì trừ
+  `aws_ce_anomaly_monitor` khỏi `<n>` và monitor đổi tại chỗ (`~`).
 
 ```sh
-AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform apply bootstrap.tfplan
+AWS_PROFILE=anhnv-sso terraform apply -input=false bootstrap.tfplan && rm bootstrap.tfplan
 ../scripts/tfvars.sh backend mgmt
 ```
 
@@ -194,9 +206,13 @@ AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform app
 ### 1d. Chuyển state vào bucket
 
 ```sh
-rm local_override.tf bootstrap.tfplan
-AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform init -migrate-state -backend-config=../backend.hcl
-AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform plan   # expect: No changes.
+rm local_override.tf
+AWS_PROFILE=anhnv-sso \
+TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
+  terraform init -migrate-state -backend-config=../backend.hcl
+AWS_PROFILE=anhnv-sso \
+TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
+  terraform plan -input=false   # expect: No changes.
 AWS_PROFILE=anhnv-sso aws s3api head-object --region ap-southeast-1 \
   --bucket "$(AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform output -raw state_bucket)" \
   --key aws/bootstrap/terraform.tfstate --query '{Size:ContentLength,SSE:ServerSideEncryption,Key:SSEKMSKeyId}'
@@ -222,9 +238,11 @@ AWS_PROFILE=anhnv-sso aws ce list-cost-allocation-tags --region us-east-1 --tag-
   dừng và dán plan. Thiếu key nào: AWS chỉ kích hoạt key đã có trong dữ liệu billing, tức 24 giờ sau khi tài nguyên mang tag phát sinh
   chi phí (`Env` chỉ sau buổi env đầu): chờ key hiện ra rồi `plan`, `apply` lại; thứ tự áp không đổi.
 
-Rồi `plan`, `apply`, `tfvars.sh backend mgmt` bằng ba lệnh của [1c](#1c-apply-lần-đầu-trên-state-local), xoá `bootstrap.tfplan` sau apply.
+Rồi `plan`, `show`, `apply`, `tfvars.sh backend mgmt` bằng các lệnh của [1c](#1c-apply-lần-đầu-trên-state-local) (apply xoá
+`bootstrap.tfplan`).
 
-- **Mong đợi:** không `destroy`; lần đầu bucket chuyển sang KMS là `7 to add, 1 to change, 0 to destroy` (đổi tại chỗ mã hoá bucket).
+- **Mong đợi:** không `destroy`; lần đầu bucket chuyển sang KMS thì thêm các phần của mục
+  [`aws/bootstrap`](../reference/inventory.md#awsbootstrap) ở inventory mà account chưa có, kèm một đổi tại chỗ (`~`) mã hoá bucket.
   `tfvars.sh` in `… written` khi file đổi (thì sang 1f), `… already as written, file unchanged` khi không.
 
 ### 1f. Init lại mọi root
@@ -233,7 +251,9 @@ Rồi `plan`, `apply`, `tfvars.sh backend mgmt` bằng ba lệnh của [1c](#1c-
 
 ```sh
 ../scripts/tfvars.sh init
-AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform plan    # expect: No changes.
+AWS_PROFILE=anhnv-sso \
+TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
+  terraform plan -input=false   # expect: No changes.
 ```
 
 - **Mong đợi:** mỗi root của [`aws/bootstrap`, Root dùng bucket state](../../aws/bootstrap/README.md#root-dùng-bucket-state) một dòng
@@ -272,21 +292,26 @@ Chỉ khi state chưa có tổ chức (root dựng lại từ đầu): nhận qu
 
 ```sh
 AWS_PROFILE=anhnv-sso aws organizations describe-organization --region us-east-1 --query 'Organization.[Id,MasterAccountId,FeatureSet]' --output text
-AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform import aws_organizations_organization.this <o-… vừa đọc>
+AWS_PROFILE=anhnv-sso \
+TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
+  terraform import -input=false aws_organizations_organization.this <o-… vừa đọc>
 ```
 
 ### 2b. Plan có `-target`
 
 ```sh
-AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform plan -out=org.tfplan \
-  -target=aws_organizations_organization.this \
-  -target=aws_organizations_organizational_unit.security \
-  -target=aws_organizations_organizational_unit.workloads \
-  -target=aws_organizations_organizational_unit.prod \
-  -target=aws_organizations_organizational_unit.nonprod \
-  -target=aws_organizations_account.member \
-  -target=aws_organizations_account.log_archive \
-  -target=aws_organizations_account.security
+AWS_PROFILE=anhnv-sso \
+TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
+  terraform plan -input=false -out=org.tfplan \
+    -target=aws_organizations_organization.this \
+    -target=aws_organizations_organizational_unit.security \
+    -target=aws_organizations_organizational_unit.workloads \
+    -target=aws_organizations_organizational_unit.prod \
+    -target=aws_organizations_organizational_unit.nonprod \
+    -target=aws_organizations_account.member \
+    -target=aws_organizations_account.log_archive \
+    -target=aws_organizations_account.security
+AWS_PROFILE=anhnv-sso terraform show -no-color org.tfplan > "$SVP_SESSION_DIR/org-plan.txt"
 ```
 
 - **Mong đợi:** `Plan: 5 to add, 3 to change, 0 to destroy`. Thêm: OU `Security`, `Prod`, `NonProd`; account `svp-log-archive`,
@@ -299,8 +324,7 @@ AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform pla
 ### 2c. Apply và id của hai account
 
 ```sh
-AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform apply org.tfplan
-rm org.tfplan
+AWS_PROFILE=anhnv-sso terraform apply -input=false org.tfplan && rm org.tfplan
 export SVP_AWS_LOG_ACCOUNT_ID="$(AWS_PROFILE=anhnv-sso terraform output -raw log_archive_account_id)"
 export SVP_AWS_SECURITY_ACCOUNT_ID="$(AWS_PROFILE=anhnv-sso terraform output -raw security_account_id)"
 printf '%s\n' "$SVP_AWS_LOG_ACCOUNT_ID" "$SVP_AWS_SECURITY_ACCOUNT_ID"
@@ -329,13 +353,19 @@ Năm biến 12 số: `SVP_AWS_MGMT_ACCOUNT_ID`, `SVP_AWS_LOG_ACCOUNT_ID`, `SVP_A
 
 ```sh
 ../scripts/tfvars.sh init
-AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
-  TF_VAR_security_account_id="$SVP_AWS_SECURITY_ACCOUNT_ID" TF_VAR_stg_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
-  TF_VAR_prd_account_id="$SVP_AWS_PRD_ACCOUNT_ID" \
-  terraform plan -out=log-archive.tfplan
+AWS_PROFILE=anhnv-sso \
+TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
+TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
+TF_VAR_security_account_id="$SVP_AWS_SECURITY_ACCOUNT_ID" \
+TF_VAR_stg_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+TF_VAR_prd_account_id="$SVP_AWS_PRD_ACCOUNT_ID" \
+  terraform plan -input=false -out=log-archive.tfplan
+AWS_PROFILE=anhnv-sso terraform show -no-color log-archive.tfplan > "$SVP_SESSION_DIR/log-archive-plan.txt"
 ```
 
-- **Mong đợi:** `Plan: 59 to add, 0 to change, 0 to destroy`; root đã áp từ trước thì chỉ phần chưa có, không `change` hay `destroy`.
+- **Mong đợi:** `Plan: <n> to add, 0 to change, 0 to destroy` với `<n>` bằng tổng `to add` của mục
+  [`aws/log-archive`](../reference/inventory.md#awslog-archive) ở inventory; root đã áp từ trước thì chỉ phần chưa có (lấy bảng theo phần,
+  trừ phần đã có), không `change` hay `destroy`.
 - **Kiểm:** hai `aws_kms_key.log`, key `waf`, mọi tài nguyên `["waf"]`, `["cloudfront"]` và hai
   `aws_cloudwatch_log_delivery_destination.cloudfront` có `region = "us-east-1"`, còn lại `ap-southeast-1`;
   `aws_s3_bucket_server_side_encryption_configuration.log["waf"]` và `["cloudfront"]` trỏ key `waf`; `destination_resource_arn` của mỗi
@@ -346,11 +376,7 @@ AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" TF_VAR_log_ar
 ### 3b. Apply
 
 ```sh
-AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
-  TF_VAR_security_account_id="$SVP_AWS_SECURITY_ACCOUNT_ID" TF_VAR_stg_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
-  TF_VAR_prd_account_id="$SVP_AWS_PRD_ACCOUNT_ID" \
-  terraform apply log-archive.tfplan
-rm log-archive.tfplan
+AWS_PROFILE=anhnv-sso terraform apply -input=false log-archive.tfplan && rm log-archive.tfplan
 AWS_PROFILE=anhnv-sso terraform output bucket_names
 AWS_PROFILE=anhnv-sso terraform output kms_key_arns
 ```
@@ -380,10 +406,15 @@ AWS_PROFILE=anhnv-sso aws cloudtrail describe-trails --region ap-southeast-1 --q
 ```
 
 ```sh
-AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform plan -out=org.tfplan
+AWS_PROFILE=anhnv-sso \
+TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
+  terraform plan -input=false -out=org.tfplan
+AWS_PROFILE=anhnv-sso terraform show -no-color org.tfplan > "$SVP_SESSION_DIR/org-plan.txt"
 ```
 
-- **Mong đợi:** `Plan: 51 to add, 2 to change, 3 to destroy`.
+- **Mong đợi:** `Plan: <n> to add, 2 to change, 3 to destroy`. `<n>` bằng số tài nguyên của danh sách "Thêm" dưới, cộng ba
+  attachment của "Thay" (đếm ở cả add lẫn destroy). Không lấy tổng của mục [`aws/org`](../reference/inventory.md#awsorg) ở inventory:
+  mục đó đếm root trên account trống, còn ở đây state đã có tổ chức, OU, account của bước (2) cùng trail, policy và Identity Center cũ.
   - Thêm: account `svp-backup` (`parent_id` là OU `Security`); delegated admin (2 GuardDuty, 1 Security Hub, 1 Inspector, 3 qua
     Organizations); `aws_iam_service_linked_role.access_analyzer`; `aws_iam_organizations_features.root_access`; 6 liên hệ `SECURITY`;
     permission set `SvpReadOnly`, `SvpLogReader` với policy và gán (12, trong đó `read_only["backup"]`); hai nhóm nền tảng;
@@ -395,15 +426,20 @@ AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform pla
   - Thay (`-/+`, đếm cả ở add lẫn destroy): đúng ba `module.org_policies.aws_organizations_policy_attachment.this` của
     `deny-leave-organization`, `protect-cloudtrail`, `deny-other-regions` (`target_id` từ OU `Workloads` sang root). Ba SCP này rời đích
     cũ vài giây trước khi gắn đích mới; nội dung không đổi.
+- **Thay đổi được phép:** khi `aws_backup_global_settings.this` đã có trong state (plan lại root đã áp), plan có thể thêm một đổi tại chỗ
+  ở nó: `isDelegatedAdministratorEnabled "true" -> "false"`. Cờ đó đã bật ngoài Terraform (trang Cross-account management của AWS Backup
+  trên console); apply là đúng thiết kế, vì `aws/org/backup.tf` giữ delegated administrator của AWS Backup tắt. Đổi khác ở
+  `global_settings` thì dừng, dán plan.
 - **Bẫy:** dừng (không apply) nếu tổ chức, account, KMS key hay bucket cũ có `destroy` hay `-/+`, nếu có `destroy` ngoài ba đích trên, hay
   nếu `kms_key_id` của trail là ARN alias.
 
 ### 4b. Apply
 
 ```sh
-AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform apply org.tfplan
-rm org.tfplan
-AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform plan
+AWS_PROFILE=anhnv-sso terraform apply -input=false org.tfplan && rm org.tfplan
+AWS_PROFILE=anhnv-sso \
+TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
+  terraform plan -input=false
 ```
 
 - **Mong đợi:** `Apply complete!`, rồi plan lần hai `No changes.`; khác thì dán lại.
@@ -482,11 +518,17 @@ AWS_PROFILE=anhnv-sso terraform init -backend-config=../backend.hcl
 ### 5b. Plan
 
 ```sh
-AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" TF_VAR_security_account_id="$SVP_AWS_SECURITY_ACCOUNT_ID" \
-  TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" terraform plan -out=security.tfplan
+AWS_PROFILE=anhnv-sso \
+TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
+TF_VAR_security_account_id="$SVP_AWS_SECURITY_ACCOUNT_ID" \
+TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
+  terraform plan -input=false -out=security.tfplan
+AWS_PROFILE=anhnv-sso terraform show -no-color security.tfplan > "$SVP_SESSION_DIR/security-plan.txt"
 ```
 
-- **Mong đợi:** với `aws/paid-features.json` của repo `Plan: 1 to import, 56 to add, 1 to change, 0 to destroy`: mỗi region của hai region
+- **Mong đợi:** với `aws/paid-features.json` của repo `to add` bằng tổng của mục [`aws/security`](../reference/inventory.md#awssecurity) ở
+  inventory, `1 to import`, `1 to change`, `0 to destroy` (inventory không có `1 to change`: nó chỉ hiện khi Inspector đã tự bật ở
+  account thật). Mỗi region của hai region
   một cấu hình tổ chức, sáu protection plan, một publishing destination, một detector management, một member, một analyzer, một rule
   `svp-security-guardduty-findings`; bốn tài nguyên Security Hub, policy `svp-security-off` và năm association (management,
   `svp-log-archive`, `svp-backup`, `svp-stg`, `svp-prd`); cấu hình tổ chức Inspector, hai liên kết thành viên (`svp-log-archive`,
@@ -509,9 +551,7 @@ AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" TF_VAR_securi
 ### 5d. Apply
 
 ```sh
-AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" TF_VAR_security_account_id="$SVP_AWS_SECURITY_ACCOUNT_ID" \
-  TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" terraform apply security.tfplan
-rm security.tfplan
+AWS_PROFILE=anhnv-sso terraform apply -input=false security.tfplan && rm security.tfplan
 ```
 
 - **Mong đợi:** `Apply complete!`; bật cấu hình tập trung và gắn policy có thể mất vài phút.
@@ -610,28 +650,31 @@ done
 
 ```sh
 ../scripts/tfvars.sh init
-AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
-  TF_VAR_security_account_id="$SVP_AWS_SECURITY_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" \
-  TF_VAR_stg_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_prd_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform plan -out=baseline.tfplan
+AWS_PROFILE=anhnv-sso \
+TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
+TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
+TF_VAR_security_account_id="$SVP_AWS_SECURITY_ACCOUNT_ID" \
+TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" \
+TF_VAR_stg_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+TF_VAR_prd_account_id="$SVP_AWS_PRD_ACCOUNT_ID" \
+  terraform plan -input=false -out=baseline.tfplan
+AWS_PROFILE=anhnv-sso terraform show -no-color baseline.tfplan > "$SVP_SESSION_DIR/baseline-plan.txt"
 ```
 
-- **Mong đợi:** với `aws/paid-features.json` của repo (`config_recording` tắt ở mọi account trừ `svp-security`) `Plan: 228 to add, 0 to
-  change, 0 to destroy`: 48 ở `module.mgmt`, 36 ở mỗi `module.log_archive`, `module.backup`, 42 ở `module.security`, 31 ở mỗi
-  `module.prd`, `module.stg`, 4 key và alias EBS. Mỗi account có `config_recording` `always` thêm 6 ở module của nó (recorder, delivery
-  channel, trạng thái recorder của hai region). Root đã áp, thêm account mới: chỉ module của account đó, với file của repo `Plan: 36 to
-  add, 0 to change, 0 to destroy` ở `module.backup`.
+- **Mong đợi:** với `aws/paid-features.json` của repo (`config_recording` tắt ở mọi account trừ `svp-security`) `Plan: <n> to add, 0 to
+  change, 0 to destroy` với `<n>` bằng tổng `to add` của mục [`aws/baseline`](../reference/inventory.md#awsbaseline) ở inventory (bảng
+  "Phần" chia theo `module.<account>` và key EBS). Mỗi account có `config_recording` `always` thêm 6 ở module của nó (recorder, delivery
+  channel, trạng thái recorder của hai region). Root đã áp, thêm account mới: chỉ module của account đó, số là dòng `module.<account>` của
+  bảng "Phần".
 - **Kiểm:** `aws_ebs_default_kms_key` chỉ ở stg, prd, `key_arn` là key `svp-ebs` của chính account đó; `svp-security-root-signin` của
-  management ở ba region; `s3_kms_key_arn` của mọi delivery channel dạng `key/<id>`.
+  mọi account ở ba region (`us-east-1`, `us-east-2`, `us-west-2`); `s3_kms_key_arn` của mọi delivery channel dạng `key/<id>`.
 - **Bẫy:** `AccessDenied` khi assume role là account hay profile sai; lỗi đọc alias `alias/svp-log-archive` là bước (3) chưa áp. Có dòng
   `change` hay `destroy`: dừng, dán plan.
 
 ### 6d. Apply
 
 ```sh
-AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
-  TF_VAR_security_account_id="$SVP_AWS_SECURITY_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" \
-  TF_VAR_stg_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_prd_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform apply baseline.tfplan
-rm baseline.tfplan
+AWS_PROFILE=anhnv-sso terraform apply -input=false baseline.tfplan && rm baseline.tfplan
 AWS_PROFILE=anhnv-sso terraform output ebs_kms_key_arns
 ```
 
@@ -871,6 +914,8 @@ Mọi root của runbook này sống suốt lab, không gỡ cuối buổi. Gỡ
 ## Khi một bước đỏ
 
 - Lỗi ở `plan`: không có gì đổi trên account; đọc lỗi, sửa nguyên nhân (biến terminal, file `.auto.tfvars`, phiên SSO), chạy lại đúng bước.
+- `Error acquiring the state lock` kèm Lock ID (thường sau Ctrl+C một lệnh đang chờ nhập):
+  [`operations.md`, Khoá state kẹt](../reference/operations.md#khoá-state-kẹt).
 - Lỗi giữa `apply`: phần đã tạo nằm trong state; `plan` lại cùng root chỉ còn phần chưa tạo. Dán lỗi và plan mới trước khi apply lại;
   `-target`, áp code của PR chưa merge:
   [`operations.md`, Khi apply lỗi giữa chừng](../reference/operations.md#khi-apply-lỗi-giữa-chừng). Đọc plan gọn mà không để file lộ
@@ -885,16 +930,117 @@ Mọi root của runbook này sống suốt lab, không gỡ cuối buổi. Gỡ
 Khi bước (4) đã chạy trước khi `aws/org` có role này (bước (5) lỗi `ConflictException` ở analyzer tổ chức): áp `aws/org` trước
 `aws/security`, bằng lệnh `plan`, `apply` của [4a](#4a-plan), [4b](#4b-apply).
 
-- **Mong đợi:** `Plan: 1 to add, 0 to change, 0 to destroy` (`aws_iam_service_linked_role.access_analyzer`); khác thì dừng, dán plan.
+- **Mong đợi:** chỉ thêm một tài nguyên, `aws_iam_service_linked_role.access_analyzer`, không `destroy`; `1 to change` chỉ khi có thêm
+  **Thay đổi được phép** của [4a](#4a-plan); khác thì dừng, dán plan.
 - **Bẫy:** apply lỗi `Service role name AWSServiceRoleForAccessAnalyzer has been taken in this account` là role đã có (ai đó mở Access
   Analyzer trên console của management): đưa nó vào state thay vì tạo.
 
 ```sh
-AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform import aws_iam_service_linked_role.access_analyzer \
-  "arn:aws:iam::$SVP_AWS_MGMT_ACCOUNT_ID:role/aws-service-role/access-analyzer.amazonaws.com/AWSServiceRoleForAccessAnalyzer"
+AWS_PROFILE=anhnv-sso \
+TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
+  terraform import -input=false aws_iam_service_linked_role.access_analyzer \
+    "arn:aws:iam::$SVP_AWS_MGMT_ACCOUNT_ID:role/aws-service-role/access-analyzer.amazonaws.com/AWSServiceRoleForAccessAnalyzer"
 ```
 
 - **Kiểm:** plan lần hai `No changes.`; rồi plan và apply lại `aws/security` ([5b](#5b-plan)).
+
+### Thêm rule đăng nhập root ở us-east-2, us-west-2 vào tổ chức đã áp
+
+Khi bước (6) đã áp lúc account thành viên chỉ có `svp-security-root-signin` ở `us-east-1`. CloudTrail ghi đăng nhập root ở `us-east-1`,
+`us-east-2` hay `us-west-2` ([tra cứu đường cảnh báo](../reference/security-alerts.md#rule-chuyển-sự-kiện)), nên mọi account cần rule ở
+cả ba. Thứ tự bắt buộc: `aws/org` trước, vì SCP `svp-deny-other-regions` cũ từ chối `events:PutRule` của account thành viên ở hai region
+mới; `aws/baseline` chạy trước thì apply lỗi giữa chừng.
+
+1. **`aws/org`: mở rule ở hai region trong SCP.**
+
+   ```sh
+   aws/scripts/check-account.sh mgmt
+   cd aws/org
+   AWS_PROFILE=anhnv-sso \
+   TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
+     terraform plan -input=false -out=org.tfplan
+   AWS_PROFILE=anhnv-sso terraform show -no-color org.tfplan > "$SVP_SESSION_DIR/org-plan.txt"
+   ```
+
+   - **Mong đợi:** `Plan: 0 to add, 1 to change, 0 to destroy`, hay `2 to change` khi có thêm **Thay đổi được phép** của [4a](#4a-plan).
+     Đổi tại chỗ duy nhất `module.org_policies.aws_organizations_policy.this["deny-other-regions"]`: `description` thêm "and the root
+     sign-in rule aside"; `content` thêm các action `events:` của rule vào `NotAction` của `DenyOtherRegions` và statement mới
+     `DenyOtherRegionsButRootSigninRule` với `NotResource` là `arn:aws:events:us-east-2:*:rule/svp-security-root-signin`,
+     `arn:aws:events:us-west-2:*:rule/svp-security-root-signin`.
+   - **Bẫy:** `destroy` hay `-/+` ở policy hay đích của nó, hay đổi ở policy khác: dừng, dán plan.
+
+   ```sh
+   AWS_PROFILE=anhnv-sso terraform apply -input=false org.tfplan && rm org.tfplan
+   AWS_PROFILE=anhnv-sso \
+   TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
+     terraform plan -input=false
+   cd ../..
+   ```
+
+   - **Mong đợi:** `Apply complete! Resources: 0 added, 1 changed, 0 destroyed.`, rồi `No changes.`; khác thì dán lại. Thư `UpdatePolicy`
+     của rule `svp-security-org` là của chính lần apply này.
+
+2. **`aws/baseline`: thêm rule ở hai region cho năm account thành viên.**
+
+   ```sh
+   eval "$(aws/scripts/accounts.sh)"
+   aws/scripts/check-account.sh mgmt
+   cd aws/baseline
+   AWS_PROFILE=anhnv-sso \
+   TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
+   TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
+   TF_VAR_security_account_id="$SVP_AWS_SECURITY_ACCOUNT_ID" \
+   TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" \
+   TF_VAR_stg_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+   TF_VAR_prd_account_id="$SVP_AWS_PRD_ACCOUNT_ID" \
+     terraform plan -input=false -out=baseline.tfplan
+   AWS_PROFILE=anhnv-sso terraform show -no-color baseline.tfplan > "$SVP_SESSION_DIR/baseline-plan.txt"
+   ```
+
+   - **Mong đợi:** không `change`, `destroy`; `to add` bằng số tài nguyên liệt kê: ở mỗi `module.log_archive`,
+     `module.backup`, `module.security`, `module.stg`, `module.prd` bốn tài nguyên, `aws_cloudwatch_event_rule.forward` và
+     `aws_cloudwatch_event_target.forward` khoá
+     `"svp-security-root-signin/us-east-2"`, `"svp-security-root-signin/us-west-2"`; `module.mgmt` đã có cả ba region nên không đổi.
+   - **Bẫy:** `AccessDeniedException` `explicit deny in a service control policy` là bước 1 chưa áp. `Backend initialization required`:
+     `../scripts/tfvars.sh init` rồi plan lại. Có `change` hay `destroy`: dừng, dán plan.
+
+   ```sh
+   AWS_PROFILE=anhnv-sso terraform apply -input=false baseline.tfplan && rm baseline.tfplan
+   AWS_PROFILE=anhnv-sso \
+   TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
+   TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
+   TF_VAR_security_account_id="$SVP_AWS_SECURITY_ACCOUNT_ID" \
+   TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" \
+   TF_VAR_stg_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+   TF_VAR_prd_account_id="$SVP_AWS_PRD_ACCOUNT_ID" \
+     terraform plan -input=false
+   cd ../..
+   ```
+
+   - **Mong đợi:** `Apply complete! Resources: 20 added, 0 changed, 0 destroyed.`, rồi `No changes.`. Không có thư `PutRule`, `PutTargets`
+     như ở [6d](#6d-apply): rule `svp-security-alert-rules` chỉ ở region nhà và `us-east-1`.
+
+3. **Kiểm** từng account thành viên ở từng region của rule, bằng profile chỉ đọc (`ListTargetsByRule` là action SCP mở cho rule này; SCP
+   không mở `ListRules`, `ViewOnlyAccess` của `anhnv-log-ro` không có `DescribeRule`):
+
+   ```sh
+   for p in anhnv-log-ro anhnv-security-ro anhnv-backup-ro anhnv-stg-ro anhnv-prd-ro; do
+     for r in us-east-1 us-east-2 us-west-2; do echo "== $p $r"
+       AWS_PROFILE=$p aws events list-targets-by-rule --rule svp-security-root-signin --region "$r" \
+         --query 'Targets[].[Id,Arn]' --output text
+     done
+   done
+   ```
+
+   - **Mong đợi:** dưới mỗi dòng `==` đúng một dòng hai cột: `svp-security-events` và
+     `arn:aws:events:ap-southeast-1:<security>:event-bus/svp-security-events` (`<security>` là `SVP_AWS_SECURITY_ACCOUNT_ID`). Dán lại
+     output, che 8 số đầu của account ID.
+   - **Bẫy:** `ResourceNotFoundException` là account đó chưa có rule ở region đó (bước 2 chưa áp, hay apply lỗi giữa chừng);
+     `AccessDeniedException` `explicit deny in a service control policy` ở `us-east-2`, `us-west-2` là SCP của bước 1 chưa áp.
+
+4. **Gỡ** (ngược thứ tự áp): revert code, rồi `aws/baseline` trước bằng lệnh plan, apply của bước 2 (mong `Plan: 0 to add, 0 to change,
+   20 to destroy`, đúng hai rule và hai target ở mỗi account thành viên), rồi `aws/org` bằng lệnh của bước 1 (mong `1 to change` ở
+   `deny-other-regions`). Đảo thứ tự thì SCP cũ chặn Terraform xoá rule ở `us-east-2`, `us-west-2`.
 
 [adr0060-10]: https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0060-org-detection-logging.md#10-đường-cảnh-báo
 [adr0060-12]: https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0060-org-detection-logging.md#12-chi-phí-liên-tục

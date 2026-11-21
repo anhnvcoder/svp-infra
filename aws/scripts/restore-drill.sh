@@ -13,7 +13,7 @@
 # each recovery point of vault svp-<env> that has a completed copy (the source's keys go with the destroy). It records
 # backup-drained, which tf.sh needs before that destroy; backup, rds and s3 record backup-undrained first.
 
-# Design notes: README.md.
+# Design notes: docs/handbook/00-tong-quan.md#các-đường-của-một-buổi.
 
 # Usage: aws/scripts/restore-drill.sh [--print] stg|prd backup|rds|s3|cleanup
 set -euo pipefail

@@ -22,7 +22,7 @@ module "stg" {
   ebs_kms_key_arn        = "arn:aws:kms:ap-southeast-1:000000000000:key/<id>"
   admin_events           = false
   organization_events    = false
-  root_signin_regions    = ["us-east-1"]
+  root_signin_regions    = ["us-east-1", "us-east-2", "us-west-2"]
   identity_center_region = null
   config_recording       = false
 }
@@ -82,7 +82,7 @@ module "stg" {
 | identity\_center\_region | Region of the IAM Identity Center instance, for the account that holds it: forwards successful permission set and account assignment changes (svp-security-admin-sso), recorded in that region only. null: no such rule. | `string` | `null` | no |
 | log\_archive\_key\_arn | ARN of the KMS key of the Log Archive account in the home region, in its key/<id> form: the delivery channels encrypt with it. | `string` | n/a | yes |
 | organization\_events | Forward the events only the management account records: changes to AWS Organizations and its policies (svp-security-org) and AssumeRoot sessions (svp-security-root-session). | `bool` | `false` | no |
-| root\_signin\_regions | Regions of the rule svp-security-root-signin. CloudTrail records a console sign-in of the root user in us-east-1, us-east-2 or us-west-2: the management account passes all three, member accounts keep us-east-1 (other regions are denied to them). | `list(string)` | <pre>[<br/>  "us-east-1"<br/>]</pre> | no |
+| root\_signin\_regions | Regions of the rule svp-security-root-signin. CloudTrail records a console sign-in of the root user in us-east-1, us-east-2 or us-west-2, so the list holds all three; in a member account the region policy svp-deny-other-regions must leave this rule open in us-east-2 and us-west-2. | `list(string)` | <pre>[<br/>  "us-east-1",<br/>  "us-east-2",<br/>  "us-west-2"<br/>]</pre> | no |
 | security\_event\_bus\_arn | ARN of the event bus svp-security-events of the Security Tooling account, target of every svp-security-* rule of the account. | `string` | n/a | yes |
 <!-- END_TF_DOCS -->
 <!-- markdownlint-enable MD033 -->

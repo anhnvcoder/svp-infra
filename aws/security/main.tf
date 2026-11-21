@@ -1,5 +1,5 @@
 # Detection services of the organization, run by the Security Tooling account as delegated administrator, and the path
-# that turns security events and severe findings into email. Design notes: aws/security/README.md.
+# that turns security events and severe findings into email. Design notes: docs/handbook/05-security.md.
 
 locals {
   # The home region and us-east-1 (global services, CloudFront WAF); the region service control policy denies every

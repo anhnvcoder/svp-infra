@@ -4,7 +4,7 @@
 # volumes (EBS CSI driver) and Karpenter's nodes. Terraform knows none of them; left behind they block the destroy
 # (ENIs, security groups) or stay billed (volumes, instances). Every wait has a limit, and what is left is printed.
 
-# Design notes: README.md.
+# Design notes: docs/handbook/00-tong-quan.md#các-đường-của-một-buổi.
 
 # 1. The root of GitOps: ApplicationSet svp-bootstrap would make svp-root again, and the auto-sync (prune, self-heal) of
 #    svp-root and svp-apps would make again every child deleted below. Their finalizers and automated sync are cleared,

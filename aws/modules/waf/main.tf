@@ -3,7 +3,7 @@
 # web_acl_arn to the distribution. Requests that no rule blocks are allowed. Rules run cheapest first: the rate limit
 # per IP, IP reputation, the baseline groups, then Bot Control and account takeover prevention when set.
 
-# Design notes: aws/modules/waf/README.md.
+# Design notes: docs/handbook/12-media-edge.md.
 
 locals {
   # Every rule of Bot Control's COMMON level. Each is overridden to count so that all of them run and label requests;

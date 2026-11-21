@@ -7,6 +7,9 @@ Giải thích: [09. Env và mạng](../../../docs/handbook/09-envs-network.md), 
 [11. Dữ liệu](../../../docs/handbook/11-data.md), đường vào, media, transcode ở chương [12. Media và
 edge](../../../docs/handbook/12-media-edge.md), backup của env ở chương [07. Backup](../../../docs/handbook/07-backup.md).
 
+Chạy root này tạo gì: mục [`aws/envs/prd`](../../../docs/reference/inventory.md#awsenvsprd) của
+[inventory](../../../docs/reference/inventory.md) (số tài nguyên theo phần, theo loại, kèm sơ đồ).
+
 ## Dựng gì
 
 Cùng `*.tf`, cùng module, cùng đối số với root stg: bảng tài nguyên, biến, tài nguyên sống lâu và output ở

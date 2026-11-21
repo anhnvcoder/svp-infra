@@ -223,10 +223,19 @@ cp example.auto.tfvars.example prd.auto.tfvars          # rồi sửa bốn giá
 AWS_PROFILE=anhnv-prd terraform init -reconfigure -backend-config=../../backend-prd.hcl -backend-config=key=aws/prd/terraform.tfstate
 export SVP_SESSION_DIR="$(git rev-parse --show-toplevel)/.session/$(date -u +%Y%m%dT%H%M%SZ)"  # thư mục buổi đang dở
 ../../scripts/media-signing-key.sh prd new a     # plan reads slot a's public key from media-signing.auto.tfvars.json
-AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
-  TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform plan -var-file=prd.tfvars -out=prd.tfplan
-AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
-  TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform apply prd.tfplan
+AWS_PROFILE=anhnv-prd \
+TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" \
+TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
+TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" \
+  terraform plan -input=false -var-file=prd.tfvars -out=prd.tfplan
+AWS_PROFILE=anhnv-prd terraform show -no-color prd.tfplan > "$SVP_SESSION_DIR/prd-plan.txt"
+```
+
+Đọc `prd-plan.txt` ([Đọc plan an toàn](../reference/operations.md#đọc-plan-an-toàn)): chỉ tài nguyên của `aws/envs/prd`, không
+`destroy` nào. Đúng thì apply:
+
+```sh
+AWS_PROFILE=anhnv-prd terraform apply -input=false prd.tfplan && rm prd.tfplan
 cd ../../..                                              # về infra/ cho các lệnh sau
 ```
 
@@ -245,5 +254,7 @@ Gỡ toàn bộ nằm ở trang chủ buổi prd: [Kết thúc buổi](session-p
 - **`FAIL no tunnel …`:** mở lại tunnel ([Tunnel tới API](#tunnel-tới-api-sau-bước-9-trước-bước-11)), chạy lại đúng bước đó.
 - **Plan gitops dừng vì thiếu `gitopsRevision`:** cổng promote chưa merge; không dựng tiếp.
 - **Apply bước 9 đỏ:** xem bẫy của [bước 9](#bước-9-apply-root-env).
+- **`Error acquiring the state lock`** kèm Lock ID sau một lệnh `terraform` trần bị ngắt (mục [Chạy tay một
+  root](#chạy-tay-một-root-không-qua-script)): [Khoá state kẹt](../reference/operations.md#khoá-state-kẹt).
 - **Lỗi khác của script:** đọc dòng `FAIL`, dán cả dòng; theo trang tương ứng của
   [buổi stg](session-stg-deploy.md#khi-một-bước-đỏ).

@@ -110,6 +110,12 @@ variables {
 
   # Same as the second document above, enforcing baseline.
   baseline_namespace = "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: svp\n  labels:\n    pod-security.kubernetes.io/enforce: baseline\n    pod-security.kubernetes.io/enforce-version: v1.36\n    pod-security.kubernetes.io/warn: restricted\n    pod-security.kubernetes.io/warn-version: v1.36\n    pod-security.kubernetes.io/audit: restricted\n    pod-security.kubernetes.io/audit-version: v1.36\n"
+
+  # Namespace istio-system as chart svp-cluster renders it, privileged; the same without its audit labels; and namespace
+  # keda privileged, which no exception covers.
+  istio_namespace           = "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: istio-system\n  labels:\n    pod-security.kubernetes.io/enforce: privileged\n    pod-security.kubernetes.io/enforce-version: v1.36\n    pod-security.kubernetes.io/warn: privileged\n    pod-security.kubernetes.io/warn-version: v1.36\n    pod-security.kubernetes.io/audit: privileged\n    pod-security.kubernetes.io/audit-version: v1.36\n"
+  istio_namespace_no_audit  = "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: istio-system\n  labels:\n    pod-security.kubernetes.io/enforce: privileged\n    pod-security.kubernetes.io/enforce-version: v1.36\n    pod-security.kubernetes.io/warn: privileged\n    pod-security.kubernetes.io/warn-version: v1.36\n"
+  privileged_keda_namespace = "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: keda\n  labels:\n    pod-security.kubernetes.io/enforce: privileged\n    pod-security.kubernetes.io/enforce-version: v1.36\n    pod-security.kubernetes.io/warn: privileged\n    pod-security.kubernetes.io/warn-version: v1.36\n    pod-security.kubernetes.io/audit: privileged\n    pod-security.kubernetes.io/audit-version: v1.36\n"
 }
 
 run "stg" {
@@ -770,6 +776,39 @@ run "namespace_not_restricted" {
   }
 
   expect_failures = [output.namespaces]
+}
+
+run "other_namespace_privileged" {
+  command = plan
+
+  variables {
+    namespace_manifests = [var.namespace_manifests[0], var.privileged_keda_namespace]
+  }
+
+  expect_failures = [output.namespaces]
+}
+
+run "istio_system_without_audit" {
+  command = plan
+
+  variables {
+    namespace_manifests = [var.namespace_manifests[0], var.istio_namespace_no_audit]
+  }
+
+  expect_failures = [output.namespaces]
+}
+
+run "istio_system_privileged" {
+  command = plan
+
+  variables {
+    namespace_manifests = [var.namespace_manifests[0], var.istio_namespace]
+  }
+
+  assert {
+    condition     = output.namespaces["istio-system"].metadata.labels["pod-security.kubernetes.io/enforce"] == "privileged"
+    error_message = "Namespace istio-system must be applied privileged, as chart svp-cluster renders it."
+  }
 }
 
 run "argocd_namespace_missing" {

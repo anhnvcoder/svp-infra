@@ -1,7 +1,7 @@
 # What the plan role of an env guarantees: its trust, its session, the policies it holds and the Deny that keeps it off
 # workload data and off writes to the state; then one plan per validation rule with a value only that rule rejects. The
 # AWS provider is a mock: nothing reaches an account. Policies are asserted through the arguments of their
-# aws_iam_policy_document data sources. Design notes: aws/modules/ci-plan-role/README.md.
+# aws_iam_policy_document data sources. Design notes: docs/handbook/14-ci.md.
 
 mock_provider "aws" {
   mock_data "aws_partition" {

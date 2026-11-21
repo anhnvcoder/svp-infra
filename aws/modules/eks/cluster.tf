@@ -23,7 +23,7 @@ locals {
   }
 }
 
-# Design notes: aws/modules/eks/README.md.
+# Design notes: docs/handbook/10-eks.md.
 
 # AWS-0039: no customer managed key for Secrets while secrets_kms_encryption is false; EKS then encrypts the Kubernetes
 # API data, Secrets included, with an AWS owned key. Holds only for create_kms_key=false. The root of an env that keeps

@@ -5,6 +5,9 @@
 
 Giải thích: [02. GitHub](../docs/handbook/02-github.md).
 
+Chạy root này tạo gì: mục [`github`](../docs/reference/inventory.md#github) của [inventory](../docs/reference/inventory.md) (số
+tài nguyên theo phần, theo loại, kèm sơ đồ).
+
 ## Dựng gì
 
 Root quản mọi repo trong `local.repositories` của `repositories.tf`: các repo của lab và `anhnvcoder/.github` (default community health

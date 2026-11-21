@@ -1,7 +1,7 @@
 # The repositories of the account listed in local.repositories (the lab repositories and .github, the default community
 # health files of every repository). Every repository merges by squash alone, the commit taking the pull request's
 # title and body, so each commit on main is one pull request.
-# Design notes: github/README.md.
+# Design notes: docs/handbook/02-github.md.
 
 locals {
   repositories = {

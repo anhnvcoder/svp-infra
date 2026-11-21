@@ -1,6 +1,6 @@
 # Projects of make infracost (workflow cost.yml): the roots CI plans, priced from their HCL and the values committed
 # beside them. A variable with no default and no value in <env>.tfvars (domain, emails, account ids) stays empty: its
-# value lives in a *.auto.tfvars, which is never committed. Design notes: README.md.
+# value lives in a *.auto.tfvars, which is never committed. Design notes: docs/reference/ci.md.
 version: 0.1
 
 projects:

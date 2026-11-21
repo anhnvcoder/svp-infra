@@ -32,7 +32,7 @@ data "aws_kms_alias" "observability" {
 }
 
 # The flag managed_grafana decides whether aws/accounts/<env> makes a Grafana workspace at all: at off there is none to
-# read, and the cluster values hand the charts an empty grafanaUrl. Design notes: aws/modules/paid-features/README.md.
+# read, and the cluster values hand the charts an empty grafanaUrl. Design notes: docs/handbook/15-cost.md.
 module "paid_features" {
   source = "../../modules/paid-features"
 

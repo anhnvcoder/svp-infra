@@ -3,25 +3,36 @@
 
 Four pages: stg, prd (one function, sizes read from the Terraform of this repository), org (organization, accounts, OUs,
 policies, log, detection and backup copy flows) and flows (release path to ECR, upload to playback, request, telemetry,
-transcode, backup and restore, plan on pull request). Layout as in SKILL.md: rows = AZs, each holding its public, private and database subnet; columns = tiers (outside
-→ global services of the account → public → private → database), the regional band below the VPC. Every coordinate is a multiple of 40 (major cell), icons 80px.
+transcode, backup and restore, plan on pull request). Layout as in docs/diagrams/README.md (section draw.io): rows = AZs, each
+holding its public, private and database subnet; columns = tiers (outside → global services of the account → public → private
+→ database), the regional band below the VPC. Every coordinate is a multiple of 40 (major cell), icons 80px.
+The engine (drawio_lib, check_diagram) is the aws-drawio-diagram skill: $AWS_DRAWIO_SKILL, default
+~/.claude/skills/aws-drawio-diagram.
 
-    python3 .claude/skills/aws-drawio-diagram/scripts/build_svp.py [--pdf] [--png DIR] [--docs]
+    python3 docs/diagrams/drawio/build_svp.py [--pdf] [--png DIR] [--docs]
 """
 from __future__ import annotations
 
 import argparse
 import ipaddress
 import json
+import os
 import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from drawio_lib import ACCOUNT, ANA, AZ, BAND, CLOUD, COMP, DB, INTEG, K8S, MUTED, NET, PRIVATE, PUBLIC, REGION, SEC, STO, STROKE, VPC, VPC_PURPLE, Page, bullets, export, write  # noqa: E402
+SKILL = Path(os.environ.get("AWS_DRAWIO_SKILL", "~/.claude/skills/aws-drawio-diagram")).expanduser()
+if not (SKILL / "scripts/drawio_lib.py").is_file():
+    sys.exit(f"aws-drawio-diagram skill not found at {SKILL}: clone https://github.com/anhnvcoder/agent-skills, link its "
+             "aws-drawio-diagram folder to ~/.claude/skills/aws-drawio-diagram, or set AWS_DRAWIO_SKILL to that folder")
+sys.path.insert(0, str(SKILL / "scripts"))
+from drawio_lib import (  # noqa: E402
+    ACCOUNT, ANA, AZ, BAND, CLOUD, COMP, DB, INTEG, K8S, MUTED, NET, PRIVATE, PUBLIC, REGION, SEC, STO, STROKE,
+    VPC, VPC_PURPLE, Page, bullets, export, write,
+)
 
-ROOT = Path(__file__).resolve().parents[4]
+ROOT = Path(__file__).resolve().parents[3]
 OUT = ROOT / "docs/diagrams/svp-aws.drawio"
 # The draw.io CLI cuts a PNG taller than 8192 px without a blank tail, so export_png() of drawio_lib cannot see it: the
 # docs export stays under this height whatever the page's.
@@ -127,8 +138,8 @@ class Env:
     logs: tuple            # what writes to CloudWatch Logs; empty: no log group
     kms_eks: bool          # a customer managed KMS key encrypts the cluster's Secrets
     zone: str              # Route 53 zone as drawn: zone_name of the committed example, a placeholder domain
-    media_free: bool       # media distribution on the flat-rate Free plan (no access log); every other distribution pays as you go
-    dnssec: bool           # the zone is DNSSEC signed and has a query log (the same two root variables of aws/accounts/<env>)
+    media_free: bool       # media distribution on the flat-rate Free plan (no access log); the others pay as you go
+    dnssec: bool           # the zone is DNSSEC signed and has a query log (two root variables of aws/accounts/<env>)
     endpoint_azs: int      # AZs whose private subnet holds the ENIs of the interface endpoints (stg 1, prd az_count)
     grafana: str = "always"         # managed_grafana: session, AMG only while a session is open; off, no AMG at all
     inspector: bool = True          # inspector_ecr = always: Inspector enhanced scanning; else ECR basic scanning
@@ -233,9 +244,10 @@ def org_expected() -> dict[str, int]:
 
 
 # ---------------------------------------------------------------- geometry of an env page
-# Coordinates: the layout section of SKILL.md; why each part sits where it does: its content rules 0–13 (nesting Cloud
-# → Account → Region → VPC → AZ → subnet, subnet tiers per AZ row, EBS outside the subnets, the ALB across the edge
-# subnets of the first two AZ rows, the cluster box over each private box, database columns kept off replication lines).
+# Coordinates: the draw.io section of docs/diagrams/README.md; why each part sits where it does: the skill's content
+# rules 0–13 (Cloud → Account → Region → VPC → AZ → subnet nesting, subnet tiers per AZ row, EBS outside the subnets,
+# the ALB across the edge subnets of the first two AZ rows, the cluster box over each private box, database columns
+# kept off replication lines).
 CLOUD_X, ACCT_X, GLOBAL_X, REGION_X, IGW_X, VPC_X, AZ_X = 160, 200, 240, 400, 440, 560, 600
 PUB_X, PUB_W, NAT_X = 640, 240, 680
 EDGE_X, EDGE_W, ALB_X, EBS_X = 920, 240, 1000, 1200
@@ -299,8 +311,8 @@ def env_page(env: Env) -> Page:
     ep_y, vpc_b = bottom + 80, bottom + 200
     band_y = vpc_b + 40
     row = band_y + 40                                     # icon row of the band
-    row_t = row + 240                                     # transcode row of the band, under the buckets it reads and writes
-    row2 = row + 440                                      # third icon row of the band: account-level observability, registry
+    row_t = row + 240                                     # transcode row, under the buckets it reads and writes
+    row2 = row + 440                                      # third icon row: account-level observability, registry
     row3 = row + 640                                      # fourth icon row of the band: backup
     lane = band_y + 920                                   # users → uploads, below the band
     region_b = lane + 40

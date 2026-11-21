@@ -10,6 +10,19 @@ variables {
   nonprod_ou_id     = "ou-ab12-gh78ij90"
   organization_id   = "o-ab12cd34ef"
   backup_account_id = "222222222222"
+
+  # What Terraform needs on the rule svp-security-root-signin, and what verify reads of it.
+  root_signin_rule_actions = [
+    "events:DeleteRule",
+    "events:DescribeRule",
+    "events:ListTagsForResource",
+    "events:ListTargetsByRule",
+    "events:PutRule",
+    "events:PutTargets",
+    "events:RemoveTargets",
+    "events:TagResource",
+    "events:UntagResource",
+  ]
 }
 
 run "policies" {
@@ -119,19 +132,41 @@ run "region_deny" {
   command = plan
 
   assert {
-    condition     = length(jsondecode(aws_organizations_policy.this["deny-other-regions"].content).Statement) == 1
-    error_message = "deny-other-regions must hold one statement."
+    condition = [for s in jsondecode(aws_organizations_policy.this["deny-other-regions"].content).Statement : s.Sid] == [
+      "DenyOtherRegions",
+      "DenyOtherRegionsButRootSigninRule",
+    ]
+    error_message = "deny-other-regions must hold the region deny, then the deny that keeps the root sign-in rule the only resource left open."
   }
 
+  # Both statements: the same region condition, no principal exempted (no ArnNotLike aws:PrincipalARN or other key).
   assert {
-    condition     = toset(jsondecode(aws_organizations_policy.this["deny-other-regions"].content).Statement[0].Condition.StringNotEquals["aws:RequestedRegion"]) == toset(["ap-southeast-1", "us-east-1"])
-    error_message = "deny-other-regions must allow exactly ap-southeast-1 and us-east-1."
+    condition = alltrue([for s in jsondecode(aws_organizations_policy.this["deny-other-regions"].content).Statement :
+      s.Effect == "Deny" && keys(s.Condition) == ["StringNotEquals"] && keys(s.Condition.StringNotEquals) == ["aws:RequestedRegion"] &&
+      toset(s.Condition.StringNotEquals["aws:RequestedRegion"]) == toset(["ap-southeast-1", "us-east-1"])
+    ])
+    error_message = "deny-other-regions must allow exactly ap-southeast-1 and us-east-1, condition on aws:RequestedRegion alone and exempt no principal."
   }
 
-  # No principal is exempted (no ArnNotLike aws:PrincipalARN or other key beside the region).
+  # The region deny lets through no EventBridge action but the nine the root sign-in rule needs: no wildcard, no
+  # PutEvents, EnableRule, DisableRule or bus action.
   assert {
-    condition     = keys(jsondecode(aws_organizations_policy.this["deny-other-regions"].content).Statement[0].Condition) == ["StringNotEquals"] && keys(jsondecode(aws_organizations_policy.this["deny-other-regions"].content).Statement[0].Condition.StringNotEquals) == ["aws:RequestedRegion"]
-    error_message = "deny-other-regions must condition on aws:RequestedRegion alone, exempting no principal."
+    condition     = toset([for a in jsondecode(aws_organizations_policy.this["deny-other-regions"].content).Statement[0].NotAction : a if startswith(a, "events:")]) == toset(var.root_signin_rule_actions)
+    error_message = "DenyOtherRegions must leave out exactly the EventBridge actions of the root sign-in rule."
+  }
+
+  # The same nine actions stay denied on every resource but the rule svp-security-root-signin of the default bus in
+  # us-east-2 and us-west-2: no other rule, bus or region.
+  assert {
+    condition = (
+      toset(jsondecode(aws_organizations_policy.this["deny-other-regions"].content).Statement[1].Action) == toset(var.root_signin_rule_actions) &&
+      toset(jsondecode(aws_organizations_policy.this["deny-other-regions"].content).Statement[1].NotResource) == toset([
+        "arn:aws:events:us-east-2:*:rule/svp-security-root-signin",
+        "arn:aws:events:us-west-2:*:rule/svp-security-root-signin",
+      ]) &&
+      !contains(keys(jsondecode(aws_organizations_policy.this["deny-other-regions"].content).Statement[1]), "Resource")
+    )
+    error_message = "DenyOtherRegionsButRootSigninRule must deny the rule actions on every resource but svp-security-root-signin in us-east-2 and us-west-2."
   }
 
   assert {

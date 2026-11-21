@@ -5,7 +5,7 @@
 #   the whole diff of the pull request; the role it assumes is read-only and never writes or locks the state;
 # - no plan text, attribute value, account id or domain in a log, artifact or comment: ci/terraform-plan.sh masks them;
 # - every action is GitHub's own, pinned to a full commit SHA; terraform runs from the image pinned in the Makefile.
-# Design notes: README.md.
+# Design notes: docs/reference/ci.md.
 name: plan
 
 on:

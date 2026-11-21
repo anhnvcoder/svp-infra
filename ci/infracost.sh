@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Infracost of a pull request for workflow cost.yml. estimate prices the projects of infracost.yml from their HCL in the
 # base tree and in this one (no plan, state or AWS credential) and writes their diff to $RUNNER_TEMP/infracost; comment
-# posts that diff to the pull request. Both trees use the config and usage files of this one. Design notes: README.md.
+# posts that diff to the pull request. Both trees use the config and usage files of this one.
+# Design notes: docs/reference/ci.md.
 
 # The API key and the GitHub token reach the container by name alone (-e NAME): never an argument, never a log line.
 # Without a key the script refuses on a dev machine and skips with a notice in GitHub Actions.
@@ -26,7 +27,7 @@ notice() {
 
 need_key() {
   [ -z "${INFRACOST_API_KEY:-}" ] || return 0
-  in_actions || fail "INFRACOST_API_KEY is empty: export your free Infracost API key first (README.md)"
+  in_actions || fail "INFRACOST_API_KEY is empty: export your free Infracost API key first (docs/runbooks/github-setup.md#khoá-infracost)"
   notice "Infracost skipped: secret INFRACOST_API_KEY is not set"
   exit 0
 }

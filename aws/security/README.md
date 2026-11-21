@@ -5,6 +5,9 @@ và `us-east-1` · **profile** `anhnv-sso` · **state** bucket của `aws/bootst
 
 Giải thích: [05. Bảo mật](../../docs/handbook/05-security.md).
 
+Chạy root này tạo gì: mục [`aws/security`](../../docs/reference/inventory.md#awssecurity) của
+[inventory](../../docs/reference/inventory.md) (số tài nguyên theo phần, theo loại, kèm sơ đồ).
+
 ## Dựng gì
 
 Tên tài nguyên như code; "hai region" là `ap-southeast-1` và `us-east-1`. Cờ là `aws/paid-features.json`, đọc qua module

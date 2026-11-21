@@ -77,8 +77,8 @@ mỗi buổi.
 
 - **Mong đợi:** `init` chạy `terraform init -reconfigure` với `../../backend-stg.hcl` và key `aws/accounts/stg/terraform.tfstate`,
   state của baseline. `plan --open` plan với `-var session_open=true`, ghi `aws/accounts/stg/stg.account-open.tfplan` (xoá plan
-  đóng cũ nếu còn) và bản text `stg-account-open-plan.txt` ở thư mục buổi. **Đọc file text đó trước khi apply**: `Plan: 7 to add,
-  0 to change, 0 to destroy`, đúng bảy tài nguyên trên. `apply` chỉ nhận đúng một plan đã lưu của root này, áp nó, ghi mốc
+  đóng cũ nếu còn) và bản text `stg-account-open-plan.txt` ở thư mục buổi. **Đọc file text đó trước khi apply**: chỉ `to add`,
+  `0 to change, 0 to destroy`, đúng bảy tài nguyên trên. `apply` chỉ nhận đúng một plan đã lưu của root này, áp nó, ghi mốc
   `account-open-applied` rồi xoá file.
 - **Kiểm:** `tf.sh stg env plan` từ chối tới khi mốc cuối trong `account-open-applied`, `account-close-applied` của buổi là
   `account-open-applied` (`FAIL the session features of stg (managed_grafana) are not open …`). Env không có cờ `session` (prd sau khi đổi
@@ -340,10 +340,19 @@ cp example.auto.tfvars.example stg.auto.tfvars          # rồi sửa bốn giá
 AWS_PROFILE=anhnv-stg terraform init -reconfigure -backend-config=../../backend-stg.hcl -backend-config=key=aws/stg/terraform.tfstate
 export SVP_SESSION_DIR="$(git rev-parse --show-toplevel)/.session/$(date -u +%Y%m%dT%H%M%SZ)"  # thư mục buổi đang dở
 ../../scripts/media-signing-key.sh stg new a     # plan reads slot a's public key from media-signing.auto.tfvars.json
-AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
-  TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform plan -var-file=stg.tfvars -out=stg.tfplan
-AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
-  TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform apply stg.tfplan
+AWS_PROFILE=anhnv-stg \
+TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
+TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" \
+  terraform plan -input=false -var-file=stg.tfvars -out=stg.tfplan
+AWS_PROFILE=anhnv-stg terraform show -no-color stg.tfplan > "$SVP_SESSION_DIR/stg-plan.txt"
+```
+
+Đọc `stg-plan.txt` ([Đọc plan an toàn](../reference/operations.md#đọc-plan-an-toàn)): chỉ tài nguyên của `aws/envs/stg`, không
+`destroy` nào. Đúng thì apply:
+
+```sh
+AWS_PROFILE=anhnv-stg terraform apply -input=false stg.tfplan && rm stg.tfplan
 cd ../../..                                              # về infra/ cho các lệnh sau
 ```
 
@@ -363,4 +372,5 @@ quét sót. Bỏ buổi giữa chừng: xem **Bẫy** của bước 9 và 15.
 
 Đọc dòng `FAIL`, sửa nguyên nhân, chạy lại **đúng bước đó** (mọi script chạy lại được). Không đi tiếp qua một bước đỏ. Lỗi riêng của từng
 bước ở nhãn **Bẫy** của nó; apply đỏ: bảng "Lỗi apply đã biết" ở bước 6–10; destroy kẹt:
-[Destroy kẹt](session-stg.md#destroy-kẹt) của trang chủ.
+[Destroy kẹt](session-stg.md#destroy-kẹt) của trang chủ; `Error acquiring the state lock` kèm Lock ID sau một lệnh `terraform` trần bị
+ngắt (mục [Chạy tay một root](#chạy-tay-một-root-không-qua-script)): [Khoá state kẹt](../reference/operations.md#khoá-state-kẹt).

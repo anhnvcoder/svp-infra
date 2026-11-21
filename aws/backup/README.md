@@ -5,6 +5,9 @@
 
 Giải thích: [07. Backup](../../docs/handbook/07-backup.md).
 
+Chạy root này tạo gì: mục [`aws/backup`](../../docs/reference/inventory.md#awsbackup) của
+[inventory](../../docs/reference/inventory.md) (số tài nguyên theo phần, theo loại, kèm sơ đồ).
+
 ## Dựng gì
 
 Mọi tài nguyên mang tag `Stack=backup` và sống suốt lab; key có `prevent_destroy`, nên root này không bao giờ `terraform destroy` cả khối.

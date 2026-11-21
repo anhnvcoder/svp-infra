@@ -181,13 +181,24 @@ bước này.
 
 ### Destroy tay một root (không qua script)
 
-Khi cần `terraform destroy` trần ở root env (đọc plan từng bước, kiểm một lỗi): sau `pre-destroy.sh stg`, destroy
+Khi cần gỡ root env bằng lệnh `terraform` trần (đọc plan từng bước, kiểm một lỗi): sau `pre-destroy.sh stg`, destroy
 `aws/gitops/stg`, `aws/scripts/restore-drill.sh stg cleanup`, rồi root này, rồi lệnh quét tài nguyên sót. Script `tf.sh` vẫn là
-đường chính: nó chặn destroy khi thiếu mốc `gitops-destroy-end` hay `backup-drained`, còn lệnh trần thì không.
+đường chính: nó chặn destroy khi thiếu mốc `gitops-destroy-end` hay `backup-drained`, còn lệnh trần thì không. Lệnh theo
+[khuôn lệnh plan](../reference/operations.md#đọc-plan-an-toàn), chạy trong `aws/envs/stg`:
 
 ```sh
-AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
-  TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform destroy -var-file=stg.tfvars
+AWS_PROFILE=anhnv-stg \
+TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
+TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" \
+  terraform plan -destroy -input=false -var-file=stg.tfvars -out=stg-destroy.tfplan
+AWS_PROFILE=anhnv-stg terraform show -no-color stg-destroy.tfplan > "$SVP_SESSION_DIR/stg-destroy-plan.txt"
+```
+
+Đọc `stg-destroy-plan.txt` như file text của bước 26: `0 to add, 0 to change`, chỉ tài nguyên của `aws/envs/stg`. Đúng thì apply:
+
+```sh
+AWS_PROFILE=anhnv-stg terraform apply -input=false stg-destroy.tfplan && rm stg-destroy.tfplan
 ```
 
 Instance, launch template và instance profile do Karpenter tạo nằm ngoài state: `pre-destroy.sh` gỡ chúng khi controller còn chạy,
@@ -297,4 +308,6 @@ Bước 20–31 là chính phần gỡ của buổi. Destroy kẹt: [Destroy k�
 ## Khi một bước đỏ
 
 Đọc dòng `FAIL`, sửa nguyên nhân, chạy lại **đúng bước đó** (mọi script chạy lại được); không đi tiếp qua một bước đỏ. Lỗi riêng
-của từng bước ở nhãn **Bẫy** của nó; destroy kẹt ở [Destroy kẹt](session-stg.md#destroy-kẹt).
+của từng bước ở nhãn **Bẫy** của nó; destroy kẹt ở [Destroy kẹt](session-stg.md#destroy-kẹt). `Error acquiring the state lock` kèm
+Lock ID sau một lệnh `terraform` trần bị ngắt (mục [Destroy tay một root](#destroy-tay-một-root-không-qua-script)): [Khoá state
+kẹt](../reference/operations.md#khoá-state-kẹt).

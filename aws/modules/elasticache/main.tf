@@ -1,7 +1,7 @@
 # One ElastiCache for Valkey replication group per env, cluster mode off: clients speak plain (not cluster) Valkey
 # over TLS and log in as one RBAC user each, limited to its own database and key prefix. Passwords are made and
 # written in the same apply without passing through plan or state.
-# Design notes: aws/modules/elasticache/README.md.
+# Design notes: docs/handbook/11-data.md.
 
 locals {
   # Access strings of the platform's users, the same text as the local aclfile. No default user: a user group of

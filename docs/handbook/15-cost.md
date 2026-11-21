@@ -63,9 +63,10 @@ về thế nào?
    Phải bỏ cả hai: `validation` của module từ chối `security_hub` `always` khi `config_recording` của cùng account là `off`, vì control
    của Security Hub là rule Config. Comment Infracost của PR không có chênh: `aws/security`, `aws/baseline` không phải project của
    `infracost.yml`. `infra-ok` xanh thì merge.
-2. **Áp theo hướng bật** ([`paid-features.md`](../runbooks/paid-features.md#thứ-tự-apply-cờ)): `aws/baseline` trước, plan `6 to add` ở
-   `module.stg` (recorder, delivery channel, recorder status ở hai region); rồi `aws/security`, plan xoá association
-   `svp-security-off` của stg và sửa `detail.accountId` của rule `svp-security-guardduty-findings` (account còn `off` vẫn giữ rule).
+2. **Áp theo hướng bật** ([`paid-features.md`](../runbooks/paid-features.md#thứ-tự-apply-cờ)): `aws/baseline`
+   trước, plan thêm sáu tài nguyên ở `module.stg` (recorder, delivery channel, recorder status ở hai region); rồi `aws/security`,
+   plan xoá association `svp-security-off` của stg và sửa `detail.accountId` của rule `svp-security-guardduty-findings` (account còn
+   `off` vẫn giữ rule).
    `aws/accounts/stg` không đọc hai cờ này nên bỏ qua.
 3. **Security Hub bắt đầu chấm.** stg về configuration policy `svp-security-standards` của root tổ chức. Check bắt đầu trong vòng hai
    giờ, phần lớn trong 25 phút sau khi chuẩn bật (ADR-0071 phụ lục [N7]).

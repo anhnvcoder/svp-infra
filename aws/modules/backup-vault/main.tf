@@ -1,5 +1,5 @@
 # AWS Backup vaults encrypted with a key the caller owns, each with an optional governance lock and an optional access
-# policy that lets other accounts copy into it. Design notes: aws/modules/backup-vault/README.md.
+# policy that lets other accounts copy into it. Design notes: docs/handbook/07-backup.md.
 
 data "aws_partition" "current" {}
 

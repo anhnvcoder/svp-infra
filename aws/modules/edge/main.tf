@@ -1,6 +1,6 @@
 # The public way in to the web and the API: one CloudFront distribution per name, both reaching Envoy through a VPC
 # origin and an internal ALB in the edge subnets. Nothing here is reachable from the internet but CloudFront.
-# Design notes: aws/modules/edge/README.md.
+# Design notes: docs/handbook/12-media-edge.md.
 
 locals {
   # CloudFront takes viewer certificates, and delivers its logs, only in us-east-1.

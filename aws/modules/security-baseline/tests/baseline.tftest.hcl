@@ -1,5 +1,5 @@
-# What the security baseline of an account guarantees, for a member account (defaults), the management account (every
-# event group, root sign-in in three regions, a default EBS key) and both values of config_recording; then one plan per
+# What the security baseline of an account guarantees, for a member account (defaults, root sign-in in three regions),
+# the management account (every event group, a default EBS key) and both values of config_recording; then one plan per
 # validation rule with a value only that rule rejects. The AWS provider is a mock: nothing reaches an account. The home
 # region is the mocked region of the provider; the other region of the module is us-east-1.
 
@@ -37,6 +37,8 @@ variables {
   # Rules every account has, as "<rule>/<region>".
   member_rules = [
     "svp-security-root-signin/us-east-1",
+    "svp-security-root-signin/us-east-2",
+    "svp-security-root-signin/us-west-2",
     "svp-security-trail/ap-southeast-1",
     "svp-security-trail/us-east-1",
     "svp-security-detection/ap-southeast-1",
@@ -154,6 +156,15 @@ run "member_account" {
     error_message = "svp-security-root-signin must match console sign-ins of the root user."
   }
 
+  # CloudTrail records a root console sign-in in any of these three regions, member accounts included.
+  assert {
+    condition = (
+      toset([for r in aws_cloudwatch_event_rule.forward : r.region if r.name == "svp-security-root-signin"]) == toset(["us-east-1", "us-east-2", "us-west-2"]) &&
+      length(distinct([for r in aws_cloudwatch_event_rule.forward : r.event_pattern if r.name == "svp-security-root-signin"])) == 1
+    )
+    error_message = "svp-security-root-signin must be in us-east-1, us-east-2 and us-west-2 by default, with one pattern."
+  }
+
   assert {
     condition     = toset(jsondecode(aws_cloudwatch_event_rule.forward["svp-security-trail/us-east-1"].event_pattern).detail.eventName) == toset(["DeleteTrail", "PutEventSelectors", "PutInsightSelectors", "StopLogging", "UpdateTrail"])
     error_message = "svp-security-trail must match every CloudTrail change the service control policy denies, succeeded or denied."
@@ -222,10 +233,7 @@ run "management_account" {
   }
 
   assert {
-    condition = toset(keys(aws_cloudwatch_event_rule.forward)) == setunion(setsubtract(toset(var.member_rules), ["svp-security-root-signin/us-east-1"]), [
-      "svp-security-root-signin/us-east-1",
-      "svp-security-root-signin/us-east-2",
-      "svp-security-root-signin/us-west-2",
+    condition = toset(keys(aws_cloudwatch_event_rule.forward)) == setunion(toset(var.member_rules), [
       "svp-security-root-session/ap-southeast-1",
       "svp-security-root-session/us-east-1",
       "svp-security-org/us-east-1",
@@ -445,6 +453,27 @@ run "root_signin_without_us_east_1" {
 
   variables {
     root_signin_regions = ["us-east-2", "us-west-2"]
+  }
+
+  expect_failures = [var.root_signin_regions]
+}
+
+# The rule must stay in every region where CloudTrail records a root sign-in, member accounts included.
+run "root_signin_us_east_1_only" {
+  command = plan
+
+  variables {
+    root_signin_regions = ["us-east-1"]
+  }
+
+  expect_failures = [var.root_signin_regions]
+}
+
+run "root_signin_duplicate" {
+  command = plan
+
+  variables {
+    root_signin_regions = ["us-east-1", "us-east-2", "us-west-2", "us-east-2"]
   }
 
   expect_failures = [var.root_signin_regions]

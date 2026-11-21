@@ -4,7 +4,7 @@ data "aws_region" "current" {}
 
 data "aws_caller_identity" "current" {}
 
-# Design notes: aws/modules/observability/README.md.
+# Design notes: docs/handbook/08-accounts.md.
 locals {
   name       = "svp-${var.env}"
   partition  = data.aws_partition.current.partition

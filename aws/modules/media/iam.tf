@@ -71,7 +71,7 @@ data "aws_iam_policy_document" "video_service" {
 # On AWS media-worker runs as the MediaConvert bridge. MediaConvert's Probe reads the upload with the caller's rights;
 # the bridge copies the job's output onto itself and a premium video's preview to preview/, writes the masters and the
 # job records under transcode-jobs/, and lists its prefixes to learn whether a key exists. Its MediaConvert, SQS and
-# PassRole rights come from elsewhere. Design notes: aws/modules/media/README.md.
+# PassRole rights come from elsewhere. Design notes: docs/handbook/12-media-edge.md.
 data "aws_iam_policy_document" "media_worker" {
   statement {
     sid       = "ReadUploads"

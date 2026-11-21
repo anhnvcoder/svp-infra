@@ -1,6 +1,6 @@
 # The log archive of the organization: one bucket per kind of log in an account of its own, so administrators of the
 # workload and security accounts cannot read, change or delete the logs; management still can, through the role this
-# root applies with. Lives between sessions. Design notes: README.md.
+# root applies with. Lives between sessions. Design notes: docs/handbook/04-log-archive.md.
 
 data "aws_partition" "current" {}
 

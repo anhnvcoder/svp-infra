@@ -6,6 +6,9 @@
 
 Giải thích: [03. Tổ chức](../../docs/handbook/03-org.md).
 
+Chạy root này tạo gì: mục [`aws/org`](../../docs/reference/inventory.md#awsorg) của [inventory](../../docs/reference/inventory.md)
+(số tài nguyên theo phần, theo loại, kèm sơ đồ).
+
 ## Dựng gì
 
 `<mgmt>`, `<log>`, `<prd>` là id của management, `svp-log-archive`, `svp-prd`, tính lúc chạy. Mọi tài nguyên mang tag `Stack=org` và sống

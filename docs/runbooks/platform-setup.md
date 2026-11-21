@@ -97,6 +97,9 @@ Lệnh `plan`, `apply` của [`org-security-setup.md`, bước (4)](org-security
 
 - **Mong đợi:** tổ chức dựng mới: `No changes.` (delegated admin Inspector, hai nhóm đã có). Tổ chức dựng trước khi có Inspector và nhóm
   nền tảng: plan của [N1](#n1-awsorg-thêm-inspector-và-nhóm-nền-tảng). Plan lần hai `No changes.`. `cd ../..` khi xong.
+- **Thay đổi được phép** ở mọi plan `aws/org` đủ: `aws_backup_global_settings.this` sửa tại chỗ, chỉ `isDelegatedAdministratorEnabled
+  "true" -> "false"` trong `global_settings`, khi cờ đó đã bật ngoài Terraform (trang Cross-account management của AWS Backup trên
+  console). Apply là đúng thiết kế: `aws/org/backup.tf` giữ delegated administrator của AWS Backup tắt.
 
 ## Bước (2): `aws/security`
 
@@ -122,8 +125,8 @@ Từ gốc `infra/` (không `cd github`: target `make github-*` chạy từ đó
 [`github-setup.md`, Lệnh người học chạy](github-setup.md#lệnh-người-học-chạy-plan-apply).
 
 - **Mong đợi:** environment `ecr-rescan` và action AWS đã có thì `No changes.`; chưa có thì plan của
-  [`github-setup.md`, Environment `ecr-rescan`](github-setup.md#environment-ecr-rescan-và-action-aws-cho-job-ecr) (`Plan: 4 to add, 2 to
-  change, 0 to destroy`). Plan lần hai `No changes.`, rồi `make github-check` (chỉ đọc).
+  [`github-setup.md`, Environment `ecr-rescan`](github-setup.md#environment-ecr-rescan-và-action-aws-cho-job-ecr).
+  Plan lần hai `No changes.`, rồi `make github-check` (chỉ đọc).
 
 ## Bước (4): nhóm nền tảng
 
@@ -161,8 +164,10 @@ aws/scripts/tfvars.sh groups prd
 
 Ví dụ là stg; với prd thay `stg` bằng `prd`, `anhnv-stg` bằng `anhnv-prd`, `SVP_AWS_STG_ACCOUNT_ID` bằng `SVP_AWS_PRD_ACCOUNT_ID`. Làm stg
 theo thứ tự 5a, bước (6) (ghi credential vào hai secret), 5b, rồi prd: vòng `validate` ở cuối 5b đọc credential của bước (6). Account dựng
-theo `accounts-setup.md` đã có mọi tài nguyên: bỏ 5a, làm 5b (plan mong `No changes.`) và phần kiểm, bước (6) trước vòng `validate` nếu
-chưa ghi credential.
+theo `accounts-setup.md` bằng bản root hiện tại đã có mọi tài nguyên: bỏ 5a, làm 5b (plan mong `No changes.`) và phần kiểm, bước (6) trước
+vòng `validate` nếu chưa ghi credential. Account chỉ có baseline đời đầu (dựng trước khi root có registry) chưa có hai secret: vẫn đi 5a,
+bước (6), rồi 5b, với mong đợi của 5b theo [N3](#n3-awsaccountsenv-thêm-registry-observability). Lệnh thiếu `AWS_PROFILE=anhnv-<env>`
+ra `AccessDenied` trên bucket state: [`accounts-setup.md`, bẫy profile mặc định](accounts-setup.md#bước-4-chuyển-state-vào-bucket).
 
 ### 5a. Vỏ secret cache trước
 
@@ -173,15 +178,19 @@ Rule cache của GHCR, Docker Hub trỏ secret có credential (`credentialArn`);
 aws/scripts/check-account.sh stg
 cd aws/accounts/stg
 AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform init -backend-config=../../backend-stg.hcl
-AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform plan \
-  -target='module.registry.aws_secretsmanager_secret.cache' -out=stg.tfplan
+AWS_PROFILE=anhnv-stg \
+TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" \
+  terraform plan -input=false -out=stg.tfplan \
+    -target='module.registry.aws_secretsmanager_secret.cache'
+AWS_PROFILE=anhnv-stg terraform show -no-color stg.tfplan > "$SVP_SESSION_DIR/stg-plan.txt"
 ```
 
 - **Mong đợi:** `Plan: 2 to add, 0 to change, 0 to destroy`: đúng `module.registry.aws_secretsmanager_secret.cache["ghcr"]`,
   `["docker-hub"]`; cảnh báo "Resource targeting is in effect" là đúng ý. Khác thì dừng, dán plan.
 
 ```sh
-AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform apply stg.tfplan && rm stg.tfplan
+AWS_PROFILE=anhnv-stg terraform apply -input=false stg.tfplan && rm stg.tfplan
 cd ../../..
 ```
 
@@ -192,21 +201,33 @@ Làm bước (6) cho account này, rồi quay lại lượt đủ.
 ```sh
 aws/scripts/check-account.sh stg
 cd aws/accounts/stg
-AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform plan -out=stg.tfplan
+AWS_PROFILE=anhnv-stg \
+TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" \
+  terraform plan -input=false -out=stg.tfplan
+AWS_PROFILE=anhnv-stg terraform show -no-color stg.tfplan > "$SVP_SESSION_DIR/stg-plan.txt"
 ```
 
-- **Mong đợi:** chỉ thêm đúng các dòng của danh sách ở [`accounts-setup.md`, N1](accounts-setup.md#n1-phần-của-root-và-số-tài-nguyên)
-  (cột của env này, theo `aws/paid-features.json` của repo: cả stg lẫn prd không có AMG giữa các buổi) trừ hai secret đã có; dòng cuối
-  có dạng `Plan: <n> to add, 0 to change, 0 to destroy`.
-- **Bẫy:** có `change`, `destroy` hay tài nguyên của `module.baseline`, `module.alarms`: dừng, dán plan. Lệnh `plan` trần ở đây tính
-  trạng thái giữa buổi: biến `session_open` mặc định `false`, nên env có `managed_grafana` `session` không có workspace AMG. Trong một buổi,
+- **Mong đợi:** chỉ thêm các phần của [`accounts-setup.md`, N1](accounts-setup.md#n1-phần-của-root-và-số-tài-nguyên) mà account chưa có,
+  trừ hai secret đã có; số theo bảng "Phần" của mục [`aws/accounts/<env>`](../reference/inventory.md#awsaccountsstg) ở inventory (theo
+  `aws/paid-features.json` của repo: cả stg lẫn prd không có AMG giữa các buổi); dòng cuối có dạng `Plan: <n> to add, 0 to change, 0 to
+  destroy`. Account chỉ có baseline đời đầu: plan thêm các tài nguyên baseline, alarms còn thiếu ở
+  [`accounts-setup.md`, N3](accounts-setup.md#n3-plan-và-apply) cùng các phần chưa có khác, tối đa `2 to change` (key state và budget).
+  Số đo thật của prd trong trường hợp này: `Plan: 69 to add, 2 to change` trước 5a, nên `Plan: 67 to add, 2 to change` ở 5b sau 5a
+  và bước (6); lệch thì đối chiếu theo phần ở N3 trước khi apply.
+- **Bẫy:** có `change` ngoài hai sửa tại chỗ của N3, `destroy`, `-/+` hay tài nguyên ngoài các phần và danh sách còn thiếu của N3: dừng,
+  dán plan. Lệnh `plan` trần ở đây tính trạng thái giữa buổi: biến `session_open` mặc định `false`, nên env
+  có `managed_grafana` `session` không có workspace AMG. Trong một buổi,
   root này chỉ apply qua `aws/scripts/tf.sh <env> account` ([bước mở tính năng của buổi](session-stg-deploy.md)): lệnh trần lúc đó xoá
   workspace mà cluster đang dùng.
 
 ```sh
-AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform apply stg.tfplan && rm stg.tfplan
+AWS_PROFILE=anhnv-stg terraform apply -input=false stg.tfplan && rm stg.tfplan
 # Expect: No changes.
-AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform plan
+AWS_PROFILE=anhnv-stg \
+TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" \
+  terraform plan -input=false
 AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform output -json ci_role_arns | jq -r 'keys[]'
 cd ../../..
 for p in ghcr docker-hub quay k8s ecr-public; do
@@ -469,6 +490,8 @@ PAT, token của cache: thu hồi trên GitHub, Docker Hub.
 ## Khi một bước đỏ
 
 - Lỗi ở `plan`: không có gì đổi trên account; đọc lỗi, sửa nguyên nhân (biến terminal, file `.auto.tfvars`, phiên SSO), chạy lại đúng bước.
+- `Error acquiring the state lock` kèm Lock ID (thường sau Ctrl+C một lệnh đang chờ nhập):
+  [`operations.md`, Khoá state kẹt](../reference/operations.md#khoá-state-kẹt).
 - Lỗi giữa `apply`: phần đã tạo nằm trong state; `plan` lại cùng root chỉ còn phần chưa tạo. Dán lỗi và plan mới trước khi apply lại;
   `-target` và áp code của PR chưa merge: [`operations.md`, Khi apply lỗi giữa chừng](../reference/operations.md#khi-apply-lỗi-giữa-chừng).
 - Plan có `destroy` hay `-/+` ở tài nguyên có sẵn (baseline, tổ chức, repo GitHub): dừng, không apply, dán plan. `-/+` lặp lại ở mọi plan là
@@ -484,10 +507,15 @@ Dùng khi tổ chức hay account env đã áp trước khi code có Inspector, 
 Apply `aws/org` trước `aws/security` (root đó cấu hình Inspector từ `svp-security`, cần delegated admin có sẵn), cùng lệnh `plan`, `apply`
 của [`org-security-setup.md`, bước (4)](org-security-setup.md#bước-4-awsorg-đủ).
 
-- **Mong đợi:** `Plan: 3 to add, 1 to change, 0 to destroy`: thêm `aws_inspector2_delegated_admin_account.security`,
+- **Mong đợi:** plan không `destroy`; thêm `aws_inspector2_delegated_admin_account.security`,
   `aws_identitystore_group.platform["admins"]`, `aws_identitystore_group.platform["viewers"]`; đổi tại chỗ (`~`) chỉ tổ chức, chỉ một dòng
   `+ "inspector2.amazonaws.com"` trong `aws_service_access_principals`, không dòng `-` nào.
-- **Bẫy:** dừng (không apply, dán plan lại) nếu có `destroy`, `-/+` hay thay đổi nào khác.
+  `to add` bằng số tài nguyên thêm liệt kê, `to change` là một.
+- **Thay đổi được phép** của [bước (1)](#bước-1-awsorg): khi cờ delegated administrator của AWS Backup đã bật ngoài Terraform (trang
+  Cross-account management trên console), plan thêm một sửa tại chỗ (`to change` thành hai) ở `aws_backup_global_settings.this`, chỉ
+  `isDelegatedAdministratorEnabled "true" -> "false"`. Apply là đúng thiết kế: `aws/org/backup.tf` giữ cờ đó tắt.
+- **Bẫy:** dừng (không apply, dán plan lại) nếu có `destroy`, `-/+` hay thay đổi nào khác, trừ thay đổi được phép ở trên và của
+  [bước (1)](#bước-1-awsorg) ở `aws_backup_global_settings.this`.
 - **Kiểm:** sau apply, Inspector tự bật mọi loại quét ở `svp-security`; `aws/security` thu về chỉ ECR (N2). Plan lần hai `No changes.`; rồi
   ghi id nhóm theo bước (4).
 

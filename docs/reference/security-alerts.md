@@ -14,7 +14,7 @@ Rule `svp-security-*` ở mỗi account chọn sự kiện CloudTrail trên bus 
 
 | Rule (module `security-baseline`) | Bắt gì | Region | Có ở |
 | --- | --- | --- | --- |
-| `svp-security-root-signin` | Root đăng nhập console | `root_signin_regions` (management: `us-east-1`, `us-east-2`, `us-west-2`; thành viên: `us-east-1`) | mọi account |
+| `svp-security-root-signin` | Root đăng nhập console | `us-east-1`, `us-east-2`, `us-west-2` (`root_signin_regions`) | mọi account |
 | `svp-security-trail` | Trail bị dừng, xoá, đổi, thành công hay bị từ chối | nhà, `us-east-1` | mọi account |
 | `svp-security-detection` | GuardDuty, Security Hub, Config, Access Analyzer bị tắt hay đổi | nhà, `us-east-1` | mọi account |
 | `svp-security-alert-rules` | Rule `svp-security-*` bị đổi, tắt, xoá | nhà, `us-east-1` | mọi account |
@@ -27,11 +27,13 @@ Rule `svp-security-*` ở mỗi account chọn sự kiện CloudTrail trên bus 
   `AccessDenied` (phủ cả `AccessDeniedException` của API JSON); `denied-storage` khớp thêm `Client.UnauthorizedOperation` của EC2, kể cả
   `--dry-run`.
 - `svp-security-root-signin`: CloudTrail ghi đăng nhập root của mọi account ở một trong `us-east-1`, `us-east-2`, `us-west-2`
-  ([sự kiện đăng nhập][signin-events]), và sự kiện tới bus mặc định của đúng region đó. Code đặt rule ở cả ba region cho management,
-  chỉ `us-east-1` cho account thành viên (`root_signin_regions` của `aws/baseline/main.tf`). SCP `svp-deny-other-regions` chặn lời gọi
-  API ở region khác, không chặn AWS ghi sự kiện đăng nhập ở đó, nên đăng nhập root của account thành viên được ghi ở `us-east-2` hay
-  `us-west-2` không khớp rule nào. Account thành viên không giữ mật khẩu root (root tập trung, `aws/org/root-access.tf`), nên đường này
-  hẹp, nhưng rule không phủ đủ ba region.
+  ([sự kiện đăng nhập][signin-events]), và sự kiện tới bus mặc định của đúng region đó. Mọi account có rule ở cả ba region
+  (`root_signin_regions` của `aws/baseline/main.tf`; module từ chối danh sách thiếu một trong ba). SCP `svp-deny-other-regions` chặn
+  account thành viên gọi API ở `us-east-2`, `us-west-2`, trừ các action `events:` mà Terraform cần để tạo, đọc, sửa, xoá rule, target,
+  tag và mà profile chỉ đọc gọi để kiểm (`root_signin_rule_actions` của module `org-policies`), chỉ trên đúng ARN rule
+  `svp-security-root-signin` của bus mặc định ở hai region đó (statement `DenyOtherRegionsButRootSigninRule`). Đổi hay xoá rule vẫn
+  chỉ `OrganizationAccountAccessRole` làm được (`svp-protect-baseline`). Target ở hai region đó đặt sự kiện vào bus
+  `svp-security-events` ở region nhà, region mà SCP cho phép.
 - `svp-security-root-session` nhận cả sự kiện chỉ đọc (`ENABLED_WITH_ALL_CLOUDTRAIL_MANAGEMENT_EVENTS`): `AssumeRoot` có thể là sự kiện
   chỉ đọc, mà rule `ENABLED` chỉ nhận sự kiện ghi
   ([sự kiện quản lý của CloudTrail](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-service-event-cloudtrail-management.html)).

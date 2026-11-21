@@ -43,7 +43,7 @@ qua tunnel SSM; Argo CD chạy trong cluster và tự đọc GitHub qua NAT. Sau
 | --- | --- | --- |
 | Root `aws/gitops/<env>` | máy người học; state ở bucket của account env | Đọc state root env và file của `svp-gitops`, áp các thứ theo thứ tự bên dưới |
 | Module `gitops-bridge` | gọi từ root | Tính mọi giá trị (tên, nhãn, values, commit bootstrap); không có resource nào |
-| Namespace có Pod Security | cluster | `argocd` và namespace của dự án mang nhãn `restricted` trước pod đầu tiên |
+| Namespace có Pod Security | cluster | `argocd`, namespace dự án mang nhãn `restricted` (`istio-system`: `privileged`) trước pod đầu tiên |
 | Release `argocd` | namespace `argocd` | Argo CD, ApplicationSet controller, Argo CD Notifications |
 | AppProject `svp`, `default` | namespace `argocd` | `svp` giới hạn repo nguồn, namespace và loại tài nguyên; `default` bị làm rỗng |
 | Cluster Secret `in-cluster` | namespace `argocd` | Nhãn `svp.io/env`, `svp.io/platform`, `svp.io/node-arch`; annotation `svp.io/cluster-values` |
@@ -212,7 +212,9 @@ của `main` lúc plan. `svp-root` luôn theo `refs/heads/main`; tầng 2 render
 | `node_arch` | `arm64` | `arm64` | node Graviton ở cả hai env |
 
 Chart `svp-cluster` mà root dùng để render namespace lấy ở `revision` của `envs/<env>/charts.yaml`, đúng chart mà Application
-`svp-cluster` sẽ cài, nên nhãn Pod Security trước Argo CD khớp nhãn sau Argo CD. Ghim của prd và promote:
+`svp-cluster` sẽ cài, nên nhãn Pod Security trước Argo CD khớp nhãn sau Argo CD. Module chỉ nhận `privileged` cho namespace của
+biến `privileged_namespaces` (`istio-system`: ztunnel, istio-cni đổi mạng của node), mọi namespace khác phải `restricted`
+([module `gitops-bridge`](../../aws/modules/gitops-bridge/README.md#pod-security-của-namespace)). Ghim của prd và promote:
 [ADR-0048](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0048-prd-aws.md) §7 (ghim), §8 (promote).
 
 ### Root riêng, qua tunnel

@@ -136,6 +136,8 @@ Ba giới hạn cần nhớ: SCP và RCP không áp lên management account và 
   mỗi region một detector, `DeleteDetector` đã chặn), `securityhub:EnableSecurityHub` (cấu hình tập trung của delegated admin giữ trạng
   thái), Config (`PutConfigurationRecorder` đã chặn), Firewall Manager (chỉ management chỉ định được admin, mà SCP không áp lên
   management). `us-east-1` được phép vì AWS chỉ phục vụ ở đó chứng chỉ ACM, web ACL WAF của CloudFront và Identity Center của tổ chức.
+  Ở `us-east-2`, `us-west-2`, `svp-deny-other-regions` chỉ để ngỏ rule `svp-security-root-signin`: CloudTrail ghi đăng nhập root cả ở
+  đó, nên rule phải có ở mọi account ([tra cứu đường cảnh báo](../reference/security-alerts.md#rule-chuyển-sự-kiện)).
 
 ### Resource control policy (RCP)
 
@@ -333,9 +335,12 @@ principal trong `organization.tf` có lý do ở comment cạnh nó; thêm dịc
 - `DenyUnusedSecurityServices` chặn lệnh mà nút bật trên console gọi của Macie, Detective, Security Lake, Audit Manager, Shield Advanced:
   mỗi dịch vụ tính tiền cho cả account khi đã bật, Shield Advanced còn cam kết một năm phí tháng. `ProtectAccessAnalyzer` chặn cả
   `CreateAnalyzer`: analyzer truy cập không dùng tính tiền theo role, user mà API không có khoá điều kiện theo loại analyzer.
-- `NotAction` của `svp-deny-other-regions` chép nguyên mẫu Region deny của Control Tower
-  ([nguồn](https://docs.aws.amazon.com/controltower/latest/controlreference/primary-region-deny-policy.html)); AWS thêm dịch vụ toàn cục
-  thì cập nhật từ trang đó. Cỡ và số policy mỗi đích theo quota của Organizations; test của module kiểm.
+- `NotAction` của `svp-deny-other-regions` là danh sách Region deny của Control Tower
+  ([nguồn](https://docs.aws.amazon.com/controltower/latest/controlreference/primary-region-deny-policy.html)) cộng chín action `events:`
+  của `root_signin_rule_actions` (rule root sign-in ở `us-east-2`, `us-west-2`); AWS thêm dịch vụ toàn cục thì cập nhật phần Control Tower
+  từ trang đó và giữ chín action `events:` này. Cỡ và số policy mỗi đích theo quota của Organizations; test của module kiểm.
+- **Rủi ro chấp nhận:** rule root sign-in ở `us-east-2`, `us-west-2` không có rule báo khi bị sửa hay xoá, giống account management. Chỉ
+  `OrganizationAccountAccessRole` sửa được chúng (SCP `protect-baseline`), và chính đăng nhập root vẫn được báo.
 - OU `Production`, `Development` cũ chứa hai account demo đã đóng (`SUSPENDED`), nằm ngoài Terraform; AWS gỡ hẳn account đóng sau 90 ngày,
   rồi hai OU rỗng được xoá tay ([`org-security-setup.md`, Đồ ngoài Terraform](../runbooks/org-security-setup.md#đồ-ngoài-terraform)).
 

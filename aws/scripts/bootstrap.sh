@@ -2,7 +2,7 @@
 # Bootstrap of the session's EKS cluster around the apply of root aws/gitops/<env>, which installs Argo CD and the root
 # of GitOps. Thin on purpose: the secrets and GlitchTip are the code repository's make targets, Argo CD is Terraform's.
 # Runs them in order with the account checked and the waits bounded: secrets before root gitops, wait after it.
-# Design notes: README.md.
+# Design notes: docs/reference/operations.md.
 
 # Usage: aws/scripts/bootstrap.sh [--print] stg|prd secrets|wait
 set -euo pipefail

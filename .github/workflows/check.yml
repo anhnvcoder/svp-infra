@@ -5,7 +5,7 @@
 # - no pull_request_target, no workflow_run; the jobs that run repository code have contents: read and nothing else;
 # - every action is GitHub's own, pinned to a full commit SHA; tools run from images pinned by digest in the Makefile;
 # - checkout with persist-credentials: false.
-# Design notes: README.md.
+# Design notes: docs/reference/ci.md.
 name: check
 
 on:
@@ -23,9 +23,9 @@ concurrency:
 
 jobs:
   # Whether a pull request changes anything but documentation, so job check skips and infra-ok accepts that skip.
-  # Documentation is Markdown, docs/ and LICENSE, but not the README.md of a Terraform directory (aws/, github/):
-  # terraform-docs writes part of it and make check holds it to the code. A change of the Makefile or of this workflow,
-  # and a push, turn the output true: when in doubt, run. The list comes from GitHub's API, so no history is fetched.
+  # Documentation is Markdown, docs/ and LICENSE, but not a Terraform README.md (aws/, github/) nor the inventory page
+  # and diagrams: make check holds them to the code. A Makefile or workflow change, and a push, turn the output true.
+  # The list comes from GitHub's API, so no history is fetched.
   changes:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -59,7 +59,7 @@ jobs:
           printf '%s\n' "$files"
           code=false
           if printf '%s\n' "$files" | grep -v -E -e '^$' -e '^docs/|^LICENSE$|\.md$' | grep -q . ||
-            printf '%s\n' "$files" | grep -q -E '^(aws|github)/.*README\.md$'; then
+            printf '%s\n' "$files" | grep -q -E '^(aws|github)/.*README\.md$|^docs/reference/inventory\.md$|^docs/diagrams/(inventory/|icons/|tokens\.d2$)'; then
             code=true
           fi
           echo "code=$code" | tee -a "$GITHUB_OUTPUT"

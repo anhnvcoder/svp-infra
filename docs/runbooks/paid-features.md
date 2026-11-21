@@ -128,8 +128,12 @@ Tắt: bước đầu. Bật: sau `aws/baseline`. Chỉ khi `security_hub` hay `
 aws/scripts/check-account.sh mgmt
 cd aws/security
 AWS_PROFILE=anhnv-sso terraform init -backend-config=../backend.hcl
-AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" TF_VAR_security_account_id="$SVP_AWS_SECURITY_ACCOUNT_ID" \
-  TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" terraform plan -out=security.tfplan
+AWS_PROFILE=anhnv-sso \
+TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
+TF_VAR_security_account_id="$SVP_AWS_SECURITY_ACCOUNT_ID" \
+TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
+  terraform plan -input=false -out=security.tfplan
+AWS_PROFILE=anhnv-sso terraform show -no-color security.tfplan > "$SVP_SESSION_DIR/security-plan.txt"
 ```
 
 - **Mong đợi** (theo [Đổi cờ](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0071-paid-features.md#đổi-cờ)):
@@ -140,8 +144,7 @@ AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" TF_VAR_securi
 - **Dừng** (không apply, dán plan) nếu plan chạm tài nguyên khác: detector GuardDuty, analyzer, aggregator Config, bus, topic, KMS key.
 
 ```sh
-AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" TF_VAR_security_account_id="$SVP_AWS_SECURITY_ACCOUNT_ID" \
-  TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" terraform apply security.tfplan && rm security.tfplan
+AWS_PROFILE=anhnv-sso terraform apply -input=false security.tfplan && rm security.tfplan
 cd ../..
 ```
 
@@ -158,21 +161,25 @@ Tắt: sau `aws/security`. Bật: bước đầu. Chỉ khi `config_recording` �
 aws/scripts/check-account.sh mgmt
 cd aws/baseline
 AWS_PROFILE=anhnv-sso terraform init -backend-config=../backend.hcl
-AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
-  TF_VAR_security_account_id="$SVP_AWS_SECURITY_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" \
-  TF_VAR_stg_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_prd_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform plan -out=baseline.tfplan
+AWS_PROFILE=anhnv-sso \
+TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
+TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
+TF_VAR_security_account_id="$SVP_AWS_SECURITY_ACCOUNT_ID" \
+TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" \
+TF_VAR_stg_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+TF_VAR_prd_account_id="$SVP_AWS_PRD_ACCOUNT_ID" \
+  terraform plan -input=false -out=baseline.tfplan
+AWS_PROFILE=anhnv-sso terraform show -no-color baseline.tfplan > "$SVP_SESSION_DIR/baseline-plan.txt"
 ```
 
 - **Mong đợi:** mỗi account đổi cờ 6 tài nguyên trong module của nó (`module.stg` với stg):
   `aws_config_configuration_recorder_status.this`, `aws_config_delivery_channel.this`, `aws_config_configuration_recorder.this`, mỗi cái
-  hai khoá region; `off` là `6 to destroy`, `always` là `6 to add`. `aws_iam_service_linked_role.config`, key EBS, rule `svp-security-*`
-  không đổi.
+  hai khoá region; `off` là `6 to destroy`, `always` thêm đúng sáu tài nguyên đó. `aws_iam_service_linked_role.config`, key EBS, rule
+  `svp-security-*` không đổi.
 - **Dừng** (không apply, dán plan) nếu plan khác.
 
 ```sh
-AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
-  TF_VAR_security_account_id="$SVP_AWS_SECURITY_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" \
-  TF_VAR_stg_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_prd_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform apply baseline.tfplan && rm baseline.tfplan
+AWS_PROFILE=anhnv-sso terraform apply -input=false baseline.tfplan && rm baseline.tfplan
 cd ../..
 ```
 
@@ -199,7 +206,11 @@ Bước cuối ở cả hai hướng. Chỉ khi `managed_grafana` hay `inspector
 aws/scripts/check-account.sh stg
 cd aws/accounts/stg
 AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform init -backend-config=../../backend-stg.hcl
-AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform plan -out=stg.tfplan
+AWS_PROFILE=anhnv-stg \
+TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" \
+  terraform plan -input=false -out=stg.tfplan
+AWS_PROFILE=anhnv-stg terraform show -no-color stg.tfplan > "$SVP_SESSION_DIR/stg-plan.txt"
 ```
 
 - **Mong đợi:**
@@ -210,9 +221,9 @@ AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_
     | Từ | Sang | Plan |
     | --- | --- | --- |
     | `always` | `session`, `off` | `7 to destroy` |
-    | `session` | `always` | `7 to add` |
+    | `session` | `always` | thêm bảy tài nguyên AMG |
     | `session` | `off` | `No changes.` (ngoài buổi không có workspace) |
-    | `off` | `always` | `7 to add` |
+    | `off` | `always` | thêm bảy tài nguyên AMG |
     | `off` | `session` | `No changes.`; buổi kế thêm 7 ở bước mở `tf.sh <env> account plan --open` |
 
     Data source, dashboard trong workspace mất cùng nó; Grafana Operator dựng lại ở buổi có workspace.
@@ -221,7 +232,7 @@ AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_
   `terraform plan` trần ở đây luôn tính trạng thái giữa buổi. Với cờ `always` hay `off`, `session_open` không đổi gì.
 
 ```sh
-AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform apply stg.tfplan && rm stg.tfplan
+AWS_PROFILE=anhnv-stg terraform apply -input=false stg.tfplan && rm stg.tfplan
 cd ../../..
 AWS_PROFILE=anhnv-stg aws ecr get-registry-scanning-configuration --region ap-southeast-1 --output text \
   --query 'scanningConfiguration.[scanType,rules[0].scanFrequency]'
@@ -250,6 +261,8 @@ hướng ngược ở [Thứ tự apply cờ](#thứ-tự-apply-cờ).
 
 - Lỗi ở `plan`: không có gì đổi trên account. `Invalid value for variable` ở `module.paid_features` là file sai luật: sửa bằng PR mới, không
   sửa file tại chỗ rồi áp.
+- `Error acquiring the state lock` kèm Lock ID (thường sau Ctrl+C một lệnh đang chờ nhập):
+  [`operations.md`, Khoá state kẹt](../reference/operations.md#khoá-state-kẹt).
 - Lỗi giữa `apply`: phần đã đổi nằm trong state; `plan` lại cùng root chỉ còn phần chưa đổi. Dán lỗi và plan mới trước khi apply lại.
 - Dừng giữa hai root (một root đã áp, root sau chưa): không đảo file; sửa nguyên nhân rồi áp tiếp root sau theo đúng thứ tự.
 - Plan có `destroy` hay `-/+` ở KMS key, bucket, vault, log group hay detector: dừng, không apply, dán plan.

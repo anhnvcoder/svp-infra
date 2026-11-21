@@ -2,7 +2,7 @@
 # Helpers of the session scripts of this directory, sourced by each of them; they run from a terminal of the Mac (bash
 # 3.2). --print as the first argument of each shows, in order, every command it would run, and then runs none. Every
 # command that reaches AWS carries the profile and the region; no secret value is printed or written to a file.
-# Design notes: README.md.
+# Design notes: docs/reference/operations.md.
 
 region=ap-southeast-1
 # CloudFront's web ACLs (scope CLOUDFRONT), certificates and log delivery sources, and the Pricing Plan Manager

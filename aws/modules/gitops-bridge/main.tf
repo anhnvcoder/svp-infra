@@ -34,6 +34,14 @@ locals {
 
   # Pod Security labels every namespace must carry, as chart svp-cluster writes them.
   pod_security_modes = ["enforce", "audit", "warn"]
+
+  # Namespaces whose labels break the rule of output namespaces, named in its error. A namespace of
+  # privileged_namespaces may still be restricted: the exception only widens what it may run.
+  pod_security_violations = [for n in local.namespace_docs : n.metadata.name if !alltrue([for m in local.pod_security_modes :
+    contains(contains(var.privileged_namespaces, n.metadata.name) ? ["restricted", "privileged"] : ["restricted"],
+    try(n.metadata.labels["pod-security.kubernetes.io/${m}"], "")) &&
+    can(regex("^v1\\.[0-9]+$", n.metadata.labels["pod-security.kubernetes.io/${m}-version"]))
+  ])]
 }
 
 ################################################################################

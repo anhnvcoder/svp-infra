@@ -179,6 +179,12 @@ variable "svp_cluster_values_template" {
 }
 
 variable "namespace_manifests" {
-  description = "Namespaces rendered from templates/namespaces.yaml of chart svp-cluster (helm template output, one or more documents each): namespace argocd, and the namespaces of the project and of the platform charts. Each must enforce, audit and warn Pod Security restricted."
+  description = "Namespaces rendered from templates/namespaces.yaml of chart svp-cluster (helm template output, one or more documents each): namespace argocd, and the namespaces of the project and of the platform charts. Each must enforce, audit and warn Pod Security restricted, or privileged for a namespace of privileged_namespaces."
   type        = list(string)
+}
+
+variable "privileged_namespaces" {
+  description = "Namespaces that may enforce, audit and warn Pod Security privileged instead of restricted, as chart svp-cluster of svp-gitops names them with podSecurity: privileged. istio-system by default: ztunnel and istio-cni of Istio ambient change the network of the node and its pods."
+  type        = list(string)
+  default     = ["istio-system"]
 }

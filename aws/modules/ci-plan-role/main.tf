@@ -4,7 +4,7 @@ data "aws_region" "current" {}
 
 data "aws_caller_identity" "current" {}
 
-# Design notes: aws/modules/ci-plan-role/README.md.
+# Design notes: docs/handbook/14-ci.md.
 locals {
   # The key policy of the state key (account-baseline module) names this role by its ARN: rename both together.
   role_name = "svp-ci-terraform-plan"

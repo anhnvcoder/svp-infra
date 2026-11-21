@@ -3,7 +3,7 @@
 # chore(stg):, chore(prd):, chore(deps):, fix(deps):, and GitHub's Revert button (Revert "<title>").
 # The title reaches the script through env only, never through ${{ }} in run:; no permission, no checkout.
 # The same pattern and test set run in the four repositories with CI.
-# Design notes: README.md.
+# Design notes: docs/reference/ci.md.
 name: pr-title
 
 on:

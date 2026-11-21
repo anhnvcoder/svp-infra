@@ -1,6 +1,7 @@
 # Size and protection of stg: the services, configuration, encryption and logs of prd, with less redundancy, smaller
 # sizes, short retention and no protection against deletion, disposable at the end of every session. Committed; it
-# holds no personal value. Every plan, apply and destroy of this root passes it; the commands are in README.md.
+# holds no personal value. Every plan, apply and destroy of this root passes it; the commands are in
+# docs/runbooks/session-stg-deploy.md and session-stg-teardown.md.
 
 # network: two zones; one NAT gateway and the interface endpoints of the AWS APIs, both in the first zone; flow logs go
 # to the log archive account, which keeps them. The S3 gateway endpoint lets through the same buckets as in prd: the
