@@ -89,6 +89,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # The self-tests of group scripts run the host's jq: the version of JQ_IMAGE, not the runner's.
+      - name: Pin jq
+        if: matrix.group == 'scripts'
+        run: make ci-pin-jq
       - name: make check-${{ matrix.group }}
         env:
           GROUP: ${{ matrix.group }}
@@ -121,8 +125,18 @@ jobs:
     if: always()
     needs: [changes, check, docs]
     runs-on: ubuntu-24.04
-    permissions: {}
+    permissions:
+      contents: read
     steps:
+      # Only the Makefile (the jq pin) and its script, so the jq here is the version of JQ_IMAGE.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            Makefile
+            ci/pin-jq.sh
+          sparse-checkout-cone-mode: false
+      - run: make ci-pin-jq
       - name: All checks passed
         env:
           NEEDS: ${{ toJSON(needs) }}

@@ -45,6 +45,10 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           path: base
           persist-credentials: false
+      # ci/infracost.sh reads the diff with the host's jq: the version of JQ_IMAGE, not the runner's.
+      - name: Pin jq
+        working-directory: pr
+        run: make ci-pin-jq
       - id: estimate
         working-directory: pr
         env:
