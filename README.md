@@ -54,7 +54,8 @@ của account đích.
 | `.github/workflows/`, `ci/` | GitHub Actions; role plan chỉ đọc ở `svp-<env>` | [14. CI](docs/handbook/14-ci.md) | [`github-setup.md`](docs/runbooks/github-setup.md) |
 | [`aws/paid-features.json`](aws/paid-features.json) | mọi account | [15. Chi phí](docs/handbook/15-cost.md) | [`paid-features.md`](docs/runbooks/paid-features.md) |
 
-Phí giữ giữa các buổi và phí một buổi của mỗi root: chương [15. Chi phí](docs/handbook/15-cost.md).
+Phí giữ giữa các buổi và phí một buổi của mỗi root: chương [15. Chi phí](docs/handbook/15-cost.md). Mỗi root tạo bao nhiêu tài nguyên
+trên account trống, theo phần và dịch vụ: [`docs/reference/inventory.md`](docs/reference/inventory.md).
 
 ## Cài đặt
 
@@ -72,11 +73,13 @@ account, region ở [`docs/reference/operations.md`](docs/reference/operations.m
 ```sh
 make check                            # mọi phép kiểm tĩnh, không chạm account
 make check DIRS=aws/modules/network   # chỉ các phép Terraform của một thư mục
+make inventory                        # sinh lại bảng tài nguyên mỗi root (plan giả, không mạng, không credential)
 make hooks                            # bật hook pre-commit (một lần mỗi clone)
 make help                             # liệt kê target
 ```
 
-Mỗi target làm gì, chạy song song, hook pre-commit, ngoại lệ trivy: [`docs/reference/checks.md`](docs/reference/checks.md).
+Mỗi target làm gì, chạy song song, hook pre-commit, ngoại lệ trivy: [`docs/reference/checks.md`](docs/reference/checks.md). Đổi root,
+module, cờ hay `<env>.tfvars` thì chạy `make inventory` trong cùng PR: `make check` (`inventory-check`) đỏ khi bảng lệch code.
 
 ## Luật an toàn
 
@@ -98,7 +101,8 @@ Mỗi target làm gì, chạy song song, hook pre-commit, ngoại lệ trivy: [`
 - [`docs/handbook/`](docs/handbook/README.md): giải thích, một chương mỗi bước của luồng áp (Explanation).
 - [`docs/runbooks/`](docs/runbooks/README.md): việc từng bước, theo thứ tự làm (How-to).
 - `docs/reference/`: tra cứu, [`checks.md`](docs/reference/checks.md) (lệnh kiểm), [`operations.md`](docs/reference/operations.md)
-  (profile, biến, script, đọc plan), [`ci.md`](docs/reference/ci.md) (plan và chi phí trên PR).
+  (profile, biến, script, đọc plan), [`ci.md`](docs/reference/ci.md) (plan và chi phí trên PR),
+  [`inventory.md`](docs/reference/inventory.md) (tài nguyên mỗi root tạo trên account trống, sinh từ code).
 - `docs/diagrams/`: sơ đồ AWS, nhúng ở chương 00 và các chương liên quan.
 - README của mỗi root và module: tài nguyên, đầu vào, đầu ra. ADR và explanation chung của lab ở `docs/` của svp-backend.
 

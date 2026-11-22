@@ -58,7 +58,7 @@ module "alarms" {
 }
 
 # One file holds the cost flags of every account, so the roots that switch the same service cannot disagree.
-# Design notes: aws/modules/paid-features/README.md.
+# Design notes: docs/handbook/15-cost.md.
 module "paid_features" {
   source = "../../modules/paid-features"
 

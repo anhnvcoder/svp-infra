@@ -41,7 +41,7 @@ locals {
   # Entries of the NACL of each tier. No entry allows TCP or UDP to port 22 or 3389 from anywhere, so the ranges open
   # to the internet skip both ports. TCP, UDP and ICMP are named one by one instead of protocol -1: nothing in the VPC
   # speaks another IP protocol. Kept in locals for the tests: the rules are made inside the registry module.
-  # Design notes: aws/modules/network/README.md.
+  # Design notes: docs/handbook/09-envs-network.md.
   nacl_from_vpc = [for i, p in ["tcp", "udp", "icmp"] :
     { rule_number = 100 + i, rule_action = "allow", protocol = p, from_port = 0, to_port = p == "icmp" ? 0 : 65535, icmp_type = p == "icmp" ? -1 : null, icmp_code = p == "icmp" ? -1 : null, cidr_block = var.cidr }
   ]
@@ -175,7 +175,7 @@ module "vpc" {
 # With the policy, only the env's buckets and the bucket ECR serves image layers from in this region
 # (https://docs.aws.amazon.com/AmazonECR/latest/userguide/vpc-endpoints.html) are reachable, so a stolen credential
 # cannot copy data to a bucket of another account from inside the VPC.
-# Design notes: aws/modules/network/README.md.
+# Design notes: docs/handbook/09-envs-network.md.
 locals {
   s3_endpoint_policy = var.s3_endpoint_restricted ? jsonencode({
     Version = "2012-10-17"
@@ -282,7 +282,7 @@ resource "aws_vpc_endpoint" "guardduty_data" {
 # Interface endpoints for the AWS APIs below, so those calls stay in the VPC and pass an endpoint policy; the NAT
 # gateway keeps destinations outside AWS and a few AWS APIs left out on purpose (listed in the design notes). Private
 # DNS points the regional service names at the endpoints, so no client needs an endpoint setting.
-# Design notes: aws/modules/network/README.md.
+# Design notes: docs/handbook/09-envs-network.md.
 locals {
   interface_endpoint_services = [
     "sts", "eks-auth", "secretsmanager", "logs", "ssm", "ssmmessages", "ec2messages", "ecr.api", "ecr.dkr", "ec2",

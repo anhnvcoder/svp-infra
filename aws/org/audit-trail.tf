@@ -1,7 +1,7 @@
-# Organization trail: the management events (read and write) of every account of the organization, in every region,
-# and the S3 data events of the production user buckets, delivered to the log archive account (aws/log-archive), with
-# log file integrity validation. Member accounts see the trail but cannot change it, and protect-cloudtrail of
-# org-policies keeps them from changing any trail of their own. Lives between sessions. Design notes: README.md.
+# Organization trail: the management events (read and write) of every account of the organization, in every region, and
+# the S3 data events of the production user buckets, delivered to the log archive account (aws/log-archive), with log
+# file integrity validation. Member accounts see the trail but cannot change it, and protect-cloudtrail of org-policies
+# keeps them from changing any trail of their own. Lives between sessions. Design notes: docs/handbook/03-org.md.
 
 locals {
   trail_name = "svp-audit"

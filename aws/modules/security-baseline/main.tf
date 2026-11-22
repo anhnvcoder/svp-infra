@@ -1,7 +1,7 @@
 # Security baseline of one account: S3 Block Public Access of the account, EBS encryption by default, AWS Config
 # recording, and the rules that forward security events to the Security Tooling account. One aws provider in the home
 # region; resources of the other regions name theirs with the region argument. Design notes:
-# aws/modules/security-baseline/README.md.
+# docs/handbook/06-baseline.md.
 
 data "aws_partition" "current" {}
 

@@ -2,7 +2,7 @@
 # The profiles of the lab's accounts, sourced by the session scripts after lib.sh: a script that runs a command under a
 # profile that is not the one of its environment (a read-only profile, the account of the logs) takes the profile and
 # the account variable of its row here, so that check_account, aws_, aws_global_ and tf_ of lib.sh work on it as on an
-# environment. Design notes: README.md.
+# environment. Design notes: docs/reference/operations.md.
 
 # shellcheck disable=SC2034 # read by the scripts that source this file
 # The profiles, one line each. Fields, read by profile_arg: profile, variable with the 12 digits of the account,

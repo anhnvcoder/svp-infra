@@ -1,7 +1,7 @@
 # One distribution per name, so each carries its own web ACL (bot control for the web, account takeover for the API),
 # certificate, headers and log. Nothing is cached but the hashed build files of the web; every request reaches the
 # origin with every viewer header, cookie and query string, the Host included, which Envoy routes on, and
-# CloudFront-Viewer-Address, which the gateway reads the client IP from. Design notes: aws/modules/edge/README.md.
+# CloudFront-Viewer-Address, which the gateway reads the client IP from. Design notes: docs/handbook/12-media-edge.md.
 
 data "aws_cloudfront_cache_policy" "caching_disabled" {
   name = "Managed-CachingDisabled"

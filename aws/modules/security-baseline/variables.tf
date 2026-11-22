@@ -41,15 +41,15 @@ variable "ebs_kms_key_arn" {
 }
 
 variable "root_signin_regions" {
-  description = "Regions of the rule svp-security-root-signin. CloudTrail records a console sign-in of the root user in us-east-1, us-east-2 or us-west-2: the management account passes all three, member accounts keep us-east-1 (other regions are denied to them)."
+  description = "Regions of the rule svp-security-root-signin. CloudTrail records a console sign-in of the root user in us-east-1, us-east-2 or us-west-2, so the list holds all three; in a member account the region policy svp-deny-other-regions must leave this rule open in us-east-2 and us-west-2."
   type        = list(string)
-  default     = ["us-east-1"]
+  default     = ["us-east-1", "us-east-2", "us-west-2"]
 
   validation {
-    condition = contains(var.root_signin_regions, "us-east-1") && length(distinct(var.root_signin_regions)) == length(var.root_signin_regions) && alltrue([
+    condition = length(setsubtract(["us-east-1", "us-east-2", "us-west-2"], var.root_signin_regions)) == 0 && length(distinct(var.root_signin_regions)) == length(var.root_signin_regions) && alltrue([
       for r in var.root_signin_regions : can(regex("^[a-z]{2}(-[a-z]+)+-[0-9]$", r))
     ])
-    error_message = "root_signin_regions must be distinct AWS region names and hold us-east-1."
+    error_message = "root_signin_regions must be distinct AWS region names and hold us-east-1, us-east-2 and us-west-2."
   }
 }
 

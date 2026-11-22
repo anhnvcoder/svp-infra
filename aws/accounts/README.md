@@ -6,6 +6,10 @@
 
 Giải thích: [08. Account env](../../docs/handbook/08-accounts.md); phần backup: [07. Backup](../../docs/handbook/07-backup.md).
 
+Chạy root này tạo gì: mục [`aws/accounts/stg`](../../docs/reference/inventory.md#awsaccountsstg),
+[`aws/accounts/prd`](../../docs/reference/inventory.md#awsaccountsprd) của [inventory](../../docs/reference/inventory.md) (số tài
+nguyên theo phần, theo loại, kèm sơ đồ).
+
 ## Dựng gì
 
 Mọi tài nguyên mang tag `Stack=baseline` (script quét sót của buổi bỏ qua) và sống giữa các buổi, trừ phần AMG khi cờ `managed_grafana`

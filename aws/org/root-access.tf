@@ -1,6 +1,6 @@
 # Centralized root access: member accounts keep no root password, access key or MFA device; the few tasks only root
 # can do run from the management account through sts:AssumeRoot, one task policy and at most 15 minutes at a time.
-# The management account's own root user stays the break-glass path. Design notes: README.md.
+# The management account's own root user stays the break-glass path. Design notes: docs/handbook/03-org.md.
 resource "aws_iam_organizations_features" "root_access" {
   enabled_features = [
     "RootCredentialsManagement",

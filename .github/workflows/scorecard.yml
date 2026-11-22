@@ -9,7 +9,7 @@
 # Publishing binds this file to the Scorecard API's Workflow Restrictions: no env or defaults at workflow or job level,
 # no write permission at workflow level, id-token: write in this job alone, no container or service, one GitHub-hosted
 # Ubuntu runner label (22.04 or later), only the allowed actions as uses: steps (no run:).
-# Design notes: README.md.
+# Design notes: docs/reference/ci.md.
 name: scorecard
 
 on:

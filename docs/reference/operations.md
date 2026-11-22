@@ -47,11 +47,11 @@ account Log Archive) và `SVP_AWS_BACKUP_ACCOUNT_ID` (account mà key RDS cho d�
 ## Biến account và direnv
 
 Mọi thiết lập shell cá nhân của svp nằm ở một chỗ: file `.envrc` của [direnv](https://direnv.net/) ở thư mục chứa các bản clone (thư mục
-cha của `infra/`, `backend/`, `labs/`…; không phải git repo nên không có đường commit). File chứa `export SVP_AWS_<…>_ACCOUNT_ID=…` của
-từng account (`MGMT`, `STG`, `PRD`; `LOG`, `SECURITY`, `BACKUP` khi đã có) và mặc định `AWS_PROFILE=anhnv-sso`, `AWS_REGION=ap-southeast-1`.
-Lý do: ID account không được nằm trong cây repo public, một chỗ dùng chung cho mọi repo của lab, và không phải gõ lại biến mỗi buổi.
-direnv tìm `.envrc` ngược lên các thư mục cha, nên mọi repo bên dưới đều nạp nó. Vì direnv chỉ dùng file gần nhất, repo không giữ
-`.envrc` riêng: một file trong repo sẽ che file chung.
+cha của `infra/`, `backend/`, `labs/`…; không phải git repo nên không có đường commit). File chỉ chứa `export SVP_AWS_<…>_ACCOUNT_ID=…` của
+từng account (`MGMT`, `STG`, `PRD`; `LOG`, `SECURITY`, `BACKUP` khi đã có) và mặc định `AWS_PROFILE=anhnv-sso`, `AWS_REGION=ap-southeast-1`;
+không `TF_VAR_*` nào. Lý do: ID account không được nằm trong cây repo public, một chỗ dùng chung cho mọi repo của lab, và không phải gõ lại
+biến mỗi buổi. direnv tìm `.envrc` ngược lên các thư mục cha, nên mọi repo bên dưới đều nạp nó. Vì direnv chỉ dùng file gần nhất, repo
+không giữ `.envrc` riêng: một file trong repo sẽ che file chung.
 
 Tạo file lần đầu (đọc 12 số trên trang SSO; chỉ ghi các account đã có, thêm dòng còn thiếu khi account được tạo), rồi cho direnv tin nó:
 
@@ -62,28 +62,28 @@ cat > .envrc <<'ENV'
 export SVP_AWS_MGMT_ACCOUNT_ID=<12 số>
 export SVP_AWS_STG_ACCOUNT_ID=<12 số>
 export SVP_AWS_PRD_ACCOUNT_ID=<12 số>
-export TF_VAR_stg_account_id=$SVP_AWS_STG_ACCOUNT_ID
-export TF_VAR_prd_account_id=$SVP_AWS_PRD_ACCOUNT_ID
 export AWS_PROFILE=anhnv-sso
 export AWS_REGION=ap-southeast-1
 ENV
 direnv allow
 ```
 
-Các biến `TF_VAR_*` không đổi giữa root cũng nằm trong file, lấy từ biến account tương ứng: `TF_VAR_stg_account_id`,
-`TF_VAR_prd_account_id`, và khi account đã có thì `TF_VAR_log_archive_account_id=$SVP_AWS_LOG_ACCOUNT_ID`,
-`TF_VAR_security_account_id=$SVP_AWS_SECURITY_ACCOUNT_ID`, `TF_VAR_backup_account_id=$SVP_AWS_BACKUP_ACCOUNT_ID`. Lệnh của runbook vì vậy
-chỉ cần ghi `TF_VAR_account_id` (mỗi root một account); lệnh nào vẫn ghi cả các biến kia thì cho cùng giá trị. direnv chỉ nạp file đã
-được tin: sau mỗi lần sửa `.envrc`, chạy `direnv allow` rồi kiểm bằng `printf '%s\n' "${SVP_AWS_STG_ACCOUNT_ID: -4}"` (4 số cuối).
+direnv chỉ nạp file đã được tin: sau mỗi lần sửa `.envrc`, chạy `direnv allow` rồi kiểm bằng
+`printf '%s\n' "${SVP_AWS_STG_ACCOUNT_ID: -4}"` (4 số cuối).
+
+**Mọi `TF_VAR_*` nằm trong lệnh**, không trong file: lệnh viết sẵn ghi từng biến mà root của nó cần, mỗi biến một dòng, từ biến
+`SVP_AWS_*` tương ứng (`TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID"`, `TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID"`…), hay
+script đặt chúng (`tf.sh`). Biến bắt buộc của một root là các biến không `default` trong `variables.tf` của nó. Lý do: đọc lệnh là thấy
+đủ giá trị root nhận, và `TF_VAR_account_id` đổi theo root (mỗi root thuộc một account, lệnh đặt nó từ biến của account mà profile vào).
+Lệnh thiếu một biến dừng ở lỗi `No value for required variable` nhờ `-input=false` ([Đọc plan an toàn](#đọc-plan-an-toàn)).
 
 `SVP_AWS_MGMT_ACCOUNT_ID` luôn gõ tay vào file, không lấy từ Organizations: đó là giá trị mà `check_account` của mọi script đối chiếu với
 account thật của `anhnv-sso`. Biến của account thành viên (kể cả `LOG`, `SECURITY`, `BACKUP`) kiểm và đặt lại bằng
 `eval "$(aws/scripts/accounts.sh)"`: lệnh đọc Organizations, đặt biến trong terminal hiện tại và in `ok` mỗi biến; chép giá trị vào file
 khi cần giữ sang buổi sau.
 
-Luật không đổi. `TF_VAR_account_id` không bao giờ đặt chung trong file này, vì mỗi root thuộc một account: lệnh viết sẵn đặt nó từ biến của
-account mà profile vào. Lệnh viết sẵn và script vẫn ghi profile và `--region` trong lệnh (ghi đè mặc định của file); lệnh tay ở account
-thành viên phải ghi profile. `SVP_SESSION_DIR` vẫn export mỗi buổi, từ thư mục `infra/`
+Lệnh viết sẵn và script vẫn ghi profile và `--region` trong lệnh (ghi đè mặc định của file); lệnh tay ở account thành viên phải ghi
+profile. `SVP_SESSION_DIR` vẫn export mỗi buổi, từ thư mục `infra/`
 (`export SVP_SESSION_DIR="$PWD/.session/$(date -u +%Y%m%dT%H%M%SZ)"`): script từ chối đường dẫn ngoài `infra/.session/`, nơi duy nhất git
 bỏ qua cho file của buổi.
 
@@ -100,6 +100,35 @@ Terraform của máy (Homebrew) phải nằm trong `required_version` của root
 root của management đọc `aws/backend.hcl` (sinh từ output `backend_hcl` của `aws/bootstrap`); root của account thành viên đọc
 `aws/backend-<env>.hcl` (sinh từ output `backend_hcl` của `aws/accounts/<env>`, có bucket, region, KMS, không có `key`) cộng một
 `-backend-config=key=<key của root>` thứ hai, `init -reconfigure` (script buổi `tf.sh` làm vậy). Không file nào trong hai loại được commit.
+
+### Khoá state kẹt
+
+Lệnh `plan`, `apply` giữ một lock file cạnh state của root trong bucket tới khi xong. Lệnh bị ngắt giữa chừng (Ctrl+C một `plan` đang chờ
+nhập biến, terminal đóng) có thể để lock file lại; lệnh sau ở cùng root dừng ở:
+
+```text
+Error: Error acquiring the state lock
+…
+Lock Info:
+  ID:        <Lock ID>
+  Operation: OperationTypePlan
+  Who:       <user>@<máy>
+```
+
+1. Kiểm không còn lệnh Terraform nào giữ khoá: `pgrep -fl terraform`. Dòng `terraform-ls` (language server của editor) không giữ khoá, bỏ
+   qua. Dòng `terraform plan`, `apply` nào khác là lệnh còn chạy: chờ nó xong hay dừng nó ở terminal của nó, không gỡ khoá. `Who` là máy
+   khác thì lệnh chạy ở đó: hỏi người chạy, không gỡ.
+2. Gỡ khoá trong thư mục root, với cùng profile và biến của lệnh bị kẹt (ví dụ root `aws/org`):
+
+   ```sh
+   AWS_PROFILE=anhnv-sso \
+   TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
+     terraform force-unlock -force <Lock ID>
+   ```
+
+- **Mong đợi:** `Terraform state has been successfully unlocked!`; rồi chạy lại đúng lệnh bị kẹt, theo khuôn có `-input=false`
+  ([Đọc plan an toàn](#đọc-plan-an-toàn)).
+- **Bẫy:** gỡ khoá khi một lệnh khác còn chạy là cho hai lệnh cùng ghi một state; state hỏng thì lấy bản trước từ versioning của bucket.
 
 ## Script của `aws/scripts/`
 
@@ -166,12 +195,33 @@ tới khi root env đã destroy; env không có cờ `session` thì mọi lệnh
 
 ## Đọc plan an toàn
 
-Plan lưu bằng `-out=<root>.tfplan` được git bỏ qua. Bản văn bản của plan thì không: lưu ra file `.txt` trong repo (để dán hay đọc lại)
-là để lộ account ID và tên tài nguyên vào cây repo public, nên xoá ngay khi đọc xong. Cách gọn, không tạo file, chỉ in dòng mỗi tài nguyên
-đổi và dòng tổng:
+Mọi lệnh `terraform plan`, `apply` trần mà runbook hay README trao để dán theo một khuôn (ví dụ root `aws/backup`, trong thư mục root):
 
 ```sh
-terraform show -no-color <root>.tfplan | grep -E '^\s*# .* (will|must) be|^Plan:'
+AWS_PROFILE=anhnv-sso \
+TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
+TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" \
+TF_VAR_stg_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+TF_VAR_prd_account_id="$SVP_AWS_PRD_ACCOUNT_ID" \
+  terraform plan -input=false -out=backup.tfplan
+AWS_PROFILE=anhnv-sso terraform show -no-color backup.tfplan > "$SVP_SESSION_DIR/backup-plan.txt"
+```
+
+- **Mỗi biến môi trường một dòng**, cuối dòng là `\`: một dòng dài bị terminal cắt khi dán thì mất `TF_VAR_*` ở cuối mà không báo gì.
+- **`-input=false`**: thiếu biến bắt buộc thì plan dừng ngay ở lỗi thay vì ngồi chờ nhập (chạy qua `| grep` thì không thấy câu hỏi);
+  Ctrl+C một lệnh đang chờ để lại [khoá state kẹt](#khoá-state-kẹt).
+- **`-out` rồi `terraform show`**: bản văn bản đủ của plan vào thư mục của buổi, để đọc hết trước khi apply.
+- **`apply` chỉ nhận file plan đã đọc**: `AWS_PROFILE=anhnv-sso terraform apply -input=false backup.tfplan && rm backup.tfplan`. File plan
+  giữ giá trị biến của lượt plan, nên lệnh apply chỉ cần profile.
+- **Plan kiểm `No changes.`** sau apply cùng dạng, không `-out`. `terraform destroy` trần cũng đi qua plan: `terraform plan -destroy
+  -input=false -out=<tên>-destroy.tfplan`, `show` ra `"$SVP_SESSION_DIR/<tên>-destroy-plan.txt"`, rồi apply file đó.
+- Lệnh qua `aws/scripts/tf.sh` đã làm đủ những điều trên.
+
+File `.tfplan` được git bỏ qua. Bản văn bản chỉ ghi vào `$SVP_SESSION_DIR` (dưới `infra/.session/`, git bỏ qua): `.txt` ở chỗ khác trong
+repo là để lộ account ID và tên tài nguyên vào cây repo public. Dòng mỗi tài nguyên đổi và dòng tổng:
+
+```sh
+grep -E '^\s*# .* (will|must) be|^Plan:' "$SVP_SESSION_DIR/<tên>-plan.txt"
 ```
 
 Mong đợi: mỗi dòng `# <địa chỉ> will be created|updated in-place|destroyed` hay `must be replaced`, cuối cùng `Plan: N to add, N to change,

@@ -13,7 +13,7 @@
 # Added here, from the cluster: TCP 15017 (istiod; its injection and validation webhooks call Service port 443, which
 # targets 15017 on the pod). Mesh traffic between nodes (HBONE 15008, xDS 15012) already falls in 1025-65535.
 
-# Design notes: aws/modules/eks/README.md.
+# Design notes: docs/handbook/10-eks.md.
 locals {
   node_security_group_enable_recommended_rules = true
 

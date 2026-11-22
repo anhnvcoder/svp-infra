@@ -28,6 +28,9 @@ Chạy từ gốc repo, không cần credential AWS, cần Docker và mạng (re
 | `make tfdocs` / `make tfdocs-check` | terraform-docs ghi / kiểm khối sinh (requirements, providers, resources, inputs, outputs) giữa `<!-- BEGIN_TF_DOCS -->` và `<!-- END_TF_DOCS -->` của `README.md` mỗi module; `tfdocs-check` đỏ khi README lệch `.tf`, root bị bỏ qua; container `--network none` |
 | `make test` | `terraform test` của mỗi module (`tests/*.tftest.hcl`): `init -backend=false` trong một container, rồi `terraform test` trong container `--network none` với image `TERRAFORM_IMAGE` ghim digest, chỉ thư mục module và cache provider được mount (chỉ đọc), không biến `AWS_*` nào (bỏ bằng `env -u`), không `~/.aws`, `.envrc`, `backend.hcl`; file test chỉ được nhận khi theo khuôn: đúng một dòng `mock_provider "aws" {`, mỗi `run "<tên>" {` có `command = plan` ở dòng không trống đầu tiên, không dòng nào khác bắt đầu bằng `run`, `mock_provider`, `provider`, `override_`, `module`, `command`, `/*`, không `alias`, `*/`, heredoc, symlink hay `*.tftest.json`; sai thì bị từ chối, nêu file và dòng; root bị bỏ qua |
 | `make test-guard` | tự kiểm ba luật của `make test` với `docker` giả trên PATH: file test sai bị từ chối, lệnh docker có `--network none`, image ghim digest, chỉ mount thư mục dữ liệu, module và cache provider (chỉ đọc), không biến hay file credential AWS nào tới container |
+| `make inventory` | sinh lại [`inventory.md`](inventory.md) (tài nguyên mỗi root tạo trên account trống) và sơ đồ của nó ở `docs/diagrams/inventory/` từ plan của `terraform test` trên provider giả, mọi root, mỗi env; chạy sau khi đổi root, module, cờ hay `<env>.tfvars` (mục [Inventory](#inventory)) |
+| `make inventory-check` | sinh vào thư mục tạm và so với bản commit; đỏ khi trang, `.d2` hay SVG lệch hay thiếu, hay file trong `docs/diagrams/inventory/` không còn được sinh, nêu file |
+| `make inventory-test` | tự kiểm `ci/inventory.sh` với `docker` giả trên PATH và một cây giả có file cá nhân mang giá trị canary: lượt `terraform test` có `--network none`, không biến `AWS_*` hay file credential nào tới container, chỉ mount bản chép (chỉ đọc), thư mục dữ liệu và cache provider (chỉ đọc), bản chép không có canary, `*.auto.tfvars`, `backend*.hcl`, `.envrc`, state, override hay symlink; trang đếm đúng phần, loại, import; `check` nêu file lệch và file thừa; file cá nhân đã `git add -f` vẫn không vào bản chép (mỗi mẫu của bộ lọc một ca); root thiếu `notes` hay thiếu trong `ROOTS` thì dừng |
 | `make github-app-test` | unit test của `github/scripts/github-app.py` và phép kiểm manifest của nó (không mạng, `gh` hay account) |
 | `make ci-plan-test` | tự kiểm `ci/terraform-plan.sh` với `docker`, `curl`, `gh` giả trên PATH và một bản chép của repo ở thư mục tạm: từ chối chạy ngoài Actions, cổng (biến bật plan, fork, gốc không plan, PR Renovate), buổi mở hay không, thứ tự lệnh Terraform, token mới mỗi lệnh, secret account cần và không cần, khoá media lấy từ state, giá trị che vắng khỏi log và tóm tắt, stdout của `plan` không vào log, lỗi `init`, `plan` làm đỏ với stderr đã che, tóm tắt đúng số và address của `ci/testdata/plan.json`; bước đăng comment của `plan.yml` chạy đúng như trong file với `gh` giả (đăng mới, sửa comment dính, cắt khi quá dài) |
 | `make ci-plan ENV=<stg\|prd>` | plan của job `plan` trong `plan.yml`; từ chối chạy khi thiếu `GITHUB_ACTIONS=true` và `ACTIONS_ID_TOKEN_REQUEST_URL`, nên không bao giờ chạy trên máy dev |
@@ -48,12 +51,12 @@ chọn theo `uname -m`. Cùng một tham chiếu trên máy dev và trong CI, n�
 
 Các target tự kiểm chạy trên máy chủ, không container: `session-test` chỉ cần bash, git và jq mà máy Mac và runner CI đều có, `test-guard`
 chạy với `docker` giả, `github-app-test` dùng python3, `ci-plan-test` chạy với `docker`, `curl`, `gh` giả, `infracost-test` chạy với
-`docker` giả. Image chạy qua `env -u DOCKER_DEFAULT_PLATFORM docker run` (shell của máy đặt `linux/amd64` cho dự án khác), container chạy
-dưới uid của người gọi.
+`docker` giả, `inventory-test` chạy với `docker` giả. Image chạy qua `env -u DOCKER_DEFAULT_PLATFORM docker run` (shell của máy đặt
+`linux/amd64` cho dự án khác), container chạy dưới uid của người gọi.
 
 Không target nào gọi `apply`, `destroy`, `import`, `output` hay `aws`. Chỉ `ci-plan`, target của job CI, đọc account: `state pull` và
-`plan` chỉ đọc; ngoài nó không target nào gọi `state`, và `plan` duy nhất là các `run` của `make test`, trên provider AWS giả
-(`mock_provider`), không mạng, không credential.
+`plan` chỉ đọc; ngoài nó không target nào gọi `state`, và `plan` duy nhất là các `run` của `make test` và của `make inventory`,
+`inventory-check`, trên provider giả (`mock_provider`), không mạng, không credential.
 
 ## Tệp cấu hình
 
@@ -99,6 +102,30 @@ kiểm ai dùng được key state, bucket state được bảo vệ ra sao, tê
 dòng, nên khi khối comment và heredoc bị cấm thì mỗi dòng được đọc đúng như HCL đọc nó. Vì thế dòng chứa `*/` (kể cả dòng comment, vì `/*`
 có thể nằm trong chuỗi như một origin) hay `<<` (heredoc) bị từ chối: dòng của hai thứ đó có thể giả làm dòng khuôn. Khuôn đủ ở
 [`AGENTS.md`](../../AGENTS.md); `make test-guard` kiểm ba luật mà không khởi động container nào.
+
+## Inventory
+
+`make inventory` trả lời "chạy root này trên account trống thì tạo gì, bao nhiêu" cho từng root (mỗi env của `aws/accounts`, `aws/envs`,
+`aws/gitops`), ghi vào [`inventory.md`](inventory.md) cùng một sơ đồ D2 mỗi root có icon dịch vụ AWS. Mỗi root một lượt:
+
+1. Chép các file git theo dõi dưới `aws/`, `github/` vào thư mục tạm, bỏ mọi file có thể chứa giá trị cá nhân dù đã lỡ commit
+   (`*.auto.tfvars*`, `terraform.tfvars*`, `backend*.hcl` trừ `.example`, `.envrc`, `.terraform/`, state, plan, `.session/`, override) và
+   symlink; bản chép còn file nào như vậy thì dừng.
+2. Đặt `ci/inventory/<root>.tftest.hcl` vào `tests/` của root trong bản chép: provider giả cho mọi provider và alias của root, giá trị giả
+   cho data source quyết định `count`, `for_each`, validation (danh sách account, zone, repo ECR, file của svp-gitops), một `run` với
+   `command = plan`. Root có env dùng chung một file cho stg và prd.
+3. `terraform init -backend=false` trong container có mạng (tải provider vào `.plugin-cache/`, khoá như `make test`), rồi `terraform test
+   -json -verbose` trong container `--network none`, mount bản chép và cache chỉ đọc, không biến `AWS_*`; biến từ `<env>.tfvars`, rồi
+   `*.auto.tfvars.example`.
+4. Đếm `resource_changes` của plan (tài nguyên managed, `create` hay import) theo phần (lời gọi module cấp root, hay file `.tf` khai báo
+   tài nguyên của root) và loại; mỗi loại AWS ứng một dịch vụ và icon ở `docs/diagrams/icons/` (bảng `SERVICES` của
+   `ci/inventory.sh`: loại AWS mới ngoài bảng làm lượt chạy đỏ, để chọn icon một lần).
+
+Plan đỏ vì giá trị giả (validation, precondition) thì sửa giá trị giả trong `ci/inventory/`, không sửa root; giả định nào đổi số thì ghi ở
+mục của root trong trang (hàm `notes` của `ci/inventory.sh`). Một lượt đủ mất khoảng hai phút khi cache đã có provider. `inventory-check`
+ở job `check (test)` của CI; PR chỉ đổi `docs/reference/inventory.md`, `docs/diagrams/inventory/`, `docs/diagrams/icons/` hay
+`docs/diagrams/tokens.d2` vẫn chạy job đó. Thư mục có `*.tf` ngoài `modules/` (cách `LIST_DIRS` của `Makefile` tìm root) mà không nằm trong
+`ROOTS` của `ci/inventory.sh` làm `inventory-check` đỏ, nêu thư mục đó.
 
 ## Chạy song song
 

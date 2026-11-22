@@ -1,6 +1,7 @@
 # Only the management account can turn cross-account backup on, and the setting holds for every member account: the
 # env accounts copy their recovery points into the vaults of svp-backup. The provider reads back every flag AWS returns,
-# so the map lists all of them; multi-party approval and delegated administrator stay off. Design notes: README.md.
+# so the map lists all of them; multi-party approval and delegated administrator stay off.
+# Design notes: docs/handbook/03-org.md.
 resource "aws_backup_global_settings" "this" {
   global_settings = {
     isCrossAccountBackupEnabled     = "true"

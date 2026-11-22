@@ -66,10 +66,10 @@ flat() { tr '\t\n' '  ' | sed 's/ *$//'; }
 
 # --- quotas ---
 
-# The quotas the runbooks read, one line each: environment, service code, quota code (- for the AMP rule interval,
-# whose code is looked up by name), min or max, the figure, then the name. A figure cpu+A:N is A plus limits.cpu of the
-# NodePool in svp-gitops, at least N (cpu:N: A is 0). The floors are the strictest of aws/org/README.md and runbooks.
-# stg evaluates its AMP rules every 30 s, the default quota, so it runs without a Support case; prd keeps 15 s.
+# The quotas the runbooks read, one line each: environment, service code, quota code (- for the AMP rule interval, whose
+# code is looked up by name), min or max, the figure, then the name. A figure cpu+A:N is A plus limits.cpu of the
+# NodePool in svp-gitops, at least N (cpu:N: A is 0). The floors are the strictest of those in docs/runbooks. stg
+# evaluates its AMP rules every 30 s, the default quota, so it runs without a Support case; prd keeps 15 s.
 quota_table='stg ec2 L-1216C47A min 10 vCPU on-demand (Standard)
 stg ec2 L-34B43A08 min cpu:10 vCPU Spot (Standard)
 stg ec2 L-0263D0A3 min 1 Elastic IP

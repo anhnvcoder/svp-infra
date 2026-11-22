@@ -1,7 +1,7 @@
 # Usage of the resources priced by volume, for make infracost (--usage-file). Infracost prices a month of 730 hours;
 # the volumes below are those of one session of 4 hours, the unit the cost tables of the design use, so a line's
 # hourly part is a whole month and its volume part one session. Usage left out shows as "depends on usage".
-# Design notes: README.md.
+# Design notes: docs/reference/ci.md.
 version: 0.1
 
 resource_type_default_usage:

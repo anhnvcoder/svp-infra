@@ -38,7 +38,7 @@ resource "aws_ssoadmin_permission_set" "admin" {
   description  = "Administrator of the svp member accounts"
   instance_arn = local.sso_instance_arn
   # An hour of administrator rights at a time. A long apply is not cut: with an sso-session profile the SDK takes new
-  # role credentials from the SSO token while the access portal session lasts. Design notes: README.md.
+  # role credentials from the SSO token while the access portal session lasts. Design notes: docs/handbook/03-org.md.
   session_duration = "PT1H"
 }
 

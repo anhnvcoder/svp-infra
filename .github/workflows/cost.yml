@@ -5,7 +5,7 @@
 # - job infracost alone has the secret INFRACOST_API_KEY and read access; job infracost-comment also needs the key to
 #   post, and alone can write to the pull request, from the diff that job infracost leaves in an artifact;
 # - every action is GitHub's own, pinned to a full commit SHA; Infracost runs from the image pinned in the Makefile.
-# Design notes: README.md.
+# Design notes: docs/reference/ci.md.
 name: cost
 
 on:

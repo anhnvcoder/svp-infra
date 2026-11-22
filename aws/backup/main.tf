@@ -1,6 +1,6 @@
 # The copies of the stg and prd backups in an account of their own, so administrators of the env accounts cannot
 # delete them; management still can, through the role this root applies with. Lives between sessions. Design notes:
-# README.md.
+# docs/handbook/07-backup.md.
 
 data "aws_partition" "current" {}
 

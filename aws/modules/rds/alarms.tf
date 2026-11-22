@@ -1,6 +1,6 @@
 # CloudWatch alarms of the instance, outside the cluster so they still fire when the cluster is down. Thresholds follow
 # the CloudWatch recommended alarms for RDS; the table, its sources and where it departs from them are in
-# Design notes: aws/modules/rds/README.md.
+# Design notes: docs/handbook/11-data.md.
 
 locals {
   gib = 1024 * 1024 * 1024

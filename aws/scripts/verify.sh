@@ -103,14 +103,21 @@ account_key() {
 # standards REGION: Security Hub standards and the Config recorder of the profile in REGION, unless the account's cost
 # flags (paid-features.json) turn the service off there.
 standards() {
-  local r=$1 hub cfg std rec st n
+  local r=$1 hub cfg std rec st n errf
   hub=$(paid_feature "$env_name" security_hub) || return 1
   cfg=$(paid_feature "$env_name" config_recording) || return 1
+  errf=$(mktemp)
   if ! std=$(aws_in "$r" securityhub get-enabled-standards \
-    --query 'StandardsSubscriptions[].[StandardsArn,StandardsStatus]' --output text); then
+    --query 'StandardsSubscriptions[].[StandardsArn,StandardsStatus]' --output text 2>"$errf"); then
+    # With the flag off the account is not subscribed to Security Hub on purpose: only that error is muted.
+    if [ "$hub" != off ] || ! grep -q 'not subscribed to AWS Security Hub' "$errf"; then cat "$errf" >&2; fi
+    rm -f "$errf"
     [ "$hub" = off ] || fail "securityhub get-enabled-standards in $r with profile $profile"
     std=
+  else
+    cat "$errf" >&2
   fi
+  rm -f "$errf"
   rec=$(aws_in "$r" configservice describe-configuration-recorders \
     --query 'ConfigurationRecorders[].[name,recordingMode.recordingFrequency]' --output text) ||
     fail "configservice describe-configuration-recorders in $r with profile $profile"
@@ -229,9 +236,12 @@ org_trail_mgmt() {
   local m out
   m=$(need_id SVP_AWS_MGMT_ACCOUNT_ID) || return 1
   out=$(aws_ s3api list-objects-v2 --bucket "svp-cloudtrail-$m-ap-southeast-1" \
-    --query 'max_by(Contents, &LastModified).LastModified' --output text) ||
+    --query 'Contents[].LastModified' --output text) ||
     fail "7c: cannot read the old management trail bucket"
   printing && return 0
+  # The query runs on each page of the listing: one value per object, the newest of all pages is picked here.
+  out=$(tr '\t' '\n' <<<"$out" | { grep -v '^None$' || true; } | sort | tail -n 1)
+  out=${out:-None}
   note "7c: last write to the old management trail bucket: $out (not later than the apply of step 4 plus minutes)"
 }
 
@@ -873,7 +883,7 @@ cost() {
   case $kind in
     mgmt)
       note "GuardDuty and Security Hub estimated cost after the trial: console of svp-security, page Usage of each"
-      note "cost monitor, anomaly subscription and allocation tags: README of aws/bootstrap, section 5"
+      note "cost monitor, anomaly subscription and allocation tags: docs/runbooks/org-security-setup.md, 7f"
       ;;
     backup) note "compare with the estimate of the backup runbook for the account svp-backup (±50 %)" ;;
     *) note "the whole organization: verify.sh cost mgmt" ;;

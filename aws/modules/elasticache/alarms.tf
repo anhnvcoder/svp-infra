@@ -1,6 +1,6 @@
 # CloudWatch alarms of the replication group, outside the EKS cluster so they still fire when it is down. Thresholds
 # follow the CloudWatch recommended alarms for ElastiCache; the table and its sources are in the design notes.
-# Design notes: aws/modules/elasticache/README.md.
+# Design notes: docs/handbook/11-data.md.
 
 locals {
   runbook_base_url = "https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks"

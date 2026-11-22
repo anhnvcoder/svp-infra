@@ -1,6 +1,6 @@
 # CloudWatch alarms of the cluster, outside the EKS cluster so they still fire when it is down. Levels follow the MSK
 # best practices; the table and its sources are in the design notes.
-# Design notes: aws/modules/msk/README.md.
+# Design notes: docs/handbook/11-data.md.
 
 locals {
   runbook_base_url = "https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks"

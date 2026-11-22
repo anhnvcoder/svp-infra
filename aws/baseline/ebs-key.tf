@@ -1,7 +1,7 @@
 # Customer managed key that encrypts new EBS volumes of svp-stg and svp-prd in the home region, the only accounts and
 # region that run EC2. The key policy is that of the AWS managed key aws/ebs: any principal of the account may use it
 # through EC2 of the home region, so node groups (the AutoScaling service-linked role), Karpenter and the bastion need
-# no IAM change. Design notes: aws/baseline/README.md.
+# no IAM change. Design notes: docs/handbook/06-baseline.md.
 
 locals {
   # Built from its parts rather than read from the key: a template is known to be non-null before the key exists, so

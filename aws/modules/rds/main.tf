@@ -1,6 +1,6 @@
 # One PostgreSQL instance for every service: each service keeps its own database and roles on it, made by the
 # bootstrap job of the cluster, so nothing here creates a database.
-# Design notes: aws/modules/rds/README.md.
+# Design notes: docs/handbook/11-data.md.
 
 resource "aws_db_subnet_group" "this" {
   name_prefix = "${var.name}-"

@@ -5,6 +5,10 @@
 
 Giải thích: [13. GitOps](../../docs/handbook/13-gitops.md).
 
+Chạy root này tạo gì: mục [`aws/gitops/stg`](../../docs/reference/inventory.md#awsgitopsstg),
+[`aws/gitops/prd`](../../docs/reference/inventory.md#awsgitopsprd) của [inventory](../../docs/reference/inventory.md) (số tài
+nguyên theo phần, theo loại, kèm sơ đồ).
+
 ## Dựng gì
 
 Mọi tài nguyên nằm trong cluster `svp-<env>` của root [`aws/envs/<env>`](../envs/stg/README.md); root không tạo tài nguyên AWS nào. Giá
@@ -12,7 +16,7 @@ trị do module [`gitops-bridge`](../modules/gitops-bridge/README.md) tính; `de
 
 | Tài nguyên | Account, region | Một câu |
 | --- | --- | --- |
-| `kubernetes_manifest.namespace` | cluster `svp-<env>` | `argocd` và namespace dự án với nhãn Pod Security `restricted`, render từ `templates/namespaces.yaml` của chart `svp-cluster`; server-side apply, field manager `svp-pod-security` |
+| `kubernetes_manifest.namespace` | cluster `svp-<env>` | `argocd` và namespace dự án với nhãn Pod Security `restricted` (`istio-system` mang `privileged`, [lý do](../modules/gitops-bridge/README.md#pod-security-của-namespace)), render từ `templates/namespaces.yaml` của chart `svp-cluster`; server-side apply, field manager `svp-pod-security` |
 | `helm_release.argocd` | cluster `svp-<env>` | Argo CD theo `argocd/bootstrap.json` ở commit bootstrap B; values file nó nêu, rồi `platforms/eks/argo-cd.yaml` |
 | `helm_release.app_projects` | cluster `svp-<env>` | AppProject `svp`, `default` nguyên văn `argocd/project.yaml` ở B, `take_ownership` |
 | `kubernetes_secret_v1.cluster` | cluster `svp-<env>` | Secret `argocd/in-cluster`: nhãn env, platform, kiến trúc node; annotation `svp.io/cluster-values`, chat Telegram |

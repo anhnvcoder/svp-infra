@@ -369,17 +369,48 @@ Theo thứ tự, mỗi bước xong mới sang bước sau:
      và giữ backup tự động. Bước 28, 29 (đóng root account) in `ok no session feature of prd …` như bước 3–5 (cùng điều kiện **Cờ prd ở
      giá trị production**).
    - **Lệnh terraform tương ứng**, khi cần chạy tay từ `aws/envs/prd` (`teardown.tfvars` chỉ đặt `rds_deletion_protection = false`,
-     `media_force_destroy = true` và `edge_alb_deletion_protection = false`; không đổi cỡ, log hay mã hoá): `apply` nhấc bảo vệ, rồi
-     `cleanup`, rồi `destroy` cùng hai file. MSK và ElastiCache không có bảo vệ xoá để nhấc: `destroy` gỡ chúng cùng secret `AmazonMSK_*`
-     (xoá ngay) và để KMS key của root ở `PendingDeletion`.
+     `media_force_destroy = true` và `edge_alb_deletion_protection = false`; không đổi cỡ, log hay mã hoá): plan rồi apply nhấc bảo vệ,
+     rồi `cleanup`, rồi plan `-destroy` và apply cùng hai file, theo [khuôn lệnh plan](../reference/operations.md#đọc-plan-an-toàn). MSK và
+     ElastiCache không có bảo vệ xoá để nhấc: destroy gỡ chúng cùng secret `AmazonMSK_*` (xoá ngay) và để KMS key của root ở
+     `PendingDeletion`.
 
      ```sh
      cd aws/envs/prd          # từ infra/, thư mục của terminal buổi
-     AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
-       TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform apply -var-file=prd.tfvars -var-file=teardown.tfvars
+     AWS_PROFILE=anhnv-prd \
+     TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" \
+     TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
+     TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" \
+       terraform plan -input=false -var-file=prd.tfvars -var-file=teardown.tfvars -out=prd-teardown.tfplan
+     AWS_PROFILE=anhnv-prd terraform show -no-color prd-teardown.tfplan > "$SVP_SESSION_DIR/prd-teardown-plan.txt"
+     ```
+
+     Đọc `prd-teardown-plan.txt`: chỉ `to change` như plan của bước 23. Đúng thì apply (bước 24):
+
+     ```sh
+     AWS_PROFILE=anhnv-prd terraform apply -input=false prd-teardown.tfplan && rm prd-teardown.tfplan
+     ```
+
+     Chỉ khi apply báo `Apply complete!` mới dọn backup (bước 25); apply lỗi thì dừng, không chạy `cleanup`:
+
+     ```sh
      ../../scripts/restore-drill.sh prd cleanup
-     AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
-       TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform destroy -var-file=prd.tfvars -var-file=teardown.tfvars
+     ```
+
+     Rồi plan `-destroy`:
+
+     ```sh
+     AWS_PROFILE=anhnv-prd \
+     TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" \
+     TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
+     TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" \
+       terraform plan -destroy -input=false -var-file=prd.tfvars -var-file=teardown.tfvars -out=prd-destroy.tfplan
+     AWS_PROFILE=anhnv-prd terraform show -no-color prd-destroy.tfplan > "$SVP_SESSION_DIR/prd-destroy-plan.txt"
+     ```
+
+     Đọc `prd-destroy-plan.txt`: `0 to add, 0 to change`, chỉ tài nguyên của `aws/envs/prd`. Đúng thì apply:
+
+     ```sh
+     AWS_PROFILE=anhnv-prd terraform apply -input=false prd-destroy.tfplan && rm prd-destroy.tfplan
      cd ../../..              # về infra/ cho các lệnh sau
      ```
 
@@ -471,6 +502,8 @@ trị rẻ); chạy cả khi buổi dừng sớm. Destroy kẹt hay tài nguyên
 prd](#cổng-promote-prd-trước-mọi-lệnh-tốn-tiền)).
 - **Bước dựng đỏ** (1–15): trang dựng, mục của bước đó ([`session-prd-deploy.md`](session-prd-deploy.md)); apply bước 9 đỏ thì vẫn gỡ theo
   bẫy ở bước 1 của [Gỡ, quét sót, trả cờ](#gỡ-quét-sót-trả-cờ).
+- **`Error acquiring the state lock`** kèm Lock ID sau một lệnh `terraform` trần bị ngắt: [Khoá state
+  kẹt](../reference/operations.md#khoá-state-kẹt).
 - **Destroy kẹt, `sweep.sh` còn dòng sót:** [mục Destroy kẹt và Lệnh xoá tay theo loại của trang chủ buổi stg](session-stg.md#destroy-kẹt)
   (anchor `#lệnh-xoá-tay-theo-loại` ở trang đó), với `AWS_PROFILE=anhnv-prd`.
 - **Cần dừng sớm:** bỏ phần đo còn lại, làm finding bảo mật rồi bước 20–31 và trả cờ; buổi chỉ xong khi đủ năm bước của mục

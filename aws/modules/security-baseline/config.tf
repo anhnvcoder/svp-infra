@@ -1,5 +1,5 @@
 # AWS Config records every supported resource type continuously in both regions, unless config_recording is off.
-# Design notes: aws/modules/security-baseline/README.md.
+# Design notes: docs/handbook/06-baseline.md.
 
 locals {
   # Built from its parts rather than read from the role, so the recorders are known at plan time.

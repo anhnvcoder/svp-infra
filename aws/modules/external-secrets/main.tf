@@ -4,7 +4,7 @@ data "aws_region" "current" {}
 
 data "aws_caller_identity" "current" {}
 
-# Design notes: aws/modules/external-secrets/README.md.
+# Design notes: docs/handbook/10-eks.md.
 locals {
   # The remoteRef keys of the ExternalSecrets chart svp-cluster of the backend repository renders on eks: store aws,
   # managed object store, Kafka and Valkey outside the cluster, Argo CD notifications, Grafana Operator and media

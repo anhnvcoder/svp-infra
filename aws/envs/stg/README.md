@@ -7,6 +7,9 @@ Giải thích: [09. Env và mạng](../../../docs/handbook/09-envs-network.md), 
 [11. Dữ liệu](../../../docs/handbook/11-data.md), đường vào, media, transcode ở chương [12. Media và
 edge](../../../docs/handbook/12-media-edge.md), backup của env ở chương [07. Backup](../../../docs/handbook/07-backup.md).
 
+Chạy root này tạo gì: mục [`aws/envs/stg`](../../../docs/reference/inventory.md#awsenvsstg) của
+[inventory](../../../docs/reference/inventory.md) (số tài nguyên theo phần, theo loại, kèm sơ đồ).
+
 ## Dựng gì
 
 Root dựng đầu buổi và gỡ cuối buổi. Ứng dụng trong cluster không ở đây: Argo CD triển khai từ `svp-gitops`, qua root `aws/gitops/stg`.

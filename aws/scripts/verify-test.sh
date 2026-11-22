@@ -44,6 +44,8 @@ done
 echo "${AWS_PROFILE:-} $key" >>"$FAKE_PROFILES"
 pick=
 for f in "$key$joined@profile=${AWS_PROFILE:-}" "$key$joined" $singles "$key@profile=${AWS_PROFILE:-}"; do
+  # A file <answer>.error is a failed call: its text on stderr, exit 255, as the real CLI.
+  if [ -f "$FAKE_ANSWERS/$f.error" ]; then cat "$FAKE_ANSWERS/$f.error" >&2; exit 255; fi
   if [ -f "$FAKE_ANSWERS/$f" ]; then pick=$f; break; fi
 done
 if [ -n "$pick" ]; then
@@ -254,6 +256,36 @@ ans "securityhub_get-enabled-standards@profile=anhnv-security-ro" "$std_arn/cis-
 expect "org FAIL: one standard of two READY at anhnv-security-ro" runs_fail org
 expect "org FAIL: it names the profile, the region and the count" failedl 'anhnv-security-ro ap-southeast-1: 1 of the 2 standards'
 expect "org FAIL: the other profiles still ran" okl "anhnv-prd-ro us-east-1: Security Hub standards"
+
+org_answers
+ans "s3api_list-objects-v2@--bucket=svp-cloudtrail-000000000000-ap-southeast-1" \
+  '2026-10-01T00:00:00+00:00\t2026-11-03T00:00:00+00:00\n2026-11-02T00:00:00+00:00\t2026-09-30T00:00:00+00:00'
+expect "org: 7c several pages of timestamps give one note with the newest" run org
+expect "org: 7c that note is one line with only the newest write" \
+  sh -c '[ "$(grep -c "^note  7c: last write" "$1")" = 1 ] && grep -q "^note  7c: last write to the old management trail bucket: 2026-11-03T00:00:00+00:00 (not later" "$1"' _ "$out"
+ans "s3api_list-objects-v2@--bucket=svp-cloudtrail-000000000000-ap-southeast-1" 'None'
+expect "org: 7c an empty bucket is still None" run org
+expect "org: 7c the note names None" notel "7c: last write to the old management trail bucket: None (not later"
+
+org_answers
+printf '\nAn error occurred (InvalidAccessException) when calling the GetEnabledStandards operation: Account is not subscribed to AWS Security Hub CSPM\n' \
+  >"$answers/securityhub_get-enabled-standards@profile=anhnv-stg-ro.error"
+expect "org: flag security_hub off and the known not-subscribed error exits 0" run org
+expect "org: that known error is not printed" sh -c '! grep -q "not subscribed" "$1"' _ "$err"
+expect "org: that account still has its note" notel "anhnv-stg-ro us-east-1: security_hub is off"
+
+org_answers
+printf 'An error occurred (AccessDenied) when calling the GetEnabledStandards operation: denied\n' \
+  >"$answers/securityhub_get-enabled-standards@profile=anhnv-stg-ro.error"
+expect "org: flag off and another error does not fail" run org
+expect "org: that other error is still printed" sh -c 'grep -q "AccessDenied" "$1"' _ "$err"
+
+org_answers
+printf 'An error occurred: Account is not subscribed to AWS Security Hub CSPM\n' \
+  >"$answers/securityhub_get-enabled-standards@profile=anhnv-prd-ro.error"
+expect "org FAIL: flag on and the same error fails" runs_fail org
+expect "org FAIL: flag on, the error is printed and the check named" \
+  sh -c 'grep -q "not subscribed" "$1" && grep -q "^FAIL  securityhub get-enabled-standards in" "$1"' _ "$err"
 
 org_answers
 SVP_AWS_LOG_ACCOUNT_ID=999999999999 expect "org FAIL: a profile in another account exits non-zero" runs_fail org

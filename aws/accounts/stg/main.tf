@@ -46,7 +46,7 @@ module "baseline" {
 }
 
 # One file holds the cost flags of every account, so the roots that switch the same service cannot disagree.
-# Design notes: aws/modules/paid-features/README.md.
+# Design notes: docs/handbook/15-cost.md.
 module "paid_features" {
   source = "../../modules/paid-features"
 
@@ -74,7 +74,7 @@ module "ci_plan_role" {
 
 # Karpenter launches the Spot nodes of stg through CreateFleet, which needs this role to exist already: EC2 creates it
 # on first use from the console only ("Service-linked role for Spot Instance requests", EC2 User Guide, read
-# 2026-11-19), and the Karpenter controller may not create it. Design notes: aws/accounts/README.md.
+# 2026-11-19), and the Karpenter controller may not create it. Design notes: docs/handbook/08-accounts.md.
 resource "aws_iam_service_linked_role" "spot" {
   aws_service_name = "spot.amazonaws.com"
 }

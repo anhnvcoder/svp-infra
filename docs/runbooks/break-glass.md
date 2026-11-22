@@ -110,7 +110,7 @@ mục dưới.
 | Bước | Email (rule, account) |
 | --- | --- |
 | Mỗi `AssumeRoot` (mỗi privileged action) | `svp-security-root-session`, management, chỉ khi gọi ở `ap-southeast-1` hay `us-east-1` |
-| Root thành viên đăng nhập console | `svp-security-root-signin`, account đó, `us-east-1` |
+| Root thành viên đăng nhập console | `svp-security-root-signin`, account đó (CloudTrail ghi ở `us-east-1`, `us-east-2` hay `us-west-2`) |
 | Root thành viên thử việc mà SCP chặn | `svp-security-denied-*`, account đó |
 
 `AssumeRoot` gọi ở region khác hai region trên không sinh email (ADR-0060, Hệ quả): lệnh CLI luôn ghi `--region ap-southeast-1`.

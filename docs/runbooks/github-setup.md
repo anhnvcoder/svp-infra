@@ -404,7 +404,8 @@ Thôi quản một tài nguyên: mục [Thôi quản một tài nguyên](#thôi-
 Một lần, sau khi PR thêm chúng merge; trước khi workflow của `svp-backend`, `svp-frontend` dùng chúng chạy trên `main`. `make github-plan`,
 đọc plan, `make github-apply`.
 
-- **Mong đợi:** `Plan: 4 to add, 2 to change, 0 to destroy`: environment `ecr-rescan` và luật nhánh `main` của nó ở hai repo;
+- **Mong đợi:** `to add` bằng số tài nguyên thêm liệt kê, `2 to change`, `0 to destroy`: environment `ecr-rescan` và luật nhánh
+  `main` của nó ở hai repo;
   `github_actions_repository_permissions` của `svp-backend`, `svp-frontend` đổi tại chỗ, `patterns_allowed` thêm đúng một dòng
   `+ "aws-actions/configure-aws-credentials@*"`, không dòng `-`. Dòng nào khác: dừng như bước 3 của mục
   [Lệnh người học chạy](#lệnh-người-học-chạy-plan-apply).
@@ -414,7 +415,7 @@ Một lần, sau khi PR thêm chúng merge; trước khi workflow của `svp-bac
 Một lần, sau khi PR thêm chúng merge; trước khi `release.yml` của `svp-backend` chạy trên `main`, vì job nêu environment chưa có thì
 GitHub tự tạo nó ngoài Terraform. App `svp-release-please` tạo trước (bước 1 của [Thứ tự](#thứ-tự-trên-một-account-mới)).
 
-- **Mong đợi:** `Plan: 6 to add, 1 to change, 0 to destroy`: environment `release`, luật nhánh `main` và biến
+- **Mong đợi:** `to add` bằng số tài nguyên thêm liệt kê, `1 to change`, `0 to destroy`: environment `release`, luật nhánh `main` và biến
   `SVP_RELEASE_APP_CLIENT_ID` của nó; environment `terraform-plan`; biến `SVP_TF_PLAN_ENVS` (`[]`); ruleset `gitops-check-tags`;
   `github_actions_repository_permissions` của `svp-backend` đổi tại chỗ, `patterns_allowed` thêm đúng một dòng
   `+ "googleapis/release-please-action@*"`, không dòng `-`. Dòng nào khác: dừng như bước 3 của mục

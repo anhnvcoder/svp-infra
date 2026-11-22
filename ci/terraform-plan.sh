@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # terraform plan of a pull request for workflow plan.yml. gate decides which envs plan; plan ENV plans the roots of
 # one env with the job's OIDC token and the read-only role svp-ci-terraform-plan, and writes a masked summary
-# (counts and addresses, never attribute values) to $RUNNER_TEMP/plan-summary/<env>. Design notes: README.md.
+# (counts and addresses, never attribute values) to $RUNNER_TEMP/plan-summary/<env>. Design notes: docs/reference/ci.md.
 
 # plan refuses to run outside GitHub Actions: a dev machine never reaches an account with it. Nothing is written but
 # below $RUNNER_TEMP; the plan text is never printed or kept, terraform's stderr is printed masked and only on failure.

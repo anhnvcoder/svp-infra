@@ -16,7 +16,7 @@
 # the kinds a baseline keeps there too (the DNSSEC alarms of prd, its query log group, their SNS topic and KMS keys):
 # each of those kinds reads the Stack tag, so what a baseline keeps is "kept" in either region.
 
-# Design notes: README.md.
+# Design notes: docs/handbook/00-tong-quan.md#các-đường-của-một-buổi.
 
 # Usage: aws/scripts/sweep.sh [--print] mgmt|stg|prd
 set -euo pipefail

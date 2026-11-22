@@ -5,7 +5,7 @@
 
 # Runs after the apply of aws/envs/<env>, before root gitops; again when a third-party digest changes mid-session.
 
-# Design notes: README.md.
+# Design notes: docs/reference/operations.md.
 
 # Usage: aws/scripts/ecr-warm.sh [--print] stg|prd FILE
 set -euo pipefail

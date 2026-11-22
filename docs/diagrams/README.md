@@ -13,8 +13,10 @@ Chạy từ gốc repo; D2 chạy trong container ghim digest (`D2_IMAGE` của 
 | `make diagrams-check` | Sinh vào thư mục tạm, so với cả hai SVG đã commit; lệch, thiếu, hay SVG không còn `.d2` cùng tên thì exit 1 kèm tên file |
 | `make diagrams PNG=1` | Sinh thêm `<tên>.png` và `<tên>-dark.png` bên cạnh để xem; không commit |
 | `make diagrams LAYOUT=<engine> OUT=<thư mục> SUFFIX=<chữ>` | Bản thử: engine khác `layout-engine` của file, thư mục khác, hậu tố tên; không commit |
-| `python3 .claude/skills/aws-drawio-diagram/scripts/build_svp.py --pdf --docs` | Sinh `svp-aws.drawio` (sơ đồ tổng có icon AWS) cùng PDF, PNG mỗi trang từ spec, không sửa tay; cỡ trang env đọc từ `<env>.tfvars` và `variables.tf` của `aws/envs/<env>`, đổi cỡ thì build lại; cần CLI draw.io (`brew install --cask drawio` hay biến `DRAWIO`) |
-| `check_diagram.py docs/diagrams/svp-aws.drawio`, `check_svp_counts.py` (cùng thư mục script) | Kiểm offline trước khi commit: hình học; số AZ, subnet, NAT, node, bastion, RDS, broker, node ElastiCache khớp cỡ env |
+| `make inventory` | Sinh `inventory/*.d2`, SVG của chúng và trang inventory từ plan giả của mọi root (mục [Sơ đồ inventory](#sơ-đồ-inventory)) |
+| `python3 docs/diagrams/drawio/build_svp.py --pdf --docs` | Sinh `svp-aws.drawio` (sơ đồ tổng có icon AWS) cùng PDF, PNG mỗi trang từ spec, không sửa tay; mục [draw.io](#drawio) |
+| `python3 "$SKILL/scripts/check_diagram.py" docs/diagrams/svp-aws.drawio` | Kiểm hình học của `.drawio`: lệch lưới, đường gãy; 0 lỗi trước khi giao (`SKILL` ở mục [Vòng làm](#vòng-làm)) |
+| `python3 docs/diagrams/drawio/check_svp_counts.py` | Kiểm offline: số AZ, subnet, NAT, node, bastion, RDS, broker, node ElastiCache khớp cỡ env, trang `org` khớp `org_expected()` |
 
 `diagrams-check` chạy một lần mỗi lượt CI, ở job `docs` của `check.yml` (job chạy mọi PR, kể cả PR chỉ đổi `.d2`, `.svg`). CI chỉ kiểm
 SVG khớp `.d2`; `.d2` khớp Terraform do người viết và review kiểm. Cùng nguồn, cùng digest của image thì ra cùng byte, arm64 lẫn amd64.
@@ -103,6 +105,27 @@ thị đủ dấu tiếng Việt.
 | `group` | nhóm nhiều account theo vòng đời hay mục đích (sống lâu, trong buổi): nét chấm mảnh; không phải account hay ranh giới |
 | `data-flow`, `control-flow` | mũi tên mảnh: dữ liệu (nét liền), điều khiển như chính sách, API, trigger (nét đứt) |
 
+## Icon
+
+Sơ đồ D2 dùng icon dịch vụ AWS khi khối của nó là một dịch vụ (sơ đồ inventory ở `inventory/`, mục dưới). Icon là SVG cỡ 48 của
+[AWS Architecture Icons](https://aws.amazon.com/architecture/icons/), bản `07312026` (gói `Icon-package_07312026`, thư mục
+`Architecture-Service-Icons_07312026/<nhóm>/48/Arch_<dịch vụ>_48.svg`), chép vào [`icons/`](icons/) với tên ngắn kebab-case (`kms.svg`,
+`ecr.svg`, `amp.svg`). AWS cho dùng bộ này để vẽ sơ đồ kiến trúc; không sửa hình, không đổi màu.
+
+- **Trong repo, không URL.** D2 chạy trong container `--network none` nên không tải icon từ mạng; đường dẫn tương đối tính từ file
+  `.d2` (`icon: ../icons/kms.svg`) và D2 nhúng hình vào SVG (base64), nên máy và CI ra cùng byte.
+- **Chỉ icon dùng tới.** Thêm dịch vụ mới thì chép đúng một file từ gói cùng bản, đặt tên theo bảng `SERVICES` của `ci/inventory.sh`;
+  nâng bản gói thì thay mọi file trong `icons/` cùng lúc, sửa bản ở đoạn trên, chạy lại `make inventory`, `make diagrams`.
+- **Cỡ.** Nút icon là `shape: image`, `width: 48; height: 48`, nhãn `<dịch vụ> · <số>` nằm dưới hình; nhãn nằm trên nền nhạt của khối
+  nên đặt `font-color` tối ở cả hai theme (theme tối của D2 tô chữ sáng, không đọc được trên nền nhạt).
+
+### Sơ đồ inventory
+
+`inventory/<slug>.d2` cùng hai SVG của nó do `make inventory` sinh từ plan giả của mỗi root, không sửa tay; `make inventory-check`
+(không phải `diagrams-check`) kiểm chúng. Mỗi khối một phần của root, tiêu đề ghi số tài nguyên, mỗi icon một dịch vụ với số của nó.
+Trang nhúng: [`docs/reference/inventory.md`](../reference/inventory.md); cách sinh: [`checks.md`, mục
+Inventory](../reference/checks.md#inventory).
+
 ## Luật
 
 - PR đổi kiến trúc mà một sơ đồ `.d2` tả (account, luồng, dịch vụ) thì sửa `.d2` đó và chạy `make diagrams` trong cùng PR; không sửa
@@ -112,3 +135,74 @@ thị đủ dấu tiếng Việt.
   khối chạy song song đặt cạnh nhau, không ép thành chuỗi.
 - Trước khi giao, `make diagrams PNG=1` rồi xem `<tên>.png` (sáng) và `<tên>-dark.png` (tối): chữ không tràn, mũi tên không xuyên nút hay
   cắt nhãn khung, tỉ lệ cao/rộng không quá 1,3. Xoá PNG sau khi xem.
+
+## draw.io
+
+Sơ đồ tổng [`svp-aws.drawio`](svp-aws.drawio) (trang `stg`, `prd`, `org`, `flows`) có icon AWS nên vẽ bằng draw.io, không bằng D2. File
+`.drawio`, PDF và PNG mỗi trang là sản phẩm sinh từ spec Python ở [`drawio/`](drawio/); không sửa tay trong draw.io.
+
+### Engine và cách cài
+
+Thư viện vẽ (`drawio_lib.py`), checker hình học (`check_diagram.py`) và luật chung (lưới 40px, icon 80px, lồng Cloud → Account → Region →
+VPC → AZ → subnet, EKS, bẫy của CLI draw.io) là skill `aws-drawio-diagram` của
+[`anhnvcoder/agent-skills`](https://github.com/anhnvcoder/agent-skills), không chép vào repo này. Spec tìm skill qua biến
+`AWS_DRAWIO_SKILL`, mặc định `~/.claude/skills/aws-drawio-diagram`, và dừng với thông báo cài đặt khi không thấy.
+
+```sh
+git clone git@github.com:anhnvcoder/agent-skills.git
+ln -s "$PWD/agent-skills/aws-drawio-diagram" ~/.claude/skills/aws-drawio-diagram  # hay: AWS_DRAWIO_SKILL=<thư mục đó>
+```
+
+CI không build draw.io; xuất PDF, PNG cần CLI draw.io (`brew install --cask drawio` hay biến `DRAWIO`).
+
+### Vòng làm
+
+Từ gốc repo, `SKILL` là thư mục skill (`${AWS_DRAWIO_SKILL:-$HOME/.claude/skills/aws-drawio-diagram}`):
+
+```sh
+SKILL="${AWS_DRAWIO_SKILL:-$HOME/.claude/skills/aws-drawio-diagram}"
+python3 docs/diagrams/drawio/build_svp.py --pdf --png /tmp/svp          # .drawio + .pdf, PNG để xem
+python3 "$SKILL/scripts/check_diagram.py" docs/diagrams/svp-aws.drawio   # 0 lỗi trước khi giao
+python3 docs/diagrams/drawio/check_svp_counts.py                        # 0 lệch
+python3 docs/diagrams/drawio/build_svp.py --pdf --docs                  # khi giao: PNG scale 2 cạnh .drawio
+```
+
+Rồi mở PNG và nhìn: checker đo lệch lưới và đường gãy, còn đường đi qua nhãn hay icon chỉ mắt thấy. PNG trong `/tmp` không commit; PDF
+commit cạnh `.drawio`; PNG `--docs` (`svp-aws-<trang>.png`) commit vì tài liệu của repo code nhúng chúng.
+
+### Luật riêng của sơ đồ svp
+
+Thêm vào luật của skill:
+
+- **Cỡ đọc từ Terraform, không gõ lại.** Mỗi trang env sinh từ cùng một hàm; cỡ lấy từ `aws/envs/<env>/<env>.tfvars` và mặc định của
+  `variables.tf` trong root đó. Số của repo khác (replica của workload ở `svp-gitops`) nằm trong một bảng của spec, comment nêu file nguồn,
+  để repo build được khi clone một mình. Đổi cỡ env thì build lại.
+- **Subnet của mỗi AZ theo tầng, từ trái sang phải:** public (chỉ NAT), edge (chỉ ALB internal `svp-<env>-edge`, không route ra ngoài
+  VPC, nhãn `Edge subnet`), private, database (nhãn `Database subnet`). Một ALB là một icon bắc qua biên hai box edge của hai AZ đầu
+  (phụ đề ghi "một ALB trên mọi subnet edge").
+- **Interface endpoint:** một icon `endpoints` mỗi AZ có ENI (`interface_endpoint_az_count` của root: stg một AZ, prd mọi AZ), bên trái
+  box cluster, nhãn nêu số dịch vụ đọc từ `interface_endpoint_services` của module `network`; đường đứt `443` tới box cluster.
+- **Dải "Regional services" dưới VPC** có hai hàng: dịch vụ regional (S3, Secrets Manager, KMS, CloudWatch Logs, ACM của ALB) rồi dịch vụ
+  cấp account sống qua `destroy` (ECR, Inspector, AMP, AMG, log group ứng dụng, X-Ray; cạnh nối láng giềng cùng hàng). Dịch vụ toàn cầu
+  (Route 53, mỗi distribution CloudFront cùng web ACL của nó) ở Account ngoài Region, bên trái; web ACL nối bằng đường đứt không mũi tên,
+  nhãn đặt trên; distribution vào mép trái của ALB (VPC origin). Cert ACM của distribution (`us-east-1`) không thêm icon.
+- **Namespace:** `svp` vắt qua box private của hai AZ đầu; mỗi workload một icon Kubernetes theo kind kèm replica; Argo CD, Kyverno,
+  Prometheus là chữ trong khung; add-on của EKS không vẽ. Controller tạo tài nguyên AWS có khung riêng và đường đứt tới thứ nó tạo
+  (AWS Load Balancer Controller → ALB, EBS CSI → EBS).
+- **Tầng database:** mỗi dịch vụ một cột, gần cluster nhất ở hàng thấp nhất (RDS +280, ElastiCache +160, MSK +40 so với mép trái box);
+  broker MSK một icon mỗi AZ.
+- **Số icon khớp Terraform:** `check_svp_counts.py` đọc lại file và so từng loại icon của mỗi trang env với cỡ của env, trang `org` với
+  `org_expected()` (account cùng dịch vụ của từng account).
+- **Trang `org`:** không VPC, AZ, subnet. Root của Organization chứa hộp chính sách gắn ở root (tên và loại đọc từ
+  `aws/modules/org-policies/main.tf`) và ba cột: account quản lý, OU `Security` (`svp-log-archive`, `svp-security`, `svp-backup`), OU
+  `Workloads` (`Prod` với `svp-prd`, `NonProd` với `svp-stg`). OU là group aws4 nét liền không nền; account là group `ACCOUNT`. Luồng log
+  (xanh) từ mọi account vào bucket của `svp-log-archive`; luồng phát hiện (đỏ): GuardDuty, Access Analyzer → Security Hub → bus
+  `svp-security-events` ← rule `svp-security-*` của mọi account → SNS → email. Account có cờ `off` trong `aws/paid-features.json` có ghi chú
+  `Off in …` đọc từ file cờ; icon AMG của account env chỉ có khi cờ `managed_grafana` không phải `off`.
+- **Trang env vẽ `svp-log-archive` chỉ cho bucket env ghi vào** (flow log, log WAF, log CloudFront), dưới account env, trong Cloud.
+- **Trang `flows`** gồm các khối dọc, mỗi khối một tiêu đề: phát hành image (GitHub Actions → GHCR → ECR qua role OIDC; PR promote →
+  `svp-gitops` → Argo CD), upload tới phát lại, request, telemetry, transcode, backup và restore, plan trên PR. Tên role, repo, log group
+  khớp code; nhiều đường ra từ một icon dùng chung một thân dọc.
+
+Toạ độ của trang env (cột x, hàng y) nằm ở phần "geometry of an env page" của [`build_svp.py`](drawio/build_svp.py); thêm AZ hay dịch vụ
+thì giữ hàng, cột đó và chỉ thêm icon ở bội số 40.

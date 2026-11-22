@@ -1,6 +1,6 @@
 # Amazon Inspector scans container images in ECR, and nothing else: nodes are replaced each session from a pinned EKS
 # AMI and watched by GuardDuty Runtime Monitoring, and the lab runs no Lambda. Home region only, where the registries
-# are. Findings reach Security Hub through its built-in integration. Design notes: aws/security/README.md.
+# are. Findings reach Security Hub through its built-in integration. Design notes: docs/handbook/05-security.md.
 
 resource "aws_inspector2_organization_configuration" "this" {
   # Accounts that join the organization later.

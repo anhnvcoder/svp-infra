@@ -1,7 +1,7 @@
 # CloudFront in front of the media bucket, at media.<domain>. The URL of an object is https://media.<domain>/<key>, the
 # key starting with its prefix: media/ and preview/ are public, any other path (premium/) needs a signed URL.
 # flat_rate_free picks the plan: true subscribes to the flat-rate Free plan (managed CORS policy, no access log), false
-# is pay-as-you-go with the module's own headers policy and a standard log. Design notes: aws/modules/media/README.md.
+# is pay-as-you-go with its own headers policy and a standard log. Design notes: docs/handbook/12-media-edge.md.
 
 locals {
   # CloudFront takes viewer certificates, and delivers its logs, only in us-east-1.

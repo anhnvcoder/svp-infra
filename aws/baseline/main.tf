@@ -1,6 +1,6 @@
 # The security baseline of every account of the organization, applied from the management account. The accounts and
 # what differs between them are data in local.accounts and aws/paid-features.json; each account gets one call of the
-# security-baseline module. Design notes: aws/baseline/README.md.
+# security-baseline module. Design notes: docs/handbook/06-baseline.md.
 
 data "aws_partition" "current" {
   provider = aws.mgmt
@@ -26,50 +26,53 @@ locals {
   config_bucket_name     = "svp-config-${var.log_archive_account_id}-${var.region}"
   security_event_bus_arn = "arn:${local.partition}:events:${var.region}:${var.security_account_id}:event-bus/svp-security-events"
 
+  # Every region where CloudTrail records a root console sign-in, in every account: svp-deny-other-regions of aws/org
+  # leaves this one rule open in us-east-2 and us-west-2 for the member accounts.
+  root_signin_regions = ["us-east-1", "us-east-2", "us-west-2"]
+
   # ebs_kms_key_arn: null keeps aws/ebs. admin_events: off where every session creates dozens of roles, keys and
-  # buckets. organization_events, three sign-in regions and the Identity Center rule: management only, the account
-  # that records those events and is not held to the region policy.
+  # buckets. organization_events and the Identity Center rule: management only, the account that records those events.
   accounts = {
     mgmt = {
       ebs_kms_key_arn        = null
       admin_events           = true
       organization_events    = true
-      root_signin_regions    = ["us-east-1", "us-east-2", "us-west-2"]
+      root_signin_regions    = local.root_signin_regions
       identity_center_region = var.sso_region
     }
     log-archive = {
       ebs_kms_key_arn        = null
       admin_events           = true
       organization_events    = false
-      root_signin_regions    = ["us-east-1"]
+      root_signin_regions    = local.root_signin_regions
       identity_center_region = null
     }
     backup = {
       ebs_kms_key_arn        = null
       admin_events           = true
       organization_events    = false
-      root_signin_regions    = ["us-east-1"]
+      root_signin_regions    = local.root_signin_regions
       identity_center_region = null
     }
     security = {
       ebs_kms_key_arn        = null
       admin_events           = true
       organization_events    = false
-      root_signin_regions    = ["us-east-1"]
+      root_signin_regions    = local.root_signin_regions
       identity_center_region = null
     }
     stg = {
       ebs_kms_key_arn        = local.ebs_key_arns.stg
       admin_events           = false
       organization_events    = false
-      root_signin_regions    = ["us-east-1"]
+      root_signin_regions    = local.root_signin_regions
       identity_center_region = null
     }
     prd = {
       ebs_kms_key_arn        = local.ebs_key_arns.prd
       admin_events           = false
       organization_events    = false
-      root_signin_regions    = ["us-east-1"]
+      root_signin_regions    = local.root_signin_regions
       identity_center_region = null
     }
   }

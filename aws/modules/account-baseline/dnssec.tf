@@ -1,5 +1,5 @@
 # DNSSEC signing of the zone, its key and the alarms that page before a failing key stops the zone resolving.
-# Design notes: aws/modules/account-baseline/README.md.
+# Design notes: docs/handbook/08-accounts.md.
 
 locals {
   # Route 53 takes the DNSSEC key, the query log group and the alarms on their metrics in us-east-1 only.

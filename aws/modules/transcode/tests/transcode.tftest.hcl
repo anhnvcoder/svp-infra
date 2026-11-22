@@ -1,7 +1,7 @@
 # What the transcode module of an env guarantees, for stg and prd, then one plan per validation rule with a value that
 # only that rule rejects. The AWS provider is a mock: nothing reaches an account. Policies are asserted through the
-# arguments of their aws_iam_policy_document data sources, each statement as one JSON string, so a policy must equal
-# its table exactly: no statement, action, resource or condition more or less. Design notes: README.md of the module.
+# arguments of their aws_iam_policy_document data sources, each statement as one JSON string, so a policy must equal its
+# table exactly: no statement, action, resource or condition more or less. Design notes: docs/handbook/12-media-edge.md.
 
 mock_provider "aws" {
   mock_data "aws_partition" {

@@ -1,7 +1,7 @@
 # What the registry of an env guarantees, for the CI roles of stg and prd and both scan types, then one plan per
 # validation rule with a value only that rule rejects. The AWS provider is a mock: nothing reaches an account. Policies
 # are asserted through the arguments of their aws_iam_policy_document data sources; the ARNs of the KMS key and the
-# secrets are unknown in a plan, so their use is checked by type and name. Design notes: aws/modules/registry/README.md.
+# secrets are unknown in a plan, so their use is checked by type and name. Design notes: docs/handbook/08-accounts.md.
 
 mock_provider "aws" {
   mock_data "aws_partition" {

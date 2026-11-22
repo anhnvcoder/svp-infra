@@ -1,6 +1,6 @@
 # CloudWatch alarms on failed backup and copy jobs of the account. AWS Backup documents only example dimensions for its
 # metrics, so each alarm is a Metrics Insights query over the whole namespace instead of one metric per dimension set.
-# Design notes: aws/modules/backup-alarms/README.md.
+# Design notes: docs/handbook/07-backup.md.
 
 locals {
   # AWS Backup publishes its metrics every 5 minutes. The vault of a copy job's metrics is the destination vault.

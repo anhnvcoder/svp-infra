@@ -45,7 +45,7 @@ output "svp_cluster_platform_values" {
 ################################################################################
 
 output "namespaces" {
-  description = "Namespace manifests by name, before Argo CD: argocd and those of the project and the platform charts, each with Pod Security restricted."
+  description = "Namespace manifests by name, before Argo CD: argocd and those of the project and the platform charts, each with Pod Security restricted, or privileged for a namespace of privileged_namespaces (istio-system, whose ztunnel and istio-cni change the network of the node)."
   value       = local.namespaces
 
   precondition {
@@ -59,11 +59,8 @@ output "namespaces" {
   }
 
   precondition {
-    condition = alltrue([for n in local.namespace_docs : alltrue([for m in local.pod_security_modes :
-      try(n.metadata.labels["pod-security.kubernetes.io/${m}"] == "restricted", false) &&
-      can(regex("^v1\\.[0-9]+$", n.metadata.labels["pod-security.kubernetes.io/${m}-version"]))
-    ])])
-    error_message = "Every namespace must enforce, audit and warn Pod Security restricted at a version v1.<minor>."
+    condition     = length(local.pod_security_violations) == 0
+    error_message = "Namespaces ${join(", ", local.pod_security_violations)} must enforce, audit and warn Pod Security restricted (privileged only for ${join(", ", var.privileged_namespaces)}) at a version v1.<minor>."
   }
 }
 

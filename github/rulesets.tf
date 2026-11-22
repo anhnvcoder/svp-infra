@@ -15,7 +15,7 @@
 # gets it only once pr-title.yml is on its main and has passed on a pull request: a required check that has never run
 # would leave every pull request waiting.
 
-# Design notes: github/README.md.
+# Design notes: docs/handbook/02-github.md.
 
 locals {
   github_actions_app_id = 15368

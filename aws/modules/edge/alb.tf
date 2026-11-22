@@ -1,7 +1,7 @@
 # The VPC origin: an internal ALB in the edge subnets that only CloudFront reaches, forwarding to the Envoy pods that
 # the TargetGroupBinding of the cluster registers in the target group. No tag of the Load Balancer Controller
 # (elbv2.k8s.aws/*): the controller registers targets in any target group, and pre-destroy.sh waits for the load
-# balancers that carry its tag. Design notes: aws/modules/edge/README.md.
+# balancers that carry its tag. Design notes: docs/handbook/12-media-edge.md.
 
 data "aws_ec2_managed_prefix_list" "cloudfront" {
   name = "com.amazonaws.global.cloudfront.origin-facing"

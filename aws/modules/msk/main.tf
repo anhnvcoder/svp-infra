@@ -1,6 +1,6 @@
 # One Amazon MSK provisioned cluster per env: KRaft brokers reached only over SASL/SCRAM-SHA-512 on TLS (port 9096), one
 # SCRAM user per client, passwords made and written in the same apply without passing through plan or state.
-# Design notes: aws/modules/msk/README.md.
+# Design notes: docs/handbook/11-data.md.
 
 locals {
   # The Kafka users of the platform. svp-admin creates topics and ACLs (the init job); every other user gets only the

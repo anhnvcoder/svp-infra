@@ -9,7 +9,7 @@
 # applies whichever was planned. env plan is refused until the last of them applied is the open one, plan --close while
 # root env stands in this session; for an env with no such flag every account command says so and exits 0.
 
-# Design notes: README.md.
+# Design notes: docs/reference/operations.md.
 
 # plan --teardown (env only) targets the resources of the state whose protection the teardown file lifts (the DB
 # instance, the edge's ALB, the buckets) and nothing else, so it never creates what a failed apply left out.

@@ -1,4 +1,4 @@
-# Design notes: aws/modules/account-baseline/README.md.
+# Design notes: docs/handbook/08-accounts.md.
 locals {
   # Roles IAM Identity Center creates in this account for the permission set SvpAdmin. The role name ends in a random
   # suffix, so the policy matches it with a trailing wildcard, as the IAM Identity Center guide on referencing
@@ -117,7 +117,8 @@ resource "aws_kms_key" "state" {
   deletion_window_in_days = 30
   policy                  = data.aws_iam_policy_document.state_key.json
 
-  # Without this key the state in the bucket cannot be read. Removing both on purpose: aws/accounts/README.md.
+  # Without this key the state in the bucket cannot be read. Removing both on purpose:
+  # docs/runbooks/lab-teardown.md#awsaccountsenv.
   lifecycle {
     prevent_destroy = true
   }

@@ -86,6 +86,9 @@ cross-account backup và opt-in của management.
 
 - **Tổ chức dựng mới:** bước (4) của [`org-security-setup.md`](org-security-setup.md#bước-4-awsorg-đủ) đã làm hết; sang bước (2).
 - **Tổ chức dựng trước khi có backup:** làm [N1](#n1-awsorg-thêm-account-và-backup-policy) rồi quay lại bước (2).
+- **Plan đủ của `aws/org` về sau** (áp lại root): `aws_backup_global_settings.this` có thể đổi `isDelegatedAdministratorEnabled "true" ->
+  "false"` khi cờ đó đã bật ngoài Terraform (trang Cross-account management của AWS Backup trên console). Apply là đúng thiết kế:
+  `aws/org/backup.tf` giữ cờ đó tắt ([4a của `org-security-setup.md`](org-security-setup.md#4a-plan), **Thay đổi được phép**).
 
 ## Bước (2): profile `anhnv-backup-ro`
 
@@ -142,13 +145,18 @@ cd aws/backup
 
 ```sh
 ../scripts/tfvars.sh init
-AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
-  TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" TF_VAR_stg_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
-  TF_VAR_prd_account_id="$SVP_AWS_PRD_ACCOUNT_ID" \
-  terraform plan -out=backup.tfplan
+AWS_PROFILE=anhnv-sso \
+TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
+TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" \
+TF_VAR_stg_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+TF_VAR_prd_account_id="$SVP_AWS_PRD_ACCOUNT_ID" \
+  terraform plan -input=false -out=backup.tfplan
+AWS_PROFILE=anhnv-sso terraform show -no-color backup.tfplan > "$SVP_SESSION_DIR/backup-plan.txt"
 ```
 
-- **Mong đợi:** `Plan: 8 to add, 0 to change, 0 to destroy`: key và alias, hai vault, hai lock, hai vault access policy.
+- **Mong đợi:** `Plan: <n> to add, 0 to change, 0 to destroy` với `<n>` bằng tổng `to add` của mục
+  [`aws/backup`](../reference/inventory.md#awsbackup) ở inventory (account trống chạy lần đầu): key và alias, hai vault, hai lock, hai vault
+  access policy.
 - **Kiểm:** `kms_key_arn` của hai `module.vaults.aws_backup_vault.this` là key mới; `min_retention_days`, `max_retention_days` của hai lock
   khớp bảng [Dựng gì của `aws/backup`](../../aws/backup/README.md#dựng-gì); policy của `svp-stg-copy` chỉ nêu
   `arn:aws:iam::<stg>:root`, của `svp-prd-copy` chỉ `arn:aws:iam::<prd>:root`.
@@ -158,11 +166,7 @@ AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
 ### 5c. Apply và kiểm
 
 ```sh
-AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
-  TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" TF_VAR_stg_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
-  TF_VAR_prd_account_id="$SVP_AWS_PRD_ACCOUNT_ID" \
-  terraform apply backup.tfplan
-rm backup.tfplan
+AWS_PROFILE=anhnv-sso terraform apply -input=false backup.tfplan && rm backup.tfplan
 AWS_PROFILE=anhnv-sso terraform output vault_arns
 ../scripts/verify.sh backup
 ```
@@ -189,7 +193,8 @@ aws/scripts/check-account.sh stg
   backup đi cùng baseline.
 - **Tổ chức dựng trước khi có backup:** account env đã có baseline: theo [accounts-setup, Thêm vào account đã có
   baseline](accounts-setup.md) cho stg, rồi prd (`aws/scripts/check-account.sh prd` trước).
-- **Mong đợi:** plan của mỗi account, khi account đã có mọi phần khác, chỉ gồm 9 tài nguyên của `backup.tf`: `aws_kms_key.backup`,
+- **Mong đợi:** plan của mỗi account, khi account đã có mọi phần khác, chỉ gồm phần backup của mục
+  [`aws/accounts/<env>`](../reference/inventory.md#awsaccountsstg) ở inventory (`backup.tf`, `module.backup_vault`): `aws_kms_key.backup`,
   `aws_kms_alias.backup`, `module.backup_vault.aws_backup_vault.this["svp-<env>"]`, `aws_backup_region_settings.this`,
   `aws_iam_role.backup` và bốn `aws_iam_role_policy_attachment.backup`. Sau apply, plan lần hai `No changes.`
 - **Kiểm:** opt-in `RDS`, `S3` của account ở dòng `7b` của `verify.sh backup` (bước (7)).
@@ -281,6 +286,8 @@ của [`lab-teardown.md`](lab-teardown.md#thứ-tự-gỡ): vault env cùng base
 ## Khi một bước đỏ
 
 - Lỗi ở `plan`: không có gì đổi trên account; đọc lỗi, sửa nguyên nhân (biến terminal, `org.auto.tfvars`, phiên SSO), chạy lại đúng bước.
+- `Error acquiring the state lock` kèm Lock ID (thường sau Ctrl+C một lệnh đang chờ nhập):
+  [`operations.md`, Khoá state kẹt](../reference/operations.md#khoá-state-kẹt).
 - Lỗi giữa `apply`: phần đã tạo nằm trong state; `plan` lại cùng root chỉ còn phần chưa tạo. Dán lỗi và plan mới trước khi apply lại;
   `-target`: [`operations.md`, Khi apply lỗi giữa chừng](../reference/operations.md#khi-apply-lỗi-giữa-chừng).
 - Plan có `destroy` hay `-/+` ở tổ chức, account, vault hay key có sẵn: dừng, không apply, dán plan. `-/+` lặp lại ở mọi plan là lỗi code.
@@ -327,7 +334,11 @@ AWS_PROFILE=anhnv-sso aws backup describe-region-settings --region ap-southeast-
 Plan riêng account, đọc, rồi apply:
 
 ```sh
-AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform plan -out=org.tfplan -target=aws_organizations_account.backup
+AWS_PROFILE=anhnv-sso \
+TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
+  terraform plan -input=false -out=org.tfplan \
+    -target=aws_organizations_account.backup
+AWS_PROFILE=anhnv-sso terraform show -no-color org.tfplan > "$SVP_SESSION_DIR/org-plan.txt"
 ```
 
 - **Mong đợi:** `Plan: 1 to add, 1 to change, 0 to destroy`: thêm `aws_organizations_account.backup` (`name` `svp-backup`, `parent_id` là
@@ -335,8 +346,7 @@ AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform pla
   `+ "BACKUP_POLICY"` trong `enabled_policy_types`, không dòng `-` nào. Khác thì dừng, dán plan.
 
 ```sh
-AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform apply org.tfplan
-rm org.tfplan
+AWS_PROFILE=anhnv-sso terraform apply -input=false org.tfplan && rm org.tfplan
 eval "$(../scripts/accounts.sh)"
 ```
 
@@ -350,13 +360,16 @@ eval "$(../scripts/accounts.sh)"
 Cùng lệnh `plan`, `apply` của [4a](org-security-setup.md#4a-plan), [4b](org-security-setup.md#4b-apply) của `org-security-setup.md` (plan
 không `-target`).
 
-- **Mong đợi:** `Plan: 8 to add, 1 to change, 0 to destroy`.
+- **Mong đợi:** `Plan: <n> to add, 1 to change, 0 to destroy` với `<n>` bằng số tài nguyên thêm liệt kê dưới đây.
   - Thêm: `aws_account_alternate_contact.security["backup"]`, `aws_ssoadmin_account_assignment.read_only["backup"]`,
     `aws_backup_global_settings.this`, `aws_backup_region_settings.this`, `module.org_policies.aws_organizations_policy.this["backup-prd"]`,
     `["backup-stg"]` và hai `aws_organizations_policy_attachment` của chúng (đích OU `Prod`, `NonProd`).
   - Đổi tại chỗ: `module.org_policies.aws_organizations_policy.this["tags"]` (thêm khoá `Backup`, giá trị `backup` của `Stack`).
+- **Thay đổi được phép:** `aws_backup_global_settings.this` đã có trong state (plan lại sau một lượt apply) có thể hiện đổi tại chỗ
+  `isDelegatedAdministratorEnabled "true" -> "false"` trong `global_settings`. Cờ đó đã bật ngoài Terraform (trang Cross-account management
+  của AWS Backup trên console); apply là đúng thiết kế, vì `aws/org/backup.tf` giữ delegated administrator của AWS Backup tắt.
 - **Bẫy:** dừng (không apply, dán plan) nếu có `destroy`, `-/+` hay thay đổi nào khác. Sau apply, plan lần hai phải là `No changes.`; một
-  diff ở `global_settings` (AWS trả khoá ngoài ba khoá của `backup.tf`) thì dán lại.
+  diff khác ở `global_settings` (AWS trả khoá ngoài ba khoá của `backup.tf`) thì dán lại.
 
 Kiểm cài đặt cross-account:
 
@@ -378,7 +391,8 @@ cd aws/baseline
 Theo [bước (6) của `org-security-setup.md`](org-security-setup.md#bước-6-awsbaseline), đoạn cho account thêm vào tổ chức khi root đã áp:
 6a, 6c, 6d, bỏ 6b.
 
-- **Mong đợi:** plan chỉ thêm module của `svp-backup` (số tài nguyên ở [6c](org-security-setup.md#6c-plan)).
+- **Mong đợi:** plan chỉ thêm module của `svp-backup`; số tài nguyên là dòng `module.backup` ở bảng "Phần" của mục
+  [`aws/baseline`](../reference/inventory.md#awsbaseline) ở inventory.
 - **Bẫy:** dòng `change`, `destroy` hay tài nguyên của module khác: dừng, dán plan.
 
 `cd ../..` khi xong.
@@ -395,21 +409,24 @@ account `ACTIVE` lúc plan, nên root áp lại một lần để `svp-backup` c
 ```sh
 aws/scripts/check-account.sh mgmt
 cd aws/security
-AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" TF_VAR_security_account_id="$SVP_AWS_SECURITY_ACCOUNT_ID" \
-  TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" terraform plan -out=security.tfplan
+AWS_PROFILE=anhnv-sso \
+TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
+TF_VAR_security_account_id="$SVP_AWS_SECURITY_ACCOUNT_ID" \
+TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
+  terraform plan -input=false -out=security.tfplan
+AWS_PROFILE=anhnv-sso terraform show -no-color security.tfplan > "$SVP_SESSION_DIR/security-plan.txt"
 ```
 
-- **Mong đợi:** với `aws/paid-features.json` của repo (`security_hub` của `backup` là `off`) `Plan: 2 to add, 3 to change, 0 to destroy`:
-  thêm `aws_inspector2_member_association.members["<id của svp-backup>"]` và
+- **Mong đợi:** với `aws/paid-features.json` của repo (`security_hub` của `backup` là `off`) plan không `destroy`; thêm
+  `aws_inspector2_member_association.members["<id của svp-backup>"]` và
   `aws_securityhub_configuration_policy_association.off["<id của svp-backup>"]`; đổi tại chỗ (`~`) `aws_inspector2_enabler.members`, chỉ
   thêm id đó vào `account_ids`, và `aws_cloudwatch_event_rule.guardduty_findings` ở hai region, chỉ thêm id đó vào `detail.accountId` của
-  `event_pattern`. Cờ đó `always` thì `Plan: 1 to add, 1 to change, 0 to destroy`, chỉ phần Inspector.
+  `event_pattern`. `to add` và `to change` bằng số mục liệt kê. Cờ đó `always` thì không có association của Security Hub, chỉ
+  phần Inspector.
 - **Bẫy:** dừng (không apply, dán plan) nếu enabler bị thay (`-/+`, `must be replaced`) hay plan có tài nguyên khác.
 
 ```sh
-AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" TF_VAR_security_account_id="$SVP_AWS_SECURITY_ACCOUNT_ID" \
-  TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" terraform apply security.tfplan
-rm security.tfplan
+AWS_PROFILE=anhnv-sso terraform apply -input=false security.tfplan && rm security.tfplan
 cd ../..
 ```
 

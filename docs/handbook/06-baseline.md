@@ -25,7 +25,8 @@ buổi chỉ `svp-security` ghi, và account env bật lại trong buổi bằng
 | Account | Region | Vòng đời | Root Terraform |
 | --- | --- | --- | --- |
 | mọi account của `local.accounts` (`aws/baseline/main.tf`), kể cả management | `ap-southeast-1` (nhà), `us-east-1` | sống lâu | `aws/baseline` |
-| management, thêm | `us-east-2`, `us-west-2` (rule đăng nhập root), `sso_region` (rule Identity Center) | sống lâu | `aws/baseline` |
+| mọi account, thêm | `us-east-2`, `us-west-2` (chỉ rule đăng nhập root) | sống lâu | `aws/baseline` |
+| management, thêm | `sso_region` (rule Identity Center) | sống lâu | `aws/baseline` |
 | `svp-stg`, `svp-prd` | `ap-southeast-1` (CMK EBS) | sống lâu | `aws/baseline` |
 
 ## Kiến trúc

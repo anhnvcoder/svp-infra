@@ -4,7 +4,7 @@
 # which the k6 profile cloud reads; (3) the k6 profile cloud (deploy/k6/cloud/run.sh) at 1, 2, 4 and 8 pods, each pod
 # the load of one pod of the 20-pod design, 2 min up and 10 min held; the first level that fails ends the ladder.
 
-# Design notes: README.md.
+# Design notes: docs/reference/operations.md.
 
 # Each level starts with make eks-rl-reset: every pod registers its users from its own address, and a pod of a later
 # level may get the address of an earlier one. A level passes when every pod wrote its summary with every threshold

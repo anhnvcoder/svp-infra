@@ -1,5 +1,5 @@
 # MediaConvert of an env: an on-demand queue, the role jobs run with, and the way job states come back to the bridge
-# (an EventBridge rule into an SQS queue with a dead-letter queue). Design notes: aws/modules/transcode/README.md.
+# (an EventBridge rule into an SQS queue with a dead-letter queue). Design notes: docs/handbook/12-media-edge.md.
 
 data "aws_partition" "current" {}
 

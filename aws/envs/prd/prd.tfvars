@@ -1,6 +1,6 @@
 # Size and protection of prd: the production level of every module, kept for the whole session and protected against
 # deletion. Committed; it holds no personal value. Every plan and apply of this root passes it, and the teardown at the
-# end of a session adds teardown.tfvars; the commands are in README.md.
+# end of a session adds teardown.tfvars; the commands are in docs/runbooks/session-prd-deploy.md.
 
 # network: three zones, one NAT gateway and one network interface of each interface endpoint of the AWS APIs per
 # zone; flow logs go to the log archive account, which keeps them. The S3 gateway endpoint lets through only the env's

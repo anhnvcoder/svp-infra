@@ -24,8 +24,10 @@ repo (`infra/`) trừ chỗ ghi `cd`. Vì sao mỗi root tồn tại: [handbook]
 
 ## Mở terminal
 
-Như [Mở terminal của `org-security-setup.md`](org-security-setup.md#mở-terminal): đăng nhập `anhnv-sso`, kiểm biến account,
-`check-account.sh mgmt`. Lệnh `aws` không có `allowed_account_ids` như provider Terraform, nên đối chiếu account trước lệnh ghi đầu tiên:
+Như [Mở terminal của `org-security-setup.md`](org-security-setup.md#mở-terminal): đăng nhập `anhnv-sso`, kiểm biến account, export
+`SVP_SESSION_DIR` (bản văn bản của mỗi plan dưới đây ghi vào đó), `check-account.sh mgmt`. Mọi plan ở đây theo khuôn của
+[Đọc plan an toàn](../reference/operations.md#đọc-plan-an-toàn): đọc file `.txt` của plan rồi mới apply đúng file `.tfplan` đó.
+Lệnh `aws` không có `allowed_account_ids` như provider Terraform, nên đối chiếu account trước lệnh ghi đầu tiên:
 
 ```sh
 AWS_PROFILE=anhnv-sso aws sts get-caller-identity --region ap-southeast-1 --query '[Account,Arn]' --output text
@@ -64,14 +66,20 @@ stg). Ví dụ là stg; với prd thay `stg` bằng `prd`, `anhnv-stg` bằng `a
      `AWS_PROFILE=anhnv-prd aws sts get-caller-identity --region ap-southeast-1`, rồi từ `aws/accounts/prd` plan, đọc, apply:
 
      ```sh
-     AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform plan -out=prd.tfplan
-     AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform apply prd.tfplan && rm prd.tfplan
+     AWS_PROFILE=anhnv-prd \
+     TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" \
+     TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" \
+       terraform plan -input=false -out=prd.tfplan
+     AWS_PROFILE=anhnv-prd terraform show -no-color prd.tfplan > "$SVP_SESSION_DIR/prd-plan.txt"
      ```
+
+     Đọc `prd-plan.txt` (Mong đợi dưới), đúng thì apply:
+     `AWS_PROFILE=anhnv-prd terraform apply -input=false prd.tfplan && rm prd.tfplan`.
 
    - prd: gỡ stg trước (bước 3 đòi zone chỉ còn `NS`, `SOA`, `CAA` ở đỉnh). Rồi làm [đường lui của
      `edge-setup.md`](edge-setup.md#đường-lui): gỡ bản ghi `DS` `aws`, chờ TTL của nó, apply `-var dnssec_signing=false`. Rồi xoá bốn bản
      ghi `NS` `aws` trong Cloudflare.
-   - **Mong đợi:** plan của stg là `0 to add, 0 to change, 1 to destroy`, đúng
+   - **Mong đợi:** plan của bước stg là `0 to add, 0 to change, 1 to destroy`, đúng
      `module.baseline.aws_route53_record.delegation["stg.aws.<domain>"]`. Với prd, `dig NS aws.<domain> +short @1.1.1.1` không còn ra name
      server nào của zone prd (cache có thể giữ tới 48 giờ).
 2. **Kiểm account của env** trước lệnh đầu tiên bằng profile env (các bước dưới ghi vào account đó):
@@ -90,10 +98,24 @@ stg). Ví dụ là stg; với prd thay `stg` bằng `prd`, `anhnv-stg` bằng `a
 5. **Gỡ bảo vệ, sửa local, không commit**: đổi `prevent_destroy = true` thành `false` trong `aws/modules/account-baseline/state.tf`,
    `kms.tf`, `aws/modules/registry/kms.tf` và `aws/modules/observability/kms.tf`; thêm `force_destroy = true` vào `aws_s3_bucket.state` (xoá
    được bucket còn version cũ và state của các root khác) và `force_delete = true` vào `aws_ecr_repository.release` của
-   `aws/modules/registry/repositories.tf` (ECR không xoá repo còn image). Rồi
-   `AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform apply`
-   (ở prd, khi mặc định của `dnssec_signing` còn `true`, thêm `-var dnssec_signing=false` như bước 1).
-   - **Mong đợi:** `0 to add`, `0 to destroy`, `change` chỉ đổi `force_destroy` của bucket và `force_delete` của mọi repo phát hành.
+   `aws/modules/registry/repositories.tf` (ECR không xoá repo còn image). Rồi plan, đọc, apply (ở prd, khi mặc định của `dnssec_signing`
+   còn `true`, thêm `-var dnssec_signing=false` vào `plan` như bước 1):
+
+   ```sh
+   AWS_PROFILE=anhnv-stg \
+   TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+   TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" \
+     terraform plan -input=false -out=stg.tfplan
+   AWS_PROFILE=anhnv-stg terraform show -no-color stg.tfplan > "$SVP_SESSION_DIR/stg-plan.txt"
+   ```
+
+   - **Mong đợi:** `stg-plan.txt` là `0 to add`, `0 to destroy`, `change` chỉ đổi `force_destroy` của bucket và `force_delete` của mọi
+     repo phát hành; khác thì không apply, dán plan. Đúng thì apply:
+
+     ```sh
+     AWS_PROFILE=anhnv-stg terraform apply -input=false stg.tfplan && rm stg.tfplan
+     ```
+
 6. **Xoá repo do pull-through cache tạo**: ECR tạo chúng khi node kéo image qua cache, nên chúng nằm ngoài state, mã hoá bằng key
    `alias/svp-<env>-ecr` mà bước 8 lên lịch xoá. Liệt kê theo tiền tố của các rule cache:
 
@@ -125,11 +147,21 @@ stg). Ví dụ là stg; với prd thay `stg` bằng `prd`, `anhnv-stg` bằng `a
 8. **Destroy** (ở prd Terraform tắt DNSSEC của zone trước, rồi xoá KSK):
 
    ```sh
-   AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" terraform destroy
+   AWS_PROFILE=anhnv-stg \
+   TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+   TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" \
+     terraform plan -destroy -input=false -out=stg-destroy.tfplan
+   AWS_PROFILE=anhnv-stg terraform show -no-color stg-destroy.tfplan > "$SVP_SESSION_DIR/stg-destroy-plan.txt"
    ```
 
+   - **Kiểm:** `stg-destroy-plan.txt` chỉ có `destroy`, `0 to add, 0 to change`; đúng thì apply:
+
+     ```sh
+     AWS_PROFILE=anhnv-stg terraform apply -input=false stg-destroy.tfplan && rm stg-destroy.tfplan
+     ```
+
    - **Mong đợi:** key của state, `alias/svp-<env>-ecr`, `alias/svp-<env>-observability` và `alias/svp-<env>-backup` vào `PendingDeletion`
-     30 ngày (không tính phí), huỷ được trong thời gian đó (id mỗi key in ở output của `destroy`):
+     30 ngày (không tính phí), huỷ được trong thời gian đó (id mỗi key in ở output của `apply`):
      `AWS_PROFILE=anhnv-stg aws kms cancel-key-deletion --key-id <id key> --region ap-southeast-1`.
    - **Bẫy:** hai secret `ecr-pullthroughcache/ghcr`, `ecr-pullthroughcache/docker-hub` cũng chờ xoá 30 ngày, trong thời gian đó không tạo
      được secret cùng tên: dựng lại env này sớm hơn thì xoá hẳn chúng trước (giá trị ghi lại sau apply như lần đầu):
@@ -179,21 +211,38 @@ Vault `svp-<env>` của account env phải gỡ trước (AWS Backup không xoá
    ```
 
    ```sh
-   AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
-     TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" TF_VAR_stg_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
-     TF_VAR_prd_account_id="$SVP_AWS_PRD_ACCOUNT_ID" \
-     terraform apply
-   AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
-     TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" TF_VAR_stg_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
-     TF_VAR_prd_account_id="$SVP_AWS_PRD_ACCOUNT_ID" \
-     terraform destroy
+   AWS_PROFILE=anhnv-sso \
+   TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
+   TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" \
+   TF_VAR_stg_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+   TF_VAR_prd_account_id="$SVP_AWS_PRD_ACCOUNT_ID" \
+     terraform plan -input=false -out=backup.tfplan
+   AWS_PROFILE=anhnv-sso terraform show -no-color backup.tfplan > "$SVP_SESSION_DIR/backup-plan.txt"
    ```
 
-   - **Mong đợi:** plan của `apply` là `0 to add, 2 to change, 0 to destroy`, chỉ `force_destroy` của hai
-     `module.vaults.aws_backup_vault.this`; khác thì trả lời `no` và dán plan. `destroy` là `8 to destroy`, theo thứ tự phụ thuộc: bỏ hai
-     lock (governance gỡ được bằng `OrganizationAccountAccessRole`) và hai vault access policy, xoá recovery point rồi hai vault, cuối
-     cùng key vào `PendingDeletion` 30 ngày.
-   - **Bẫy:** copy job đang chạy làm việc xoá vault lỗi: chờ nó xong rồi chạy lại `destroy`.
+   - **Mong đợi:** `backup-plan.txt` là `0 to add, 2 to change, 0 to destroy`, chỉ `force_destroy` của hai
+     `module.vaults.aws_backup_vault.this`; khác thì không apply, dán plan.
+
+   ```sh
+   AWS_PROFILE=anhnv-sso terraform apply -input=false backup.tfplan && rm backup.tfplan
+   AWS_PROFILE=anhnv-sso \
+   TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
+   TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" \
+   TF_VAR_stg_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+   TF_VAR_prd_account_id="$SVP_AWS_PRD_ACCOUNT_ID" \
+     terraform plan -destroy -input=false -out=backup-destroy.tfplan
+   AWS_PROFILE=anhnv-sso terraform show -no-color backup-destroy.tfplan > "$SVP_SESSION_DIR/backup-destroy-plan.txt"
+   ```
+
+   - **Mong đợi:** `backup-destroy-plan.txt` là `8 to destroy`, theo thứ tự phụ thuộc: bỏ hai lock (governance gỡ được bằng
+     `OrganizationAccountAccessRole`) và hai vault access policy, xoá recovery point rồi hai vault, cuối cùng key vào `PendingDeletion` 30
+     ngày. Đúng thì apply:
+
+     ```sh
+     AWS_PROFILE=anhnv-sso terraform apply -input=false backup-destroy.tfplan && rm backup-destroy.tfplan
+     ```
+
+   - **Bẫy:** copy job đang chạy làm việc xoá vault lỗi: chờ nó xong rồi plan `-destroy` lại và apply file mới.
    - **Kiểm:** trong 30 ngày chờ xoá, `aws kms cancel-key-deletion` còn cứu được key; sau đó bản copy nào còn mã hoá bằng nó không đọc
      được nữa.
 3. **Kiểm sạch** bằng profile chỉ đọc:
@@ -221,12 +270,24 @@ trạng thái chờ xoá 30 ngày. SCP `svp-protect-baseline` không chặn lệ
 ```sh
 aws/scripts/check-account.sh mgmt
 cd aws/baseline
-AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
-  TF_VAR_security_account_id="$SVP_AWS_SECURITY_ACCOUNT_ID" TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" \
-  TF_VAR_stg_account_id="$SVP_AWS_STG_ACCOUNT_ID" TF_VAR_prd_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform destroy
+AWS_PROFILE=anhnv-sso \
+TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
+TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
+TF_VAR_security_account_id="$SVP_AWS_SECURITY_ACCOUNT_ID" \
+TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" \
+TF_VAR_stg_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+TF_VAR_prd_account_id="$SVP_AWS_PRD_ACCOUNT_ID" \
+  terraform plan -destroy -input=false -out=baseline-destroy.tfplan
+AWS_PROFILE=anhnv-sso terraform show -no-color baseline-destroy.tfplan > "$SVP_SESSION_DIR/baseline-destroy-plan.txt"
 ```
 
-- **Mong đợi:** plan chỉ có `destroy`, đúng các tài nguyên trong state của root; `Destroy complete!`. Lệnh có thể sinh thư
+- **Kiểm:** `baseline-destroy-plan.txt` chỉ có `destroy`, đúng các tài nguyên trong state của root; đúng thì apply:
+
+  ```sh
+  AWS_PROFILE=anhnv-sso terraform apply -input=false baseline-destroy.tfplan && rm baseline-destroy.tfplan
+  ```
+
+- **Mong đợi:** `Destroy complete!`. Lệnh có thể sinh thư
   `svp-security-alert-rules` (`DeleteRule`, `RemoveTargets`) và `svp-security-detection` (`DeleteConfigurationRecorder`) trước khi rule
   của chính account bị xoá: đúng ý.
 - **Kiểm:** trong 30 ngày chờ xoá, `aws kms cancel-key-deletion` (profile ghi của stg, prd) còn cứu được CMK EBS.
@@ -240,23 +301,33 @@ Sau `aws/baseline` (rule nguồn trỏ bus của root này) và trước khi `aw
 ```sh
 aws/scripts/check-account.sh mgmt
 cd aws/security
-AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" TF_VAR_security_account_id="$SVP_AWS_SECURITY_ACCOUNT_ID" \
-  TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" terraform destroy
+AWS_PROFILE=anhnv-sso \
+TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
+TF_VAR_security_account_id="$SVP_AWS_SECURITY_ACCOUNT_ID" \
+TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
+  terraform plan -destroy -input=false -out=security-destroy.tfplan
+AWS_PROFILE=anhnv-sso terraform show -no-color security-destroy.tfplan > "$SVP_SESSION_DIR/security-destroy-plan.txt"
 ```
 
-- **Mong đợi:** `Destroy complete!`. Gỡ cấu hình tổ chức, publishing destination, member và detector của management, policy và aggregator
-  Security Hub, Inspector theo thứ tự `depends_on` (tắt quét ở thành viên và đặt lại cấu hình tổ chức, gỡ liên kết thành viên, tắt
-  `svp-security`), aggregator Config, analyzer, bus, rule, role `svp-security-guardduty-forwarder`, topic; KMS key của topic chờ xoá 7
-  ngày.
+- **Kiểm:** `security-destroy-plan.txt` chỉ có `destroy`; đúng thì apply:
+
+  ```sh
+  AWS_PROFILE=anhnv-sso terraform apply -input=false security-destroy.tfplan && rm security-destroy.tfplan
+  ```
+
+- **Mong đợi:** `Destroy complete!`. Gỡ cấu hình tổ chức, publishing destination, member và detector
+  của management, policy và aggregator Security Hub, Inspector theo thứ tự `depends_on` (tắt quét ở thành viên và đặt lại cấu hình tổ
+  chức, gỡ liên kết thành viên, tắt `svp-security`), aggregator Config, analyzer, bus, rule, role `svp-security-guardduty-forwarder`,
+  topic; KMS key của topic chờ xoá 7 ngày.
 - **Kiểm:** GuardDuty và Security Hub của chính `svp-security` còn bật: chúng tắt khi `aws/org` bỏ delegated admin (phần 1 dưới).
 
 `cd ../..` khi xong.
 
 ## `aws/org`
 
-Root này không bao giờ `terraform destroy` cả khối; các phần theo thứ tự, lệnh `terraform` chạy trong `infra/aws/org` với
-`TF_VAR_account_id` của management. `aws/log-archive` còn nguyên ở phần 1 (phần đó đọc alias `alias/svp-log-archive` qua provider
-`aws.log_archive`).
+Root này không bao giờ gỡ cả khối (không `plan -destroy` thiếu `-target`); các phần theo thứ tự, lệnh `terraform` chạy trong
+`infra/aws/org` với `TF_VAR_account_id` của management. `aws/log-archive` còn nguyên ở phần 1 (phần đó đọc alias
+`alias/svp-log-archive` qua provider `aws.log_archive`).
 
 ```sh
 aws/scripts/check-account.sh mgmt
@@ -269,7 +340,9 @@ Tắt trail, bỏ delegated admin, role Access Analyzer, root tập trung, liên
 `prevent_destroy`; log đã ghi vẫn còn.
 
 ```sh
-AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform apply -destroy -target=aws_cloudtrail.audit \
+AWS_PROFILE=anhnv-sso \
+TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
+  terraform plan -destroy -input=false -out=org-part1-destroy.tfplan -target=aws_cloudtrail.audit \
   -target=aws_guardduty_organization_admin_account.security -target=aws_securityhub_organization_admin_account.security \
   -target=aws_inspector2_delegated_admin_account.security \
   -target=aws_organizations_delegated_administrator.security -target=aws_iam_service_linked_role.access_analyzer \
@@ -281,10 +354,17 @@ AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform app
   -target=aws_ssoadmin_account_assignment.log_reader -target=aws_ssoadmin_managed_policy_attachment.log_reader \
   -target=aws_ssoadmin_permission_set_inline_policy.log_reader -target=aws_ssoadmin_permission_set.log_reader \
   -target=aws_identitystore_group.platform
+AWS_PROFILE=anhnv-sso terraform show -no-color org-part1-destroy.tfplan > "$SVP_SESSION_DIR/org-part1-destroy-plan.txt"
 ```
 
-- **Mong đợi:** plan chỉ có `destroy` của các tài nguyên trên; trả lời `yes` sau khi đọc. Muốn xoá log trước khi đóng account: làm mục
-  [`aws/log-archive`](#awslog-archive) ngay sau phần này, rồi quay lại phần 2.
+- **Kiểm:** `org-part1-destroy-plan.txt` chỉ có `destroy` của các tài nguyên trên; khác thì không apply, dán plan. Đúng thì apply:
+
+  ```sh
+  AWS_PROFILE=anhnv-sso terraform apply -input=false org-part1-destroy.tfplan && rm org-part1-destroy.tfplan
+  ```
+
+- **Việc tay:** muốn xoá log trước khi đóng account thì làm mục [`aws/log-archive`](#awslog-archive) ngay sau phần này, rồi quay lại
+  phần 2.
 
 ### Phần 2: đóng năm account thành viên
 
@@ -314,9 +394,18 @@ Nếu còn: như [Gỡ bucket trail cũ](#gỡ-bucket-trail-cũ). Object Lock ch
 `prevent_destroy = true` thành `false` ở `aws_s3_bucket.trail`, `aws_s3_bucket.access_logs`, `aws_kms_key.cloudtrail`, rồi:
 
 ```sh
-AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform apply -destroy -target=aws_s3_bucket.trail \
+AWS_PROFILE=anhnv-sso \
+TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
+  terraform plan -destroy -input=false -out=org-part3-destroy.tfplan -target=aws_s3_bucket.trail \
   -target=aws_s3_bucket.access_logs -target=aws_kms_alias.cloudtrail -target=aws_kms_key.cloudtrail
+AWS_PROFILE=anhnv-sso terraform show -no-color org-part3-destroy.tfplan > "$SVP_SESSION_DIR/org-part3-destroy-plan.txt"
 ```
+
+- **Kiểm:** `org-part3-destroy-plan.txt` chỉ có `destroy` của bốn tài nguyên trên; khác thì không apply, dán plan. Đúng thì apply:
+
+  ```sh
+  AWS_PROFILE=anhnv-sso terraform apply -input=false org-part3-destroy.tfplan && rm org-part3-destroy.tfplan
+  ```
 
 ### Phần 4: policy và OU, sau 90 ngày
 
@@ -325,10 +414,20 @@ Sau khi AWS gỡ hẳn năm account đã đóng khỏi tổ chức (OU còn acco
 account `svp-*`.
 
 ```sh
-AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform apply -destroy -target=module.org_policies \
+AWS_PROFILE=anhnv-sso \
+TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
+  terraform plan -destroy -input=false -out=org-part4-destroy.tfplan -target=module.org_policies \
   -target=aws_organizations_organizational_unit.prod -target=aws_organizations_organizational_unit.nonprod \
   -target=aws_organizations_organizational_unit.workloads -target=aws_organizations_organizational_unit.security
+AWS_PROFILE=anhnv-sso terraform show -no-color org-part4-destroy.tfplan > "$SVP_SESSION_DIR/org-part4-destroy-plan.txt"
 ```
+
+- **Kiểm:** `org-part4-destroy-plan.txt` chỉ có `destroy` của policy trong `module.org_policies` và bốn OU; khác thì không apply, dán
+  plan. Đúng thì apply:
+
+  ```sh
+  AWS_PROFILE=anhnv-sso terraform apply -input=false org-part4-destroy.tfplan && rm org-part4-destroy.tfplan
+  ```
 
 ### Phần 5: trả tổ chức về như trước
 
@@ -374,18 +473,37 @@ phần 1 còn đọc alias `alias/svp-log-archive`) và trước phần 2 (accou
    ```
 
    ```sh
-   AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
-     TF_VAR_security_account_id="$SVP_AWS_SECURITY_ACCOUNT_ID" TF_VAR_stg_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
-     TF_VAR_prd_account_id="$SVP_AWS_PRD_ACCOUNT_ID" \
-     terraform apply
-   AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
-     TF_VAR_security_account_id="$SVP_AWS_SECURITY_ACCOUNT_ID" TF_VAR_stg_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
-     TF_VAR_prd_account_id="$SVP_AWS_PRD_ACCOUNT_ID" \
-     terraform destroy
+   AWS_PROFILE=anhnv-sso \
+   TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
+   TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
+   TF_VAR_security_account_id="$SVP_AWS_SECURITY_ACCOUNT_ID" \
+   TF_VAR_stg_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+   TF_VAR_prd_account_id="$SVP_AWS_PRD_ACCOUNT_ID" \
+     terraform plan -input=false -out=log-archive.tfplan
+   AWS_PROFILE=anhnv-sso terraform show -no-color log-archive.tfplan > "$SVP_SESSION_DIR/log-archive-plan.txt"
    ```
 
-   - **Mong đợi:** plan của `apply` là `0 to add, 7 to change, 0 to destroy`, chỉ `force_destroy` của bảy `aws_s3_bucket.log`; khác thì
-     trả lời `no` và dán plan. `destroy` là `59 to destroy`; bucket nhiều object xoá lâu.
+   - **Mong đợi:** `log-archive-plan.txt` là `0 to add, 7 to change, 0 to destroy`, chỉ `force_destroy` của bảy `aws_s3_bucket.log`;
+     khác thì không apply, dán plan.
+
+   ```sh
+   AWS_PROFILE=anhnv-sso terraform apply -input=false log-archive.tfplan && rm log-archive.tfplan
+   AWS_PROFILE=anhnv-sso \
+   TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
+   TF_VAR_log_archive_account_id="$SVP_AWS_LOG_ACCOUNT_ID" \
+   TF_VAR_security_account_id="$SVP_AWS_SECURITY_ACCOUNT_ID" \
+   TF_VAR_stg_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+   TF_VAR_prd_account_id="$SVP_AWS_PRD_ACCOUNT_ID" \
+     terraform plan -destroy -input=false -out=log-archive-destroy.tfplan
+   AWS_PROFILE=anhnv-sso terraform show -no-color log-archive-destroy.tfplan > "$SVP_SESSION_DIR/log-archive-destroy-plan.txt"
+   ```
+
+   - **Mong đợi:** `log-archive-destroy-plan.txt` là `59 to destroy`. Đúng thì apply (bucket nhiều object xoá lâu):
+
+     ```sh
+     AWS_PROFILE=anhnv-sso terraform apply -input=false log-archive-destroy.tfplan && rm log-archive-destroy.tfplan
+     ```
+
    - **Kiểm:** hai key vào `PendingDeletion` 30 ngày: huỷ được trong thời gian đó, sau đó log nào còn mã hoá bằng chúng không đọc được.
 3. **Hoàn tác sửa local** (`git checkout -- buckets.tf kms.tf`), `cd ../..`, rồi phần 2 của `aws/org`.
 
@@ -475,9 +593,27 @@ Chỉ khi không còn root nào dùng bucket: mọi mục trên xong, script qu�
    (chỉ đổi `force_destroy`) và destroy:
 
    ```sh
-   AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform apply
-   AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform destroy
+   AWS_PROFILE=anhnv-sso \
+   TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
+     terraform plan -input=false -out=bootstrap.tfplan
+   AWS_PROFILE=anhnv-sso terraform show -no-color bootstrap.tfplan > "$SVP_SESSION_DIR/bootstrap-plan.txt"
    ```
+
+   - **Mong đợi:** `bootstrap-plan.txt` chỉ đổi `force_destroy` của `aws_s3_bucket.state`; khác thì không apply, dán plan.
+
+   ```sh
+   AWS_PROFILE=anhnv-sso terraform apply -input=false bootstrap.tfplan && rm bootstrap.tfplan
+   AWS_PROFILE=anhnv-sso \
+   TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
+     terraform plan -destroy -input=false -out=bootstrap-destroy.tfplan
+   AWS_PROFILE=anhnv-sso terraform show -no-color bootstrap-destroy.tfplan > "$SVP_SESSION_DIR/bootstrap-destroy-plan.txt"
+   ```
+
+   - **Kiểm:** `bootstrap-destroy-plan.txt` chỉ có `destroy` của tài nguyên trong state của root; đúng thì apply:
+
+     ```sh
+     AWS_PROFILE=anhnv-sso terraform apply -input=false bootstrap-destroy.tfplan && rm bootstrap-destroy.tfplan
+     ```
 
    - **Mong đợi:** key vào trạng thái chờ xoá 30 ngày; trong thời gian đó `aws kms cancel-key-deletion` còn cứu được nó.
 4. **Dọn file local:** `rm -f terraform.tfstate* ../backend.hcl bootstrap.auto.tfvars local_override.tf`, hoàn tác sửa của bước 3
@@ -485,7 +621,10 @@ Chỉ khi không còn root nào dùng bucket: mọi mục trên xong, script qu�
 
 ## Khi một bước đỏ
 
-- Lỗi ở `plan` của `destroy`: không có gì đổi trên account; đọc lỗi, sửa nguyên nhân (biến terminal, phiên SSO), chạy lại đúng mục.
-- `destroy` lỗi giữa chừng: phần đã gỡ ra khỏi state; chạy lại cùng lệnh, plan chỉ còn phần chưa gỡ. Dán lỗi trước khi chạy lại.
-- Plan đòi gỡ thứ không có trong mục (tổ chức, account, bucket state khi chưa tới mục đó): dừng, không trả lời `yes`, dán plan.
+- Lỗi ở `plan -destroy`: không có gì đổi trên account; đọc lỗi, sửa nguyên nhân (biến terminal, phiên SSO), chạy lại đúng mục.
+- `Error acquiring the state lock` kèm Lock ID: [Khoá state kẹt](../reference/operations.md#khoá-state-kẹt).
+- `apply` của plan destroy lỗi giữa chừng: phần đã gỡ ra khỏi state; plan `-destroy` lại, plan chỉ còn phần chưa gỡ. Dán lỗi trước khi
+  chạy lại.
+- `Saved plan is stale`: state đã đổi từ lúc plan (một apply khác chen vào); plan lại, đọc lại rồi apply file mới.
+- Plan đòi gỡ thứ không có trong mục (tổ chức, account, bucket state khi chưa tới mục đó): dừng, không apply, dán plan.
 - Mất đường vào (Identity Center hỏng sau phần 1): [`break-glass.md`](break-glass.md).
