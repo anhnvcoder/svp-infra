@@ -34,6 +34,7 @@ Chạy từ gốc repo, không cần credential AWS, cần Docker và mạng (re
 | `make github-app-test` | unit test của `github/scripts/github-app.py` và phép kiểm manifest của nó (không mạng, `gh` hay account) |
 | `make ci-plan-test` | tự kiểm `ci/terraform-plan.sh` với `docker`, `curl`, `gh` giả trên PATH và một bản chép của repo ở thư mục tạm: từ chối chạy ngoài Actions, cổng (biến bật plan, fork, gốc không plan, PR Renovate), buổi mở hay không, thứ tự lệnh Terraform, token mới mỗi lệnh, secret account cần và không cần, khoá media lấy từ state, giá trị che vắng khỏi log và tóm tắt, stdout của `plan` không vào log, lỗi `init`, `plan` làm đỏ với stderr đã che, tóm tắt đúng số và address của `ci/testdata/plan.json`; bước đăng comment của `plan.yml` chạy đúng như trong file với `gh` giả (đăng mới, sửa comment dính, cắt khi quá dài) |
 | `make ci-plan ENV=<stg\|prd>` | plan của job `plan` trong `plan.yml`; từ chối chạy khi thiếu `GITHUB_ACTIONS=true` và `ACTIONS_ID_TOKEN_REQUEST_URL`, nên không bao giờ chạy trên máy dev |
+| `make ci-pin-jq` | jq của `JQ_IMAGE` lên đầu `PATH` của job CI ([Image và chỗ chạy](#image-và-chỗ-chạy)); ngoài Actions thì từ chối |
 | `make infracost-test` | tự kiểm `ci/infracost.sh` với `docker` giả trên PATH và một bản chép của script ở thư mục tạm: không khoá thì từ chối trên máy, bỏ qua có notice trong Actions, PR từ fork bỏ qua, thứ tự lệnh (breakdown cây base, breakdown cây PR, `diff`), hai cây mount chỉ đọc, khoá và token GitHub chỉ vào container theo tên, không bao giờ trong tham số, output hay job summary, bảng tổng mỗi project, lệnh `comment` đúng cờ; `INFRACOST_IMAGE` ghim digest có dòng `# renovate:` |
 | `make infracost BASE=<cây base>` | chi phí tháng theo HCL của các project trong `infracost.yml` ở cây base và ở cây này, rồi `diff`, cho job `infracost` của `cost.yml`; cần `INFRACOST_API_KEY`, thiếu thì từ chối trên máy |
 | `make infracost-comment` | đăng diff của `make infracost` lên PR `PR` của `REPO` bằng `infracost comment github --behavior update`, cho job `infracost-comment`; cần `INFRACOST_API_KEY`, `GITHUB_TOKEN` |
@@ -49,12 +50,16 @@ một biến `*_IMAGE` có dòng `# renovate:` ngay trên; `MARKDOWNLINT_IMAGE`,
 repo code. terraform-docs chỉ có tag theo kiến trúc nên ghim cả hai cùng bản (`TFDOCS_IMAGE_AMD64`, `TFDOCS_IMAGE_ARM64`), `Makefile`
 chọn theo `uname -m`. Cùng một tham chiếu trên máy dev và trong CI, nên không cài gì thêm và không tin action setup nào. jq của
 `ci/inventory.sh` và `ci/terraform-plan.sh` cũng chạy trong image ghim (`JQ_IMAGE`): jq của runner và của Mac khác bản, nhận chương trình
-khác nhau, nên chương trình chạy được trên máy vẫn có thể đỏ trên runner.
+khác nhau, nên chương trình chạy được trên máy vẫn có thể đỏ trên runner. Phần còn lại chạy jq của máy chủ: trên CI, `make ci-pin-jq`
+(`ci/pin-jq.sh`) chép binary tĩnh `/jq` ra khỏi `JQ_IMAGE` rồi đặt lên đầu `PATH` (nhóm `scripts` của `check.yml`, `infra-ok`,
+`plan-comment`, job `infracost` của `cost.yml`), nên một nguồn version, một lần Renovate cập nhật; script buổi chạy trên Mac dùng jq
+của máy, không đổi.
 
-Các target tự kiểm chạy trên máy chủ, không container: `session-test` chỉ cần bash, git và jq mà máy Mac và runner CI đều có, `test-guard`
-chạy với `docker` giả, `github-app-test` dùng python3, `ci-plan-test` chạy với `docker` (vai terraform), `curl`, `gh` giả còn jq của
-script chạy thật trong `JQ_IMAGE`, `infracost-test` chạy với `docker` giả, `inventory-test` chạy với `docker` giả. Image chạy qua
-`env -u DOCKER_DEFAULT_PLATFORM docker run` (shell của máy đặt `linux/amd64` cho dự án khác), container chạy dưới uid của người gọi.
+Các target tự kiểm chạy trên máy chủ, không container: `session-test` chỉ cần bash, git và jq (jq của máy; trên CI là bản của
+`JQ_IMAGE`), `test-guard` chạy với `docker` giả, `github-app-test` dùng python3, `ci-plan-test` chạy với `docker` (vai terraform),
+`curl`, `gh` giả còn jq của script chạy thật trong `JQ_IMAGE`, `infracost-test` chạy với `docker` giả, `inventory-test` chạy với
+`docker` giả. Image chạy qua `env -u DOCKER_DEFAULT_PLATFORM docker run` (shell của máy đặt `linux/amd64` cho dự án khác), container
+chạy dưới uid của người gọi.
 
 Không target nào gọi `apply`, `destroy`, `import`, `output` hay `aws`. Chỉ `ci-plan`, target của job CI, đọc account: `state pull` và
 `plan` chỉ đọc; ngoài nó không target nào gọi `state`, và `plan` duy nhất là các `run` của `make test` và của `make inventory`,

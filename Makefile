@@ -43,8 +43,8 @@ INFRACOST_IMAGE  := infracost/infracost:ci-0.10.49@sha256:78ce091ec7324caa46b8fb
 # Same version as GITLEAKS_VERSION of the code repository's Makefile, which installs it with go install.
 # renovate: datasource=docker depName=ghcr.io/gitleaks/gitleaks
 GITLEAKS_IMAGE   := ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
-# jq for ci/inventory.sh, ci/terraform-plan.sh: the host's jq differs between the runner and a Mac, and accepts
-# different programs.
+# jq for ci/inventory.sh, ci/terraform-plan.sh, and on CI the host's jq too (ci/pin-jq.sh): the host's jq differs
+# between the runner and a Mac, and accepts different programs.
 # renovate: datasource=docker depName=ghcr.io/jqlang/jq
 JQ_IMAGE         := ghcr.io/jqlang/jq:1.8.2@sha256:b9c68867e5766576263a222e91db3de422d802069c7af70440e667a95344e486
 # D2 from its official image (terrastruct/d2 on Docker Hub is a mirror), a multi-architecture index: the SVGs come out
@@ -111,7 +111,7 @@ IS_MODULE = case "/$$d/" in (*/modules/*) true;; (*) false;; esac
 .PHONY: help check check-terraform check-lint check-test check-scripts hooks pre-commit \
 	fmt-check fmt validate tflint tfdocs tfdocs-check trivy shellcheck zizmor docs-check diagrams diagrams-check session-test test-guard test lock \
 	github-app-test github-check github-app github-app-key github-settings github-secrets infracost-key github-tfvars \
-	github-plan github-apply ci-plan ci-plan-gate ci-plan-test infracost infracost-comment infracost-test inventory inventory-check inventory-test
+	github-plan github-apply ci-plan ci-plan-gate ci-plan-test ci-pin-jq infracost infracost-comment infracost-test inventory inventory-check inventory-test
 
 help: ## List the targets
 	@grep -hE '^[a-zA-Z0-9_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-15s %s\n", $$1, $$2}'
@@ -389,6 +389,11 @@ ci-plan-gate: ## The envs plan.yml plans for a pull request (its job gate: reads
 ci-plan-test: ## Self-test of ci/terraform-plan.sh: fake terraform, curl and gh, the pinned jq (no account, token or network)
 	@echo "ci-plan-test"; \
 	bash ci/terraform-plan-test.sh >/dev/null || { echo "FAIL: ci-plan-test (bash ci/terraform-plan-test.sh prints every check)" >&2; exit 1; }
+
+# The host's jq of a GitHub Actions job (check.yml, plan.yml, cost.yml): ci/pin-jq.sh copies /jq out of JQ_IMAGE and
+# puts it first on the job's PATH through $GITHUB_PATH, so it refuses to run outside GitHub Actions.
+ci-pin-jq: ## Put the jq of JQ_IMAGE first on PATH for the next steps of a GitHub Actions job (refuses anywhere else)
+	@JQ_IMAGE='$(JQ_IMAGE)' bash ci/pin-jq.sh
 
 # Cost estimate of a pull request for .github/workflows/cost.yml, from the HCL of the roots in infracost.yml: no plan,
 # state or AWS credential. It needs the learner's free key in INFRACOST_API_KEY, which reaches the container by name

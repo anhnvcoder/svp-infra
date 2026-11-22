@@ -110,8 +110,8 @@ thay đổi", không phải lỗi.
 - Plan đỏ giữa chừng: dòng **Failed:**; env không có tóm tắt: "No summary".
 - Comment quá giới hạn của GitHub chỉ giữ dòng số, danh sách đủ ở job summary của lượt. Artifact `plan-summary-<env>` giữ một ngày, chỉ bản
   đã che.
-- Job `plan-comment` không checkout, không credential, nên bước đăng comment viết thẳng trong `plan.yml`; `make ci-plan-test` chạy chính
-  bước đó.
+- Job `plan-comment` không credential và chỉ checkout `Makefile` cùng `ci/pin-jq.sh` (để chạy đúng jq của `JQ_IMAGE`), nên bước đăng
+  comment viết thẳng trong `plan.yml`; `make ci-plan-test` chạy chính bước đó.
 
 ### Duyệt environment `terraform-plan`
 

@@ -89,16 +89,25 @@ jobs:
           if-no-files-found: ignore
           retention-days: 1
 
-  # One sticky comment per pull request, edited by each run. No checkout and no credential: it posts the summaries.
-  # Its step stays inline for want of a checkout; ci/terraform-plan-test.sh runs it from this file.
+  # One sticky comment per pull request, edited by each run. No credential: it posts the summaries. It checks out the
+  # Makefile and the script that pins jq alone; its step stays inline, ci/terraform-plan-test.sh runs it from this file.
   plan-comment:
     needs: [gate, plan]
     if: always() && needs.gate.outputs.envs != '[]' && (needs.plan.result == 'success' || needs.plan.result == 'failure')
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
+      contents: read
       pull-requests: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            Makefile
+            ci/pin-jq.sh
+          sparse-checkout-cone-mode: false
+      - run: make ci-pin-jq
       # Merged: a single artifact matching the pattern lands in path itself, not in a directory named after it.
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:

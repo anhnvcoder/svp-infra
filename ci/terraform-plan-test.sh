@@ -401,8 +401,8 @@ expect "gate: JQ_IMAGE without digest: red before any call" bash -c '[ "$1" -ne 
   _ "$rc" "$log"
 
 # --- comment -----------------------------------------------------------------------------------------------------
-# Step "Post the summary" of job plan-comment as plan.yml holds it (that job has no checkout, so it cannot call a
-# script), run as a run step runs it: bash -e -o pipefail, on the summaries download-artifact leaves.
+# Step "Post the summary" of job plan-comment as plan.yml holds it (that job checks out only the Makefile and
+# ci/pin-jq.sh), run as a run step runs it: bash -e -o pipefail, on the summaries download-artifact leaves.
 yml=$src/../.github/workflows/plan.yml
 awk '/^      - name: Post the summary$/ {s = 1; next}
   s == 1 && /^        run: [|]$/ {s = 2; next}
