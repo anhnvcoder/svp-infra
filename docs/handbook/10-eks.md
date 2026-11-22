@@ -293,7 +293,7 @@ Node workload do Karpenter tạo theo pod, nằm ngoài state: cuối buổi `pr
   quá hạn tới khi thêm rule. RDS, MSK, ElastiCache nhận từ security group node và security group cluster do EKS tạo; node của svp không mang
   security group cluster.
 - Module registry bỏ qua thay đổi `desired_size` sau khi tạo node group: scale tay nhóm `system` bằng lệnh người học chạy,
-  `AWS_PROFILE=anhnv-stg aws eks update-nodegroup-config --cluster-name svp-stg --nodegroup-name <tên> --scaling-config
+  `AWS_PROFILE=anhnv-stg aws --no-cli-pager eks update-nodegroup-config --cluster-name svp-stg --nodegroup-name <tên> --scaling-config
   minSize=2,maxSize=4,desiredSize=3 --region ap-southeast-1` (tên node group có tiền tố `system-`, đọc bằng `aws eks list-nodegroups`).
 - IMDS hop limit 1: chỉ process mạng host (`aws-node`) đọc được role node (gồm `AmazonEKS_CNI_Policy`); phần node của EBS CSI lấy
   metadata từ Kubernetes thay IMDS. Role node có `ecr:BatchImportUpstreamImage`, `ecr:CreateRepository` chỉ trên tiền tố cache và

@@ -66,7 +66,7 @@ Karpenter đọc nó, drain node và dựng node thay:
 AWS_PROFILE=anhnv-stg kubectl --context svp-stg get node -l karpenter.sh/nodepool=default \
   -o jsonpath='{range .items[*]}{.metadata.name} {.spec.providerID}{"\n"}{end}'
 aws/scripts/check-account.sh stg
-AWS_PROFILE=anhnv-stg aws ec2 terminate-instances --instance-ids <i-… của một dòng trên> --region ap-southeast-1 \
+AWS_PROFILE=anhnv-stg aws --no-cli-pager ec2 terminate-instances --instance-ids <i-… của một dòng trên> --region ap-southeast-1 \
   --query 'TerminatingInstances[0].CurrentState.Name' --output text
 AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n kube-system logs deploy/karpenter --since=10m | grep -i -E 'interruption|disrupt' | head -n 5
 # NodeClaim mới Ready, Ctrl-C
@@ -77,8 +77,8 @@ Mong `shutting-down`, một dòng log của Karpenter nêu NodeClaim của insta
 tới đó). Không dòng log nào: dán log và số tin còn trong hàng đợi cho AI:
 
 ```sh
-AWS_PROFILE=anhnv-stg aws sqs get-queue-attributes --attribute-names ApproximateNumberOfMessages --region ap-southeast-1 \
-  --queue-url "$(AWS_PROFILE=anhnv-stg aws sqs get-queue-url --queue-name svp-stg-karpenter --region ap-southeast-1 --query QueueUrl --output text)"
+AWS_PROFILE=anhnv-stg aws --no-cli-pager sqs get-queue-attributes --attribute-names ApproximateNumberOfMessages --region ap-southeast-1 \
+  --queue-url "$(AWS_PROFILE=anhnv-stg aws --no-cli-pager sqs get-queue-url --queue-name svp-stg-karpenter --region ap-southeast-1 --query QueueUrl --output text)"
 ```
 
 (c) Envoy và Kyverno HA, trải zone (ADR-0056 §4–§6): Envoy hai replica có HPA và PDB, Kyverno ba replica có PDB, pod nằm trên node của
@@ -101,9 +101,9 @@ lệnh sau đọc các dòng `connection authorized` của 30 phút gần nhất
 ```sh
 AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp get secret user-service-env -o jsonpath='{.data.DATABASE_URL}' | base64 --decode |
   sed -E 's#^[^@]*@([^/]*)/[^?]*#\1 #'; echo
-AWS_PROFILE=anhnv-stg aws logs filter-log-events --log-group-name /aws/rds/instance/svp-stg/postgresql --region ap-southeast-1 \
+AWS_PROFILE=anhnv-stg aws --no-cli-pager logs filter-log-events --log-group-name /aws/rds/instance/svp-stg/postgresql --region ap-southeast-1 \
   --start-time "$(( ($(date +%s) - 1800) * 1000 ))" --filter-pattern '"connection authorized" -rdsadmin' --max-items 10 --query 'events[].message' --output text
-AWS_PROFILE=anhnv-stg aws rds describe-db-instances --db-instance-identifier svp-stg --region ap-southeast-1 --output text \
+AWS_PROFILE=anhnv-stg aws --no-cli-pager rds describe-db-instances --db-instance-identifier svp-stg --region ap-southeast-1 --output text \
   --query 'DBInstances[0].[DBInstanceClass,EngineVersion,CACertificateIdentifier,StorageEncrypted,MaxAllocatedStorage]'
 ```
 
@@ -113,20 +113,20 @@ của service `Running` cùng các dòng đó chứng minh client kiểm đượ
 Dòng log câu lệnh chậm (`duration:` từ 1 s, ADR-0057 §6) không được kèm dòng `Parameters:`; mong `0`:
 
 ```sh
-AWS_PROFILE=anhnv-stg aws logs filter-log-events --log-group-name /aws/rds/instance/svp-stg/postgresql --region ap-southeast-1 \
+AWS_PROFILE=anhnv-stg aws --no-cli-pager logs filter-log-events --log-group-name /aws/rds/instance/svp-stg/postgresql --region ap-southeast-1 \
   --start-time "$(( ($(date +%s) - 3600) * 1000 ))" --filter-pattern '"Parameters:"' --query 'length(events)' --output text
 ```
 
 (e) Log control plane, mã hoá Secret, endpoint, autoscaling storage MSK, slow-log Valkey (ADR-0055 §2, ADR-0056 §7, ADR-0058 §4, §5):
 
 ```sh
-AWS_PROFILE=anhnv-stg aws eks describe-cluster --name svp-stg --region ap-southeast-1 --output json \
+AWS_PROFILE=anhnv-stg aws --no-cli-pager eks describe-cluster --name svp-stg --region ap-southeast-1 --output json \
   --query 'cluster.[logging.clusterLogging[?enabled].types[], encryptionConfig[].resources[], resourcesVpcConfig.[endpointPublicAccess,endpointPrivateAccess]]'
-AWS_PROFILE=anhnv-stg aws application-autoscaling describe-scaling-policies --service-namespace kafka --region ap-southeast-1 --output text \
+AWS_PROFILE=anhnv-stg aws --no-cli-pager application-autoscaling describe-scaling-policies --service-namespace kafka --region ap-southeast-1 --output text \
   --query 'ScalingPolicies[].[PolicyName,TargetTrackingScalingPolicyConfiguration.PredefinedMetricSpecification.PredefinedMetricType,TargetTrackingScalingPolicyConfiguration.TargetValue]'
-AWS_PROFILE=anhnv-stg aws elasticache describe-replication-groups --replication-group-id svp-stg --region ap-southeast-1 --output text \
+AWS_PROFILE=anhnv-stg aws --no-cli-pager elasticache describe-replication-groups --replication-group-id svp-stg --region ap-southeast-1 --output text \
   --query 'ReplicationGroups[0].LogDeliveryConfigurations[].[LogType,DestinationType,LogFormat,Status]'
-AWS_PROFILE=anhnv-stg aws logs describe-log-streams --log-group-name /aws/elasticache/svp-stg/slow-log --region ap-southeast-1 --max-items 1 \
+AWS_PROFILE=anhnv-stg aws --no-cli-pager logs describe-log-streams --log-group-name /aws/elasticache/svp-stg/slow-log --region ap-southeast-1 --max-items 1 \
   --query 'logStreams[].logStreamName' --output text
 ```
 
@@ -475,7 +475,7 @@ cut -f1 "$SVP_SESSION_DIR/k6-levels.tsv" | while read -r n; do
   shed=$(promql "sum(increase(svp_gateway_requests_shed_total[$((e - s))s]))" "$e" | awk '{ print $NF }')
   k6=$(cat "$SVP_SESSION_DIR/k6-$n"/summaries/pod-*.json | jq -s -r \
     '[.[].routes[]] | "5xx=\(map((.requests // 0) * (.failed_rate // 0)) | add | round) p99_ms=\(map(.p99_ms // 0) | max)"')
-  rds=$(AWS_PROFILE=anhnv-stg aws cloudwatch get-metric-statistics --namespace AWS/RDS --metric-name DatabaseConnections \
+  rds=$(AWS_PROFILE=anhnv-stg aws --no-cli-pager cloudwatch get-metric-statistics --namespace AWS/RDS --metric-name DatabaseConnections \
     --dimensions Name=DBInstanceIdentifier,Value=svp-stg --start-time "$(at "k6-$n-start" 1)" --end-time "$(at "k6-$n-end" 1)" \
     --period 60 --statistics Maximum --region ap-southeast-1 --query 'max(Datapoints[].Maximum)' --output text)
   printf '%s\tshed=%s\t%s\trds_max=%s\n' "$n" "${shed:-0}" "$k6" "$rds"

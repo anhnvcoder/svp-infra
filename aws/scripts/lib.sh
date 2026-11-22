@@ -4,6 +4,9 @@
 # command that reaches AWS carries the profile and the region; no secret value is printed or written to a file.
 # Design notes: docs/reference/operations.md.
 
+# AWS CLI v2 opens `less` for long output on a terminal and a script waits at (END); every script sources this file.
+export AWS_PAGER=""
+
 region=ap-southeast-1
 # CloudFront's web ACLs (scope CLOUDFRONT), certificates and log delivery sources, and the Pricing Plan Manager
 # (CloudFront flat-rate plans) live in us-east-1 whatever the region of the distribution.

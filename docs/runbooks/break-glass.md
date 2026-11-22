@@ -28,7 +28,7 @@ khối này: khi đó chỉ còn console root của management ([Identity Center
 
 ```sh
 cd infra
-AWS_PROFILE=anhnv-sso aws sso login --region us-east-1
+AWS_PROFILE=anhnv-sso aws --no-cli-pager sso login --region us-east-1
 export SVP_SESSION_DIR="$PWD/.session/$(date -u +%Y%m%dT%H%M%SZ)"  # check-account.sh ghi mốc ở đây
 aws/scripts/check-account.sh mgmt
 ```
@@ -58,7 +58,8 @@ bị xoá, sửa sai.
 2. Mở IAM Identity Center ở region của instance (`sso_region` của `aws/org/org.auto.tfvars`), sửa đúng chỗ hỏng: user bị khoá hay mất
    MFA (Users), gán `AdministratorAccess` của management cho user (AWS accounts), permission set `SvpAdmin`, `SvpReadOnly`,
    `SvpLogReader` và gán của chúng (Permission sets).
-3. Đăng xuất root. Đăng nhập lại bằng `aws sso login --profile anhnv-sso --region us-east-1`, rồi `aws/scripts/check-account.sh mgmt`.
+3. Đăng xuất root. Đăng nhập lại bằng `aws --no-cli-pager sso login --profile anhnv-sso --region us-east-1`, rồi
+   `aws/scripts/check-account.sh mgmt`.
 4. Đưa Identity Center về đúng code: plan `aws/org` (lệnh ở [`org-security-setup.md`, 4a](org-security-setup.md#4a-plan)). Plan chỉ được
    đổi đúng phần vừa sửa tay; áp để state và account khớp, rồi plan lần hai `No changes.`.
 
@@ -138,10 +139,10 @@ R="$(AWS_PROFILE=anhnv-sso terraform -chdir=aws/org output -raw root_id)"
 P="$(AWS_PROFILE=anhnv-sso terraform -chdir=aws/org output -json organizational_unit_ids | jq -r .Prod)"
 for T in "$R" "$P"; do
   echo "== $T"
-  AWS_PROFILE=anhnv-sso aws organizations list-policies-for-target --target-id "$T" --filter SERVICE_CONTROL_POLICY --region us-east-1 \
+  AWS_PROFILE=anhnv-sso aws --no-cli-pager organizations list-policies-for-target --target-id "$T" --filter SERVICE_CONTROL_POLICY --region us-east-1 \
     --query 'Policies[].[Name,Id]' --output text
 done
-AWS_PROFILE=anhnv-sso aws organizations detach-policy --policy-id <p-… của policy cần tháo> --target-id <id đích in policy đó: $R hay $P> \
+AWS_PROFILE=anhnv-sso aws --no-cli-pager organizations detach-policy --policy-id <p-… của policy cần tháo> --target-id <id đích in policy đó: $R hay $P> \
   --region us-east-1
 ```
 

@@ -66,12 +66,12 @@ L=$SVP_AWS_LOG_ACCOUNT_ID A=$SVP_AWS_STG_ACCOUNT_ID
 (a) Add-on `aws-guardduty-agent`, DaemonSet của nó trên mọi node (cả node Karpenter), coverage EKS của cluster:
 
 ```sh
-AWS_PROFILE=anhnv-stg aws eks describe-addon --cluster-name svp-stg --addon-name aws-guardduty-agent --region ap-southeast-1 \
+AWS_PROFILE=anhnv-stg aws --no-cli-pager eks describe-addon --cluster-name svp-stg --addon-name aws-guardduty-agent --region ap-southeast-1 \
   --query 'addon.[status,addonVersion]' --output text
 AWS_PROFILE=anhnv-stg kubectl --context svp-stg get nodes --no-headers | wc -l
 AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n amazon-guardduty get daemonset aws-guardduty-agent
-det=$(AWS_PROFILE=anhnv-stg aws guardduty list-detectors --region ap-southeast-1 --query 'DetectorIds[0]' --output text)
-AWS_PROFILE=anhnv-stg aws guardduty list-coverage --detector-id "$det" --region ap-southeast-1 --output text \
+det=$(AWS_PROFILE=anhnv-stg aws --no-cli-pager guardduty list-detectors --region ap-southeast-1 --query 'DetectorIds[0]' --output text)
+AWS_PROFILE=anhnv-stg aws --no-cli-pager guardduty list-coverage --detector-id "$det" --region ap-southeast-1 --output text \
   --query "Resources[?ResourceDetails.EksClusterDetails.ClusterName=='svp-stg'].[CoverageStatus,Issue]"
 ```
 
@@ -82,11 +82,11 @@ hay không dòng nào: chờ 10 phút, chạy lại lệnh cuối một lần; v
 object tới trễ tới ~10 phút):
 
 ```sh
-AWS_PROFILE=anhnv-stg aws ec2 describe-flow-logs --region ap-southeast-1 \
+AWS_PROFILE=anhnv-stg aws --no-cli-pager ec2 describe-flow-logs --region ap-southeast-1 \
   --filter "Name=resource-id,Values=$(jq -r .vpcId "$values")" \
   --query 'FlowLogs[].[FlowLogStatus,DeliverLogsStatus,LogDestinationType,TrafficType]' --output text
 p="AWSLogs/aws-account-id=$A/aws-service=vpcflowlogs/aws-region=ap-southeast-1/$(date -u +year=%Y/month=%m/day=%d)/"
-AWS_PROFILE=anhnv-log-ro aws s3 ls "s3://svp-flowlogs-$L-ap-southeast-1/$p" --recursive --region ap-southeast-1 | tail -n 3 |
+AWS_PROFILE=anhnv-log-ro aws --no-cli-pager s3 ls "s3://svp-flowlogs-$L-ap-southeast-1/$p" --recursive --region ap-southeast-1 | tail -n 3 |
   sed "s/$A/<account>/g"
 ```
 
@@ -107,10 +107,10 @@ Mong `200`. Mười phút sau (WAF giao file mỗi năm phút):
 
 ```sh
 b=aws-waf-logs-svp-$L-us-east-1
-AWS_PROFILE=anhnv-log-ro aws s3api list-objects-v2 --bucket "$b" --prefix "AWSLogs/$A/WAFLogs/" --region us-east-1 \
+AWS_PROFILE=anhnv-log-ro aws --no-cli-pager s3api list-objects-v2 --bucket "$b" --prefix "AWSLogs/$A/WAFLogs/" --region us-east-1 \
   --query 'Contents[].[Key,LastModified]' --output json |
   jq -r --arg s "$since" '(. // [])[] | select((.[0] | contains("/svp-stg-media/")) and .[1] >= $s) | .[0]' |
-  while read -r k; do AWS_PROFILE=anhnv-log-ro aws s3 cp "s3://$b/$k" - --region us-east-1 | gunzip -c; done |
+  while read -r k; do AWS_PROFILE=anhnv-log-ro aws --no-cli-pager s3 cp "s3://$b/$k" - --region us-east-1 | gunzip -c; done |
   jq -c 'select(any(.httpRequest.headers[]?; (.name | ascii_downcase) == "authorization"))
     | [.httpRequest.headers[]? | .name as $n
       | if ($n | ascii_downcase | IN("authorization", "cookie")) then "\($n)=\(.value)" else $n end]' | head -n 3
@@ -124,14 +124,14 @@ cho AI. Không dòng nào: đọc lại sau năm phút; vẫn không thì dán o
 quét (luồng transcode không đổi: smoke đã tới `READY`):
 
 ```sh
-AWS_PROFILE=anhnv-stg aws guardduty list-malware-protection-plans --region ap-southeast-1 \
+AWS_PROFILE=anhnv-stg aws --no-cli-pager guardduty list-malware-protection-plans --region ap-southeast-1 \
   --query 'MalwareProtectionPlans[].MalwareProtectionPlanId' --output text
-AWS_PROFILE=anhnv-stg aws guardduty get-malware-protection-plan --malware-protection-plan-id <id trên> --region ap-southeast-1 \
+AWS_PROFILE=anhnv-stg aws --no-cli-pager guardduty get-malware-protection-plan --malware-protection-plan-id <id trên> --region ap-southeast-1 \
   --query '[Status,ProtectedResource.S3Bucket.BucketName]' --output text | sed "s/$A/<account>/g"
 up=$(jq -r .uploadsBucket "$values")
-key=$(AWS_PROFILE=anhnv-stg aws s3api list-objects-v2 --bucket "$up" --region ap-southeast-1 --output text \
+key=$(AWS_PROFILE=anhnv-stg aws --no-cli-pager s3api list-objects-v2 --bucket "$up" --region ap-southeast-1 --output text \
   --query "sort_by(Contents[?Key != 'malware-protection-resource-validation-object'], &LastModified)[-1].Key"); echo "$key"
-AWS_PROFILE=anhnv-stg aws s3api get-object-tagging --bucket "$up" --key "$key" --region ap-southeast-1 \
+AWS_PROFILE=anhnv-stg aws --no-cli-pager s3api get-object-tagging --bucket "$up" --key "$key" --region ap-southeast-1 \
   --query "TagSet[?Key=='GuardDutyMalwareScanStatus'].Value" --output text
 ```
 
@@ -149,12 +149,12 @@ bảng ở `OK` hay `INSUFFICIENT_DATA`, rồi ép một alarm `page` sang `ALAR
 alarm về trạng thái thật ở lần đánh giá kế (chu kỳ 60 s) và gửi thư `OK`:
 
 ```sh
-AWS_PROFILE=anhnv-stg aws cloudwatch describe-alarms --alarm-name-prefix svp-stg- --region ap-southeast-1 --output text \
+AWS_PROFILE=anhnv-stg aws --no-cli-pager cloudwatch describe-alarms --alarm-name-prefix svp-stg- --region ap-southeast-1 --output text \
   --query 'MetricAlarms[].[AlarmName,StateValue]'
 aws/scripts/check-account.sh stg
-AWS_PROFILE=anhnv-stg aws cloudwatch set-alarm-state --alarm-name svp-stg-rds-storage-low --state-value ALARM \
+AWS_PROFILE=anhnv-stg aws --no-cli-pager cloudwatch set-alarm-state --alarm-name svp-stg-rds-storage-low --state-value ALARM \
   --state-reason 'session test of the alarm path' --region ap-southeast-1
-AWS_PROFILE=anhnv-stg aws cloudwatch describe-alarm-history --alarm-name svp-stg-rds-storage-low --history-item-type StateUpdate \
+AWS_PROFILE=anhnv-stg aws --no-cli-pager cloudwatch describe-alarm-history --alarm-name svp-stg-rds-storage-low --history-item-type StateUpdate \
   --max-items 3 --region ap-southeast-1 --query 'AlarmHistoryItems[].[Timestamp,HistorySummary]' --output text
 ```
 

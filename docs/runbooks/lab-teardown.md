@@ -30,7 +30,7 @@ Như [Mở terminal của `org-security-setup.md`](org-security-setup.md#mở-te
 Lệnh `aws` không có `allowed_account_ids` như provider Terraform, nên đối chiếu account trước lệnh ghi đầu tiên:
 
 ```sh
-AWS_PROFILE=anhnv-sso aws sts get-caller-identity --region ap-southeast-1 --query '[Account,Arn]' --output text
+AWS_PROFILE=anhnv-sso aws --no-cli-pager sts get-caller-identity --region ap-southeast-1 --query '[Account,Arn]' --output text
 ```
 
 - **Kiểm:** `Account` bằng `$SVP_AWS_MGMT_ACCOUNT_ID`, `Arn` là role SSO của người học. Khác thì dừng, không chạy bước nào dưới đây.
@@ -63,7 +63,7 @@ stg). Ví dụ là stg; với prd thay `stg` bằng `prd`, `anhnv-stg` bằng `a
 1. **Bỏ uỷ quyền trước khi xoá zone**: bản ghi `NS` ở zone cha còn trỏ tới name server của zone đã xoá thì người khác tạo zone cùng tên
    trên các name server đó chiếm được tên (subdomain takeover).
    - stg: xoá mục `stg.aws.<domain>` khỏi `delegated_subdomains` trong `aws/accounts/prd/prd.auto.tfvars`, kiểm account prd bằng
-     `AWS_PROFILE=anhnv-prd aws sts get-caller-identity --region ap-southeast-1`, rồi từ `aws/accounts/prd` plan, đọc, apply:
+     `AWS_PROFILE=anhnv-prd aws --no-cli-pager sts get-caller-identity --region ap-southeast-1`, rồi từ `aws/accounts/prd` plan, đọc, apply:
 
      ```sh
      AWS_PROFILE=anhnv-prd \
@@ -83,13 +83,13 @@ stg). Ví dụ là stg; với prd thay `stg` bằng `prd`, `anhnv-stg` bằng `a
      `module.baseline.aws_route53_record.delegation["stg.aws.<domain>"]`. Với prd, `dig NS aws.<domain> +short @1.1.1.1` không còn ra name
      server nào của zone prd (cache có thể giữ tới 48 giờ).
 2. **Kiểm account của env** trước lệnh đầu tiên bằng profile env (các bước dưới ghi vào account đó):
-   `AWS_PROFILE=anhnv-stg aws sts get-caller-identity --region ap-southeast-1 --query '[Account,Arn]' --output text`.
+   `AWS_PROFILE=anhnv-stg aws --no-cli-pager sts get-caller-identity --region ap-southeast-1 --query '[Account,Arn]' --output text`.
    - **Kiểm:** `Account` bằng `$SVP_AWS_STG_ACCOUNT_ID`, `Arn` là role SSO `SvpAdmin`. Khác thì dừng.
 3. **Zone chỉ còn `NS`, `SOA` và `CAA` ở đỉnh** (`CAA` thuộc baseline, `destroy` xoá nó; bản ghi sót của buổi chặn việc xoá zone, xoá chúng
    trước), từ `aws/accounts/stg`:
 
    ```sh
-   AWS_PROFILE=anhnv-stg aws route53 list-resource-record-sets --region ap-southeast-1 --hosted-zone-id "$(AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform output -raw zone_id)" --query 'ResourceRecordSets[].[Name,Type]' --output text
+   AWS_PROFILE=anhnv-stg aws --no-cli-pager route53 list-resource-record-sets --region ap-southeast-1 --hosted-zone-id "$(AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform output -raw zone_id)" --query 'ResourceRecordSets[].[Name,Type]' --output text
    ```
 
 4. **Đưa state về local** (bucket và key sắp bị xoá): tạo lại `local_override.tf` như
@@ -120,10 +120,10 @@ stg). Ví dụ là stg; với prd thay `stg` bằng `prd`, `anhnv-stg` bằng `a
    `alias/svp-<env>-ecr` mà bước 8 lên lịch xoá. Liệt kê theo tiền tố của các rule cache:
 
    ```sh
-   AWS_PROFILE=anhnv-stg aws ecr describe-pull-through-cache-rules --region ap-southeast-1 \
+   AWS_PROFILE=anhnv-stg aws --no-cli-pager ecr describe-pull-through-cache-rules --region ap-southeast-1 \
      --query 'pullThroughCacheRules[].ecrRepositoryPrefix' --output json | jq -r '.[]' > cache-prefixes.txt
    while read -r p; do
-     AWS_PROFILE=anhnv-stg aws ecr describe-repositories --region ap-southeast-1 --output json \
+     AWS_PROFILE=anhnv-stg aws --no-cli-pager ecr describe-repositories --region ap-southeast-1 --output json \
        --query "repositories[?starts_with(repositoryName, '$p/')].repositoryName" < /dev/null | jq -r '.[]'
    done < cache-prefixes.txt > cache-repos.txt
    cat cache-prefixes.txt cache-repos.txt
@@ -134,7 +134,7 @@ stg). Ví dụ là stg; với prd thay `stg` bằng `prd`, `anhnv-stg` bằng `a
 
    ```sh
    while read -r r; do
-     AWS_PROFILE=anhnv-stg aws ecr delete-repository --region ap-southeast-1 --force --repository-name "$r" \
+     AWS_PROFILE=anhnv-stg aws --no-cli-pager ecr delete-repository --region ap-southeast-1 --force --repository-name "$r" \
        --query repository.repositoryName --output text < /dev/null
    done < cache-repos.txt
    rm cache-prefixes.txt cache-repos.txt
@@ -162,13 +162,13 @@ stg). Ví dụ là stg; với prd thay `stg` bằng `prd`, `anhnv-stg` bằng `a
 
    - **Mong đợi:** key của state, `alias/svp-<env>-ecr`, `alias/svp-<env>-observability` và `alias/svp-<env>-backup` vào `PendingDeletion`
      30 ngày (không tính phí), huỷ được trong thời gian đó (id mỗi key in ở output của `apply`):
-     `AWS_PROFILE=anhnv-stg aws kms cancel-key-deletion --key-id <id key> --region ap-southeast-1`.
+     `AWS_PROFILE=anhnv-stg aws --no-cli-pager kms cancel-key-deletion --key-id <id key> --region ap-southeast-1`.
    - **Bẫy:** hai secret `ecr-pullthroughcache/ghcr`, `ecr-pullthroughcache/docker-hub` cũng chờ xoá 30 ngày, trong thời gian đó không tạo
      được secret cùng tên: dựng lại env này sớm hơn thì xoá hẳn chúng trước (giá trị ghi lại sau apply như lần đầu):
 
      ```sh
      for s in ghcr docker-hub; do
-       AWS_PROFILE=anhnv-stg aws secretsmanager delete-secret --secret-id "ecr-pullthroughcache/$s" \
+       AWS_PROFILE=anhnv-stg aws --no-cli-pager secretsmanager delete-secret --secret-id "ecr-pullthroughcache/$s" \
          --force-delete-without-recovery --region ap-southeast-1
      done
      ```
@@ -179,10 +179,11 @@ stg). Ví dụ là stg; với prd thay `stg` bằng `prd`, `anhnv-stg` bằng `a
     (cùng `/aws/application-signals/data` nếu có) do X-Ray tạo vẫn giữ span. Đưa đích về `XRay`, kiểm, rồi xoá hai log group:
 
     ```sh
-    AWS_PROFILE=anhnv-stg aws xray update-trace-segment-destination --destination XRay --region ap-southeast-1
-    AWS_PROFILE=anhnv-stg aws xray get-trace-segment-destination --region ap-southeast-1   # Destination: XRay
+    AWS_PROFILE=anhnv-stg aws --no-cli-pager xray update-trace-segment-destination --destination XRay --region ap-southeast-1
+    # Destination: XRay
+    AWS_PROFILE=anhnv-stg aws --no-cli-pager xray get-trace-segment-destination --region ap-southeast-1
     for g in aws/spans /aws/application-signals/data; do
-      AWS_PROFILE=anhnv-stg aws logs delete-log-group --log-group-name "$g" --region ap-southeast-1
+      AWS_PROFILE=anhnv-stg aws --no-cli-pager logs delete-log-group --log-group-name "$g" --region ap-southeast-1
     done
     ```
 
@@ -248,7 +249,7 @@ Vault `svp-<env>` của account env phải gỡ trước (AWS Backup không xoá
 3. **Kiểm sạch** bằng profile chỉ đọc:
 
    ```sh
-   AWS_PROFILE=anhnv-backup-ro aws backup list-backup-vaults --region ap-southeast-1 \
+   AWS_PROFILE=anhnv-backup-ro aws --no-cli-pager backup list-backup-vaults --region ap-southeast-1 \
      --query "BackupVaultList[?starts_with(BackupVaultName, 'svp-')].BackupVaultName" --output text
    ```
 
@@ -379,7 +380,7 @@ mỗi 30 ngày chỉ đóng được một phần số account thành viên, nê
 ```sh
 for id in "$SVP_AWS_STG_ACCOUNT_ID" "$SVP_AWS_PRD_ACCOUNT_ID" "$SVP_AWS_SECURITY_ACCOUNT_ID" "$SVP_AWS_LOG_ACCOUNT_ID" \
   "$SVP_AWS_BACKUP_ACCOUNT_ID"; do
-  AWS_PROFILE=anhnv-sso aws organizations close-account --account-id "$id" --region us-east-1
+  AWS_PROFILE=anhnv-sso aws --no-cli-pager organizations close-account --account-id "$id" --region us-east-1
 done
 AWS_PROFILE=anhnv-sso terraform state rm aws_organizations_account.member aws_organizations_account.log_archive \
   aws_organizations_account.security aws_organizations_account.backup
@@ -410,8 +411,8 @@ AWS_PROFILE=anhnv-sso terraform show -no-color org-part3-destroy.tfplan > "$SVP_
 ### Phần 4: policy và OU, sau 90 ngày
 
 Sau khi AWS gỡ hẳn năm account đã đóng khỏi tổ chức (OU còn account thì không xoá được). Kiểm: lệnh
-`AWS_PROFILE=anhnv-sso aws organizations list-accounts --region us-east-1 --query 'Accounts[].[Id,Name,Status]' --output text` không còn
-account `svp-*`.
+`AWS_PROFILE=anhnv-sso aws --no-cli-pager organizations list-accounts --region us-east-1 --query 'Accounts[].[Id,Name,Status]'
+--output text` không còn account `svp-*`.
 
 ```sh
 AWS_PROFILE=anhnv-sso \
@@ -437,15 +438,15 @@ root. Opt-in của management giữ nguyên: mọi loại `true` là giá trị 
 ```sh
 R="$(AWS_PROFILE=anhnv-sso terraform output -raw root_id)"
 AWS_PROFILE=anhnv-sso terraform state rm aws_organizations_organization.this aws_backup_global_settings.this aws_backup_region_settings.this
-AWS_PROFILE=anhnv-sso aws backup update-global-settings --global-settings isCrossAccountBackupEnabled=false --region ap-southeast-1
+AWS_PROFILE=anhnv-sso aws --no-cli-pager backup update-global-settings --global-settings isCrossAccountBackupEnabled=false --region ap-southeast-1
 for p in access-analyzer account backup cloudtrail config-multiaccountsetup config ec2 guardduty iam inspector2 malware-protection.guardduty \
   securityhub; do
-  AWS_PROFILE=anhnv-sso aws organizations disable-aws-service-access --service-principal "$p.amazonaws.com" --region us-east-1
+  AWS_PROFILE=anhnv-sso aws --no-cli-pager organizations disable-aws-service-access --service-principal "$p.amazonaws.com" --region us-east-1
 done
 for t in BACKUP_POLICY DECLARATIVE_POLICY_EC2 TAG_POLICY; do
-  AWS_PROFILE=anhnv-sso aws organizations disable-policy-type --root-id "$R" --policy-type "$t" --region us-east-1
+  AWS_PROFILE=anhnv-sso aws --no-cli-pager organizations disable-policy-type --root-id "$R" --policy-type "$t" --region us-east-1
 done
-AWS_PROFILE=anhnv-sso aws s3 rm "s3://svp-tfstate-$SVP_AWS_MGMT_ACCOUNT_ID-ap-southeast-1/aws/org/terraform.tfstate" --region ap-southeast-1
+AWS_PROFILE=anhnv-sso aws --no-cli-pager s3 rm "s3://svp-tfstate-$SVP_AWS_MGMT_ACCOUNT_ID-ap-southeast-1/aws/org/terraform.tfstate" --region ap-southeast-1
 rm -f org.auto.tfvars
 ```
 
@@ -515,9 +516,9 @@ sang Log Archive. Gỡ khi Object Lock của version cuối hết hạn (365 ng�
 
 ```sh
 B="svp-cloudtrail-$SVP_AWS_MGMT_ACCOUNT_ID-ap-southeast-1"
-AWS_PROFILE=anhnv-sso aws s3api list-object-versions --bucket "$B" --region ap-southeast-1 \
+AWS_PROFILE=anhnv-sso aws --no-cli-pager s3api list-object-versions --bucket "$B" --region ap-southeast-1 \
   --query 'max_by(Versions, &LastModified).[Key,VersionId]' --output text
-AWS_PROFILE=anhnv-sso aws s3api get-object-retention --bucket "$B" --key <Key> --version-id <VersionId> --region ap-southeast-1
+AWS_PROFILE=anhnv-sso aws --no-cli-pager s3api get-object-retention --bucket "$B" --key <Key> --version-id <VersionId> --region ap-southeast-1
 ```
 
 - **Kiểm:** `RetainUntilDate` ở quá khứ; chưa tới thì chờ.
@@ -525,13 +526,13 @@ AWS_PROFILE=anhnv-sso aws s3api get-object-retention --bucket "$B" --key <Key> -
 Xoá mọi version và delete marker (lặp tới khi `versions.json` rỗng), rồi rỗng bucket access log:
 
 ```sh
-AWS_PROFILE=anhnv-sso aws s3api list-object-versions --bucket "$B" --region ap-southeast-1 --output json \
+AWS_PROFILE=anhnv-sso aws --no-cli-pager s3api list-object-versions --bucket "$B" --region ap-southeast-1 --output json \
   --query '{Objects: [Versions, DeleteMarkers][][].{Key: Key, VersionId: VersionId}}' > versions.json
 jq -c '.Objects | _nwise(1000) | {Objects: ., Quiet: true}' versions.json | while read -r batch; do
-  AWS_PROFILE=anhnv-sso aws s3api delete-objects --bucket "$B" --region ap-southeast-1 --delete "$batch"
+  AWS_PROFILE=anhnv-sso aws --no-cli-pager s3api delete-objects --bucket "$B" --region ap-southeast-1 --delete "$batch"
 done
 rm versions.json
-AWS_PROFILE=anhnv-sso aws s3 rm "s3://svp-cloudtrail-access-$SVP_AWS_MGMT_ACCOUNT_ID-ap-southeast-1" --recursive --region ap-southeast-1
+AWS_PROFILE=anhnv-sso aws --no-cli-pager s3 rm "s3://svp-cloudtrail-access-$SVP_AWS_MGMT_ACCOUNT_ID-ap-southeast-1" --recursive --region ap-southeast-1
 ```
 
 - **Việc tay:** một PR bỏ khỏi `audit-trail.tf` key `aws_kms_key.cloudtrail`, alias, hai bucket cùng mọi tài nguyên và policy document của
@@ -545,10 +546,10 @@ OU `Production`, `Development` dưới root chứa hai account demo đã đóng 
 account khỏi tổ chức (90 ngày sau khi đóng), xoá hai OU rỗng. Chạy từ `infra/aws/org` (lệnh đầu đọc output của root):
 
 ```sh
-AWS_PROFILE=anhnv-sso aws organizations list-organizational-units-for-parent --parent-id "$(AWS_PROFILE=anhnv-sso terraform output -raw root_id)" \
+AWS_PROFILE=anhnv-sso aws --no-cli-pager organizations list-organizational-units-for-parent --parent-id "$(AWS_PROFILE=anhnv-sso terraform output -raw root_id)" \
   --region us-east-1 --query 'OrganizationalUnits[].[Id,Name]' --output text
-AWS_PROFILE=anhnv-sso aws organizations list-accounts-for-parent --parent-id <ou-… của Production> --region us-east-1 --query 'Accounts[].Id' --output text
-AWS_PROFILE=anhnv-sso aws organizations delete-organizational-unit --organizational-unit-id <ou-… của Production> --region us-east-1
+AWS_PROFILE=anhnv-sso aws --no-cli-pager organizations list-accounts-for-parent --parent-id <ou-… của Production> --region us-east-1 --query 'Accounts[].Id' --output text
+AWS_PROFILE=anhnv-sso aws --no-cli-pager organizations delete-organizational-unit --organizational-unit-id <ou-… của Production> --region us-east-1
 ```
 
 - **Kiểm:** lệnh thứ hai không in id nào thì mới chạy lệnh xoá; lặp lại với `Development`.
@@ -560,14 +561,14 @@ SCP tạo tay từ trước khi có code không nằm trong state của `aws/org
 còn gắn ở đâu.
 
 ```sh
-AWS_PROFILE=anhnv-sso aws organizations list-policies --filter SERVICE_CONTROL_POLICY --region us-east-1 \
+AWS_PROFILE=anhnv-sso aws --no-cli-pager organizations list-policies --filter SERVICE_CONTROL_POLICY --region us-east-1 \
   --query 'Policies[?AwsManaged==`false`].[Id,Name]' --output text
-AWS_PROFILE=anhnv-sso aws organizations list-targets-for-policy --policy-id <p-… của policy tạo tay> --region us-east-1 \
+AWS_PROFILE=anhnv-sso aws --no-cli-pager organizations list-targets-for-policy --policy-id <p-… của policy tạo tay> --region us-east-1 \
   --query 'Targets[].[TargetId,Name]' --output text
 ```
 
 - **Kiểm:** lệnh thứ hai không in dòng nào thì policy không gắn ở đâu: xoá bằng
-  `AWS_PROFILE=anhnv-sso aws organizations delete-policy --policy-id <p-…> --region us-east-1`.
+  `AWS_PROFILE=anhnv-sso aws --no-cli-pager organizations delete-policy --policy-id <p-…> --region us-east-1`.
 - **Bẫy:** còn gắn thì đọc xem nó đang chặn gì, gỡ khỏi từng đích bằng `detach-policy` trước; không xoá policy đang gắn.
 
 ## Xoá bootstrap

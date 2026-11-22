@@ -40,9 +40,9 @@ không giá trị thuộc tính. CI không `apply`. Workflow không nằm trong 
 
 ### Job và thứ tự lệnh
 
-Job `gate` (`ci/terraform-plan.sh gate`) chọn env từ biến Actions `SVP_TF_PLAN_ENVS` (mảng JSON, Terraform `terraform_plan_envs` của
-`github/`). Job `plan` chạy mỗi env một lượt, nêu environment `terraform-plan` nên chờ người học duyệt; được duyệt thì nhận secret của
-environment và token OIDC. `make ci-plan ENV=<env>` chạy `ci/terraform-plan.sh plan <env>`:
+Job `gate` (`make ci-plan-gate`, tức `ci/terraform-plan.sh gate`) chọn env từ biến Actions `SVP_TF_PLAN_ENVS` (mảng JSON,
+Terraform `terraform_plan_envs` của `github/`). Job `plan` chạy mỗi env một lượt, nêu environment `terraform-plan` nên chờ người
+học duyệt; được duyệt thì nhận secret của environment và token OIDC. `make ci-plan ENV=<env>` chạy `ci/terraform-plan.sh plan <env>`:
 
 - Trước mỗi lệnh Terraform lấy token mới (audience `sts.amazonaws.com`, sống 5 phút), ghi đè file mode 600 dưới `RUNNER_TEMP`; Terraform
   trong container `TERRAFORM_IMAGE` tự assume role qua `AWS_ROLE_ARN`, `AWS_WEB_IDENTITY_TOKEN_FILE`, không action bên thứ ba.

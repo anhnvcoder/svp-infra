@@ -70,7 +70,7 @@ Trong một buổi stg ở minor cũ, tunnel mở, đọc upgrade insights của
 minor mới bỏ sẽ hỏng sau khi nâng.
 
 ```sh
-AWS_PROFILE=anhnv-stg aws eks list-insights --cluster-name svp-stg --region ap-southeast-1 --filter categories=UPGRADE_READINESS \
+AWS_PROFILE=anhnv-stg aws --no-cli-pager eks list-insights --cluster-name svp-stg --region ap-southeast-1 --filter categories=UPGRADE_READINESS \
   --query 'insights[].[name,insightStatus.status,kubernetesVersion]' --output text
 AWS_PROFILE=anhnv-stg kubectl --context svp-stg get --raw /metrics | grep '^apiserver_requested_deprecated_apis'
 ```
@@ -139,8 +139,8 @@ buổi](session-stg-deploy.md) xanh. Rồi, cùng terminal của buổi, tunnel 
 3. Đọc lại, sau khi apply xong và Karpenter thay hết node:
 
    ```sh
-   AWS_PROFILE=anhnv-stg aws eks describe-cluster --name svp-stg --region ap-southeast-1 --query 'cluster.[version,status]' --output text
-   AWS_PROFILE=anhnv-stg aws eks list-addons --cluster-name svp-stg --region ap-southeast-1 --query addons --output text
+   AWS_PROFILE=anhnv-stg aws --no-cli-pager eks describe-cluster --name svp-stg --region ap-southeast-1 --query 'cluster.[version,status]' --output text
+   AWS_PROFILE=anhnv-stg aws --no-cli-pager eks list-addons --cluster-name svp-stg --region ap-southeast-1 --query addons --output text
    AWS_PROFILE=anhnv-stg kubectl --context svp-stg get nodes -L eks.amazonaws.com/nodegroup,karpenter.sh/nodepool
    AWS_PROFILE=anhnv-stg kubectl --context svp-stg get ec2nodeclasses.karpenter.k8s.aws default \
      -o jsonpath='{range .status.amis[*]}{.name}{"\t"}{.id}{"\n"}{end}'
@@ -173,7 +173,7 @@ Runbook không tạo tài nguyên riêng: env của bước 2, 4 gỡ cùng bu�
 | Triệu chứng | Cách xử lý |
 | --- | --- |
 | Plan có `replace` trên `aws_eks_cluster` hay node group | không apply; dán plan cho AI (đối số khác ngoài version đổi trong PR) |
-| Add-on `DEGRADED` sau apply | `AWS_PROFILE=anhnv-stg aws eks describe-addon --cluster-name svp-stg --addon-name <tên> --region ap-southeast-1 --query 'addon.health'`; dán cho AI; không hạ bản add-on bằng console |
+| Add-on `DEGRADED` sau apply | `AWS_PROFILE=anhnv-stg aws --no-cli-pager eks describe-addon --cluster-name svp-stg --addon-name <tên> --region ap-southeast-1 --query 'addon.health'`; dán cho AI; không hạ bản add-on bằng console |
 | Node group kẹt ở `UPDATING` | PDB chặn drain: `AWS_PROFILE=anhnv-stg kubectl --context svp-stg get pdb -A`; dán cho AI |
 | NodeClaim mới không `Ready` sau khi đổi alias (bước 4.1) | log Karpenter (`AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n kube-system logs deploy/karpenter --tail=50`): alias sai chuỗi hay AMI chưa có ở region; revert PR 2, node cũ vẫn chạy |
 | EC2NodeClass không còn AMI nào (lệnh `status.amis` của bước 4.1 rỗng) sau khi nâng control plane | ngày của alias chưa có bản `1.N+1` (PR 2 chưa merge, hay ngày chọn sai ở bước 1): Karpenter không dựng node mới, node đang chạy giữ nguyên; merge PR 2 với ngày có cho `1.N+1` |

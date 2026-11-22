@@ -1417,6 +1417,10 @@ expect "tf.sh prd gitops plan refuses while the tunnel is closed, before any ter
 expect "tf.sh prd gitops init needs no tunnel" sh -c 'FAKE_TUNNEL=closed bash "$1/tf.sh" prd gitops init >/dev/null 2>&1' _ "$here"
 rm -f "$infra_root"/aws/*/*/*.tfplan
 
+# --- lib.sh: pager --------------------------------------------------------------------------------------------------
+expect "lib.sh exports an empty AWS_PAGER (no less on long output) even when the shell sets one" \
+  bash -c 'AWS_PAGER=less; . "$1/lib.sh"; [ "${AWS_PAGER-unset}" = "" ] && env | grep -q "^AWS_PAGER=$"' _ "$here"
+
 # --- lib.sh: paid features --------------------------------------------------------------------------------------
 # flag FILE ACCOUNT FLAG / sessions FILE ENV: paid_feature and session_features of lib.sh, on FILE instead of the
 # sample in the tree of the test when FILE is not empty.

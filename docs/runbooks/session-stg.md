@@ -177,7 +177,7 @@ vì chép lại.
 
 ```sh
 cd infra
-AWS_PROFILE=anhnv-sso aws sso login --region us-east-1                          # one login per sso_session
+AWS_PROFILE=anhnv-sso aws --no-cli-pager sso login --region us-east-1   # one login per sso_session
 printf 'mgmt …%s\n' "${SVP_AWS_MGMT_ACCOUNT_ID: -4}"                      # from .envrc (direnv), 4 last digits only
 eval "$(aws/scripts/accounts.sh)"                                               # sets five member-account variables
 export SVP_SESSION_DIR="$PWD/.session/$(date -u +%Y%m%dT%H%M%SZ)"               # số đo của buổi; .session/ git bỏ qua
@@ -216,7 +216,7 @@ giờ từ `session-start` của nó; `tf.sh` đọc các mốc gỡ (`pre-destr
 
 ```sh
 cd infra
-AWS_PROFILE=anhnv-sso aws sso login --region us-east-1
+AWS_PROFILE=anhnv-sso aws --no-cli-pager sso login --region us-east-1
 eval "$(aws/scripts/accounts.sh)"
 ls -1d .session/*/ | tail -n 3                                                 # thư mục mới nhất là buổi đang dở
 export SVP_SESSION_DIR="$PWD/.session/<thư mục đó>"
@@ -240,7 +240,7 @@ amp="https://aps-workspaces.ap-southeast-1.amazonaws.com/workspaces/$ws/"
 # amp_get PATH [tuỳ chọn curl…]: GET tới API Prometheus của workspace, ký SigV4
 amp_get() {
   local p=$1; shift
-  AWS_PROFILE="anhnv-$E" aws configure export-credentials --format process --region ap-southeast-1 |
+  AWS_PROFILE="anhnv-$E" aws --no-cli-pager configure export-credentials --format process --region ap-southeast-1 |
     jq -r '"user = \"\(.AccessKeyId):\(.SecretAccessKey)\"", "header = \"x-amz-security-token: \(.SessionToken)\""' |
     curl -sS --fail-with-body --config - --aws-sigv4 aws:amz:ap-southeast-1:aps -G "$amp$p" "$@"
 }
@@ -254,10 +254,10 @@ promql() {
 # Lỗi API, trạng thái khác Complete, chờ quá 300 s: báo ở stderr, trả 1
 insights() {
   local id st n=0
-  id=$(AWS_PROFILE="anhnv-$E" aws logs start-query --log-group-names "$1" --start-time "$2" --end-time "$3" --query-string "$4" \
+  id=$(AWS_PROFILE="anhnv-$E" aws --no-cli-pager logs start-query --log-group-names "$1" --start-time "$2" --end-time "$3" --query-string "$4" \
     --region ap-southeast-1 --query queryId --output text) || return 1
   while :; do
-    st=$(AWS_PROFILE="anhnv-$E" aws logs get-query-results --query-id "$id" --region ap-southeast-1 --query status --output text) ||
+    st=$(AWS_PROFILE="anhnv-$E" aws --no-cli-pager logs get-query-results --query-id "$id" --region ap-southeast-1 --query status --output text) ||
       return 1
     case $st in
       Complete) break ;;
@@ -267,7 +267,7 @@ insights() {
     [ $((n += 1)) -lt 150 ] || { echo "insights: query $id still $st after 300 s" >&2; return 1; }
     sleep 2
   done
-  AWS_PROFILE="anhnv-$E" aws logs get-query-results --query-id "$id" --region ap-southeast-1 --query 'results[][].[field,value]' --output text
+  AWS_PROFILE="anhnv-$E" aws --no-cli-pager logs get-query-results --query-id "$id" --region ap-southeast-1 --query 'results[][].[field,value]' --output text
 }
 ```
 
@@ -467,21 +467,21 @@ tay cho thứ ngoài state hay khi state mất. Tài nguyên sót ở management
 Security group: rule nơi khác tham chiếu nó, thu hồi từng rule, rồi xoá:
 
 ```sh
-AWS_PROFILE=anhnv-stg aws ec2 describe-security-group-rules --region ap-southeast-1 --output text \
+AWS_PROFILE=anhnv-stg aws --no-cli-pager ec2 describe-security-group-rules --region ap-southeast-1 --output text \
   --query "SecurityGroupRules[?ReferencedGroupInfo.GroupId=='<sg-…>'].[GroupId,SecurityGroupRuleId,IsEgress]"
-AWS_PROFILE=anhnv-stg aws ec2 revoke-security-group-ingress --group-id <GroupId> --security-group-rule-ids <sgr-…> --region ap-southeast-1
-AWS_PROFILE=anhnv-stg aws ec2 delete-security-group --group-id <sg-…> --region ap-southeast-1
+AWS_PROFILE=anhnv-stg aws --no-cli-pager ec2 revoke-security-group-ingress --group-id <GroupId> --security-group-rule-ids <sgr-…> --region ap-southeast-1
+AWS_PROFILE=anhnv-stg aws --no-cli-pager ec2 delete-security-group --group-id <sg-…> --region ap-southeast-1
 ```
 
 Bucket (khi state mất): bucket không versioning xoá mọi object rồi bucket bằng một lệnh; bucket có versioning (`media` của prd) phải xoá
 mọi version và delete marker trước (từng lô 1 000, lặp tới khi rỗng):
 
 ```sh
-AWS_PROFILE=anhnv-stg aws s3 rb s3://<svp-stg-…> --force --region ap-southeast-1
-AWS_PROFILE=anhnv-stg aws s3api list-object-versions --bucket <svp-…> --max-items 1000 --region ap-southeast-1 --output json |
+AWS_PROFILE=anhnv-stg aws --no-cli-pager s3 rb s3://<svp-stg-…> --force --region ap-southeast-1
+AWS_PROFILE=anhnv-stg aws --no-cli-pager s3api list-object-versions --bucket <svp-…> --max-items 1000 --region ap-southeast-1 --output json |
   jq '{Objects: [(.Versions // [])[], (.DeleteMarkers // [])[] | {Key, VersionId}], Quiet: true}' > /tmp/svp-versions.json
-AWS_PROFILE=anhnv-stg aws s3api delete-objects --bucket <svp-…> --delete file:///tmp/svp-versions.json --region ap-southeast-1
-AWS_PROFILE=anhnv-stg aws s3api delete-bucket --bucket <svp-…> --region ap-southeast-1
+AWS_PROFILE=anhnv-stg aws --no-cli-pager s3api delete-objects --bucket <svp-…> --delete file:///tmp/svp-versions.json --region ap-southeast-1
+AWS_PROFILE=anhnv-stg aws --no-cli-pager s3api delete-bucket --bucket <svp-…> --region ap-southeast-1
 ```
 
 CloudFront, theo thứ tự: huỷ gói flat-rate trước (AWS không tắt gói khỏi distribution, không xoá distribution còn gói), rồi tắt
@@ -490,10 +490,10 @@ xoá sau distribution, cũng bằng `ETag`; web ACL sau cùng (khối dưới). 
 
 ```sh
 aws/scripts/check-account.sh stg
-AWS_PROFILE=anhnv-stg aws pricing-plan-manager list-subscriptions --region us-east-1 --query 'subscriptionSummaries[].[arn,planTier,status,resourceArns]' --output json
-AWS_PROFILE=anhnv-stg aws pricing-plan-manager get-subscription --arn <arn> --region us-east-1 --query eTag --output text
-AWS_PROFILE=anhnv-stg aws pricing-plan-manager cancel-subscription --arn <arn> --if-match <eTag trên> --region us-east-1 --query '[subscription.status,subscription.scheduledChange.changeType]' --output text
-AWS_PROFILE=anhnv-stg aws pricing-plan-manager list-subscriptions --region us-east-1 --query 'subscriptionSummaries[].arn' --output text
+AWS_PROFILE=anhnv-stg aws --no-cli-pager pricing-plan-manager list-subscriptions --region us-east-1 --query 'subscriptionSummaries[].[arn,planTier,status,resourceArns]' --output json
+AWS_PROFILE=anhnv-stg aws --no-cli-pager pricing-plan-manager get-subscription --arn <arn> --region us-east-1 --query eTag --output text
+AWS_PROFILE=anhnv-stg aws --no-cli-pager pricing-plan-manager cancel-subscription --arn <arn> --if-match <eTag trên> --region us-east-1 --query '[subscription.status,subscription.scheduledChange.changeType]' --output text
+AWS_PROFILE=anhnv-stg aws --no-cli-pager pricing-plan-manager list-subscriptions --region us-east-1 --query 'subscriptionSummaries[].arn' --output text
 ```
 
 Lệnh cuối không còn in ARN đó thì gói đã gỡ (gói Free huỷ ngay; `get-subscription` của ARN đã gỡ trả lỗi, không phải rỗng). Còn in: chờ
@@ -501,17 +501,17 @@ một phút rồi đọc lại; **không tắt, không xoá distribution khi gó
 phí, huỷ theo lịch) chỉ gỡ ở `effectiveDate` của nó; tới đó distribution ở yên. Rồi distribution:
 
 ```sh
-AWS_PROFILE=anhnv-stg aws cloudfront get-distribution-config --id <E…> --region ap-southeast-1 --output json > /tmp/svp-cf.json
+AWS_PROFILE=anhnv-stg aws --no-cli-pager cloudfront get-distribution-config --id <E…> --region ap-southeast-1 --output json > /tmp/svp-cf.json
 jq '.DistributionConfig | .Enabled = false' /tmp/svp-cf.json > /tmp/svp-cf-off.json
-AWS_PROFILE=anhnv-stg aws cloudfront update-distribution --id <E…> --if-match "$(jq -r .ETag /tmp/svp-cf.json)" \
+AWS_PROFILE=anhnv-stg aws --no-cli-pager cloudfront update-distribution --id <E…> --if-match "$(jq -r .ETag /tmp/svp-cf.json)" \
   --distribution-config file:///tmp/svp-cf-off.json --region ap-southeast-1 >/dev/null
-AWS_PROFILE=anhnv-stg aws cloudfront wait distribution-deployed --id <E…> --region ap-southeast-1
-AWS_PROFILE=anhnv-stg aws cloudfront delete-distribution --id <E…> --region ap-southeast-1 \
-  --if-match "$(AWS_PROFILE=anhnv-stg aws cloudfront get-distribution --id <E…> --query ETag --output text --region ap-southeast-1)"
-AWS_PROFILE=anhnv-stg aws cloudfront delete-origin-access-control --id <id> --region ap-southeast-1 \
-  --if-match "$(AWS_PROFILE=anhnv-stg aws cloudfront get-origin-access-control --id <id> --query ETag --output text --region ap-southeast-1)"
-AWS_PROFILE=anhnv-stg aws cloudfront delete-response-headers-policy --id <id> --region ap-southeast-1 \
-  --if-match "$(AWS_PROFILE=anhnv-stg aws cloudfront get-response-headers-policy --id <id> --query ETag --output text --region ap-southeast-1)"
+AWS_PROFILE=anhnv-stg aws --no-cli-pager cloudfront wait distribution-deployed --id <E…> --region ap-southeast-1
+AWS_PROFILE=anhnv-stg aws --no-cli-pager cloudfront delete-distribution --id <E…> --region ap-southeast-1 \
+  --if-match "$(AWS_PROFILE=anhnv-stg aws --no-cli-pager cloudfront get-distribution --id <E…> --query ETag --output text --region ap-southeast-1)"
+AWS_PROFILE=anhnv-stg aws --no-cli-pager cloudfront delete-origin-access-control --id <id> --region ap-southeast-1 \
+  --if-match "$(AWS_PROFILE=anhnv-stg aws --no-cli-pager cloudfront get-origin-access-control --id <id> --query ETag --output text --region ap-southeast-1)"
+AWS_PROFILE=anhnv-stg aws --no-cli-pager cloudfront delete-response-headers-policy --id <id> --region ap-southeast-1 \
+  --if-match "$(AWS_PROFILE=anhnv-stg aws --no-cli-pager cloudfront get-response-headers-policy --id <id> --query ETag --output text --region ap-southeast-1)"
 ```
 
 Key group `svp-stg-media` (sau distribution media, behavior mặc định của nó tin key group), rồi từng public key `svp-stg-media-*` (AWS
@@ -519,10 +519,10 @@ từ chối xoá public key còn trong key group); `--if-match` là `ETag` của
 
 ```sh
 aws/scripts/check-account.sh stg
-AWS_PROFILE=anhnv-stg aws cloudfront delete-key-group --id <id> --region ap-southeast-1 \
-  --if-match "$(AWS_PROFILE=anhnv-stg aws cloudfront get-key-group --id <id> --query ETag --output text --region ap-southeast-1)"
-AWS_PROFILE=anhnv-stg aws cloudfront delete-public-key --id <id> --region ap-southeast-1 \
-  --if-match "$(AWS_PROFILE=anhnv-stg aws cloudfront get-public-key --id <id> --query ETag --output text --region ap-southeast-1)"
+AWS_PROFILE=anhnv-stg aws --no-cli-pager cloudfront delete-key-group --id <id> --region ap-southeast-1 \
+  --if-match "$(AWS_PROFILE=anhnv-stg aws --no-cli-pager cloudfront get-key-group --id <id> --query ETag --output text --region ap-southeast-1)"
+AWS_PROFILE=anhnv-stg aws --no-cli-pager cloudfront delete-public-key --id <id> --region ap-southeast-1 \
+  --if-match "$(AWS_PROFILE=anhnv-stg aws --no-cli-pager cloudfront get-public-key --id <id> --query ETag --output text --region ap-southeast-1)"
 ```
 
 VPC origin (sau mọi distribution dùng nó; `--if-match` là `ETag` của `get-vpc-origin`), rồi, khi `sweep.sh` không còn liệt kê VPC origin
@@ -531,10 +531,10 @@ trên):
 
 ```sh
 aws/scripts/check-account.sh stg
-AWS_PROFILE=anhnv-stg aws cloudfront delete-vpc-origin --id <id> --region ap-southeast-1 \
-  --if-match "$(AWS_PROFILE=anhnv-stg aws cloudfront get-vpc-origin --id <id> --query ETag --output text --region ap-southeast-1)"
-AWS_PROFILE=anhnv-stg aws cloudfront list-vpc-origins --region ap-southeast-1 --query 'VpcOriginList.Items[].[Id,Name,Status]' --output text
-AWS_PROFILE=anhnv-stg aws ec2 delete-security-group --group-id <sg-…> --region ap-southeast-1
+AWS_PROFILE=anhnv-stg aws --no-cli-pager cloudfront delete-vpc-origin --id <id> --region ap-southeast-1 \
+  --if-match "$(AWS_PROFILE=anhnv-stg aws --no-cli-pager cloudfront get-vpc-origin --id <id> --query ETag --output text --region ap-southeast-1)"
+AWS_PROFILE=anhnv-stg aws --no-cli-pager cloudfront list-vpc-origins --region ap-southeast-1 --query 'VpcOriginList.Items[].[Id,Name,Status]' --output text
+AWS_PROFILE=anhnv-stg aws --no-cli-pager ec2 delete-security-group --group-id <sg-…> --region ap-southeast-1
 ```
 
 ALB edge của prd còn deletion protection (state mất, chưa áp `teardown.tfvars`): kiểm account prd, tắt rồi xoá bằng lệnh `delete:` của
@@ -542,7 +542,7 @@ ALB edge của prd còn deletion protection (state mất, chưa áp `teardown.tf
 
 ```sh
 aws/scripts/check-account.sh prd
-AWS_PROFILE=anhnv-prd aws elbv2 modify-load-balancer-attributes --load-balancer-arn <arn> --region ap-southeast-1 \
+AWS_PROFILE=anhnv-prd aws --no-cli-pager elbv2 modify-load-balancer-attributes --load-balancer-arn <arn> --region ap-southeast-1 \
   --attributes Key=deletion_protection.enabled,Value=false --query 'Attributes[?Key==`deletion_protection.enabled`].Value' --output text
 ```
 
@@ -552,8 +552,8 @@ tính pay-as-you-go theo giờ:
 
 ```sh
 aws/scripts/check-account.sh stg
-AWS_PROFILE=anhnv-stg aws wafv2 get-web-acl --scope CLOUDFRONT --name <svp-stg-…> --id <id> --region us-east-1 --query LockToken --output text
-AWS_PROFILE=anhnv-stg aws wafv2 delete-web-acl --scope CLOUDFRONT --name <svp-stg-…> --id <id> --lock-token <token> --region us-east-1
+AWS_PROFILE=anhnv-stg aws --no-cli-pager wafv2 get-web-acl --scope CLOUDFRONT --name <svp-stg-…> --id <id> --region us-east-1 --query LockToken --output text
+AWS_PROFILE=anhnv-stg aws --no-cli-pager wafv2 delete-web-acl --scope CLOUDFRONT --name <svp-stg-…> --id <id> --lock-token <token> --region us-east-1
 ```
 
 MSK (khi state mất), theo thứ tự: cluster (gỡ ENI của broker trong subnet database), chờ nó biến mất khỏi danh sách, rồi configuration
@@ -561,9 +561,9 @@ MSK (khi state mất), theo thứ tự: cluster (gỡ ENI của broker trong sub
 
 ```sh
 aws/scripts/check-account.sh stg
-AWS_PROFILE=anhnv-stg aws kafka delete-cluster --cluster-arn <arn cluster> --region ap-southeast-1 --query State --output text
-AWS_PROFILE=anhnv-stg aws kafka list-clusters-v2 --cluster-name-filter svp-stg --region ap-southeast-1 --query 'ClusterInfoList[].[ClusterName,State]' --output text
-AWS_PROFILE=anhnv-stg aws kafka delete-configuration --arn <arn configuration> --region ap-southeast-1 --query State --output text
+AWS_PROFILE=anhnv-stg aws --no-cli-pager kafka delete-cluster --cluster-arn <arn cluster> --region ap-southeast-1 --query State --output text
+AWS_PROFILE=anhnv-stg aws --no-cli-pager kafka list-clusters-v2 --cluster-name-filter svp-stg --region ap-southeast-1 --query 'ClusterInfoList[].[ClusterName,State]' --output text
+AWS_PROFILE=anhnv-stg aws --no-cli-pager kafka delete-configuration --arn <arn configuration> --region ap-southeast-1 --query State --output text
 ```
 
 Lệnh thứ ba in `svp-stg DELETING` trong lúc gỡ (≤ 30 phút, giả định của ADR-0053 §16); đọc lại tới khi không in gì, rồi lệnh cuối.
@@ -573,13 +573,13 @@ ElastiCache (khi state mất), theo thứ tự AWS cho xoá: replication group (
 
 ```sh
 aws/scripts/check-account.sh stg
-AWS_PROFILE=anhnv-stg aws elasticache delete-replication-group --replication-group-id svp-stg --region ap-southeast-1 --query ReplicationGroup.Status --output text
-AWS_PROFILE=anhnv-stg aws elasticache wait replication-group-deleted --replication-group-id svp-stg --region ap-southeast-1
-AWS_PROFILE=anhnv-stg aws elasticache delete-user-group --user-group-id svp-stg --region ap-southeast-1 --query Status --output text
-AWS_PROFILE=anhnv-stg aws elasticache describe-user-groups --region ap-southeast-1 --query "UserGroups[?UserGroupId=='svp-stg'].Status" --output text
-AWS_PROFILE=anhnv-stg aws elasticache delete-user --user-id <svp-stg-…> --region ap-southeast-1 --query Status --output text
-AWS_PROFILE=anhnv-stg aws elasticache delete-cache-subnet-group --cache-subnet-group-name svp-stg --region ap-southeast-1
-AWS_PROFILE=anhnv-stg aws elasticache delete-cache-parameter-group --cache-parameter-group-name <svp-stg-valkey9> --region ap-southeast-1
+AWS_PROFILE=anhnv-stg aws --no-cli-pager elasticache delete-replication-group --replication-group-id svp-stg --region ap-southeast-1 --query ReplicationGroup.Status --output text
+AWS_PROFILE=anhnv-stg aws --no-cli-pager elasticache wait replication-group-deleted --replication-group-id svp-stg --region ap-southeast-1
+AWS_PROFILE=anhnv-stg aws --no-cli-pager elasticache delete-user-group --user-group-id svp-stg --region ap-southeast-1 --query Status --output text
+AWS_PROFILE=anhnv-stg aws --no-cli-pager elasticache describe-user-groups --region ap-southeast-1 --query "UserGroups[?UserGroupId=='svp-stg'].Status" --output text
+AWS_PROFILE=anhnv-stg aws --no-cli-pager elasticache delete-user --user-id <svp-stg-…> --region ap-southeast-1 --query Status --output text
+AWS_PROFILE=anhnv-stg aws --no-cli-pager elasticache delete-cache-subnet-group --cache-subnet-group-name svp-stg --region ap-southeast-1
+AWS_PROFILE=anhnv-stg aws --no-cli-pager elasticache delete-cache-parameter-group --cache-parameter-group-name <svp-stg-valkey9> --region ap-southeast-1
 ```
 
 User group `deleting` chặn xoá user của nó: đọc lại (lệnh thứ năm) tới khi không in gì, rồi xoá từng user `sweep.sh` liệt kê.
@@ -591,8 +591,8 @@ phải `pending deletion`): lên lịch xoá, sớm nhất 7 ngày, rồi xoá a
 trỏ key `PendingDeletion` (mục `KMS aliases on keys pending deletion`, lệnh `delete:` là lệnh thứ hai dưới đây):
 
 ```sh
-AWS_PROFILE=anhnv-stg aws kms schedule-key-deletion --key-id <key id> --pending-window-in-days 7 --region ap-southeast-1 --query KeyState --output text
-AWS_PROFILE=anhnv-stg aws kms delete-alias --alias-name alias/svp-stg-msk-scram --region ap-southeast-1
+AWS_PROFILE=anhnv-stg aws --no-cli-pager kms schedule-key-deletion --key-id <key id> --pending-window-in-days 7 --region ap-southeast-1 --query KeyState --output text
+AWS_PROFILE=anhnv-stg aws --no-cli-pager kms delete-alias --alias-name alias/svp-stg-msk-scram --region ap-southeast-1
 ```
 
 Bản ghi sót của zone `stg.aws.<domain>` (alias A, AAAA của ba tên và CNAME validation ACM của root env khi state mất): không tính tiền
@@ -600,12 +600,12 @@ nhưng chặn việc xoá zone sau này, và apply của buổi sau đỏ khi t�
 
 ```sh
 zone=stg.aws.<domain>; zone_id=$(AWS_PROFILE=anhnv-stg terraform -chdir=aws/accounts/stg output -raw zone_id)
-AWS_PROFILE=anhnv-stg aws route53 list-resource-record-sets --hosted-zone-id "$zone_id" --region ap-southeast-1 --output json |
+AWS_PROFILE=anhnv-stg aws --no-cli-pager route53 list-resource-record-sets --hosted-zone-id "$zone_id" --region ap-southeast-1 --output json |
   jq --arg apex "$zone." '{Changes: [.ResourceRecordSets[]
     | select(((.Name == $apex and (.Type == "SOA" or .Type == "CAA")) or (.Type == "NS" and (.Name == $apex or (.Name | endswith("." + $apex))))) | not)
     | {Action: "DELETE", ResourceRecordSet: .}]}' > /tmp/svp-records.json
 jq -r '.Changes[].ResourceRecordSet | "\(.Name) \(.Type)"' /tmp/svp-records.json      # chỉ bản ghi sót, không NS/SOA/CAA ở đỉnh, không NS uỷ quyền bên dưới
-AWS_PROFILE=anhnv-stg aws route53 change-resource-record-sets --hosted-zone-id "$zone_id" \
+AWS_PROFILE=anhnv-stg aws --no-cli-pager route53 change-resource-record-sets --hosted-zone-id "$zone_id" \
   --change-batch file:///tmp/svp-records.json --region ap-southeast-1
 ```
 
@@ -619,10 +619,10 @@ EventBridge `svp-stg-mediaconvert-job-state`, alarm, policy inline rồi role `s
 
 ```sh
 aws/scripts/check-account.sh stg
-AWS_PROFILE=anhnv-stg aws mediaconvert list-jobs --queue svp-stg --status SUBMITTED --region ap-southeast-1 --query 'Jobs[].Id' --output text
-AWS_PROFILE=anhnv-stg aws mediaconvert list-jobs --queue svp-stg --status PROGRESSING --region ap-southeast-1 --query 'Jobs[].Id' --output text
-AWS_PROFILE=anhnv-stg aws mediaconvert cancel-job --id <id> --region ap-southeast-1
-AWS_PROFILE=anhnv-stg aws mediaconvert delete-queue --name svp-stg --region ap-southeast-1
+AWS_PROFILE=anhnv-stg aws --no-cli-pager mediaconvert list-jobs --queue svp-stg --status SUBMITTED --region ap-southeast-1 --query 'Jobs[].Id' --output text
+AWS_PROFILE=anhnv-stg aws --no-cli-pager mediaconvert list-jobs --queue svp-stg --status PROGRESSING --region ap-southeast-1 --query 'Jobs[].Id' --output text
+AWS_PROFILE=anhnv-stg aws --no-cli-pager mediaconvert cancel-job --id <id> --region ap-southeast-1
+AWS_PROFILE=anhnv-stg aws --no-cli-pager mediaconvert delete-queue --name svp-stg --region ap-southeast-1
 ```
 
 AWS Backup plans (loại `AWS Backup plans` của `sweep.sh`): chỉ plan cục bộ `svp-probe*` của thử sandbox ở management (lượt `sweep.sh
@@ -631,10 +631,10 @@ plan `svp-stg`, `svp-prd`: Backup policy của `aws/org` sinh chúng, account kh
 
 ```sh
 aws/scripts/check-account.sh mgmt
-AWS_PROFILE=anhnv-sso aws backup list-backup-selections --backup-plan-id <BackupPlanId> --region ap-southeast-1 \
+AWS_PROFILE=anhnv-sso aws --no-cli-pager backup list-backup-selections --backup-plan-id <BackupPlanId> --region ap-southeast-1 \
   --query 'BackupSelectionsList[].[SelectionId,SelectionName]' --output text
-AWS_PROFILE=anhnv-sso aws backup delete-backup-selection --backup-plan-id <BackupPlanId> --selection-id <SelectionId> --region ap-southeast-1
-AWS_PROFILE=anhnv-sso aws backup delete-backup-plan --backup-plan-id <BackupPlanId> --region ap-southeast-1 --query DeletionDate --output text
+AWS_PROFILE=anhnv-sso aws --no-cli-pager backup delete-backup-selection --backup-plan-id <BackupPlanId> --selection-id <SelectionId> --region ap-southeast-1
+AWS_PROFILE=anhnv-sso aws --no-cli-pager backup delete-backup-plan --backup-plan-id <BackupPlanId> --region ap-southeast-1 --query DeletionDate --output text
 ```
 
 Loại AWS Backup khác có lệnh `delete:` đủ dưới mỗi dòng của `sweep.sh`, theo thứ tự nó in: job (dừng backup job; copy, restore job thì
@@ -647,9 +647,9 @@ bằng lệnh dòng đó in, rồi đọc lại tới khi rỗng; workspace thì
 ```sh
 aws/scripts/check-account.sh stg
 ws=$(AWS_PROFILE=anhnv-stg terraform -chdir=aws/accounts/stg output -raw amp_workspace_id)
-AWS_PROFILE=anhnv-stg aws amp delete-rule-groups-namespace --workspace-id "$ws" --name <tên> --region ap-southeast-1
-AWS_PROFILE=anhnv-stg aws amp delete-alert-manager-definition --workspace-id "$ws" --region ap-southeast-1
-AWS_PROFILE=anhnv-stg aws amp list-rule-groups-namespaces --workspace-id "$ws" --region ap-southeast-1 --query 'ruleGroupsNamespaces[].name' --output text
+AWS_PROFILE=anhnv-stg aws --no-cli-pager amp delete-rule-groups-namespace --workspace-id "$ws" --name <tên> --region ap-southeast-1
+AWS_PROFILE=anhnv-stg aws --no-cli-pager amp delete-alert-manager-definition --workspace-id "$ws" --region ap-southeast-1
+AWS_PROFILE=anhnv-stg aws --no-cli-pager amp list-rule-groups-namespaces --workspace-id "$ws" --region ap-southeast-1 --query 'ruleGroupsNamespaces[].name' --output text
 ```
 
 Policy tạm `svp-session-deny-query` của phép kiểm canary (mục Phép kiểm nền tảng managed (d)) còn trên role `svp-stg-argo-rollouts`: gỡ
@@ -662,9 +662,9 @@ Role CI `svp-ci-*` hay IAM OIDC provider mà `sweep.sh` in là sót (không `kep
 
 ```sh
 aws/scripts/check-account.sh stg
-AWS_PROFILE=anhnv-stg aws iam list-role-policies --role-name <svp-ci-…> --region us-east-1 --query PolicyNames --output text
-AWS_PROFILE=anhnv-stg aws iam delete-role-policy --role-name <svp-ci-…> --policy-name <từng tên trên> --region us-east-1
-AWS_PROFILE=anhnv-stg aws iam delete-role --role-name <svp-ci-…> --region us-east-1
+AWS_PROFILE=anhnv-stg aws --no-cli-pager iam list-role-policies --role-name <svp-ci-…> --region us-east-1 --query PolicyNames --output text
+AWS_PROFILE=anhnv-stg aws --no-cli-pager iam delete-role-policy --role-name <svp-ci-…> --policy-name <từng tên trên> --region us-east-1
+AWS_PROFILE=anhnv-stg aws --no-cli-pager iam delete-role --role-name <svp-ci-…> --region us-east-1
 ```
 
 **Secret Secrets Manager đang chờ xoá** (dòng `scheduled for deletion since …`): vẫn giữ tên tới hết thời gian chờ (7–30 ngày), nên
@@ -673,7 +673,7 @@ là secret tạo cách khác). Secret master của RDS mang tên sinh ngẫu nhi
 đếm nó tới khi mất. Lệnh `delete:` của `sweep.sh` xoá hẳn ngay (không khôi phục được); muốn lấy lại để dùng tiếp:
 
 ```sh
-AWS_PROFILE=anhnv-stg aws secretsmanager restore-secret --secret-id <name> --region ap-southeast-1
+AWS_PROFILE=anhnv-stg aws --no-cli-pager secretsmanager restore-secret --secret-id <name> --region ap-southeast-1
 ```
 
 ## Đổi một secret của env đang chạy
@@ -752,7 +752,7 @@ secret của env đang chạy".
    sau destroy, gói của account rỗng (mong `[]`), cùng lượt `sweep.sh stg` sạch:
 
    ```sh
-   AWS_PROFILE=anhnv-stg aws pricing-plan-manager list-subscriptions --region us-east-1 --query 'subscriptionSummaries[].[arn,planTier,status]' --output json
+   AWS_PROFILE=anhnv-stg aws --no-cli-pager pricing-plan-manager list-subscriptions --region us-east-1 --query 'subscriptionSummaries[].[arn,planTier,status]' --output json
    ```
 
    Phép kiểm (f) của ADR-0053 là cùng hai lượt sweep sạch: không còn dòng MSK, ElastiCache, `AmazonMSK_*` nào; KMS key của root

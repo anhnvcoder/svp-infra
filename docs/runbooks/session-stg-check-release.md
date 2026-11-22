@@ -65,7 +65,7 @@ aws/scripts/measure.sh stg
 
 Exit: `0` khi thang đo đã chạy tới cuối (một bậc trượt là kết quả, không phải lỗi script; dòng `FAIL level <n>` nêu lý do), `1` khi smoke,
 seed hay công cụ của một bậc hỏng (cả khi hết hạn chờ mà lần đọc Job cuối cùng lỗi, như phiên SSO hết hạn hay mất mạng: bậc ghi `error`,
-không phải `fail`, Job để nguyên; `AWS_PROFILE=anhnv-sso aws sso login --region us-east-1` rồi `measure.sh stg --from <n>`,
+không phải `fail`, Job để nguyên; `AWS_PROFILE=anhnv-sso aws --no-cli-pager sso login --region us-east-1` rồi `measure.sh stg --from <n>`,
 script xoá Job đó trước khi chạy lại bậc), `3` khi một node của lúc bắt đầu bậc mất hay `NotReady` giữa bậc (**Spot bị thu hồi**, dòng `note
 node(s) …`): bậc đó ghi `interrupted`, **không tính là hệ thống trượt**. Còn thời gian (dưới mốc 3 giờ) thì chạy lại từ bậc đó, không
 smoke, không seed:
@@ -207,7 +207,7 @@ sau bước 1:
 git -C ../gitops fetch origin
 dig=$(git -C ../gitops show origin/main:envs/stg/images/dlq-replay.yaml | sed -n 's/^ *digest: *"\(sha256:[0-9a-f]*\)"/\1/p')
 echo "$dig"
-AWS_PROFILE=anhnv-stg aws ecr describe-images --repository-name svp-backend/dlq-replay --image-ids "imageDigest=$dig" \
+AWS_PROFILE=anhnv-stg aws --no-cli-pager ecr describe-images --repository-name svp-backend/dlq-replay --image-ids "imageDigest=$dig" \
   --region ap-southeast-1 --query 'imageDetails[0].[imageDigest,imagePushedAt]' --output text
 ```
 

@@ -36,7 +36,7 @@ buổi nằm ở runbook buổi ([`session-stg.md`](session-stg.md), [`session-p
 
 ```sh
 cd infra
-AWS_PROFILE=anhnv-sso aws sso login --region us-east-1
+AWS_PROFILE=anhnv-sso aws --no-cli-pager sso login --region us-east-1
 printf 'mgmt …%s\n' "${SVP_AWS_MGMT_ACCOUNT_ID: -4}"                   # ids from .envrc (direnv), last 4 digits
 export SVP_SESSION_DIR="$PWD/.session/$(date -u +%Y%m%dT%H%M%SZ)"   # check-account.sh marks its timeline here
 aws/scripts/check-account.sh mgmt
@@ -185,7 +185,7 @@ Phần backup của account env (`backup.tf`): key `alias/svp-<env>-backup`, vau
 `svp-<env>-backup` và bốn managed policy. Cần `TF_VAR_backup_account_id` trong lệnh: key policy chia sẻ key vault cho `svp-backup`.
 
 ```sh
-AWS_PROFILE=anhnv-sso aws sso login --region us-east-1   # one login for every profile of the same sso_session
+AWS_PROFILE=anhnv-sso aws --no-cli-pager sso login --region us-east-1   # one login per sso_session
 aws/scripts/check-account.sh stg
 ```
 
@@ -323,7 +323,7 @@ cd aws/org
 `backup.tf` ghi cả map opt-in loại tài nguyên của management; AWS thêm loại theo thời gian, nên đọc map hiện tại trước khi apply:
 
 ```sh
-AWS_PROFILE=anhnv-sso aws backup describe-region-settings --region ap-southeast-1 --query 'ResourceTypeOptInPreference' --output json
+AWS_PROFILE=anhnv-sso aws --no-cli-pager backup describe-region-settings --region ap-southeast-1 --query 'ResourceTypeOptInPreference' --output json
 ```
 
 - **Kiểm:** mỗi khoá API trả phải có trong `resource_type_opt_in_preference` của `backup.tf`, và ngược lại.
@@ -374,7 +374,7 @@ không `-target`).
 Kiểm cài đặt cross-account:
 
 ```sh
-AWS_PROFILE=anhnv-sso aws backup describe-global-settings --region ap-southeast-1 --query 'GlobalSettings' --output json
+AWS_PROFILE=anhnv-sso aws --no-cli-pager backup describe-global-settings --region ap-southeast-1 --query 'GlobalSettings' --output json
 ```
 
 - **Mong đợi:** đúng ba khoá: `isCrossAccountBackupEnabled` là `true`, `isDelegatedAdministratorEnabled` và `isMpaEnabled` là `false`.

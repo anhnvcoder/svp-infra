@@ -151,11 +151,11 @@ lệnh chỉ in tên sự kiện và bucket, không in bản ghi (bản ghi có 
 L=$SVP_AWS_LOG_ACCOUNT_ID P=$SVP_AWS_PRD_ACCOUNT_ID
 b=svp-cloudtrail-$L-ap-southeast-1
 since=$(awk -F '\t' '$3 == "svp-root-healthy" { t = $1 } END { print t }' "$SVP_SESSION_DIR/timeline.tsv" | tr -d Z)
-org=$(AWS_PROFILE=anhnv-log-ro aws s3 ls "s3://$b/AWSLogs/" --region ap-southeast-1 | awk '$2 ~ /^o-/ { sub("/", "", $2); print $2 }')
-AWS_PROFILE=anhnv-log-ro aws s3api list-objects-v2 --bucket "$b" --region ap-southeast-1 \
+org=$(AWS_PROFILE=anhnv-log-ro aws --no-cli-pager s3 ls "s3://$b/AWSLogs/" --region ap-southeast-1 | awk '$2 ~ /^o-/ { sub("/", "", $2); print $2 }')
+AWS_PROFILE=anhnv-log-ro aws --no-cli-pager s3api list-objects-v2 --bucket "$b" --region ap-southeast-1 \
   --prefix "AWSLogs/$org/$P/CloudTrail/ap-southeast-1/$(date -u +%Y/%m/%d)/" --query 'Contents[].[Key,LastModified]' --output json |
   jq -r --arg s "$since" '(. // [])[] | select(.[1] >= $s) | .[0]' |
-  while read -r k; do AWS_PROFILE=anhnv-log-ro aws s3 cp "s3://$b/$k" - --region ap-southeast-1 | gunzip -c; done |
+  while read -r k; do AWS_PROFILE=anhnv-log-ro aws --no-cli-pager s3 cp "s3://$b/$k" - --region ap-southeast-1 | gunzip -c; done |
   jq -r --arg a "$P" '.Records[] | select(.eventCategory == "Data" and .eventSource == "s3.amazonaws.com")
     | "\(.eventName) \(.requestParameters.bucketName | sub($a; "<account>"))"' | sort | uniq -c
 ```
@@ -167,7 +167,7 @@ sau 00:00 UTC đổi ngày trong `--prefix` về ngày trước. Vẫn thiếu m
 (`aws/org`) cho AI:
 
 ```sh
-AWS_PROFILE=anhnv-sso aws cloudtrail get-event-selectors --trail-name svp-audit --region ap-southeast-1
+AWS_PROFILE=anhnv-sso aws --no-cli-pager cloudtrail get-event-selectors --trail-name svp-audit --region ap-southeast-1
 ```
 
 ## Phép kiểm nền tảng managed
@@ -291,14 +291,14 @@ Failover bằng reboot with failover. Đọc AZ chính và AZ dự phòng, reboo
 đọc sự kiện để lấy thời gian failover, rồi smoke lại để chứng minh service nối lại được:
 
 ```sh
-AWS_PROFILE=anhnv-prd aws rds describe-db-instances --db-instance-identifier svp-prd --region ap-southeast-1 \
+AWS_PROFILE=anhnv-prd aws --no-cli-pager rds describe-db-instances --db-instance-identifier svp-prd --region ap-southeast-1 \
   --query 'DBInstances[0].[AvailabilityZone,SecondaryAvailabilityZone,DBInstanceStatus]' --output text
-AWS_PROFILE=anhnv-prd aws rds reboot-db-instance --db-instance-identifier svp-prd --force-failover --region ap-southeast-1 \
+AWS_PROFILE=anhnv-prd aws --no-cli-pager rds reboot-db-instance --db-instance-identifier svp-prd --force-failover --region ap-southeast-1 \
   --query 'DBInstance.DBInstanceStatus' --output text
-AWS_PROFILE=anhnv-prd aws rds wait db-instance-available --db-instance-identifier svp-prd --region ap-southeast-1
-AWS_PROFILE=anhnv-prd aws rds describe-db-instances --db-instance-identifier svp-prd --region ap-southeast-1 \
+AWS_PROFILE=anhnv-prd aws --no-cli-pager rds wait db-instance-available --db-instance-identifier svp-prd --region ap-southeast-1
+AWS_PROFILE=anhnv-prd aws --no-cli-pager rds describe-db-instances --db-instance-identifier svp-prd --region ap-southeast-1 \
   --query 'DBInstances[0].[AvailabilityZone,SecondaryAvailabilityZone,DBInstanceStatus]' --output text
-AWS_PROFILE=anhnv-prd aws rds describe-events --source-type db-instance --source-identifier svp-prd --duration 60 --region ap-southeast-1 \
+AWS_PROFILE=anhnv-prd aws --no-cli-pager rds describe-events --source-type db-instance --source-identifier svp-prd --duration 60 --region ap-southeast-1 \
   --query 'Events[].[Date,Message]' --output text
 AWS_PROFILE=anhnv-prd make -C ../backend eks-smoke CONTEXT=svp-prd DOMAIN=<domain>
 ```
@@ -311,7 +311,7 @@ ghi giây. Alarm `rds-*` nào đổi trạng thái trong lúc đó: đọc lịc
 đối chiếu thư tới `alarm_email`:
 
 ```sh
-AWS_PROFILE=anhnv-prd aws cloudwatch describe-alarm-history --history-item-type StateUpdate \
+AWS_PROFILE=anhnv-prd aws --no-cli-pager cloudwatch describe-alarm-history --history-item-type StateUpdate \
   --start-date "$(date -u -v-30M +%Y-%m-%dT%H:%M:%SZ)" --region ap-southeast-1 --output text \
   --query "AlarmHistoryItems[?starts_with(AlarmName, 'svp-prd-rds-')].[Timestamp,AlarmName,HistorySummary]"
 ```
@@ -393,11 +393,11 @@ Trong lúc nó ghi, terminal thứ ba: ARN của cluster, danh sách broker, kh�
 `ACTIVE` lại (`REBOOTING_BROKER` trong lúc đó), rồi đọc thời điểm của thao tác:
 
 ```sh
-arn=$(AWS_PROFILE=anhnv-prd aws kafka list-clusters-v2 --cluster-name-filter svp-prd --region ap-southeast-1 --query 'ClusterInfoList[0].ClusterArn' --output text)
-AWS_PROFILE=anhnv-prd aws kafka list-nodes --cluster-arn "$arn" --region ap-southeast-1 --query 'NodeInfoList[].BrokerNodeInfo.[BrokerId,ClientSubnet]' --output text
-AWS_PROFILE=anhnv-prd aws kafka reboot-broker --cluster-arn "$arn" --broker-ids 1 --region ap-southeast-1 --query ClusterOperationArn --output text
-AWS_PROFILE=anhnv-prd aws kafka describe-cluster-v2 --cluster-arn "$arn" --region ap-southeast-1 --query ClusterInfo.State --output text
-AWS_PROFILE=anhnv-prd aws kafka describe-cluster-operation --cluster-operation-arn <ARN của reboot-broker> --region ap-southeast-1 \
+arn=$(AWS_PROFILE=anhnv-prd aws --no-cli-pager kafka list-clusters-v2 --cluster-name-filter svp-prd --region ap-southeast-1 --query 'ClusterInfoList[0].ClusterArn' --output text)
+AWS_PROFILE=anhnv-prd aws --no-cli-pager kafka list-nodes --cluster-arn "$arn" --region ap-southeast-1 --query 'NodeInfoList[].BrokerNodeInfo.[BrokerId,ClientSubnet]' --output text
+AWS_PROFILE=anhnv-prd aws --no-cli-pager kafka reboot-broker --cluster-arn "$arn" --broker-ids 1 --region ap-southeast-1 --query ClusterOperationArn --output text
+AWS_PROFILE=anhnv-prd aws --no-cli-pager kafka describe-cluster-v2 --cluster-arn "$arn" --region ap-southeast-1 --query ClusterInfo.State --output text
+AWS_PROFILE=anhnv-prd aws --no-cli-pager kafka describe-cluster-operation --cluster-operation-arn <ARN của reboot-broker> --region ap-southeast-1 \
   --query 'ClusterOperationInfo.[OperationType,OperationState,CreationTime,EndTime]' --output text
 ```
 
@@ -442,13 +442,13 @@ AWS_PROFILE=anhnv-prd bash ../backend/deploy/k6/cloud/run.sh --context svp-prd -
 Rồi, cùng terminal khi k6 đang giữ tải:
 
 ```sh
-AWS_PROFILE=anhnv-prd aws elasticache describe-replication-groups --replication-group-id svp-prd --region ap-southeast-1 --output text \
+AWS_PROFILE=anhnv-prd aws --no-cli-pager elasticache describe-replication-groups --replication-group-id svp-prd --region ap-southeast-1 --output text \
   --query 'ReplicationGroups[0].NodeGroups[0].NodeGroupMembers[].[CacheClusterId,PreferredAvailabilityZone,CurrentRole]'
-AWS_PROFILE=anhnv-prd aws elasticache test-failover --replication-group-id svp-prd --node-group-id 0001 --region ap-southeast-1 \
+AWS_PROFILE=anhnv-prd aws --no-cli-pager elasticache test-failover --replication-group-id svp-prd --node-group-id 0001 --region ap-southeast-1 \
   --query ReplicationGroup.Status --output text
-AWS_PROFILE=anhnv-prd aws elasticache describe-events --source-type replication-group --source-identifier svp-prd --duration 30 \
+AWS_PROFILE=anhnv-prd aws --no-cli-pager elasticache describe-events --source-type replication-group --source-identifier svp-prd --duration 30 \
   --region ap-southeast-1 --query 'Events[].[Date,Message]' --output text
-AWS_PROFILE=anhnv-prd aws elasticache describe-replication-groups --replication-group-id svp-prd --region ap-southeast-1 --output text \
+AWS_PROFILE=anhnv-prd aws --no-cli-pager elasticache describe-replication-groups --replication-group-id svp-prd --region ap-southeast-1 --output text \
   --query 'ReplicationGroups[0].NodeGroups[0].NodeGroupMembers[].[CacheClusterId,PreferredAvailabilityZone,CurrentRole]'
 AWS_PROFILE=anhnv-prd make -C ../backend eks-smoke CONTEXT=svp-prd DOMAIN=<domain>
 ```

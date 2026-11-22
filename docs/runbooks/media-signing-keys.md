@@ -70,7 +70,7 @@ Bốn phép kiểm, các mục dưới gọi theo số. Phép (c), (d) cần clu
 (a) **ID trong key group**: key group giữ đúng các khoá của output root env.
 
 ```sh
-AWS_PROFILE=anhnv-stg aws cloudfront list-key-groups --region ap-southeast-1 --output json \
+AWS_PROFILE=anhnv-stg aws --no-cli-pager cloudfront list-key-groups --region ap-southeast-1 --output json \
   --query "KeyGroupList.Items[?KeyGroup.KeyGroupConfig.Name=='svp-stg-media'].KeyGroup.KeyGroupConfig.Items"
 AWS_PROFILE=anhnv-stg terraform -chdir=aws/envs/stg output -json media_signing_key_ids
 ```
@@ -81,7 +81,7 @@ AWS_PROFILE=anhnv-stg terraform -chdir=aws/envs/stg output -json media_signing_k
 (b) **Entry có giá trị**, không in giá trị (chỉ đọc version):
 
 ```sh
-AWS_PROFILE=anhnv-stg aws secretsmanager list-secret-version-ids --secret-id svp/stg/media-signing --region ap-southeast-1 \
+AWS_PROFILE=anhnv-stg aws --no-cli-pager secretsmanager list-secret-version-ids --secret-id svp/stg/media-signing --region ap-southeast-1 \
   --query "Versions[?contains(VersionStages, 'AWSCURRENT')].[VersionId,CreatedDate]" --output text
 ```
 

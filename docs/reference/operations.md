@@ -83,7 +83,8 @@ account thật của `anhnv-sso`. Biến của account thành viên (kể cả `
 khi cần giữ sang buổi sau.
 
 Lệnh viết sẵn và script vẫn ghi profile và `--region` trong lệnh (ghi đè mặc định của file); lệnh tay ở account thành viên phải ghi
-profile. `SVP_SESSION_DIR` vẫn export mỗi buổi, từ thư mục `infra/`
+profile. Mọi lệnh `aws` trao người học còn có `--no-cli-pager` ngay sau `aws` (AWS CLI v2 mở `less` khi output dài và vòng lặp dừng ở
+`(END)` mỗi lượt); script của `aws/scripts/` đặt `AWS_PAGER=""` trong `lib.sh`. `SVP_SESSION_DIR` vẫn export mỗi buổi, từ thư mục `infra/`
 (`export SVP_SESSION_DIR="$PWD/.session/$(date -u +%Y%m%dT%H%M%SZ)"`): script từ chối đường dẫn ngoài `infra/.session/`, nơi duy nhất git
 bỏ qua cho file của buổi.
 

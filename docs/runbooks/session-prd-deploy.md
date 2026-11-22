@@ -212,7 +212,7 @@ Kiểm account trước (cột `Account` phải bằng `$SVP_AWS_PRD_ACCOUNT_ID`
 
 ```sh
 cd aws/envs/prd                                          # từ infra/, thư mục của terminal buổi
-AWS_PROFILE=anhnv-prd aws sts get-caller-identity --region ap-southeast-1 --query '{Account:Account,Arn:Arn}' --output table
+AWS_PROFILE=anhnv-prd aws --no-cli-pager sts get-caller-identity --region ap-southeast-1 --query '{Account:Account,Arn:Arn}' --output table
 echo "$SVP_AWS_PRD_ACCOUNT_ID"
 ```
 

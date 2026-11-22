@@ -34,7 +34,7 @@ quản" của [`github/README.md`](../../github/README.md#không-quản-và-vì-
 ```sh
 cd infra
 gh auth status
-AWS_PROFILE=anhnv-sso aws sso login --region us-east-1
+AWS_PROFILE=anhnv-sso aws --no-cli-pager sso login --region us-east-1
 printf 'mgmt …%s\n' "${SVP_AWS_MGMT_ACCOUNT_ID: -4}"   # từ .envrc (direnv)
 ```
 

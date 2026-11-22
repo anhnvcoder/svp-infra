@@ -39,7 +39,7 @@ của script (`cache-secrets.sh`, `make github-secrets`), không bao giờ nằm
 
 ```sh
 cd infra
-AWS_PROFILE=anhnv-sso aws sso login --region us-east-1      # one login for every profile of the same sso_session
+AWS_PROFILE=anhnv-sso aws --no-cli-pager sso login --region us-east-1   # one login per sso_session
 printf 'mgmt …%s\n' "${SVP_AWS_MGMT_ACCOUNT_ID: -4}"   # from .envrc (direnv), 4 last digits only
 eval "$(aws/scripts/accounts.sh)"                           # sets the other five SVP_AWS_*_ACCOUNT_ID, no file
 export SVP_SESSION_DIR="$PWD/.session/$(date -u +%Y%m%dT%H%M%SZ)"   # check-account.sh marks its timeline here
@@ -231,7 +231,7 @@ TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" \
 AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform output -json ci_role_arns | jq -r 'keys[]'
 cd ../../..
 for p in ghcr docker-hub quay k8s ecr-public; do
-  AWS_PROFILE=anhnv-stg aws ecr validate-pull-through-cache-rule --ecr-repository-prefix "$p" --region ap-southeast-1 \
+  AWS_PROFILE=anhnv-stg aws --no-cli-pager ecr validate-pull-through-cache-rule --ecr-repository-prefix "$p" --region ap-southeast-1 \
     --query '[ecrRepositoryPrefix,isValid,failure]' --output text
 done
 ```
@@ -253,13 +253,13 @@ nguyên của nó và sửa tại chỗ key policy `module.baseline.aws_kms_key.
 cd aws/accounts/stg
 AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform output -raw ci_plan_role_arn
 cd ../../..   # về gốc infra/ cho các lệnh sau
-AWS_PROFILE=anhnv-stg aws iam get-role --role-name svp-ci-terraform-plan --region us-east-1 \
+AWS_PROFILE=anhnv-stg aws --no-cli-pager iam get-role --role-name svp-ci-terraform-plan --region us-east-1 \
   --query 'Role.{Max:MaxSessionDuration,Sub:AssumeRolePolicyDocument.Statement[0].Condition.StringEquals}' --output json
-AWS_PROFILE=anhnv-stg aws iam list-attached-role-policies --role-name svp-ci-terraform-plan --region us-east-1 \
+AWS_PROFILE=anhnv-stg aws --no-cli-pager iam list-attached-role-policies --role-name svp-ci-terraform-plan --region us-east-1 \
   --query 'AttachedPolicies[].PolicyName' --output text
-AWS_PROFILE=anhnv-stg aws iam list-role-policies --role-name svp-ci-terraform-plan --region us-east-1 --query PolicyNames --output text
-key=$(AWS_PROFILE=anhnv-stg aws kms describe-key --key-id alias/svp-tfstate --region ap-southeast-1 --query KeyMetadata.KeyId --output text)
-AWS_PROFILE=anhnv-stg aws kms get-key-policy --key-id "$key" --region ap-southeast-1 --output text --query Policy \
+AWS_PROFILE=anhnv-stg aws --no-cli-pager iam list-role-policies --role-name svp-ci-terraform-plan --region us-east-1 --query PolicyNames --output text
+key=$(AWS_PROFILE=anhnv-stg aws --no-cli-pager kms describe-key --key-id alias/svp-tfstate --region ap-southeast-1 --query KeyMetadata.KeyId --output text)
+AWS_PROFILE=anhnv-stg aws --no-cli-pager kms get-key-policy --key-id "$key" --region ap-southeast-1 --output text --query Policy \
   | jq -r '.Statement[].Sid'
 ```
 
@@ -434,7 +434,7 @@ lệnh từ output, đọc, rồi chạy đúng lệnh đã in:
 ```sh
 aws/scripts/check-account.sh stg
 AWS_PROFILE=anhnv-stg terraform -chdir=aws/accounts/stg output -raw spans_retention_command; echo
-AWS_PROFILE=anhnv-stg aws logs describe-log-groups --log-group-name-prefix aws/spans --region ap-southeast-1 \
+AWS_PROFILE=anhnv-stg aws --no-cli-pager logs describe-log-groups --log-group-name-prefix aws/spans --region ap-southeast-1 \
   --query 'logGroups[].[logGroupName,retentionInDays]' --output text
 ```
 

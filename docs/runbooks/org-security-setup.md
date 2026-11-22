@@ -74,18 +74,18 @@ profile còn lại do script ghi ở [4c](#4c-profile-của-account-thành-viên
 4. **Cấp quyền vào management**: **AWS accounts** → management account → **Assign users or groups** → user vừa tạo, với một permission
    set quyền quản trị (tạo ở **Permission sets** nếu chưa có). Code không quản permission set này; từ `SvpAdmin` trở đi `aws/org` quản.
 5. **Ghi profile** có `sso-session` ([nguồn](https://docs.aws.amazon.com/cli/latest/userguide/sso-configure-profile-token.html)):
-   `aws configure sso --profile anhnv-sso`.
+   `aws --no-cli-pager configure sso --profile anhnv-sso`.
    - **Script hỏi:** *SSO session name* → ví dụ `anhnv`; *SSO start URL* → `https://d-0000000000.awsapps.com/start` của access portal;
      *SSO region* → region của bước 1; *SSO registration scopes* → mặc định; trình duyệt xác nhận; chọn management và role của bước 4;
      *CLI default client Region* → `ap-southeast-1`; *CLI default output format* → `json`.
    - **Mong đợi:** `~/.aws/config` có `[sso-session <tên>]` và `[profile anhnv-sso]` với `sso_session`. Kiểu cũ không `sso_session`
      không tự làm mới token, nên `sso-profiles.sh write` từ chối.
-6. **Đăng nhập và đối chiếu**: `AWS_PROFILE=anhnv-sso aws sso login --region us-east-1`, rồi `AWS_PROFILE=anhnv-sso aws sts
-   get-caller-identity --region ap-southeast-1 --query '[Account,Arn]' --output text`: `Account` là `SVP_AWS_MGMT_ACCOUNT_ID`, `Arn` có
-   `AWSReservedSSO_`.
+6. **Đăng nhập và đối chiếu**: `AWS_PROFILE=anhnv-sso aws --no-cli-pager sso login --region us-east-1`, rồi
+   `AWS_PROFILE=anhnv-sso aws --no-cli-pager sts get-caller-identity --region ap-southeast-1 --query '[Account,Arn]' --output text`:
+   `Account` là `SVP_AWS_MGMT_ACCOUNT_ID`, `Arn` có `AWSReservedSSO_`.
 
 - **Bẫy:** phiên SSO hết hạn thì mọi lệnh báo `Token has expired` hay `The SSO session associated with this profile has expired`: chạy lại
-  `aws sso login --profile anhnv-sso`, không cần login từng profile cùng `sso_session`.
+  `aws --no-cli-pager sso login --profile anhnv-sso`, không cần login từng profile cùng `sso_session`.
 
 ## Mở terminal
 
@@ -93,7 +93,7 @@ profile còn lại do script ghi ở [4c](#4c-profile-của-account-thành-viên
 
 ```sh
 cd infra
-AWS_PROFILE=anhnv-sso aws sso login --region us-east-1
+AWS_PROFILE=anhnv-sso aws --no-cli-pager sso login --region us-east-1
 printf 'mgmt …%s stg …%s prd …%s\n' "${SVP_AWS_MGMT_ACCOUNT_ID: -4}" "${SVP_AWS_STG_ACCOUNT_ID: -4}" \
   "${SVP_AWS_PRD_ACCOUNT_ID: -4}"   # từ .envrc (direnv)
 export SVP_SESSION_DIR="$PWD/.session/$(date -u +%Y%m%dT%H%M%SZ)"  # check-account.sh ghi mốc ở đây
@@ -114,7 +114,7 @@ aws/scripts/check-account.sh mgmt
 Budget tổng của org:
 
 ```sh
-AWS_PROFILE=anhnv-sso aws budgets describe-budget --account-id "$SVP_AWS_MGMT_ACCOUNT_ID" --budget-name svp-monthly --region us-east-1 \
+AWS_PROFILE=anhnv-sso aws --no-cli-pager budgets describe-budget --account-id "$SVP_AWS_MGMT_ACCOUNT_ID" --budget-name svp-monthly --region us-east-1 \
   --query 'Budget.BudgetLimit' --output text
 ```
 
@@ -169,7 +169,7 @@ printf 'terraform {\n  backend "local" {}\n}\n' > local_override.tf
 AWS_PROFILE=anhnv-sso \
 TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
   terraform init
-AWS_PROFILE=anhnv-sso aws ce get-anomaly-monitors --region us-east-1 \
+AWS_PROFILE=anhnv-sso aws --no-cli-pager ce get-anomaly-monitors --region us-east-1 \
   --query 'AnomalyMonitors[].{Name:MonitorName,Type:MonitorType,Dimension:MonitorDimension,Arn:MonitorArn}' --output table
 ```
 
@@ -213,7 +213,7 @@ TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
 AWS_PROFILE=anhnv-sso \
 TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
   terraform plan -input=false   # expect: No changes.
-AWS_PROFILE=anhnv-sso aws s3api head-object --region ap-southeast-1 \
+AWS_PROFILE=anhnv-sso aws --no-cli-pager s3api head-object --region ap-southeast-1 \
   --bucket "$(AWS_PROFILE=anhnv-sso TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" terraform output -raw state_bucket)" \
   --key aws/bootstrap/terraform.tfstate --query '{Size:ContentLength,SSE:ServerSideEncryption,Key:SSEKMSKeyId}'
 ```
@@ -227,9 +227,9 @@ AWS_PROFILE=anhnv-sso aws s3api head-object --region ap-southeast-1 \
 Kiểm hai điều kiện của Cost Explorer (dịch vụ toàn cục, gọi ở `us-east-1`):
 
 ```sh
-AWS_PROFILE=anhnv-sso aws ce get-anomaly-monitors --region us-east-1 \
+AWS_PROFILE=anhnv-sso aws --no-cli-pager ce get-anomaly-monitors --region us-east-1 \
   --query 'AnomalyMonitors[].{Name:MonitorName,Type:MonitorType,Dimension:MonitorDimension,Arn:MonitorArn}' --output table
-AWS_PROFILE=anhnv-sso aws ce list-cost-allocation-tags --region us-east-1 --tag-keys Project Env Stack \
+AWS_PROFILE=anhnv-sso aws --no-cli-pager ce list-cost-allocation-tags --region us-east-1 --tag-keys Project Env Stack \
   --query 'CostAllocationTags[].{Key:TagKey,Status:Status}' --output table
 ```
 
@@ -291,7 +291,7 @@ Chỉ khi state chưa có tổ chức (root dựng lại từ đầu): nhận qu
 `MasterAccountId` bằng `SVP_AWS_MGMT_ACCOUNT_ID`, `FeatureSet` là `ALL`.
 
 ```sh
-AWS_PROFILE=anhnv-sso aws organizations describe-organization --region us-east-1 --query 'Organization.[Id,MasterAccountId,FeatureSet]' --output text
+AWS_PROFILE=anhnv-sso aws --no-cli-pager organizations describe-organization --region us-east-1 --query 'Organization.[Id,MasterAccountId,FeatureSet]' --output text
 AWS_PROFILE=anhnv-sso \
 TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
   terraform import -input=false aws_organizations_organization.this <o-… vừa đọc>
@@ -402,7 +402,7 @@ Trail tổ chức chỉ là bản sao miễn phí khi không có trail managemen
 lại):
 
 ```sh
-AWS_PROFILE=anhnv-sso aws cloudtrail describe-trails --region ap-southeast-1 --query 'trailList[].[Name,IsOrganizationTrail]' --output text
+AWS_PROFILE=anhnv-sso aws --no-cli-pager cloudtrail describe-trails --region ap-southeast-1 --query 'trailList[].[Name,IsOrganizationTrail]' --output text
 ```
 
 ```sh
@@ -450,7 +450,7 @@ TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
 Kiểm trail ghi được vào Log Archive:
 
 ```sh
-AWS_PROFILE=anhnv-sso aws cloudtrail get-trail-status --name svp-audit --region ap-southeast-1 --query '[IsLogging,LatestDeliveryError,LatestDigestDeliveryError]'
+AWS_PROFILE=anhnv-sso aws --no-cli-pager cloudtrail get-trail-status --name svp-audit --region ap-southeast-1 --query '[IsLogging,LatestDeliveryError,LatestDigestDeliveryError]'
 ```
 
 - **Mong đợi:** `[true, null, null]`. Lỗi giao log hay digest (bucket policy, key policy của `aws/log-archive` từ chối) hiện ở hai ô sau:
@@ -634,9 +634,9 @@ qua role ghi, không cần đọc).
 
 ```sh
 for p in anhnv-sso anhnv-security-ro anhnv-stg-ro anhnv-prd-ro; do echo "== $p"
-  AWS_PROFILE=$p aws iam get-role --role-name AWSServiceRoleForConfig --query Role.Arn --output text --region us-east-1 2>&1 | tail -1
+  AWS_PROFILE=$p aws --no-cli-pager iam get-role --role-name AWSServiceRoleForConfig --query Role.Arn --output text --region us-east-1 2>&1 | tail -1
   for r in ap-southeast-1 us-east-1; do
-    AWS_PROFILE=$p aws configservice describe-configuration-recorders --region $r --query 'ConfigurationRecorders[].name' --output text
+    AWS_PROFILE=$p aws --no-cli-pager configservice describe-configuration-recorders --region $r --query 'ConfigurationRecorders[].name' --output text
   done
 done
 ```
@@ -729,7 +729,7 @@ aws/scripts/verify.sh org
   (account `ACTIVE`, hay `root(FAILED)` không account nào giải thích) là lỗi thật.
 
 ```sh
-AWS_PROFILE=anhnv-sso aws organizations list-accounts --region us-east-1 \
+AWS_PROFILE=anhnv-sso aws --no-cli-pager organizations list-accounts --region us-east-1 \
   --query "Accounts[?Status!='ACTIVE'].[Id,Name,Status,State]" --output text
 ```
 
@@ -745,15 +745,15 @@ một thư `svp-security-root-session` (7e); credential của phiên là bí m�
 ```sh
 for id in "$SVP_AWS_LOG_ACCOUNT_ID" "$SVP_AWS_SECURITY_ACCOUNT_ID" "$SVP_AWS_STG_ACCOUNT_ID" "$SVP_AWS_PRD_ACCOUNT_ID"; do
   (
-    creds=$(AWS_PROFILE=anhnv-sso aws sts assume-root --target-principal "$id" --region ap-southeast-1 \
+    creds=$(AWS_PROFILE=anhnv-sso aws --no-cli-pager sts assume-root --target-principal "$id" --region ap-southeast-1 \
       --task-policy-arn arn=arn:aws:iam::aws:policy/root-task/IAMAuditRootUserCredentials \
       --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' --output text) || exit 1
     read -r AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN <<<"$creds"
     export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
     unset AWS_PROFILE
-    printf '%s password: ' "${id: -4}"; aws iam get-login-profile --region us-east-1 2>&1 | grep -q NoSuchEntity && echo none || echo PRESENT
-    printf '%s access keys: ' "${id: -4}"; aws iam list-access-keys --region us-east-1 --query 'length(AccessKeyMetadata)' --output text
-    printf '%s mfa: ' "${id: -4}"; aws iam list-mfa-devices --region us-east-1 --query 'length(MFADevices)' --output text
+    printf '%s password: ' "${id: -4}"; aws --no-cli-pager iam get-login-profile --region us-east-1 2>&1 | grep -q NoSuchEntity && echo none || echo PRESENT
+    printf '%s access keys: ' "${id: -4}"; aws --no-cli-pager iam list-access-keys --region us-east-1 --query 'length(AccessKeyMetadata)' --output text
+    printf '%s mfa: ' "${id: -4}"; aws --no-cli-pager iam list-mfa-devices --region us-east-1 --query 'length(MFADevices)' --output text
   )
 done
 ```
@@ -771,7 +771,7 @@ user tạm có lệnh xoá). Chạy bằng `SvpAdmin` (`anhnv-stg`, Spot bằng 
 control policy`, lỗi EC2 chỉ có `Encoded authorization failure message` thì giải mã, mong `"explicitDeny":true`:
 
 ```sh
-AWS_PROFILE=anhnv-stg aws sts decode-authorization-message --encoded-message <chuỗi> --region ap-southeast-1 --query DecodedMessage --output text |
+AWS_PROFILE=anhnv-stg aws --no-cli-pager sts decode-authorization-message --encoded-message <chuỗi> --region ap-southeast-1 --query DecodedMessage --output text |
   jq -c '{allowed, explicitDeny}'
 ```
 
@@ -795,43 +795,43 @@ IAM user (hoàn tác chỉ khi lệnh tạo thành công):
 
 ```sh
 U="svp-scp-probe-$(date -u +%y%m%d)"
-AWS_PROFILE=anhnv-stg aws iam create-user --user-name "$U" --region us-east-1
-AWS_PROFILE=anhnv-stg aws iam delete-user --user-name "$U" --region us-east-1        # hoàn tác
+AWS_PROFILE=anhnv-stg aws --no-cli-pager iam create-user --user-name "$U" --region us-east-1
+AWS_PROFILE=anhnv-stg aws --no-cli-pager iam delete-user --user-name "$U" --region us-east-1        # hoàn tác
 ```
 
 S3 Block Public Access cấp account, đúng bốn cờ `true` đang có (không cần hoàn tác):
 
 ```sh
-AWS_PROFILE=anhnv-stg aws s3control put-public-access-block --account-id "$SVP_AWS_STG_ACCOUNT_ID" --region ap-southeast-1 \
+AWS_PROFILE=anhnv-stg aws --no-cli-pager s3control put-public-access-block --account-id "$SVP_AWS_STG_ACCOUNT_ID" --region ap-southeast-1 \
   --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
-AWS_PROFILE=anhnv-stg aws s3control get-public-access-block --account-id "$SVP_AWS_STG_ACCOUNT_ID" --region ap-southeast-1 --output text
+AWS_PROFILE=anhnv-stg aws --no-cli-pager s3control get-public-access-block --account-id "$SVP_AWS_STG_ACCOUNT_ID" --region ap-southeast-1 --output text
 ```
 
 EBS mã hoá mặc định (`--dry-run` không đổi gì; `DryRunOperation` là guardrail hỏng); mong sau lệnh bị từ chối `True`, key mặc định là
 ARN của key `alias/svp-ebs` của stg (lệnh CMK EBS dưới in ARN đó):
 
 ```sh
-AWS_PROFILE=anhnv-stg aws ec2 disable-ebs-encryption-by-default --dry-run --region ap-southeast-1
-AWS_PROFILE=anhnv-stg aws ec2 get-ebs-encryption-by-default --region ap-southeast-1 --output text
-AWS_PROFILE=anhnv-stg aws ec2 get-ebs-default-kms-key-id --region ap-southeast-1 --output text
+AWS_PROFILE=anhnv-stg aws --no-cli-pager ec2 disable-ebs-encryption-by-default --dry-run --region ap-southeast-1
+AWS_PROFILE=anhnv-stg aws --no-cli-pager ec2 get-ebs-encryption-by-default --region ap-southeast-1 --output text
+AWS_PROFILE=anhnv-stg aws --no-cli-pager ec2 get-ebs-default-kms-key-id --region ap-southeast-1 --output text
 ```
 
 CMK EBS (API không nhận alias: lấy ARN trước; không thử `disable-key`, `schedule-key-deletion`: guardrail hỏng thì volume mới hỏng);
 mong `True` ở dòng cuối:
 
 ```sh
-K="$(AWS_PROFILE=anhnv-stg aws kms describe-key --key-id alias/svp-ebs --region ap-southeast-1 --query KeyMetadata.Arn --output text)"
-AWS_PROFILE=anhnv-stg aws kms disable-key-rotation --key-id "$K" --region ap-southeast-1
-AWS_PROFILE=anhnv-stg aws kms enable-key-rotation --key-id "$K" --region ap-southeast-1                       # hoàn tác
-AWS_PROFILE=anhnv-stg aws kms get-key-rotation-status --key-id "$K" --region ap-southeast-1 --query KeyRotationEnabled --output text
+K="$(AWS_PROFILE=anhnv-stg aws --no-cli-pager kms describe-key --key-id alias/svp-ebs --region ap-southeast-1 --query KeyMetadata.Arn --output text)"
+AWS_PROFILE=anhnv-stg aws --no-cli-pager kms disable-key-rotation --key-id "$K" --region ap-southeast-1
+AWS_PROFILE=anhnv-stg aws --no-cli-pager kms enable-key-rotation --key-id "$K" --region ap-southeast-1 # hoàn tác
+AWS_PROFILE=anhnv-stg aws --no-cli-pager kms get-key-rotation-status --key-id "$K" --region ap-southeast-1 --query KeyRotationEnabled --output text
 ```
 
 Rule cảnh báo (probe của dịch vụ API JSON, mã `AccessDeniedException`); mong `ENABLED` ở dòng cuối:
 
 ```sh
-AWS_PROFILE=anhnv-stg aws events disable-rule --name svp-security-trail --region ap-southeast-1
-AWS_PROFILE=anhnv-stg aws events enable-rule --name svp-security-trail --region ap-southeast-1                # hoàn tác
-AWS_PROFILE=anhnv-stg aws events describe-rule --name svp-security-trail --region ap-southeast-1 --query State --output text
+AWS_PROFILE=anhnv-stg aws --no-cli-pager events disable-rule --name svp-security-trail --region ap-southeast-1
+AWS_PROFILE=anhnv-stg aws --no-cli-pager events enable-rule --name svp-security-trail --region ap-southeast-1 # hoàn tác
+AWS_PROFILE=anhnv-stg aws --no-cli-pager events describe-rule --name svp-security-trail --region ap-southeast-1 --query State --output text
 ```
 
 Spot ở prd (`--dry-run`: không instance nào được tạo dù guardrail hỏng; `DryRunOperation` là guardrail hỏng; lỗi khác hai mã của bảng,
@@ -839,9 +839,9 @@ ví dụ account không có VPC mặc định: dán lại, không kết luận):
 
 ```sh
 aws/scripts/check-account.sh prd
-AMI="$(AWS_PROFILE=anhnv-prd aws ssm get-parameter --name /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64 \
+AMI="$(AWS_PROFILE=anhnv-prd aws --no-cli-pager ssm get-parameter --name /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64 \
   --region ap-southeast-1 --query Parameter.Value --output text)"
-AWS_PROFILE=anhnv-prd aws ec2 run-instances --dry-run --image-id "$AMI" --instance-type t4g.nano --region ap-southeast-1 \
+AWS_PROFILE=anhnv-prd aws --no-cli-pager ec2 run-instances --dry-run --image-id "$AMI" --instance-type t4g.nano --region ap-southeast-1 \
   --instance-market-options MarketType=spot --metadata-options HttpTokens=required
 ```
 
@@ -850,7 +850,7 @@ Declarative policy EC2 (chỉ đọc, ở stg):
 ```sh
 for c in get-instance-metadata-defaults get-serial-console-access-status get-snapshot-block-public-access-state \
   get-image-block-public-access-state; do
-  AWS_PROFILE=anhnv-stg aws ec2 "$c" --region ap-southeast-1 --output json
+  AWS_PROFILE=anhnv-stg aws --no-cli-pager ec2 "$c" --region ap-southeast-1 --output json
 done
 ```
 
@@ -864,8 +864,8 @@ Giữ tay: finding mẫu mức HIGH ghi vào GuardDuty của `svp-stg`, đi về
 `security_hub` của stg `always`) hay `svp-security-guardduty-findings` (`off`).
 
 ```sh
-D="$(AWS_PROFILE=anhnv-stg aws guardduty list-detectors --region ap-southeast-1 --query 'DetectorIds[0]' --output text)"
-AWS_PROFILE=anhnv-stg aws guardduty create-sample-findings --detector-id "$D" --region ap-southeast-1 \
+D="$(AWS_PROFILE=anhnv-stg aws --no-cli-pager guardduty list-detectors --region ap-southeast-1 --query 'DetectorIds[0]' --output text)"
+AWS_PROFILE=anhnv-stg aws --no-cli-pager guardduty create-sample-findings --detector-id "$D" --region ap-southeast-1 \
   --finding-types 'CryptoCurrency:EC2/BitcoinTool.B!DNS'
 ```
 
@@ -1026,7 +1026,7 @@ mới; `aws/baseline` chạy trước thì apply lỗi giữa chừng.
    ```sh
    for p in anhnv-log-ro anhnv-security-ro anhnv-backup-ro anhnv-stg-ro anhnv-prd-ro; do
      for r in us-east-1 us-east-2 us-west-2; do echo "== $p $r"
-       AWS_PROFILE=$p aws events list-targets-by-rule --rule svp-security-root-signin --region "$r" \
+       AWS_PROFILE=$p aws --no-cli-pager events list-targets-by-rule --rule svp-security-root-signin --region "$r" \
          --query 'Targets[].[Id,Arn]' --output text
      done
    done

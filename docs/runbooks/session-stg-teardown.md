@@ -173,10 +173,10 @@ bước này.
 
   ```sh
   aws/scripts/check-account.sh stg
-  AWS_PROFILE=anhnv-stg aws backup describe-backup-job --backup-job-id <id> --region ap-southeast-1 --query '[State,PercentDone]' --output text
-  AWS_PROFILE=anhnv-stg aws backup stop-backup-job --backup-job-id <id> --region ap-southeast-1
-  AWS_PROFILE=anhnv-stg aws backup describe-copy-job --copy-job-id <id> --region ap-southeast-1 --query 'CopyJob.State' --output text
-  AWS_PROFILE=anhnv-stg aws backup describe-restore-job --restore-job-id <id> --region ap-southeast-1 --query Status --output text
+  AWS_PROFILE=anhnv-stg aws --no-cli-pager backup describe-backup-job --backup-job-id <id> --region ap-southeast-1 --query '[State,PercentDone]' --output text
+  AWS_PROFILE=anhnv-stg aws --no-cli-pager backup stop-backup-job --backup-job-id <id> --region ap-southeast-1
+  AWS_PROFILE=anhnv-stg aws --no-cli-pager backup describe-copy-job --copy-job-id <id> --region ap-southeast-1 --query 'CopyJob.State' --output text
+  AWS_PROFILE=anhnv-stg aws --no-cli-pager backup describe-restore-job --restore-job-id <id> --region ap-southeast-1 --query Status --output text
   ```
 
 ### Destroy tay một root (không qua script)

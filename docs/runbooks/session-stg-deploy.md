@@ -182,7 +182,7 @@ dưới ID đó, ghi ID và khoá riêng vào entry `svp/stg/media-signing` (kh�
   thư. Chưa xác nhận thì không alarm nào tới email. Đọc lại (ARN của topic tính từ biến account của buổi):
 
   ```sh
-  AWS_PROFILE=anhnv-stg aws sns list-subscriptions-by-topic --region ap-southeast-1 \
+  AWS_PROFILE=anhnv-stg aws --no-cli-pager sns list-subscriptions-by-topic --region ap-southeast-1 \
     --topic-arn "arn:aws:sns:ap-southeast-1:$SVP_AWS_STG_ACCOUNT_ID:svp-stg-alarms" --query 'Subscriptions[].SubscriptionArn' --output text |
     sed -E 's/^arn:.*/confirmed/'
   ```
@@ -329,7 +329,7 @@ Kiểm account trước (cột `Account` phải bằng `$SVP_AWS_STG_ACCOUNT_ID`
 
 ```sh
 cd aws/envs/stg                                          # từ infra/, thư mục của terminal buổi
-AWS_PROFILE=anhnv-stg aws sts get-caller-identity --region ap-southeast-1 --query '{Account:Account,Arn:Arn}' --output table
+AWS_PROFILE=anhnv-stg aws --no-cli-pager sts get-caller-identity --region ap-southeast-1 --query '{Account:Account,Arn:Arn}' --output table
 echo "$SVP_AWS_STG_ACCOUNT_ID"
 ```
 

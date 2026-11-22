@@ -47,7 +47,7 @@ jobs:
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           PR: ${{ github.event.pull_request.number }}
           CHANGED: ${{ github.event.pull_request.changed_files }}
-        run: bash ci/terraform-plan.sh gate
+        run: make ci-plan-gate
 
   # The fork check is repeated from the event: job gate runs a fork's own code.
   plan:
