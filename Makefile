@@ -43,6 +43,10 @@ INFRACOST_IMAGE  := infracost/infracost:ci-0.10.49@sha256:78ce091ec7324caa46b8fb
 # Same version as GITLEAKS_VERSION of the code repository's Makefile, which installs it with go install.
 # renovate: datasource=docker depName=ghcr.io/gitleaks/gitleaks
 GITLEAKS_IMAGE   := ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+# jq for ci/inventory.sh, ci/terraform-plan.sh: the host's jq differs between the runner and a Mac, and accepts
+# different programs.
+# renovate: datasource=docker depName=ghcr.io/jqlang/jq
+JQ_IMAGE         := ghcr.io/jqlang/jq:1.8.2@sha256:b9c68867e5766576263a222e91db3de422d802069c7af70440e667a95344e486
 # D2 from its official image (terrastruct/d2 on Docker Hub is a mirror), a multi-architecture index: the SVGs come out
 # byte for byte the same on arm64 and amd64, with the ELK and TALA layout engines bundled, offline.
 # renovate: datasource=docker depName=d2lang/d2
@@ -107,7 +111,7 @@ IS_MODULE = case "/$$d/" in (*/modules/*) true;; (*) false;; esac
 .PHONY: help check check-terraform check-lint check-test check-scripts hooks pre-commit \
 	fmt-check fmt validate tflint tfdocs tfdocs-check trivy shellcheck zizmor docs-check diagrams diagrams-check session-test test-guard test lock \
 	github-app-test github-check github-app github-app-key github-settings github-secrets infracost-key github-tfvars \
-	github-plan github-apply ci-plan ci-plan-test infracost infracost-comment infracost-test inventory inventory-check inventory-test
+	github-plan github-apply ci-plan ci-plan-gate ci-plan-test infracost infracost-comment infracost-test inventory inventory-check inventory-test
 
 help: ## List the targets
 	@grep -hE '^[a-zA-Z0-9_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-15s %s\n", $$1, $$2}'
@@ -377,9 +381,12 @@ session-test: ## Self-tests of aws/scripts (session-test.sh, then every other *-
 # ENV with the job's OIDC token, so it refuses to run outside GitHub Actions. ENV reaches it through the environment,
 # never through the recipe's text. Its self-test puts fake docker, curl and gh first on PATH.
 ci-plan: ## terraform plan of the roots of ENV=<stg|prd> for plan.yml (GitHub Actions only: refuses anywhere else)
-	@TERRAFORM_IMAGE='$(TERRAFORM_IMAGE)' bash ci/terraform-plan.sh plan "$${ENV:-}"
+	@TERRAFORM_IMAGE='$(TERRAFORM_IMAGE)' JQ_IMAGE='$(JQ_IMAGE)' bash ci/terraform-plan.sh plan "$${ENV:-}"
 
-ci-plan-test: ## Self-test of ci/terraform-plan.sh with fake docker, curl and gh (no container, account, token or network)
+ci-plan-gate: ## The envs plan.yml plans for a pull request (its job gate: reads the PR's file list with gh)
+	@JQ_IMAGE='$(JQ_IMAGE)' bash ci/terraform-plan.sh gate
+
+ci-plan-test: ## Self-test of ci/terraform-plan.sh: fake terraform, curl and gh, the pinned jq (no account, token or network)
 	@echo "ci-plan-test"; \
 	bash ci/terraform-plan-test.sh >/dev/null || { echo "FAIL: ci-plan-test (bash ci/terraform-plan-test.sh prints every check)" >&2; exit 1; }
 
@@ -524,10 +531,10 @@ test-guard: ## Self-test of the rules of make test, with a fake docker (no conta
 # docs/reference/inventory.md and docs/diagrams/inventory/. The plans run on a copy of the repository without its
 # personal files, under the rules of make test (no network but init, no credential); inventory-test checks them.
 inventory: ## Write docs/reference/inventory.md and docs/diagrams/inventory/ from mock plans of every root (no network, no credential)
-	@TERRAFORM_IMAGE='$(TERRAFORM_IMAGE)' D2_IMAGE='$(D2_IMAGE)' bash ci/inventory.sh write
+	@TERRAFORM_IMAGE='$(TERRAFORM_IMAGE)' D2_IMAGE='$(D2_IMAGE)' JQ_IMAGE='$(JQ_IMAGE)' bash ci/inventory.sh write
 
 inventory-check: ## Fails, naming the file, when the inventory page or a diagram of it differs from what make inventory writes
-	@TERRAFORM_IMAGE='$(TERRAFORM_IMAGE)' D2_IMAGE='$(D2_IMAGE)' bash ci/inventory.sh check
+	@TERRAFORM_IMAGE='$(TERRAFORM_IMAGE)' D2_IMAGE='$(D2_IMAGE)' JQ_IMAGE='$(JQ_IMAGE)' bash ci/inventory.sh check
 
 inventory-test: ## Self-test of ci/inventory.sh with a fake docker (no container, network or credential)
 	@echo "inventory-test"; \

@@ -26,7 +26,8 @@ MediaConvert, STS; `us-east-1` cho IAM.
 
 ## Điều kiện trước
 
-- [ ] AWS CLI v2 có lệnh `probe` (`AWS_PROFILE=anhnv-sso aws mediaconvert probe help --region ap-southeast-1` in trang trợ giúp; lỗi
+- [ ] AWS CLI v2 có lệnh `probe`
+  (`AWS_PROFILE=anhnv-sso aws --no-cli-pager mediaconvert probe help --region ap-southeast-1` in trang trợ giúp; lỗi
   `Invalid choice` thì cập nhật AWS CLI), `jq` 1.6 trở lên (`walk`), `ffmpeg`.
 - [ ] Bản clone repo code có file job mẫu `services/media-worker/internal/mediaconvert/testdata/create-job.json`: `CreateJobInput` mà bridge
   dựng cho nguồn 1080×1920 có âm thanh, với ARN và tên bucket giả (`000000000000`). Test của bridge so khớp nó từng byte, nên đây là job
@@ -47,7 +48,7 @@ Một bucket giữ cả hai tiền tố, nên quyền của role vẫn đúng b�
 
 ```sh
 cd infra
-AWS_PROFILE=anhnv-sso aws sso login --region us-east-1
+AWS_PROFILE=anhnv-sso aws --no-cli-pager sso login --region us-east-1
 printf 'mgmt …%s\n' "${SVP_AWS_MGMT_ACCOUNT_ID: -4}"   # from .envrc (direnv)
 export SVP_SESSION_DIR="$PWD/.session/mediaconvert-probe-$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p "$SVP_SESSION_DIR"; d=$SVP_SESSION_DIR
@@ -78,9 +79,9 @@ công khai và mã hoá SSE-S3. Trust của role như role `svp-<env>-mediaconve
 `aws:SourceAccount` là account, `aws:SourceArn` là ARN queue:
 
 ```sh
-AWS_PROFILE=anhnv-sso aws s3api create-bucket --bucket "$b" --region ap-southeast-1 \
+AWS_PROFILE=anhnv-sso aws --no-cli-pager s3api create-bucket --bucket "$b" --region ap-southeast-1 \
   --create-bucket-configuration LocationConstraint=ap-southeast-1 --query Location --output text
-queue_arn=$(AWS_PROFILE=anhnv-sso aws mediaconvert create-queue --name svp-mcprobe --pricing-plan ON_DEMAND --region ap-southeast-1 \
+queue_arn=$(AWS_PROFILE=anhnv-sso aws --no-cli-pager mediaconvert create-queue --name svp-mcprobe --pricing-plan ON_DEMAND --region ap-southeast-1 \
   --query Queue.Arn --output text)
 jq -n --arg acc "$SVP_AWS_MGMT_ACCOUNT_ID" --arg q "$queue_arn" '{Version: "2012-10-17", Statement: [{Effect: "Allow",
   Principal: {Service: "mediaconvert.amazonaws.com"}, Action: "sts:AssumeRole",
@@ -88,9 +89,9 @@ jq -n --arg acc "$SVP_AWS_MGMT_ACCOUNT_ID" --arg q "$queue_arn" '{Version: "2012
 jq -n --arg b "$b" '{Version: "2012-10-17", Statement: [
   {Sid: "ReadInput", Effect: "Allow", Action: "s3:GetObject", Resource: "arn:aws:s3:::\($b)/uploads/*"},
   {Sid: "WriteOutput", Effect: "Allow", Action: "s3:PutObject", Resource: "arn:aws:s3:::\($b)/media/*"}]}' > "$d/policy.json"
-role_arn=$(AWS_PROFILE=anhnv-sso aws iam create-role --role-name svp-mcprobe-mediaconvert --region us-east-1 \
+role_arn=$(AWS_PROFILE=anhnv-sso aws --no-cli-pager iam create-role --role-name svp-mcprobe-mediaconvert --region us-east-1 \
   --assume-role-policy-document "file://$d/trust.json" --query Role.Arn --output text)
-AWS_PROFILE=anhnv-sso aws iam put-role-policy --role-name svp-mcprobe-mediaconvert --policy-name s3 --region us-east-1 \
+AWS_PROFILE=anhnv-sso aws --no-cli-pager iam put-role-policy --role-name svp-mcprobe-mediaconvert --policy-name s3 --region us-east-1 \
   --policy-document "file://$d/policy.json"
 echo "$queue_arn $role_arn" | tee "$d/arns.txt"
 ```
@@ -106,8 +107,8 @@ echo "$queue_arn $role_arn" | tee "$d/arns.txt"
 
 ```sh
 for t in 60 200; do
-  AWS_PROFILE=anhnv-sso aws s3 cp "$d/clip-${t}s.mp4" "s3://$b/uploads/clip-${t}s" --region ap-southeast-1
-  AWS_PROFILE=anhnv-sso aws mediaconvert probe --input-files "FileUrl=s3://$b/uploads/clip-${t}s" --region ap-southeast-1 \
+  AWS_PROFILE=anhnv-sso aws --no-cli-pager s3 cp "$d/clip-${t}s.mp4" "s3://$b/uploads/clip-${t}s" --region ap-southeast-1
+  AWS_PROFILE=anhnv-sso aws --no-cli-pager mediaconvert probe --input-files "FileUrl=s3://$b/uploads/clip-${t}s" --region ap-southeast-1 \
     --output json > "$d/probe-${t}s.json"
 done
 cat "$d/probe-60s.json" "$d/probe-200s.json"
@@ -127,8 +128,8 @@ jq --arg q "$queue_arn" --arg r "$role_arn" --arg b "$b" \
   "$JOB_SRC" > "$d/create-job.json"
 grep -c 000000000000 "$d/create-job.json"
 in=$(jq -r '.Settings.Inputs[0].FileInput' "$d/create-job.json"); echo "$in"
-AWS_PROFILE=anhnv-sso aws s3 cp "$d/clip-60s.mp4" "$in" --region ap-southeast-1
-job=$(AWS_PROFILE=anhnv-sso aws mediaconvert create-job --cli-input-json "file://$d/create-job.json" --region ap-southeast-1 \
+AWS_PROFILE=anhnv-sso aws --no-cli-pager s3 cp "$d/clip-60s.mp4" "$in" --region ap-southeast-1
+job=$(AWS_PROFILE=anhnv-sso aws --no-cli-pager mediaconvert create-job --cli-input-json "file://$d/create-job.json" --region ap-southeast-1 \
   --query Job.Id --output text)
 echo "$job" | tee "$d/job-id.txt"
 ```
@@ -140,12 +141,12 @@ echo "$job" | tee "$d/job-id.txt"
 
 ```sh
 for i in $(seq 1 90); do
-  st=$(AWS_PROFILE=anhnv-sso aws mediaconvert get-job --id "$job" --region ap-southeast-1 --query Job.Status --output text)
+  st=$(AWS_PROFILE=anhnv-sso aws --no-cli-pager mediaconvert get-job --id "$job" --region ap-southeast-1 --query Job.Status --output text)
   echo "$(date -u +%H:%M:%S) $st"
   case $st in COMPLETE | ERROR | CANCELED) break ;; esac
   sleep 10
 done
-AWS_PROFILE=anhnv-sso aws mediaconvert get-job --id "$job" --region ap-southeast-1 --output json > "$d/get-job.json"
+AWS_PROFILE=anhnv-sso aws --no-cli-pager mediaconvert get-job --id "$job" --region ap-southeast-1 --output json > "$d/get-job.json"
 jq -r '.Job | [.Status, .ErrorCode, .ErrorMessage] | map(tostring) | @tsv' "$d/get-job.json"
 ```
 
@@ -160,14 +161,14 @@ Danh sách key, mọi playlist rendition (tên theo `NameModifier` của output 
 bước chép mà bridge làm:
 
 ```sh
-AWS_PROFILE=anhnv-sso aws s3 ls "s3://$b/media/" --recursive --region ap-southeast-1 | tee "$d/keys.txt"
+AWS_PROFILE=anhnv-sso aws --no-cli-pager s3 ls "s3://$b/media/" --recursive --region ap-southeast-1 | tee "$d/keys.txt"
 hls='.Settings.OutputGroups[] | select(.OutputGroupSettings.Type == "HLS_GROUP_SETTINGS")'
 pfx=$(jq -r "$hls | .OutputGroupSettings.HlsGroupSettings.Destination" "$d/create-job.json"); pfx=${pfx%index}
 for m in $(jq -r "$hls | .Outputs[].NameModifier" "$d/create-job.json"); do
-  echo "== index$m.m3u8"; AWS_PROFILE=anhnv-sso aws s3 cp "${pfx}index$m.m3u8" - --region ap-southeast-1
+  echo "== index$m.m3u8"; AWS_PROFILE=anhnv-sso aws --no-cli-pager s3 cp "${pfx}index$m.m3u8" - --region ap-southeast-1
 done | tee "$d/playlists.txt"
 seg=$(awk '$4 ~ /\.ts$/ { print $4; exit }' "$d/keys.txt")
-AWS_PROFILE=anhnv-sso aws s3api head-object --bucket "$b" --key "$seg" --region ap-southeast-1 --output json | tee "$d/head-segment.json"
+AWS_PROFILE=anhnv-sso aws --no-cli-pager s3api head-object --bucket "$b" --key "$seg" --region ap-southeast-1 --output json | tee "$d/head-segment.json"
 ```
 
 - **Mong đợi:** mọi key nằm phẳng trong `media/<video_id>/<version>/<attempt>/` (ba UUID của file mẫu): `index_<rendition>.m3u8` mỗi
@@ -186,11 +187,11 @@ Gỡ rồi quét sót, trong cùng lần chạy. **Lần thử chỉ xong khi l�
 
    ```sh
    aws/scripts/check-account.sh mgmt
-   AWS_PROFILE=anhnv-sso aws mediaconvert cancel-job --id "$job" --region ap-southeast-1
-   AWS_PROFILE=anhnv-sso aws s3 rb "s3://$b" --force --region ap-southeast-1
-   AWS_PROFILE=anhnv-sso aws iam delete-role-policy --role-name svp-mcprobe-mediaconvert --policy-name s3 --region us-east-1
-   AWS_PROFILE=anhnv-sso aws iam delete-role --role-name svp-mcprobe-mediaconvert --region us-east-1
-   AWS_PROFILE=anhnv-sso aws mediaconvert delete-queue --name svp-mcprobe --region ap-southeast-1
+   AWS_PROFILE=anhnv-sso aws --no-cli-pager mediaconvert cancel-job --id "$job" --region ap-southeast-1
+   AWS_PROFILE=anhnv-sso aws --no-cli-pager s3 rb "s3://$b" --force --region ap-southeast-1
+   AWS_PROFILE=anhnv-sso aws --no-cli-pager iam delete-role-policy --role-name svp-mcprobe-mediaconvert --policy-name s3 --region us-east-1
+   AWS_PROFILE=anhnv-sso aws --no-cli-pager iam delete-role --role-name svp-mcprobe-mediaconvert --region us-east-1
+   AWS_PROFILE=anhnv-sso aws --no-cli-pager mediaconvert delete-queue --name svp-mcprobe --region ap-southeast-1
    ```
 
    - **Mong đợi:** mỗi lệnh kết thúc không lỗi, trừ hai trường hợp ở **Bẫy**.

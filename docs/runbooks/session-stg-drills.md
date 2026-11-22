@@ -80,8 +80,8 @@ nó).
   | `backup jobs still running after …` | job chưa xong khi hết hạn chờ | đọc job bằng lệnh script in ra; xong thì chạy lại bước 17 (lượt mới tạo job mới; recovery point của job cũ không có copy job, nên bước 25 giữ nó và `FAIL … has no completed copy … kept`: chọn copy lại hay xoá theo lệnh in ra) |
 
   ```sh
-  AWS_PROFILE=anhnv-stg aws backup describe-backup-job --backup-job-id <id> --region ap-southeast-1 --query '[State,StatusMessage]' --output text
-  AWS_PROFILE=anhnv-stg aws backup describe-copy-job --copy-job-id <id> --region ap-southeast-1 \
+  AWS_PROFILE=anhnv-stg aws --no-cli-pager backup describe-backup-job --backup-job-id <id> --region ap-southeast-1 --query '[State,StatusMessage]' --output text
+  AWS_PROFILE=anhnv-stg aws --no-cli-pager backup describe-copy-job --copy-job-id <id> --region ap-southeast-1 \
     --query 'CopyJob.[State,StatusMessage]' --output text
   ```
 
@@ -149,10 +149,10 @@ AWS Backup không giữ ETag).
   ```sh
   aws/scripts/check-account.sh stg
   b="svp-stg-media-$SVP_AWS_STG_ACCOUNT_ID-ap-southeast-1"
-  AWS_PROFILE=anhnv-stg aws backup describe-restore-job --restore-job-id <id> --region ap-southeast-1 --query '[Status,StatusMessage]' --output text
-  AWS_PROFILE=anhnv-stg aws s3api list-object-versions --bucket "$b" --prefix <key> --region ap-southeast-1 \
+  AWS_PROFILE=anhnv-stg aws --no-cli-pager backup describe-restore-job --restore-job-id <id> --region ap-southeast-1 --query '[Status,StatusMessage]' --output text
+  AWS_PROFILE=anhnv-stg aws --no-cli-pager s3api list-object-versions --bucket "$b" --prefix <key> --region ap-southeast-1 \
     --query 'DeleteMarkers[?IsLatest].VersionId' --output text
-  AWS_PROFILE=anhnv-stg aws s3api delete-object --bucket "$b" --key <key> --version-id <VersionId của delete marker> --region ap-southeast-1
+  AWS_PROFILE=anhnv-stg aws --no-cli-pager s3api delete-object --bucket "$b" --key <key> --version-id <VersionId của delete marker> --region ap-southeast-1
   ```
 
 ## Finding bảo mật của buổi (sau bước 19, trước bước 20)

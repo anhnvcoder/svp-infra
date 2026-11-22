@@ -20,6 +20,14 @@ fail() {
   if [ -n "${summary:-}" ] && [ -f "$summary" ]; then printf '\n**Failed:** %s\n' "$1" >>"$summary"; fi
   exit 1
 }
+# One jq for every machine: the pinned JQ_IMAGE, not the host's (1.7.1 on the runner, 1.8.x on a Mac accept different
+# programs). It reads stdin; the masks file, once plan writes one, is mounted read-only as /run/masks.
+jq() {
+  if [ -n "${masks:-}" ]; then set -- -v "$masks:/run/masks:ro" "$JQ_IMAGE" "$@"; else set -- "$JQ_IMAGE" "$@"; fi
+  env -u DOCKER_DEFAULT_PLATFORM docker run --rm -i --network none --user "$(id -u):$(id -g)" "$@"
+}
+# pinned NAME: fails unless the image in variable NAME is pinned by digest.
+pinned() { case ${!1:-} in *@sha256:*) ;; *) fail "$1 is not pinned by digest" ;; esac; }
 notice() {
   printf '::notice::%s\n' "$1" >&3
   [ -z "${GITHUB_STEP_SUMMARY:-}" ] || printf -- '- %s\n' "$1" >>"$GITHUB_STEP_SUMMARY"
@@ -50,6 +58,7 @@ plan_path() {
 gate() {
   local envs files listed count f line plans=false roots=''
   : "${GITHUB_OUTPUT:?}" "${REPO:?}" "${PR:?}" "${CHANGED:?}"
+  pinned JQ_IMAGE
   envs=$(jq -c 'if type == "array" and all(.[]; . == "stg" or . == "prd") then unique else error("") end' \
     <<<"${PLAN_ENVS:-[]}" 2>/dev/null) ||
     fail "variable SVP_TF_PLAN_ENVS is not a JSON array of stg and prd: ${PLAN_ENVS:-}"
@@ -114,7 +123,7 @@ add_mask() {
 
 # mask: stdin with every masked value replaced by ***, longest first.
 mask() {
-  jq -Rrs --rawfile m "$masks" \
+  jq -Rrs --rawfile m /run/masks \
     'reduce ($m | split("\n") | map(select(length > 0)) | unique | sort_by(-length))[] as $v (.; split($v) | join("***"))'
 }
 
@@ -168,7 +177,7 @@ plan_root() {
 # summarize ROOT HEADING: the plan JSON on stdin as {full, short} Markdown: counts, then each change's address and
 # action; short has the counts alone. Addresses are masked (a for_each key may be a domain or an account id).
 summarize() {
-  jq -c --arg root "$1" --arg heading "$2" --rawfile m "$masks" '
+  jq -c --arg root "$1" --arg heading "$2" --rawfile m /run/masks '
     def mask: reduce ($m | split("\n") | map(select(length > 0)) | unique | sort_by(-length))[] as $v
       (.; split($v) | join("***"));
     def action: if . == ["create"] then "create" elif . == ["update"] then "update" elif . == ["delete"] then "delete"
@@ -200,7 +209,8 @@ plan() {
     exit 2
   }
   : "${RUNNER_TEMP:?}" "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:?}" "${TERRAFORM_IMAGE:?}"
-  case $TERRAFORM_IMAGE in *@sha256:*) ;; *) fail "TERRAFORM_IMAGE is not pinned by digest" ;; esac
+  pinned TERRAFORM_IMAGE
+  pinned JQ_IMAGE
   upper=$(tr '[:lower:]' '[:upper:]' <<<"$env_name")
   # The other env's id is set only once that env plans too: masked when set, never required.
   for name in "SVP_AWS_${upper}_ACCOUNT_ID" SVP_AWS_LOG_ACCOUNT_ID SVP_AWS_BACKUP_ACCOUNT_ID; do

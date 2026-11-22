@@ -54,7 +54,7 @@ này (`infra/`) trừ chỗ ghi `cd`. Bước nào đỏ thì dừng ở đó, d
 
 ```sh
 cd infra
-AWS_PROFILE=anhnv-sso aws sso login --region us-east-1      # one login for every profile of the same sso_session
+AWS_PROFILE=anhnv-sso aws --no-cli-pager sso login --region us-east-1   # one login per sso_session
 printf 'mgmt …%s\n' "${SVP_AWS_MGMT_ACCOUNT_ID: -4}"   # from .envrc (direnv), 4 last digits only
 eval "$(aws/scripts/accounts.sh)"                           # sets the other five SVP_AWS_*_ACCOUNT_ID, no file
 export SVP_SESSION_DIR="$PWD/.session/$(date -u +%Y%m%dT%H%M%SZ)"   # check-account.sh marks its timeline here
@@ -142,14 +142,14 @@ AWS_PROFILE=anhnv-sso \
 TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
   terraform plan -input=false   # No changes.
 cd ../..
-AWS_PROFILE=anhnv-log-ro aws s3 ls "s3://svp-cloudfront-$SVP_AWS_LOG_ACCOUNT_ID-us-east-1/" --region us-east-1; echo "exit $?"
+AWS_PROFILE=anhnv-log-ro aws --no-cli-pager s3 ls "s3://svp-cloudfront-$SVP_AWS_LOG_ACCOUNT_ID-us-east-1/" --region us-east-1; echo "exit $?"
 ```
 
 - **Mong đợi:** lệnh cuối không in object nào (chưa buổi nào ghi log) và `exit 0`.
 - **Bẫy:** `AccessDenied` là permission set chưa cập nhật: chờ vài phút, đăng nhập lại rồi chạy lại lệnh cuối:
 
   ```sh
-  AWS_PROFILE=anhnv-sso aws sso login --region us-east-1   # one login for every profile of the same sso_session
+  AWS_PROFILE=anhnv-sso aws --no-cli-pager sso login --region us-east-1   # one login per sso_session
   ```
 
 ## Bước (2a): hạ TTL của zone prd
@@ -163,21 +163,21 @@ signing](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/dns-configuri
 ```sh
 aws/scripts/check-account.sh prd
 zone_id=$(AWS_PROFILE=anhnv-prd terraform -chdir=aws/accounts/prd output -raw zone_id)
-AWS_PROFILE=anhnv-prd aws route53 list-resource-record-sets --hosted-zone-id "$zone_id" --region us-east-1 \
+AWS_PROFILE=anhnv-prd aws --no-cli-pager route53 list-resource-record-sets --hosted-zone-id "$zone_id" --region us-east-1 \
   --query 'ResourceRecordSets[].[Name,Type,TTL]' --output text
 ```
 
 Dựng lô đổi từ chính hai bản ghi ở đỉnh (`NS` TTL 3 600, `SOA` minimum 300), đọc lại, rồi gửi:
 
 ```sh
-AWS_PROFILE=anhnv-prd aws route53 list-resource-record-sets --hosted-zone-id "$zone_id" --region us-east-1 --output json |
+AWS_PROFILE=anhnv-prd aws --no-cli-pager route53 list-resource-record-sets --hosted-zone-id "$zone_id" --region us-east-1 --output json |
   jq --arg apex "aws.<domain>." '{Changes: [.ResourceRecordSets[] | select(.Name == $apex and (.Type == "NS" or .Type == "SOA"))
     | if .Type == "NS" then .TTL = 3600 else .ResourceRecords[0].Value |= (split(" ") | .[6] = "300" | join(" ")) end
     | {Action: "UPSERT", ResourceRecordSet: .}]}' > /tmp/svp-ttl.json
 jq -c '.Changes[].ResourceRecordSet | [.Name, .Type, .TTL, [.ResourceRecords[].Value]]' /tmp/svp-ttl.json
-change=$(AWS_PROFILE=anhnv-prd aws route53 change-resource-record-sets --hosted-zone-id "$zone_id" \
+change=$(AWS_PROFILE=anhnv-prd aws --no-cli-pager route53 change-resource-record-sets --hosted-zone-id "$zone_id" \
   --change-batch file:///tmp/svp-ttl.json --region us-east-1 --query ChangeInfo.Id --output text)
-AWS_PROFILE=anhnv-prd aws route53 get-change --id "$change" --region us-east-1 --query ChangeInfo.Status --output text
+AWS_PROFILE=anhnv-prd aws --no-cli-pager route53 get-change --id "$change" --region us-east-1 --query ChangeInfo.Status --output text
 date -u +%Y-%m-%dT%H:%M:%SZ | tee "$SVP_SESSION_DIR/ttl-lowered"
 ```
 
@@ -250,7 +250,7 @@ aws/scripts/verify.sh subscriptions prd
 
 ```sh
 aws/scripts/verify.sh dnssec
-AWS_PROFILE=anhnv-prd aws cloudwatch describe-alarms --alarm-name-prefix svp-prd-dnssec- --region us-east-1 \
+AWS_PROFILE=anhnv-prd aws --no-cli-pager cloudwatch describe-alarms --alarm-name-prefix svp-prd-dnssec- --region us-east-1 \
   --query 'MetricAlarms[].[AlarmName,StateValue]' --output text
 for z in aws.<domain> stg.aws.<domain>; do echo "== $z"; dig +short CAA "$z" @1.1.1.1 | sort; done
 ```
@@ -391,7 +391,7 @@ tắt ký qua `dnssec_signing`: [README module `account-baseline`, Tắt ký DNS
 
    ```sh
    AWS_PROFILE=anhnv-prd terraform apply -input=false prd.tfplan && rm prd.tfplan
-   AWS_PROFILE=anhnv-prd aws route53 get-dnssec --region us-east-1 \
+   AWS_PROFILE=anhnv-prd aws --no-cli-pager route53 get-dnssec --region us-east-1 \
      --hosted-zone-id "$(AWS_PROFILE=anhnv-prd terraform output -raw zone_id)" --query Status.ServeSignature --output text
    cd ../../..
    ```
@@ -440,12 +440,13 @@ bao giờ xoá nó: bỏ key khỏi state trước, xoá phần còn lại bằn
 3. Lên lịch xoá key qua alias của nó (`schedule-key-deletion` chỉ nhận id hay ARN):
 
    ```sh
-   key=$(AWS_PROFILE=anhnv-prd aws kms describe-key --key-id alias/svp-dnssec --region us-east-1 --query KeyMetadata.KeyId --output text)
-   AWS_PROFILE=anhnv-prd aws kms schedule-key-deletion --key-id "$key" --pending-window-in-days 30 --region us-east-1 \
+   key=$(AWS_PROFILE=anhnv-prd aws --no-cli-pager kms describe-key --key-id alias/svp-dnssec --region us-east-1 --query KeyMetadata.KeyId --output text)
+   AWS_PROFILE=anhnv-prd aws --no-cli-pager kms schedule-key-deletion --key-id "$key" --pending-window-in-days 30 --region us-east-1 \
      --query KeyState --output text
    ```
 
-   Mong `PendingDeletion`. Huỷ được trong 30 ngày: `AWS_PROFILE=anhnv-prd aws kms cancel-key-deletion --key-id "$key" --region us-east-1`.
+   Mong `PendingDeletion`. Huỷ được trong 30 ngày:
+   `AWS_PROFILE=anhnv-prd aws --no-cli-pager kms cancel-key-deletion --key-id "$key" --region us-east-1`.
    Alias `alias/svp-dnssec` còn trỏ key tới khi key bị xoá; `sweep.sh prd` liệt kê nó ở mục alias của key chờ xoá.
 
 ## Gỡ

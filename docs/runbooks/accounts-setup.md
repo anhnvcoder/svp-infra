@@ -35,7 +35,7 @@ backup sau khi cả hai account xong: [`backup-setup.md`, bước (7)](backup-se
 
 ```sh
 cd infra
-AWS_PROFILE=anhnv-sso aws sso login --region us-east-1      # one login for every profile of the same sso_session
+AWS_PROFILE=anhnv-sso aws --no-cli-pager sso login --region us-east-1   # one login per sso_session
 printf 'mgmt …%s\n' "${SVP_AWS_MGMT_ACCOUNT_ID: -4}"   # from .envrc (direnv), 4 last digits only
 eval "$(aws/scripts/accounts.sh)"                           # sets the other five SVP_AWS_*_ACCOUNT_ID, no file
 export SVP_SESSION_DIR="$PWD/.session/$(date -u +%Y%m%dT%H%M%SZ)"   # check-account.sh marks its timeline here
@@ -141,7 +141,7 @@ AWS_PROFILE=anhnv-stg \
 TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
 TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" \
   terraform plan -input=false   # mong đợi: No changes.
-AWS_PROFILE=anhnv-stg aws s3api head-object --region ap-southeast-1 \
+AWS_PROFILE=anhnv-stg aws --no-cli-pager s3api head-object --region ap-southeast-1 \
   --bucket "$(AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform output -raw state_bucket)" \
   --key aws/accounts/stg/terraform.tfstate --query '{SSE:ServerSideEncryption,Key:SSEKMSKeyId}'
 ```
@@ -373,6 +373,6 @@ TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" \
 
 ```sh
 AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform output -json ci_role_arns | jq -r 'keys[]'
-AWS_PROFILE=anhnv-stg aws backup describe-region-settings --region ap-southeast-1 \
+AWS_PROFILE=anhnv-stg aws --no-cli-pager backup describe-region-settings --region ap-southeast-1 \
   --query 'ResourceTypeOptInPreference.{RDS:RDS,S3:S3}' --output table
 ```

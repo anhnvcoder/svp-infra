@@ -57,13 +57,13 @@ gỡ là hai dòng `Destruction complete after …` của bước 27; plan lần
 media](session-stg-check-edge-media.md#gói-free-của-media):
 
 ```sh
-AWS_PROFILE=anhnv-stg aws kafka list-clusters-v2 --cluster-name-filter svp-stg --region ap-southeast-1 --output text \
+AWS_PROFILE=anhnv-stg aws --no-cli-pager kafka list-clusters-v2 --cluster-name-filter svp-stg --region ap-southeast-1 --output text \
   --query 'ClusterInfoList[].[State,Provisioned.CurrentBrokerSoftwareInfo.KafkaVersion,Provisioned.BrokerNodeGroupInfo.InstanceType,Provisioned.NumberOfBrokerNodes]'
-AWS_PROFILE=anhnv-stg aws kafka list-clusters-v2 --cluster-name-filter svp-stg --region ap-southeast-1 --output text \
+AWS_PROFILE=anhnv-stg aws --no-cli-pager kafka list-clusters-v2 --cluster-name-filter svp-stg --region ap-southeast-1 --output text \
   --query 'ClusterInfoList[].Provisioned.[ClientAuthentication.Sasl.Scram.Enabled,ClientAuthentication.Sasl.Iam.Enabled,EncryptionInfo.EncryptionInTransit.ClientBroker]'
-AWS_PROFILE=anhnv-stg aws elasticache describe-replication-groups --replication-group-id svp-stg --region ap-southeast-1 --output text \
+AWS_PROFILE=anhnv-stg aws --no-cli-pager elasticache describe-replication-groups --replication-group-id svp-stg --region ap-southeast-1 --output text \
   --query 'ReplicationGroups[].[Status,TransitEncryptionMode,AtRestEncryptionEnabled,length(MemberClusters)]'
-AWS_PROFILE=anhnv-stg aws elasticache describe-users --region ap-southeast-1 --output text \
+AWS_PROFILE=anhnv-stg aws --no-cli-pager elasticache describe-users --region ap-southeast-1 --output text \
   --query "Users[?starts_with(UserId, 'svp-stg-')].[UserName,Status,AccessString]"
 ```
 
@@ -162,7 +162,7 @@ img=$(AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp get pods -o json |
   jq -r '[.items[].spec.containers[].image | select(contains("/svp-backend/gateway@"))][0]')
 echo "$img" | sed "s/$SVP_AWS_STG_ACCOUNT_ID/<account>/"
 export DOCKER_CONFIG=$(mktemp -d)
-AWS_PROFILE=anhnv-stg aws ecr get-login-password --region ap-southeast-1 | cosign login "$ecr" -u AWS --password-stdin
+AWS_PROFILE=anhnv-stg aws --no-cli-pager ecr get-login-password --region ap-southeast-1 | cosign login "$ecr" -u AWS --password-stdin
 ident=(--certificate-oidc-issuer https://token.actions.githubusercontent.com
   --certificate-identity https://github.com/anhnvcoder/svp-backend/.github/workflows/images.yml@refs/heads/main)
 cosign verify "${ident[@]}" "$img" >/dev/null 2>&1 && echo "signature verified"
@@ -177,17 +177,17 @@ tới buổi prd, khi prd chạy với `inspector_ecr` `always` và Inspector c�
 [ADR-0078](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0078-paid-features-lean-defaults.md) §7):
 
 ```sh
-AWS_PROFILE=anhnv-stg aws ecr get-registry-scanning-configuration --region ap-southeast-1 --output text \
+AWS_PROFILE=anhnv-stg aws --no-cli-pager ecr get-registry-scanning-configuration --region ap-southeast-1 --output text \
   --query 'scanningConfiguration.[scanType,rules[0].scanFrequency]'
 ```
 
 Cờ `always`: Inspector quét repo cache (image bên thứ ba vừa làm nóng; vài phút sau khi image vào cache), không quét repo phát hành:
 
 ```sh
-AWS_PROFILE=anhnv-stg aws inspector2 list-coverage --region ap-southeast-1 --output text \
+AWS_PROFILE=anhnv-stg aws --no-cli-pager inspector2 list-coverage --region ap-southeast-1 --output text \
   --filter-criteria '{"resourceType":[{"comparison":"EQUALS","value":"AWS_ECR_CONTAINER_IMAGE"}]}' \
   --query 'coveredResources[].scanStatus.statusCode' | tr '\t' '\n' | sort | uniq -c
-AWS_PROFILE=anhnv-stg aws inspector2 list-findings --region ap-southeast-1 --max-results 10 --output text \
+AWS_PROFILE=anhnv-stg aws --no-cli-pager inspector2 list-findings --region ap-southeast-1 --max-results 10 --output text \
   --filter-criteria '{"resourceType":[{"comparison":"EQUALS","value":"AWS_ECR_CONTAINER_IMAGE"}],"findingStatus":[{"comparison":"EQUALS","value":"ACTIVE"}]}' \
   --sort-criteria field=SEVERITY,sortOrder=DESC --query 'findings[].[severity,resources[0].details.awsEcrContainerImage.repositoryName,title]'
 ```
@@ -205,7 +205,7 @@ pod, Kyverno và External Secrets vẫn gọi được API qua đó:
 
 ```sh
 jq -r .vpcCidr "$values"
-AWS_PROFILE=anhnv-stg aws ec2 describe-vpc-endpoints --region ap-southeast-1 --output text \
+AWS_PROFILE=anhnv-stg aws --no-cli-pager ec2 describe-vpc-endpoints --region ap-southeast-1 --output text \
   --filters "Name=vpc-id,Values=$(jq -r .vpcId "$values")" Name=vpc-endpoint-type,Values=Interface \
   --query 'VpcEndpoints[].[ServiceName,State,PrivateDnsEnabled,length(SubnetIds)]' | sort
 for n in sts secretsmanager logs api.ecr "$ecr" aps-workspaces aps xray ssm ec2 elasticloadbalancing sqs eks-auth; do
@@ -228,7 +228,7 @@ AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n external-secrets get pods
 AWS_PROFILE=anhnv-stg kubectl --context svp-stg get externalsecrets.external-secrets.io -A -o json |
   jq -r '[.items[] | select(any(.status.conditions[]?; .type == "Ready" and .status == "True") | not)
     | "\(.metadata.namespace)/\(.metadata.name)"] as $bad | "\(.items | length) ExternalSecrets, not Ready: \($bad | if length == 0 then "none" else join(" ") end)"'
-AWS_PROFILE=anhnv-stg aws eks list-pod-identity-associations --cluster-name svp-stg --region ap-southeast-1 \
+AWS_PROFILE=anhnv-stg aws --no-cli-pager eks list-pod-identity-associations --cluster-name svp-stg --region ap-southeast-1 \
   --query 'associations[].[namespace,serviceAccount]' --output text | sort
 ```
 
@@ -289,9 +289,9 @@ Luật của chart ở AMP, chu kỳ 30 s của overlay stg (quota mặc định
 [`platform-setup.md`](platform-setup.md#bước-8-quota-chu-kỳ-luật-amp)), Alertmanager của AMP gửi SNS:
 
 ```sh
-AWS_PROFILE=anhnv-stg aws amp list-rule-groups-namespaces --workspace-id "$ws" --region ap-southeast-1 \
+AWS_PROFILE=anhnv-stg aws --no-cli-pager amp list-rule-groups-namespaces --workspace-id "$ws" --region ap-southeast-1 \
   --query 'ruleGroupsNamespaces[].[name,status.statusCode]' --output text
-AWS_PROFILE=anhnv-stg aws amp describe-alert-manager-definition --workspace-id "$ws" --region ap-southeast-1 \
+AWS_PROFILE=anhnv-stg aws --no-cli-pager amp describe-alert-manager-definition --workspace-id "$ws" --region ap-southeast-1 \
   --query 'alertManagerDefinition.status.statusCode' --output text
 amp_get api/v1/rules | jq -r '.data.groups[] | "\(.name) \(.interval) \(.rules | length)"'
 ```
@@ -321,7 +321,7 @@ Rollout bị abort, Application `gateway` thành Degraded, và sau 10 phút lu�
 
 ```sh
 aws/scripts/check-account.sh stg
-AWS_PROFILE=anhnv-stg aws iam put-role-policy --role-name svp-stg-argo-rollouts --policy-name svp-session-deny-query --region us-east-1 \
+AWS_PROFILE=anhnv-stg aws --no-cli-pager iam put-role-policy --role-name svp-stg-argo-rollouts --policy-name svp-session-deny-query --region us-east-1 \
   --policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":"aps:QueryMetrics","Resource":"*"}]}'
 date -u +%Y-%m-%dT%H:%M:%SZ | tee "$SVP_SESSION_DIR/canary-deny-start"
 ```
@@ -354,8 +354,8 @@ trong `timeline.tsv` cộng 2 phút lên tải; còn ≥ 6 phút giữ tải):
 
 ```sh
 aws/scripts/check-account.sh stg
-AWS_PROFILE=anhnv-stg aws iam delete-role-policy --role-name svp-stg-argo-rollouts --policy-name svp-session-deny-query --region us-east-1
-AWS_PROFILE=anhnv-stg aws iam list-role-policies --role-name svp-stg-argo-rollouts --region us-east-1 --query PolicyNames --output text
+AWS_PROFILE=anhnv-stg aws --no-cli-pager iam delete-role-policy --role-name svp-stg-argo-rollouts --policy-name svp-session-deny-query --region us-east-1
+AWS_PROFILE=anhnv-stg aws --no-cli-pager iam list-role-policies --role-name svp-stg-argo-rollouts --region us-east-1 --query PolicyNames --output text
 AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp patch rollout gateway --subresource=status --type=merge -p '{"status":{"abort":false}}'
 ```
 
@@ -452,7 +452,7 @@ Tiêu chí: `same`, tức metric bằng hệt (cùng series, cùng số), log v�
 kế còn trong retention của workspace AMP, nhưng log ứng dụng và `aws/spans` giữ ngắn hơn (`log_retention_days`, `span_retention_days` ở
 `locals` của `aws/accounts/<env>`, ADR-0063 §10): quá hạn đó thì hai phần log, trace rỗng là đúng retention, ghi "ngoài retention", chỉ so
 metric. Dòng `query failed` là truy vấn hỏng, không phải dữ liệu mất: lỗi nằm trên terminal (stderr không vào file); sửa nguyên nhân (như
-`AWS_PROFILE=anhnv-sso aws sso login --region us-east-1` khi phiên SSO hết hạn) rồi chạy lại `persist`.
+`AWS_PROFILE=anhnv-sso aws --no-cli-pager sso login --region us-east-1` khi phiên SSO hết hạn) rồi chạy lại `persist`.
 
 ## Gỡ
 

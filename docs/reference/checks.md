@@ -47,12 +47,14 @@ Target ghi cài đặt GitHub (`github-*`, `infracost-key`) là việc của ng�
 Chưa có thư mục `*.tf` nào thì sáu phép Terraform in một dòng và qua. Mọi công cụ chạy bằng image ghim digest ở đầu `Makefile`, mỗi image
 một biến `*_IMAGE` có dòng `# renovate:` ngay trên; `MARKDOWNLINT_IMAGE`, `LYCHEE_IMAGE`, `TRIVY_IMAGE`, `ZIZMOR_IMAGE` cùng bản ghim của
 repo code. terraform-docs chỉ có tag theo kiến trúc nên ghim cả hai cùng bản (`TFDOCS_IMAGE_AMD64`, `TFDOCS_IMAGE_ARM64`), `Makefile`
-chọn theo `uname -m`. Cùng một tham chiếu trên máy dev và trong CI, nên không cài gì thêm và không tin action setup nào.
+chọn theo `uname -m`. Cùng một tham chiếu trên máy dev và trong CI, nên không cài gì thêm và không tin action setup nào. jq của
+`ci/inventory.sh` và `ci/terraform-plan.sh` cũng chạy trong image ghim (`JQ_IMAGE`): jq của runner và của Mac khác bản, nhận chương trình
+khác nhau, nên chương trình chạy được trên máy vẫn có thể đỏ trên runner.
 
 Các target tự kiểm chạy trên máy chủ, không container: `session-test` chỉ cần bash, git và jq mà máy Mac và runner CI đều có, `test-guard`
-chạy với `docker` giả, `github-app-test` dùng python3, `ci-plan-test` chạy với `docker`, `curl`, `gh` giả, `infracost-test` chạy với
-`docker` giả, `inventory-test` chạy với `docker` giả. Image chạy qua `env -u DOCKER_DEFAULT_PLATFORM docker run` (shell của máy đặt
-`linux/amd64` cho dự án khác), container chạy dưới uid của người gọi.
+chạy với `docker` giả, `github-app-test` dùng python3, `ci-plan-test` chạy với `docker` (vai terraform), `curl`, `gh` giả còn jq của
+script chạy thật trong `JQ_IMAGE`, `infracost-test` chạy với `docker` giả, `inventory-test` chạy với `docker` giả. Image chạy qua
+`env -u DOCKER_DEFAULT_PLATFORM docker run` (shell của máy đặt `linux/amd64` cho dự án khác), container chạy dưới uid của người gọi.
 
 Không target nào gọi `apply`, `destroy`, `import`, `output` hay `aws`. Chỉ `ci-plan`, target của job CI, đọc account: `state pull` và
 `plan` chỉ đọc; ngoài nó không target nào gọi `state`, và `plan` duy nhất là các `run` của `make test` và của `make inventory`,

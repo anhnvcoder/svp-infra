@@ -211,7 +211,7 @@ profile, cùng cách đọc `FAIL`), vì `accounts.sh` đặt cả `SVP_AWS_PRD_
 
 ```sh
 cd infra
-AWS_PROFILE=anhnv-sso aws sso login --region us-east-1                          # one login per sso_session
+AWS_PROFILE=anhnv-sso aws --no-cli-pager sso login --region us-east-1   # one login per sso_session
 printf 'mgmt …%s\n' "${SVP_AWS_MGMT_ACCOUNT_ID: -4}"
 eval "$(aws/scripts/accounts.sh)"
 export SVP_SESSION_DIR="$PWD/.session/$(date -u +%Y%m%dT%H%M%SZ)"
@@ -430,14 +430,14 @@ Theo thứ tự, mỗi bước xong mới sang bước sau:
    chứng bảo vệ chạy), rồi xoá nó; đọc backup tự động được giữ, rồi xoá từng cái:
 
    ```sh
-   AWS_PROFILE=anhnv-prd aws backup list-recovery-points-by-backup-vault --backup-vault-name svp-prd --region ap-southeast-1 \
+   AWS_PROFILE=anhnv-prd aws --no-cli-pager backup list-recovery-points-by-backup-vault --backup-vault-name svp-prd --region ap-southeast-1 \
      --query 'length(RecoveryPoints)' --output text
-   AWS_PROFILE=anhnv-prd aws rds describe-db-snapshots --db-instance-identifier svp-prd --snapshot-type manual --region ap-southeast-1 \
+   AWS_PROFILE=anhnv-prd aws --no-cli-pager rds describe-db-snapshots --db-instance-identifier svp-prd --snapshot-type manual --region ap-southeast-1 \
      --query 'DBSnapshots[].[DBSnapshotIdentifier,SnapshotCreateTime,Status]' --output text
-   AWS_PROFILE=anhnv-prd aws rds delete-db-snapshot --db-snapshot-identifier <svp-prd-final-…> --region ap-southeast-1 --query 'DBSnapshot.Status' --output text
-   AWS_PROFILE=anhnv-prd aws rds describe-db-instance-automated-backups --db-instance-identifier svp-prd --region ap-southeast-1 \
+   AWS_PROFILE=anhnv-prd aws --no-cli-pager rds delete-db-snapshot --db-snapshot-identifier <svp-prd-final-…> --region ap-southeast-1 --query 'DBSnapshot.Status' --output text
+   AWS_PROFILE=anhnv-prd aws --no-cli-pager rds describe-db-instance-automated-backups --db-instance-identifier svp-prd --region ap-southeast-1 \
      --query 'DBInstanceAutomatedBackups[].[DBInstanceAutomatedBackupsArn,Status]' --output text
-   AWS_PROFILE=anhnv-prd aws rds delete-db-instance-automated-backup --db-instance-automated-backups-arn <arn> --region ap-southeast-1 \
+   AWS_PROFILE=anhnv-prd aws --no-cli-pager rds delete-db-instance-automated-backup --db-instance-automated-backups-arn <arn> --region ap-southeast-1 \
      --query 'DBInstanceAutomatedBackup.Status' --output text
    ```
 
@@ -457,7 +457,7 @@ Theo thứ tự, mỗi bước xong mới sang bước sau:
    - **Bẫy:** còn gì khác thì chạy lệnh `delete:` nó in, rồi chạy lại. Gói của account rỗng (mong `[]`), cùng lượt sweep sạch này:
 
      ```sh
-     AWS_PROFILE=anhnv-prd aws pricing-plan-manager list-subscriptions --region us-east-1 --query 'subscriptionSummaries[].[arn,planTier,status]' --output json
+     AWS_PROFILE=anhnv-prd aws --no-cli-pager pricing-plan-manager list-subscriptions --region us-east-1 --query 'subscriptionSummaries[].[arn,planTier,status]' --output json
      ```
 
 4. **`aws/scripts/sweep.sh mgmt`** (profile `anhnv-sso`): chỉ `Stack=bootstrap|org|security-baseline|security` (bucket state, trail,

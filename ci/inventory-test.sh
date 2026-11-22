@@ -22,6 +22,7 @@ work=$(cd "$work" && pwd)
 bin=$work/bin infra=$work/infra log=$work/calls.log tmp=$work/tmp
 tf_image=hashicorp/terraform:0.0.0@sha256:0000000000000000000000000000000000000000000000000000000000000000
 d2_image=d2lang/d2:v0.0.0@sha256:1111111111111111111111111111111111111111111111111111111111111111
+jq_image=ghcr.io/jqlang/jq:0.0.0@sha256:2222222222222222222222222222222222222222222222222222222222222222
 canary=svp-canary-7f3a9c
 failures=0
 
@@ -103,6 +104,7 @@ case " $* " in
 {"type":"test_summary","test_summary":{"status":"pass"}}
 JSON
     ;;
+  *" $FAKE_JQ_IMAGE "*) while [ "$1" != "$FAKE_JQ_IMAGE" ]; do shift; done; shift; exec jq "$@" ;;
   *" --entrypoint d2 "*)
     for a in "$@"; do cmd=$a; done
     echo "svg of $cmd" >"$work/$cmd" ;;
@@ -117,8 +119,8 @@ run() {
   : >"$log"
   rc=0
   env PATH="$bin:$PATH" AWS_PROFILE=leak AWS_ACCESS_KEY_ID=leak AWS_SECRET_ACCESS_KEY=leak AWS_SESSION_TOKEN=leak \
-    TMPDIR="$tmp" FAKE_LOG="$log" FAKE_TF_IMAGE="$tf_image" FAKE_CANARY="$canary" TERRAFORM_IMAGE="$tf_image" \
-    D2_IMAGE="$d2_image" DOCKER_DEFAULT_PLATFORM=linux/amd64 \
+    TMPDIR="$tmp" FAKE_LOG="$log" FAKE_TF_IMAGE="$tf_image" FAKE_JQ_IMAGE="$jq_image" FAKE_CANARY="$canary" TERRAFORM_IMAGE="$tf_image" \
+    D2_IMAGE="$d2_image" JQ_IMAGE="$jq_image" DOCKER_DEFAULT_PLATFORM=linux/amd64 \
     bash "$infra/ci/inventory.sh" "$@" >"$work/stdout" 2>"$work/stderr" || rc=$?
 }
 calls() { grep '^ARGS' "$log" | grep -c -- " $1 " || true; }
@@ -170,8 +172,8 @@ expect "write: one .d2 and two SVGs per root" test "$(find "$infra/docs/diagrams
   -eq $((3 * roots_n))
 expect "write: the diagram of aws/envs/stg uses the icon of S3" \
   grep -q 'icon: ../icons/s3.svg' "$infra/docs/diagrams/inventory/envs-stg.d2"
-expect "write: TERRAFORM_IMAGE and D2_IMAGE of the Makefile are pinned by digest" \
-  test "$(grep -E -c '^(TERRAFORM|D2)_IMAGE +:= [^ ]+@sha256:[0-9a-f]{64}$' "$src/../Makefile")" -eq 2
+expect "write: TERRAFORM_IMAGE, D2_IMAGE and JQ_IMAGE of the Makefile are pinned by digest" \
+  test "$(grep -E -c '^(TERRAFORM|D2|JQ)_IMAGE +:= [^ ]+@sha256:[0-9a-f]{64}$' "$src/../Makefile")" -eq 3
 
 # --- check -------------------------------------------------------------------------------------------------------
 run check

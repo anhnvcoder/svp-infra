@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Self-test of ci/terraform-plan.sh with fake docker, curl and gh first on PATH: no container, account, token or
-# network is reached. Runs on the Mac (bash 3.2) and on Linux; needs jq. The script runs from a copy in a tree of its
-# own, so the test writes nothing in this repository and can tell whether the script wrote outside $RUNNER_TEMP.
+# Self-test of ci/terraform-plan.sh with fake docker, curl and gh first on PATH: no account, token or network is
+# reached, and the script's jq runs on the real docker in JQ_IMAGE of the Makefile. Runs on the Mac (bash 3.2) and on
+# Linux; needs docker, and jq for the inline step of plan.yml. The script runs from a copy in a tree of its own, so the
+# test writes nothing in this repository and can tell whether the script wrote outside $RUNNER_TEMP.
 
 # Usage: ci/terraform-plan-test.sh
 #
@@ -14,6 +15,12 @@ command -v jq >/dev/null || {
   echo "FAIL  jq not found" >&2
   exit 1
 }
+FAKE_DOCKER=$(command -v docker) || {
+  echo "FAIL  docker not found" >&2
+  exit 1
+}
+FAKE_JQ_IMAGE=$(sed -n 's/^JQ_IMAGE *:= //p' "$src/../Makefile")
+export FAKE_DOCKER FAKE_JQ_IMAGE
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 work=$(cd "$work" && pwd)
@@ -41,6 +48,14 @@ expect() {
 # plan) makes that command fail with the masked values in its stderr, FAKE_PLAN_RC is plan's exit code otherwise.
 cat >"$bin/docker" <<'EOF'
 #!/usr/bin/env bash
+# The pinned jq image runs on the real docker, each call logged in one write to $FAKE_LOG.jq: jq runs beside
+# terraform in a pipe, and a log shared with it would interleave their lines.
+pjq() { env -u DOCKER_DEFAULT_PLATFORM "$FAKE_DOCKER" run --rm -i --network none "$FAKE_JQ_IMAGE" "$@"; }
+case " $* " in
+  *" $FAKE_JQ_IMAGE "*)
+    printf 'JQ%s\n' "$(printf ' %s' "$@")" >>"$FAKE_LOG.jq"
+    exec env -u DOCKER_DEFAULT_PLATFORM "$FAKE_DOCKER" "$@" ;;
+esac
 image= workdir= secret= data= prev=
 envs=()
 args=("$@")
@@ -63,7 +78,7 @@ tf=("${args[@]:image+1}")
     [ -z "$(find "$secret/token" -perm 0600 2>/dev/null)" ] || perm=600
     echo "TOKEN $(cat "$secret/token") $perm $secret"
     f=$secret/media-signing.tfvars.json
-    [ ! -f "$f" ] || echo "MEDIA $(jq -c . "$f") $([ -z "$(find "$f" -perm 0600)" ] || echo 600)"
+    [ ! -f "$f" ] || echo "MEDIA $(pjq -c . <"$f") $([ -z "$(find "$f" -perm 0600)" ] || echo 600)"
   fi
   echo "TF ${workdir#/src/} ${tf[*]}"
 } >>"$FAKE_LOG"
@@ -119,7 +134,8 @@ done
 case " $* " in
   *'/pulls/'*'/files '*) printf '%b' "$FAKE_FILES" ;;
   *' body=@'*) ;;
-  *) jq -r "$expr" <<<"${FAKE_COMMENTS:-[]}" ;;
+  *) env -u DOCKER_DEFAULT_PLATFORM "$FAKE_DOCKER" run --rm -i --network none "$FAKE_JQ_IMAGE" -r "$expr" \
+       <<<"${FAKE_COMMENTS:-[]}" ;;
 esac
 EOF
 chmod +x "$bin/docker" "$bin/curl" "$bin/gh"
@@ -151,7 +167,7 @@ run() {
   shift
   while [ $# -gt 0 ] && [ "$1" != -- ]; do a+=("$1"); shift; done
   [ $# -eq 0 ] || shift
-  rm -rf "$work/runner" "$log" "$log.tokens" "$work/out" "$work/err"
+  rm -rf "$work/runner" "$log" "$log.tokens" "$log.jq" "$work/out" "$work/err"
   mkdir -p "$work/runner"
   : >"$log"
   : >"$work/step.md"
@@ -161,6 +177,7 @@ run() {
     GITHUB_ACTIONS=true ACTIONS_ID_TOKEN_REQUEST_URL='https://token.actions.example/x?api-version=2.0' \
     ACTIONS_ID_TOKEN_REQUEST_TOKEN=request-token RUNNER_TEMP="$work/runner" GITHUB_STEP_SUMMARY="$work/step.md" \
     GITHUB_OUTPUT="$work/output" GITHUB_RUN_ID=42 GITHUB_RUN_ATTEMPT=1 TERRAFORM_IMAGE="$image" \
+    JQ_IMAGE="$FAKE_JQ_IMAGE" \
     SVP_AWS_STG_ACCOUNT_ID=111111111111 SVP_AWS_PRD_ACCOUNT_ID=222222222222 SVP_AWS_LOG_ACCOUNT_ID=333333333333 \
     SVP_AWS_BACKUP_ACCOUNT_ID=444444444444 SVP_TFVARS_ACCOUNT_STG="$tfvars_account" SVP_TFVARS_ENV_STG="$tfvars_env" \
     SVP_TFVARS_ACCOUNT_PRD='zone_name = "prd.svp.example"' SVP_TFVARS_ENV_PRD='domain = "prd.svp.example"' \
@@ -222,6 +239,10 @@ expect "an unterminated string in a tfvars secret: refused before docker" bash -
 run "image by tag" plan stg -- TERRAFORM_IMAGE=hashicorp/terraform:1.15.8
 expect "TERRAFORM_IMAGE without digest: refused before any call" bash -c '[ "$1" -ne 0 ] && [ ! -s "$2" ]' _ "$rc" "$log"
 
+run "jq image by tag" plan stg -- JQ_IMAGE=ghcr.io/jqlang/jq:1.8.1
+expect "JQ_IMAGE without digest: plan refused before any call" bash -c '[ "$1" -ne 0 ] && [ ! -s "$2" ] && [ ! -s "$2.jq" ]' \
+  _ "$rc" "$log"
+
 run "no token" plan stg -- FAKE_NO_TOKEN=1
 expect "no OIDC token from the endpoint: red, no docker" bash -c '[ "$1" -ne 0 ] && [ "$(grep -c "^ARGS" "$2")" = 0 ]' _ "$rc" "$log"
 
@@ -260,6 +281,11 @@ expect "every docker call runs TERRAFORM_IMAGE as the caller, the repository rea
   [ "$(grep "^ARGS" "$1" | grep -F -c -- " --user ")" = "$n" ] &&
   [ "$(grep "^ARGS" "$1" | grep -F -c -- " -v $2:/src:ro ")" = "$n" ] &&
   [ "$(grep "^ARGS" "$1" | grep -F -c -- " $3 ")" = "$n" ]' _ "$log" "$infra" "$image"
+expect "every jq call runs JQ_IMAGE as the caller, no network or variable, the masks file alone mounted read-only" \
+  bash -c '
+  n=$(grep -c "^JQ" "$1.jq"); [ "$n" -gt 10 ] &&
+  [ "$(grep -c "^JQ run --rm -i --network none --user [0-9]*:[0-9]* -v $2/svp-plan-stg/masks:/run/masks:ro $3 " "$1.jq")" \
+    = "$n" ]' _ "$log" "$work/runner" "$FAKE_JQ_IMAGE"
 expect "the role and the web identity token file are all the AWS credential docker gets" bash -c '
   grep "^ENV AWS_" "$1" | sort -u | tr "\n" "," | grep -qx "ENV AWS_REGION=ap-southeast-1,ENV AWS_ROLE_ARN=arn:aws:iam::111111111111:role/svp-ci-terraform-plan,ENV AWS_ROLE_SESSION_NAME=github-42-1,ENV AWS_WEB_IDENTITY_TOKEN_FILE=/run/svp/token,"' _ "$log"
 expect "the caller's AWS_PROFILE never reaches docker" bash -c '! grep -q leak "$1"' _ "$log"
@@ -366,6 +392,13 @@ gate '["stg"]' 'aws/org/main.tf\t\n' CHANGED=3000
 expect "the API lists fewer files than changed: plans" test "$envs" = '["stg"]'
 gate '["stg"]' 'ci/terraform-plan.sh\t\n'
 expect "a change of ci/ alone: plans" test "$envs" = '["stg"]'
+expect "gate: jq runs JQ_IMAGE as the caller without network, nothing mounted" bash -c '
+  n=$(grep -c "^JQ" "$1.jq"); [ "$n" -gt 0 ] &&
+  [ "$(grep -c "^JQ run --rm -i --network none --user [0-9]*:[0-9]* $2 " "$1.jq")" = "$n" ]' \
+  _ "$log" "$FAKE_JQ_IMAGE"
+gate '["stg"]' 'aws/envs/stg/main.tf\t\n' JQ_IMAGE=ghcr.io/jqlang/jq:1.8.1
+expect "gate: JQ_IMAGE without digest: red before any call" bash -c '[ "$1" -ne 0 ] && [ ! -s "$2" ] && [ ! -s "$2.jq" ]' \
+  _ "$rc" "$log"
 
 # --- comment -----------------------------------------------------------------------------------------------------
 # Step "Post the summary" of job plan-comment as plan.yml holds it (that job has no checkout, so it cannot call a

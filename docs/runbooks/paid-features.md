@@ -31,7 +31,7 @@ này (`infra/`) trừ chỗ ghi `cd`. Bước nào đỏ thì dừng ở đó, d
 
 ```sh
 cd infra
-AWS_PROFILE=anhnv-sso aws sso login --region us-east-1      # one login for every profile of the same sso_session
+AWS_PROFILE=anhnv-sso aws --no-cli-pager sso login --region us-east-1   # one login per sso_session
 printf 'mgmt …%s\n' "${SVP_AWS_MGMT_ACCOUNT_ID: -4}"   # account ids come from .envrc (direnv), 4 last digits only
 export SVP_SESSION_DIR="$PWD/.session/$(date -u +%Y%m%dT%H%M%SZ)"      # check-account.sh writes its marks here
 jq -r 'to_entries[] | .key as $a | .value | to_entries[] | "\($a) \(.key) \(.value)"' aws/paid-features.json
@@ -189,7 +189,7 @@ cd ../..
 
 ```sh
 for r in ap-southeast-1 us-east-1; do
-  AWS_PROFILE=anhnv-stg-ro aws configservice describe-configuration-recorder-status --region "$r" \
+  AWS_PROFILE=anhnv-stg-ro aws --no-cli-pager configservice describe-configuration-recorder-status --region "$r" \
     --query 'ConfigurationRecordersStatus[].[name,recording,lastStatus]' --output text
 done
 ```
@@ -234,9 +234,9 @@ AWS_PROFILE=anhnv-stg terraform show -no-color stg.tfplan > "$SVP_SESSION_DIR/st
 ```sh
 AWS_PROFILE=anhnv-stg terraform apply -input=false stg.tfplan && rm stg.tfplan
 cd ../../..
-AWS_PROFILE=anhnv-stg aws ecr get-registry-scanning-configuration --region ap-southeast-1 --output text \
+AWS_PROFILE=anhnv-stg aws --no-cli-pager ecr get-registry-scanning-configuration --region ap-southeast-1 --output text \
   --query 'scanningConfiguration.[scanType,rules[0].scanFrequency]'
-AWS_PROFILE=anhnv-stg aws grafana list-workspaces --region ap-southeast-1 --query "workspaces[?name=='svp-stg'].status" --output text
+AWS_PROFILE=anhnv-stg aws --no-cli-pager grafana list-workspaces --region ap-southeast-1 --query "workspaces[?name=='svp-stg'].status" --output text
 ```
 
 - **Mong đợi:** `ENHANCED CONTINUOUS_SCAN` khi `inspector_ecr` là `always`, `BASIC SCAN_ON_PUSH` khi `off`; workspace `ACTIVE` khi

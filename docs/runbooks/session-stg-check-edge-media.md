@@ -49,9 +49,9 @@ prd chạy đúng các lệnh này với `anhnv-prd`, `prd`.
 (c) Gói đã có hiệu lực trên đúng hai tài nguyên, rồi plan lần hai không còn gì để đổi:
 
 ```sh
-AWS_PROFILE=anhnv-stg aws pricing-plan-manager list-subscriptions --region us-east-1 --query 'subscriptionSummaries[].arn' --output text
-AWS_PROFILE=anhnv-stg aws pricing-plan-manager get-subscription --arn <arn trên> --region us-east-1 --query '[subscription.status,subscription.planTier]' --output text
-AWS_PROFILE=anhnv-stg aws pricing-plan-manager get-subscription --arn <arn trên> --region us-east-1 --query 'subscription.resourceArns' --output json
+AWS_PROFILE=anhnv-stg aws --no-cli-pager pricing-plan-manager list-subscriptions --region us-east-1 --query 'subscriptionSummaries[].arn' --output text
+AWS_PROFILE=anhnv-stg aws --no-cli-pager pricing-plan-manager get-subscription --arn <arn trên> --region us-east-1 --query '[subscription.status,subscription.planTier]' --output text
+AWS_PROFILE=anhnv-stg aws --no-cli-pager pricing-plan-manager get-subscription --arn <arn trên> --region us-east-1 --query 'subscription.resourceArns' --output json
 aws/scripts/tf.sh stg env plan
 ```
 
@@ -70,7 +70,7 @@ seed), rồi trình duyệt phát video; ghi như mục trên:
 
 ```sh
 values=$SVP_SESSION_DIR/cluster-values.json
-key=$(AWS_PROFILE=anhnv-stg aws s3api list-objects-v2 --bucket "$(jq -r .mediaBucket "$values")" --prefix media/ --region ap-southeast-1 \
+key=$(AWS_PROFILE=anhnv-stg aws --no-cli-pager s3api list-objects-v2 --bucket "$(jq -r .mediaBucket "$values")" --prefix media/ --region ap-southeast-1 \
   --query "Contents[?ends_with(Key, 'master.m3u8')].Key | [0]" --output text)
 curl -sI -H "Origin: https://$(jq -r .domain "$values")" "https://$(jq -r .mediaDomain "$values")/$key" | grep -i -E '^(HTTP|access-control-allow-origin)'
 ```
@@ -121,7 +121,7 @@ có `HTTP/2 200`, không HSTS, nosniff (khác biệt stg/prd của ADR-0061); me
 (b) ALB edge không có tên công khai: scheme `internal`, tên DNS chỉ ra IP private trong CIDR của VPC:
 
 ```sh
-lb=$(AWS_PROFILE=anhnv-stg aws elbv2 describe-load-balancers --names svp-stg-edge --region ap-southeast-1 \
+lb=$(AWS_PROFILE=anhnv-stg aws --no-cli-pager elbv2 describe-load-balancers --names svp-stg-edge --region ap-southeast-1 \
   --query 'LoadBalancers[0].[Scheme,DNSName]' --output text); echo "$lb"
 dig +short "$(cut -f 2 <<<"$lb")" @1.1.1.1
 ```
@@ -171,9 +171,9 @@ bước (4) của [`org-security-setup.md`](org-security-setup.md#bước-4-awso
 
 ```sh
 L=$SVP_AWS_LOG_ACCOUNT_ID A=$SVP_AWS_STG_ACCOUNT_ID
-AWS_PROFILE=anhnv-log-ro aws s3 ls "s3://svp-cloudfront-$L-us-east-1/$A/" --recursive --region us-east-1 |
+AWS_PROFILE=anhnv-log-ro aws --no-cli-pager s3 ls "s3://svp-cloudfront-$L-us-east-1/$A/" --recursive --region us-east-1 |
   tail -n 3 | sed "s/$A/<account>/g"
-AWS_PROFILE=anhnv-log-ro aws s3 ls "s3://aws-waf-logs-svp-$L-us-east-1/AWSLogs/$A/WAFLogs/" --recursive --region us-east-1 |
+AWS_PROFILE=anhnv-log-ro aws --no-cli-pager s3 ls "s3://aws-waf-logs-svp-$L-us-east-1/AWSLogs/$A/WAFLogs/" --recursive --region us-east-1 |
   tail -n 3 | sed "s/$A/<account>/g"
 ```
 
@@ -187,7 +187,7 @@ reference](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/st
 trong buổi chưa phải lỗi. Khi đó kiểm delivery của account env trỏ đúng đích:
 
 ```sh
-AWS_PROFILE=anhnv-stg aws logs describe-deliveries --region us-east-1 \
+AWS_PROFILE=anhnv-stg aws --no-cli-pager logs describe-deliveries --region us-east-1 \
   --query 'deliveries[].[deliverySourceName,deliveryDestinationArn]' --output text | sed "s/$L/<log>/g"
 ```
 
@@ -293,14 +293,14 @@ hay lý do hỏng trước khi có job (`docs/explanation/transcode.md` của re
 values=$SVP_SESSION_DIR/cluster-values.json
 media=$(jq -r .mediaBucket "$values"); dom=$(jq -r .domain "$values"); cdn=https://$(jq -r .mediaDomain "$values")
 record_key() {          # job record key of video $1
-  AWS_PROFILE=anhnv-stg aws s3api list-objects-v2 --bucket "$media" --prefix "transcode-jobs/$1/" --region ap-southeast-1 \
+  AWS_PROFILE=anhnv-stg aws --no-cli-pager s3api list-objects-v2 --bucket "$media" --prefix "transcode-jobs/$1/" --region ap-southeast-1 \
     --query 'Contents[0].Key' --output text
 }
 last_key() {            # newest job record: the video just uploaded
-  AWS_PROFILE=anhnv-stg aws s3api list-objects-v2 --bucket "$media" --prefix transcode-jobs/ --region ap-southeast-1 \
+  AWS_PROFILE=anhnv-stg aws --no-cli-pager s3api list-objects-v2 --bucket "$media" --prefix transcode-jobs/ --region ap-southeast-1 \
     --query 'sort_by(Contents, &LastModified)[-1].Key' --output text
 }
-show() { AWS_PROFILE=anhnv-stg aws s3 cp "s3://$media/$1" - --region ap-southeast-1; }
+show() { AWS_PROFILE=anhnv-stg aws --no-cli-pager s3 cp "s3://$media/$1" - --region ap-southeast-1; }
 ```
 
 (a) Smoke đi qua MediaConvert: Deployment `media-worker` chạy lệnh con `mediaconvert`, và job trong bản ghi của mỗi
@@ -312,8 +312,8 @@ job của nó (`record-job`) hay lý do của nó (`reason`), và mỗi job khá
 ```sh
 AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp get deploy media-worker \
   -o jsonpath='{.spec.template.spec.containers[?(@.name=="media-worker")].args}{"\n"}'
-AWS_PROFILE=anhnv-stg aws mediaconvert list-jobs --queue svp-stg --region ap-southeast-1 --output json > "$SVP_SESSION_DIR/mediaconvert-jobs.json"
-AWS_PROFILE=anhnv-stg aws s3 sync "s3://$media/transcode-jobs/" "$SVP_SESSION_DIR/transcode-jobs/" --region ap-southeast-1 --only-show-errors
+AWS_PROFILE=anhnv-stg aws --no-cli-pager mediaconvert list-jobs --queue svp-stg --region ap-southeast-1 --output json > "$SVP_SESSION_DIR/mediaconvert-jobs.json"
+AWS_PROFILE=anhnv-stg aws --no-cli-pager s3 sync "s3://$media/transcode-jobs/" "$SVP_SESSION_DIR/transcode-jobs/" --region ap-southeast-1 --only-show-errors
 find "$SVP_SESSION_DIR/transcode-jobs" -name '*.json' -exec jq -c '{video: (input_filename | split("/")[-2]), job: .job_id, reason}' {} + |
   jq -rs --slurpfile all "$SVP_SESSION_DIR/mediaconvert-jobs.json" '($all[0].Jobs | map({key: .Id, value: .Status}) | from_entries) as $st
     | map(.job | select(.)) as $own | map(.video) as $videos
@@ -389,7 +389,7 @@ AWS_PROFILE=anhnv-stg make -C ../backend eks-transcode-timing CONTEXT=svp-stg DO
   tee "$SVP_SESSION_DIR/transcode-timing-mediaconvert.txt"
 grep -E '^[0-9a-f-]{36} [0-9]+$' "$SVP_SESSION_DIR/transcode-timing-mediaconvert.txt" | cut -d ' ' -f 1 | while read -r id; do
   job=$(show "$(record_key "$id")" | jq -r .job_id)
-  AWS_PROFILE=anhnv-stg aws mediaconvert get-job --id "$job" --region ap-southeast-1 --output json \
+  AWS_PROFILE=anhnv-stg aws --no-cli-pager mediaconvert get-job --id "$job" --region ap-southeast-1 --output json \
     --query 'Job.{id: Id, status: Status, timing: Timing, outputs: OutputGroupDetails[].OutputDetails[].[DurationInMs, VideoDetails.WidthInPx, VideoDetails.HeightInPx]}'
 done | tee "$SVP_SESSION_DIR/transcode-timing-jobs.json"
 ```
@@ -403,7 +403,7 @@ buổi](session-stg.md#kết-thúc-buổi).
 
 ```sh
 id=$(grep -E -m 1 '^[0-9a-f-]{36} [0-9]+$' "$SVP_SESSION_DIR/transcode-timing-mediaconvert.txt" | cut -d ' ' -f 1)
-key=$(AWS_PROFILE=anhnv-stg aws s3api list-objects-v2 --bucket "$media" --prefix "media/$id/" --region ap-southeast-1 \
+key=$(AWS_PROFILE=anhnv-stg aws --no-cli-pager s3api list-objects-v2 --bucket "$media" --prefix "media/$id/" --region ap-southeast-1 \
   --query "Contents[?ends_with(Key, 'master.m3u8')].Key | [0]" --output text)
 dir=${key%/master.m3u8}
 var=$(curl -s "$cdn/$key" | grep -v -e '^#' -e '^[[:space:]]*$' | head -n 1 | tr -d '\r')
@@ -423,7 +423,7 @@ khác giá trị: dán output cho AI.
 ```sh
 AWS_PROFILE=anhnv-stg make -C ../backend eks-transcode-timing CONTEXT=svp-stg DOMAIN="$dom" CLIP="$SVP_SESSION_DIR/clip-200s.mp4" N=1
 key=$(last_key); echo "$key"; show "$key"
-AWS_PROFILE=anhnv-stg aws mediaconvert list-jobs --queue svp-stg --region ap-southeast-1 --output json \
+AWS_PROFILE=anhnv-stg aws --no-cli-pager mediaconvert list-jobs --queue svp-stg --region ap-southeast-1 --output json \
   --query "Jobs[?UserMetadata.video_id=='$(cut -d / -f 2 <<<"$key")'].[Id,Status]"
 ```
 
@@ -436,7 +436,7 @@ Mong: `make` dừng ở `FAIL  video v went FAILED instead of READY`; key `trans
 AWS_PROFILE=anhnv-stg make -C ../backend eks-transcode-timing CONTEXT=svp-stg DOMAIN="$dom" CLIP="$SVP_SESSION_DIR/clip-200s-says-60s.mp4" N=1
 key=$(last_key); echo "$key"; show "$key"
 job=$(show "$key" | jq -r '.job_id // empty')
-[ -z "$job" ] || AWS_PROFILE=anhnv-stg aws mediaconvert get-job --id "$job" --region ap-southeast-1 --output json \
+[ -z "$job" ] || AWS_PROFILE=anhnv-stg aws --no-cli-pager mediaconvert get-job --id "$job" --region ap-southeast-1 --output json \
   --query 'Job.[Status,ErrorCode,OutputGroupDetails[].OutputDetails[].DurationInMs]'
 ```
 
@@ -453,12 +453,12 @@ Loại: `lõi`.
 
 ```sh
 for q in svp-stg-transcode-events svp-stg-transcode-events-dlq; do
-  url=$(AWS_PROFILE=anhnv-stg aws sqs get-queue-url --queue-name "$q" --region ap-southeast-1 --query QueueUrl --output text)
-  echo "$q $(AWS_PROFILE=anhnv-stg aws sqs get-queue-attributes --queue-url "$url" --region ap-southeast-1 --output text \
+  url=$(AWS_PROFILE=anhnv-stg aws --no-cli-pager sqs get-queue-url --queue-name "$q" --region ap-southeast-1 --query QueueUrl --output text)
+  echo "$q $(AWS_PROFILE=anhnv-stg aws --no-cli-pager sqs get-queue-attributes --queue-url "$url" --region ap-southeast-1 --output text \
     --attribute-names ApproximateNumberOfMessages ApproximateNumberOfMessagesNotVisible \
     --query 'Attributes.[ApproximateNumberOfMessages,ApproximateNumberOfMessagesNotVisible]')"
 done
-AWS_PROFILE=anhnv-stg aws cloudwatch describe-alarms --alarm-names svp-stg-transcode-events-dlq --region ap-southeast-1 --output text \
+AWS_PROFILE=anhnv-stg aws --no-cli-pager cloudwatch describe-alarms --alarm-names svp-stg-transcode-events-dlq --region ap-southeast-1 --output text \
   --query 'MetricAlarms[].[AlarmName,StateValue]'
 AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp logs deploy/media-worker --since=3h |
   grep -c -E 'transcode event (ignored|interrupted)|transcode result undecided'

@@ -15,7 +15,7 @@
 set -euo pipefail
 
 repo=$(cd "$(dirname "$0")/.." && pwd)
-: "${TERRAFORM_IMAGE:?set by make inventory}" "${D2_IMAGE:?set by make inventory}"
+: "${TERRAFORM_IMAGE:?set by make inventory}" "${D2_IMAGE:?set by make inventory}" "${JQ_IMAGE:?set by make inventory}"
 page=docs/reference/inventory.md
 diagrams=docs/diagrams/inventory
 cache=$repo/.plugin-cache
@@ -31,6 +31,10 @@ fail() {
   echo "FAIL: inventory: $*" >&2
   exit 1
 }
+
+# One jq for every machine: the pinned image, not the host's (1.7.1 on the runner, 1.8.x on a Mac accept different
+# programs). It reads stdin alone, so a caller redirects a file in.
+jq() { docker run --rm -i --network none "$JQ_IMAGE" "$@"; }
 
 # denied PATH: whether the copy leaves PATH out. git already leaves out what .gitignore lists; this list holds even for
 # a file someone added with git add -f. Test files of the repository are left out too: only the inventory's run.
@@ -128,12 +132,12 @@ plan() {
   # shellcheck disable=SC2046 # one -var-file argument per line, without blanks
   "${TF_RUN[@]}" --network none -v "$data:/tfdata" -v "$cache/terraform:/plugin-cache:ro" -v "$copy:/src:ro" \
     -w "/src/$root" "$TERRAFORM_IMAGE" test -json -verbose -no-color $(var_files "$root") >"$out" 2>&1 || rc=$?
-  if [ "$rc" -ne 0 ] || ! jq -e 'select(.type == "test_summary") | .test_summary.status == "pass"' "$out" >/dev/null; then
-    jq -r 'select(.["@level"] == "error") | .["@message"] + "\n" + (.diagnostic.detail // "")' "$out" >&2 ||
+  if [ "$rc" -ne 0 ] || ! jq -e 'select(.type == "test_summary") | .test_summary.status == "pass"' <"$out" >/dev/null; then
+    jq -r 'select(.["@level"] == "error") | .["@message"] + "\n" + (.diagnostic.detail // "")' <"$out" >&2 ||
       cat "$out" >&2
     fail "terraform test of $root with ci/inventory/$(family "$root").tftest.hcl"
   fi
-  jq -c 'select(.type == "test_plan" and .["@testrun"] == "inventory") | .test_plan' "$out" >"$work/plan.json"
+  jq -c 'select(.type == "test_plan" and .["@testrun"] == "inventory") | .test_plan' <"$out" >"$work/plan.json"
   [ -s "$work/plan.json" ] || fail "terraform test of $root printed no plan of run \"inventory\""
 }
 
@@ -144,7 +148,7 @@ records() {
   jq -r '.resource_changes[]? | select(.mode == "managed")
     | [((.module_address // "" | capture("^(?<m>module\\.[A-Za-z0-9_-]+)") | .m)? // "-"), .type, .name,
        (if .change.importing then "import" else .change.actions | if . == ["create"] then "create"
-         else join("-") end end)] | @tsv' "$work/plan.json" >"$work/changes.tsv"
+         else join("-") end end)] | @tsv' <"$work/plan.json" >"$work/changes.tsv"
   while IFS=$'\t' read -r module type name action; do
     if [ "$module" = - ]; then
       file=$(grep -lE "^resource \"$type\" \"$name\"" "$copy/$root"/*.tf | head -n 1) || true
@@ -188,7 +192,7 @@ SERVICES='def service:
 root_records() {
   jq -R -s -c --arg root "$1" "$SERVICES"'
     [split("\n")[] | select(length > 0) | split("\t") | select(.[0] == $root)
-     | {part: .[1], type: .[2], action: .[3], service: (.[2] | service)}]' "$work/records.tsv"
+     | {part: .[1], type: .[2], action: .[3], service: (.[2] | service)}]' <"$work/records.tsv"
 }
 
 # The page's opening, then what the fake values of each root family assume (ci/inventory/<family>.tftest.hcl), in
@@ -368,7 +372,6 @@ generate() {
 main() {
   local mode=${1:-} out f rc=0
   case $mode in write | check) ;; *) echo "usage: ci/inventory.sh write|check" >&2 && exit 2 ;; esac
-  command -v jq >/dev/null || fail "jq is not installed"
   work=$(mktemp -d)
   locked=
   trap 'unlock; rm -rf "$work"' EXIT
