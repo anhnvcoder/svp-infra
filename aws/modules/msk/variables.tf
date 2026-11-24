@@ -47,13 +47,15 @@ variable "kafka_version" {
 }
 
 variable "broker_instance_type" {
-  description = "Instance type of every broker (kafka.t3.small for a lab env, kafka.m7g.large for production)."
+  description = "Instance type of every broker: a Standard broker of the m5, m7g or m8g family, the ones MSK accepts for a KRaft cluster (kafka.m7g.large in every env)."
   type        = string
-  default     = "kafka.t3.small"
+  default     = "kafka.m7g.large"
 
   validation {
-    condition     = startswith(var.broker_instance_type, "kafka.")
-    error_message = "broker_instance_type must be an MSK broker type such as kafka.t3.small."
+    # CreateCluster refuses the t3 family with a KRaft version even though the broker size list names it; Express
+    # brokers take no EBS storage settings, which this module sets.
+    condition     = can(regex("^kafka\\.(m5|m7g|m8g)\\.[0-9a-z]+$", var.broker_instance_type))
+    error_message = "broker_instance_type must be a Standard MSK broker type of the m5, m7g or m8g family, such as kafka.m7g.large."
   }
 }
 

@@ -386,7 +386,7 @@ không phí. Không sửa tay: `make inventory-check` ở CI đỏ khi trang hay
 
 ### `aws/envs/stg`
 
-`Plan: 384 to add, 0 to change, 0 to destroy.`
+`Plan: 394 to add, 0 to change, 0 to destroy.`
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../diagrams/inventory/envs-stg-dark.svg">
@@ -398,11 +398,11 @@ không phí. Không sửa tay: `make inventory-check` ở CI đỏ khi trang hay
 | `module.alarms` | 5 |
 | `module.backup_alarms` | 2 |
 | `module.edge` | 30 |
-| `module.eks` | 89 |
+| `module.eks` | 88 |
 | `module.elasticache` | 15 |
 | `module.external_secrets` | 25 |
-| `module.media` | 40 |
-| `module.msk` | 37 |
+| `module.media` | 42 |
+| `module.msk` | 46 |
 | `module.network` | 90 |
 | `module.rds` | 22 |
 | `module.ssm_bastion` | 7 |
@@ -420,12 +420,12 @@ không phí. Không sửa tay: `make inventory-check` ở CI đỏ khi trang hay
 | `aws_cloudfront_key_group` | CloudFront | 1 |
 | `aws_cloudfront_origin_access_control` | CloudFront | 1 |
 | `aws_cloudfront_public_key` | CloudFront | 1 |
-| `aws_cloudfront_response_headers_policy` | CloudFront | 2 |
+| `aws_cloudfront_response_headers_policy` | CloudFront | 3 |
 | `aws_cloudfront_vpc_origin` | CloudFront | 1 |
 | `aws_cloudwatch_event_rule` | EventBridge | 6 |
 | `aws_cloudwatch_event_target` | EventBridge | 6 |
-| `aws_cloudwatch_log_delivery` | CloudWatch | 2 |
-| `aws_cloudwatch_log_delivery_source` | CloudWatch | 2 |
+| `aws_cloudwatch_log_delivery` | CloudWatch | 3 |
+| `aws_cloudwatch_log_delivery_source` | CloudWatch | 3 |
 | `aws_cloudwatch_log_group` | CloudWatch | 6 |
 | `aws_cloudwatch_metric_alarm` | CloudWatch | 19 |
 | `aws_db_instance` | RDS | 1 |
@@ -450,10 +450,10 @@ không phí. Không sửa tay: `make inventory-check` ở CI đỏ khi trang hay
 | `aws_flow_log` | VPC | 1 |
 | `aws_guardduty_malware_protection_plan` | GuardDuty | 1 |
 | `aws_iam_instance_profile` | IAM | 1 |
-| `aws_iam_policy` | IAM | 3 |
+| `aws_iam_policy` | IAM | 2 |
 | `aws_iam_role` | IAM | 24 |
-| `aws_iam_role_policy` | IAM | 18 |
-| `aws_iam_role_policy_attachment` | IAM | 13 |
+| `aws_iam_role_policy` | IAM | 19 |
+| `aws_iam_role_policy_attachment` | IAM | 12 |
 | `aws_instance` | EC2 | 1 |
 | `aws_internet_gateway` | VPC | 1 |
 | `aws_kms_alias` | KMS | 6 |
@@ -469,7 +469,6 @@ không phí. Không sửa tay: `make inventory-check` ở CI đỏ khi trang hay
 | `aws_nat_gateway` | VPC | 1 |
 | `aws_network_acl` | VPC | 4 |
 | `aws_network_acl_rule` | VPC | 34 |
-| `aws_pricingplanmanager_subscription` | CloudFront | 1 |
 | `aws_route` | VPC | 2 |
 | `aws_route53_record` | Route 53 | 9 |
 | `aws_route_table` | VPC | 4 |
@@ -485,6 +484,7 @@ không phí. Không sửa tay: `make inventory-check` ở CI đỏ khi trang hay
 | `aws_s3_bucket_versioning` | S3 | 2 |
 | `aws_s3_object` | S3 | 1 |
 | `aws_secretsmanager_secret` | Secrets Manager | 21 |
+| `aws_secretsmanager_secret_policy` | Secrets Manager | 9 |
 | `aws_secretsmanager_secret_version` | Secrets Manager | 12 |
 | `aws_security_group` | VPC | 9 |
 | `aws_security_group_rule` | VPC | 13 |
@@ -506,7 +506,7 @@ không phí. Không sửa tay: `make inventory-check` ở CI đỏ khi trang hay
 
 ### `aws/envs/prd`
 
-`Plan: 404 to add, 0 to change, 0 to destroy.`
+`Plan: 412 to add, 0 to change, 0 to destroy.`
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../diagrams/inventory/envs-prd-dark.svg">
@@ -518,11 +518,11 @@ không phí. Không sửa tay: `make inventory-check` ở CI đỏ khi trang hay
 | `module.alarms` | 5 |
 | `module.backup_alarms` | 2 |
 | `module.edge` | 30 |
-| `module.eks` | 89 |
+| `module.eks` | 88 |
 | `module.elasticache` | 15 |
 | `module.external_secrets` | 25 |
 | `module.media` | 42 |
-| `module.msk` | 37 |
+| `module.msk` | 46 |
 | `module.network` | 108 |
 | `module.rds` | 22 |
 | `module.ssm_bastion` | 7 |
@@ -570,10 +570,10 @@ không phí. Không sửa tay: `make inventory-check` ở CI đỏ khi trang hay
 | `aws_flow_log` | VPC | 1 |
 | `aws_guardduty_malware_protection_plan` | GuardDuty | 1 |
 | `aws_iam_instance_profile` | IAM | 1 |
-| `aws_iam_policy` | IAM | 3 |
+| `aws_iam_policy` | IAM | 2 |
 | `aws_iam_role` | IAM | 24 |
-| `aws_iam_role_policy` | IAM | 18 |
-| `aws_iam_role_policy_attachment` | IAM | 13 |
+| `aws_iam_role_policy` | IAM | 19 |
+| `aws_iam_role_policy_attachment` | IAM | 12 |
 | `aws_instance` | EC2 | 1 |
 | `aws_internet_gateway` | VPC | 1 |
 | `aws_kms_alias` | KMS | 6 |
@@ -604,6 +604,7 @@ không phí. Không sửa tay: `make inventory-check` ở CI đỏ khi trang hay
 | `aws_s3_bucket_versioning` | S3 | 2 |
 | `aws_s3_object` | S3 | 1 |
 | `aws_secretsmanager_secret` | Secrets Manager | 21 |
+| `aws_secretsmanager_secret_policy` | Secrets Manager | 9 |
 | `aws_secretsmanager_secret_version` | Secrets Manager | 12 |
 | `aws_security_group` | VPC | 9 |
 | `aws_security_group_rule` | VPC | 13 |

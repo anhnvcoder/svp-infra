@@ -67,7 +67,7 @@ AWS_PROFILE=anhnv-stg aws --no-cli-pager elasticache describe-users --region ap-
   --query "Users[?starts_with(UserId, 'svp-stg-')].[UserName,Status,AccessString]"
 ```
 
-Mong `ACTIVE`, `4.1.x.kraft`, `kafka.t3.small`, `2`; `True`, `False`, `TLS`; `available`, `required`, `True`, `1`; bốn user `active` với
+Mong `ACTIVE`, `4.1.x.kraft`, `kafka.m7g.large`, `2`; `True`, `False`, `TLS`; `available`, `required`, `True`, `1`; bốn user `active` với
 access string đúng nguyên văn ADR-0053 §9 (ElastiCache viết lại một chuỗi là mục "Xem lại khi" của ADR: dán cho AI). Dán lại cả bốn output.
 
 (c) Topic, ACL, và một service bị từ chối trên topic không có ACL của nó. Topic thử `svp-acl-check` tạo bằng `svp-admin` rồi xoá ngay:

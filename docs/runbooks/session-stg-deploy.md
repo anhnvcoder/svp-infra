@@ -125,12 +125,13 @@ Lệnh, phép kiểm và cách xoay: [`media-signing-keys.md`](media-signing-key
   `module.waf["web"]`, `["api"]`, `["media"]` (`aws_wafv2_web_acl.this`, provider `us-east-1`); `module.edge`: ALB `svp-stg-edge`
   với `internal = true` ở subnet edge, listener HTTPS 443, target group `svp-stg-envoy`, VPC origin `svp-stg-edge`, distribution
   `svp-stg-web`, `svp-stg-api`, cert ACM (`us-east-1` cho distribution, region nhà cho ALB), bản ghi A, AAAA và validation,
-  delivery log `us-east-1`; distribution `svp-stg-media` (`media.<domain>`) với gói
-  `module.media.aws_pricingplanmanager_subscription.media[0]` `plan_tier = "FREE"` (phép kiểm (b) của ADR-0052), behavior mặc định
-  có `trusted_key_groups` (`media/*`, `preview/*` không), public key `module.media.aws_cloudfront_public_key.media["a"]`
-  (`svp-stg-media-a-<8 hex>`) và key group `svp-stg-media`. Plan có cluster `module.msk.aws_msk_cluster.this` (`kafka_version =
-  "4.1.x.kraft"`, `kafka.t3.small`, 2 broker), mỗi user của module `msk` một secret `AmazonMSK_svp-stg-*`, replication group
-  `module.elasticache.aws_elasticache_replication_group.this` (`engine = "valkey"`, `engine_version = "9.1"`) và bốn
+  delivery log `us-east-1`; distribution `svp-stg-media` (`media.<domain>`) trả theo dùng như prd (`media_flat_rate_free = false`:
+  gói Free từ chối web ACL media), với response headers policy `svp-stg-media` và delivery log `us-east-1` của `module.media`,
+  behavior mặc định có `trusted_key_groups` (`media/*`, `preview/*` không), public key
+  `module.media.aws_cloudfront_public_key.media["a"]` (`svp-stg-media-a-<8 hex>`) và key group `svp-stg-media`. Plan có cluster
+  `module.msk.aws_msk_cluster.this` (`kafka_version = "4.1.x.kraft"`, `kafka.m7g.large`, 2 broker), mỗi user của module `msk` một
+  secret `AmazonMSK_svp-stg-*`, replication group `module.elasticache.aws_elasticache_replication_group.this` (`engine = "valkey"`,
+  `engine_version = "9.1"`) và bốn
   `aws_elasticache_user`; mật khẩu của chúng là đối số write-only, plan chỉ in `(write-only attribute)`, không giá trị. Plan cũng
   có: node group `system` của `module.eks` (không node group nào khác), submodule `module.eks.module.karpenter` (hàng đợi SQS
   `svp-stg-karpenter`, rule EventBridge, role `svp-stg-karpenter`, `svp-stg-karpenter-node`, Pod Identity association), bastion
@@ -141,9 +142,9 @@ Lệnh, phép kiểm và cách xoay: [`media-signing-keys.md`](media-signing-key
 
 **Bước 9, `apply`.** Chỉ nhận file plan của bước 8 (không plan lại tại chỗ), rồi xoá nó. Thời gian: EKS ~10–15 phút, RDS ~10 phút, ba
 distribution CloudFront và cert ACM (DNS validation) ~5–15 phút, MSK ≤ 45 phút, ElastiCache ≤ 20 phút (giả định của ADR-0053 §16), song
-song; gói Free chờ tới `ACTIVE` (vài phút tới hơn nửa giờ). Root này cũng tạo các entry `svp/stg/*` của Secrets Manager: `kafka-admin`,
-`kafka-users`, `valkey-users` có giá trị ngay trong apply này (Terraform sinh mật khẩu, ghi cùng một giá trị vào secret `AmazonMSK_*`, user
-ElastiCache và entry; không vào plan hay state), `media-signing` còn rỗng tới bước 10, các entry khác tới bước 11.
+song. Root này cũng tạo các entry `svp/stg/*` của Secrets Manager: `kafka-admin`, `kafka-users`, `valkey-users` có giá trị ngay
+trong apply này (Terraform sinh mật khẩu, ghi cùng một giá trị vào secret `AmazonMSK_*`, user ElastiCache và entry; không vào plan
+hay state), `media-signing` còn rỗng tới bước 10, các entry khác tới bước 11.
 
 - **Mong đợi:** ghi lại hai dòng `Creation complete after …` của cluster MSK và replication group ElastiCache trong output (phút dựng, phép
   kiểm (a) của ADR-0053).

@@ -131,7 +131,7 @@ AWS_PROFILE=anhnv-stg aws --no-cli-pager logs describe-log-streams --log-group-n
 ```
 
 Mong năm loại log `api`, `audit`, `authenticator`, `controllerManager`, `scheduler`; `secrets`; `false`, `true`; một policy
-`KafkaBrokerStorageUtilization` ở mức của ADR-0058 §4 (API từ chối `kafka.t3.small` thì apply đã đỏ ở bước 9: dán lỗi cho AI);
+`KafkaBrokerStorageUtilization` ở mức của ADR-0058 §4;
 `slow-log cloudwatch-logs json active`; một log stream (chưa có lệnh chậm nào thì rỗng: ghi lại, không là trượt).
 
 ## Service mesh

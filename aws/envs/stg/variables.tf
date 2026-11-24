@@ -218,7 +218,7 @@ variable "rds_cloudwatch_logs_retention_days" {
 }
 
 variable "msk_broker_instance_type" {
-  description = "Instance type of the Kafka brokers (kafka.t3.small, kafka.m7g.large)."
+  description = "Instance type of the Kafka brokers: a Standard broker of the m5, m7g or m8g family (kafka.m7g.large)."
   type        = string
 }
 

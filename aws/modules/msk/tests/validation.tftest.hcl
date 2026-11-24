@@ -38,8 +38,8 @@ run "stg_values" {
   }
 
   assert {
-    condition     = aws_msk_cluster.this.kafka_version == "4.1.x.kraft" && aws_msk_cluster.this.number_of_broker_nodes == 2 && aws_msk_cluster.this.broker_node_group_info[0].instance_type == "kafka.t3.small"
-    error_message = "stg must run two kafka.t3.small brokers on Kafka 4.1 in KRaft mode."
+    condition     = aws_msk_cluster.this.kafka_version == "4.1.x.kraft" && aws_msk_cluster.this.number_of_broker_nodes == 2 && aws_msk_cluster.this.broker_node_group_info[0].instance_type == "kafka.m7g.large"
+    error_message = "stg must run two kafka.m7g.large brokers on Kafka 4.1 in KRaft mode."
   }
 
   assert {
@@ -106,7 +106,7 @@ run "stg_values" {
   }
 
   assert {
-    condition     = aws_appautoscaling_target.storage.service_namespace == "kafka" && aws_appautoscaling_target.storage.scalable_dimension == "kafka:broker-storage:VolumeSize" && aws_appautoscaling_target.storage.min_capacity == 10 && aws_appautoscaling_target.storage.max_capacity == 20
+    condition     = aws_appautoscaling_target.storage.service_namespace == "kafka" && aws_appautoscaling_target.storage.scalable_dimension == "kafka:broker-storage:VolumeSize" && aws_appautoscaling_target.storage.min_capacity == 1 && aws_appautoscaling_target.storage.max_capacity == 20
     error_message = "Storage autoscaling of stg must grow the broker volumes from 10 GiB up to 20 GiB."
   }
 
@@ -236,7 +236,7 @@ run "prd_values" {
   }
 
   assert {
-    condition     = aws_appautoscaling_target.storage.min_capacity == 10 && aws_appautoscaling_target.storage.max_capacity == 100 && aws_appautoscaling_policy.storage.target_tracking_scaling_policy_configuration[0].target_value == 60 && aws_appautoscaling_policy.storage.target_tracking_scaling_policy_configuration[0].disable_scale_in == true
+    condition     = aws_appautoscaling_target.storage.min_capacity == 1 && aws_appautoscaling_target.storage.max_capacity == 100 && aws_appautoscaling_policy.storage.target_tracking_scaling_policy_configuration[0].target_value == 60 && aws_appautoscaling_policy.storage.target_tracking_scaling_policy_configuration[0].disable_scale_in == true
     error_message = "Storage autoscaling of prd must grow the broker volumes from 10 GiB up to 100 GiB, never scaling in."
   }
 
@@ -298,6 +298,17 @@ run "broker_instance_type_not_msk" {
 
   variables {
     broker_instance_type = "t3.small"
+  }
+
+  expect_failures = [var.broker_instance_type]
+}
+
+# The broker size list names the t3 family, but CreateCluster refuses it with a KRaft version.
+run "broker_instance_type_t3_kraft" {
+  command = plan
+
+  variables {
+    broker_instance_type = "kafka.t3.small"
   }
 
   expect_failures = [var.broker_instance_type]
