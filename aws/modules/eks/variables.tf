@@ -155,7 +155,7 @@ variable "log_group_arn" {
 }
 
 variable "observability_kms_key_arn" {
-  description = "ARN of the KMS key alias/svp-<env>-observability (output kms_key_arn of the observability module), which encrypts the log group the Collector writes to."
+  description = "ARN of the KMS key alias/svp-<env>-observability (output kms_key_arn of the observability module), which encrypts the log group the Collector writes to and the AMP workspace that Argo Rollouts and OpenCost query."
   type        = string
 
   validation {

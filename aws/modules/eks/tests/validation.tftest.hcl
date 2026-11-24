@@ -315,18 +315,20 @@ run "pod_identity_permissions" {
   command = plan
 
   assert {
-    condition = toset([for s in data.aws_iam_policy_document.otel_collector.statement : s.sid]) == toset(["WriteMetrics", "WriteLogs", "UseLogGroupKeyThroughLogs", "WriteSpans"]) && alltrue([
+    condition = toset([for s in data.aws_iam_policy_document.otel_collector.statement : s.sid]) == toset(["WriteMetrics", "EncryptMetricsThroughPrometheus", "WriteLogs", "UseLogGroupKeyThroughLogs", "WriteSpans"]) && alltrue([
       for s in data.aws_iam_policy_document.otel_collector.statement :
       toset(s.actions) == toset(lookup({
-        WriteMetrics              = ["aps:RemoteWrite"]
-        WriteLogs                 = ["logs:PutLogEvents"]
-        UseLogGroupKeyThroughLogs = ["kms:Encrypt", "kms:Decrypt", "kms:ReEncrypt*", "kms:GenerateDataKey*", "kms:DescribeKey"]
-        WriteSpans                = ["xray:PutTraceSegments"]
+        WriteMetrics                    = ["aps:RemoteWrite"]
+        EncryptMetricsThroughPrometheus = ["kms:GenerateDataKey"]
+        WriteLogs                       = ["logs:PutLogEvents"]
+        UseLogGroupKeyThroughLogs       = ["kms:Encrypt", "kms:Decrypt", "kms:ReEncrypt*", "kms:GenerateDataKey*", "kms:DescribeKey"]
+        WriteSpans                      = ["xray:PutTraceSegments"]
         }, s.sid, [])) && toset(s.resources) == toset(lookup({
-        WriteMetrics              = ["arn:aws:aps:ap-southeast-1:000000000000:workspace/ws-0123abcd-4567-89ef-0123-456789abcdef"]
-        WriteLogs                 = ["arn:aws:logs:ap-southeast-1:000000000000:log-group:/svp/stg/otel:log-stream:otel-collector"]
-        UseLogGroupKeyThroughLogs = ["arn:aws:kms:ap-southeast-1:000000000000:key/0123abcd-4567-89ef-0123-456789abcdef"]
-        WriteSpans                = ["*"]
+        WriteMetrics                    = ["arn:aws:aps:ap-southeast-1:000000000000:workspace/ws-0123abcd-4567-89ef-0123-456789abcdef"]
+        EncryptMetricsThroughPrometheus = ["arn:aws:kms:ap-southeast-1:000000000000:key/0123abcd-4567-89ef-0123-456789abcdef"]
+        WriteLogs                       = ["arn:aws:logs:ap-southeast-1:000000000000:log-group:/svp/stg/otel:log-stream:otel-collector"]
+        UseLogGroupKeyThroughLogs       = ["arn:aws:kms:ap-southeast-1:000000000000:key/0123abcd-4567-89ef-0123-456789abcdef"]
+        WriteSpans                      = ["*"]
       }, s.sid, []))
     ])
     error_message = "The Collector may only remote write to the workspace, put events into the stream otel-collector of the log group, use the observability key and put trace segments."
@@ -342,7 +344,7 @@ run "pod_identity_permissions" {
   }
 
   assert {
-    condition     = length(data.aws_iam_policy_document.prometheus_agent.statement) == 1 && toset(data.aws_iam_policy_document.prometheus_agent.statement[0].actions) == toset(["aps:RemoteWrite"]) && toset(data.aws_iam_policy_document.prometheus_agent.statement[0].resources) == toset(["arn:aws:aps:ap-southeast-1:000000000000:workspace/ws-0123abcd-4567-89ef-0123-456789abcdef"])
+    condition     = length(data.aws_iam_policy_document.prometheus_agent.statement) == 2 && toset(data.aws_iam_policy_document.prometheus_agent.statement[0].actions) == toset(["aps:RemoteWrite"]) && toset(data.aws_iam_policy_document.prometheus_agent.statement[0].resources) == toset(["arn:aws:aps:ap-southeast-1:000000000000:workspace/ws-0123abcd-4567-89ef-0123-456789abcdef"])
     error_message = "The Prometheus agent may only remote write to the workspace."
   }
 
@@ -384,7 +386,7 @@ run "pod_identity_permissions" {
   }
 
   assert {
-    condition     = length(data.aws_iam_policy_document.argo_rollouts.statement) == 1 && toset(data.aws_iam_policy_document.argo_rollouts.statement[0].actions) == toset(["aps:QueryMetrics"]) && toset(data.aws_iam_policy_document.argo_rollouts.statement[0].resources) == toset(["arn:aws:aps:ap-southeast-1:000000000000:workspace/ws-0123abcd-4567-89ef-0123-456789abcdef"])
+    condition     = length(data.aws_iam_policy_document.argo_rollouts.statement) == 2 && toset(data.aws_iam_policy_document.argo_rollouts.statement[0].actions) == toset(["aps:QueryMetrics"]) && toset(data.aws_iam_policy_document.argo_rollouts.statement[0].resources) == toset(["arn:aws:aps:ap-southeast-1:000000000000:workspace/ws-0123abcd-4567-89ef-0123-456789abcdef"])
     error_message = "Argo Rollouts may only query metrics of the workspace."
   }
 
