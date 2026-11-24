@@ -188,6 +188,20 @@ data "aws_iam_policy_document" "ack_prometheusservice" {
     ]
     resources = [var.amp_workspace_arn]
   }
+
+  # The rule groups and the alert manager definition are stored encrypted with the workspace's key, under the caller's
+  # own rights: written (GenerateDataKey) and read back on each reconcile (Decrypt).
+  statement {
+    sid       = "UseKeyThroughPrometheus"
+    actions   = ["kms:GenerateDataKey", "kms:Decrypt"]
+    resources = [var.observability_kms_key_arn]
+
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = ["aps.${data.aws_region.current.region}.amazonaws.com"]
+    }
+  }
 }
 
 # No KMS permission: ECR decrypts layers of a repository under a customer managed key through its own grant.

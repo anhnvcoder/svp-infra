@@ -349,7 +349,7 @@ run "pod_identity_permissions" {
   }
 
   assert {
-    condition = toset([for s in data.aws_iam_policy_document.ack_prometheusservice.statement : s.sid]) == toset(["ManageRuleGroupsNamespaces", "ManageAlertManagerDefinition"]) && alltrue([
+    condition = toset([for s in data.aws_iam_policy_document.ack_prometheusservice.statement : s.sid]) == toset(["ManageRuleGroupsNamespaces", "ManageAlertManagerDefinition", "UseKeyThroughPrometheus"]) && alltrue([
       for s in data.aws_iam_policy_document.ack_prometheusservice.statement :
       toset(s.actions) == toset(lookup({
         ManageRuleGroupsNamespaces = [
@@ -360,9 +360,11 @@ run "pod_identity_permissions" {
           "aps:CreateAlertManagerDefinition", "aps:PutAlertManagerDefinition", "aps:DescribeAlertManagerDefinition",
           "aps:DeleteAlertManagerDefinition", "aps:ListRuleGroupsNamespaces",
         ]
+        UseKeyThroughPrometheus = ["kms:GenerateDataKey", "kms:Decrypt"]
         }, s.sid, [])) && toset(s.resources) == toset(lookup({
         ManageRuleGroupsNamespaces   = ["arn:aws:aps:ap-southeast-1:000000000000:rulegroupsnamespace/ws-0123abcd-4567-89ef-0123-456789abcdef/*"]
         ManageAlertManagerDefinition = ["arn:aws:aps:ap-southeast-1:000000000000:workspace/ws-0123abcd-4567-89ef-0123-456789abcdef"]
+        UseKeyThroughPrometheus      = ["arn:aws:kms:ap-southeast-1:000000000000:key/0123abcd-4567-89ef-0123-456789abcdef"]
       }, s.sid, []))
     ])
     error_message = "The ACK controller may only manage the rule groups namespaces and the alert manager definition of the workspace."

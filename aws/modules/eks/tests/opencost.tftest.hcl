@@ -134,3 +134,14 @@ run "amp_write_roles_encrypt_through_prometheus" {
     error_message = "The Prometheus agent and the Collector must encrypt samples with the AMP workspace's key through Prometheus only."
   }
 }
+
+run "ack_uses_key_through_prometheus" {
+  command = plan
+
+  assert {
+    condition = anytrue([for st in data.aws_iam_policy_document.ack_prometheusservice.statement : st.sid == "UseKeyThroughPrometheus" &&
+      toset(st.actions) == toset(["kms:GenerateDataKey", "kms:Decrypt"]) && toset(st.resources) == toset([var.observability_kms_key_arn]) &&
+    anytrue([for c in st.condition : c.variable == "kms:ViaService" && toset(c.values) == toset(["aps.ap-southeast-1.amazonaws.com"])])])
+    error_message = "The ACK controller must use the AMP workspace's key through Prometheus only."
+  }
+}
