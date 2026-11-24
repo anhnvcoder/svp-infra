@@ -182,8 +182,9 @@ resource "aws_appautoscaling_target" "storage" {
   service_namespace  = "kafka"
   resource_id        = aws_msk_cluster.this.arn
   scalable_dimension = "kafka:broker-storage:VolumeSize"
-  min_capacity       = var.broker_volume_size
-  max_capacity       = var.broker_volume_max_size
+  # Application Auto Scaling refuses any other floor for broker storage; the cluster keeps the volume size it was made with.
+  min_capacity = 1
+  max_capacity = var.broker_volume_max_size
 }
 
 resource "aws_appautoscaling_policy" "storage" {
@@ -249,14 +250,32 @@ resource "aws_secretsmanager_secret_version" "scram" {
   secret_string_wo_version = var.password_version
 }
 
+# MSK reads each secret as the service kafka.amazonaws.com before it associates it, and Secrets Manager lets a service
+# read only what the secret's own policy allows. Same statement as the one MSK attaches on association.
+resource "aws_secretsmanager_secret_policy" "scram" {
+  for_each = local.users
+
+  secret_arn = aws_secretsmanager_secret.scram[each.key].arn
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "AWSKafkaResourcePolicy"
+      Effect    = "Allow"
+      Principal = { Service = "kafka.amazonaws.com" }
+      Action    = "secretsmanager:getSecretValue"
+      Resource  = aws_secretsmanager_secret.scram[each.key].arn
+    }]
+  })
+}
+
 # One resource for every user: it owns the whole list of secrets of the cluster, and removes any secret it does not
 # name, so a second association resource would undo this one.
 resource "aws_msk_scram_secret_association" "this" {
   cluster_arn     = aws_msk_cluster.this.arn
   secret_arn_list = [for u in sort(tolist(local.users)) : aws_secretsmanager_secret.scram[u].arn]
 
-  # MSK refuses to associate a secret without a value.
-  depends_on = [aws_secretsmanager_secret_version.scram]
+  # MSK refuses to associate a secret without a value, or one it may not read.
+  depends_on = [aws_secretsmanager_secret_version.scram, aws_secretsmanager_secret_policy.scram]
 }
 
 ################################################################################

@@ -18,7 +18,7 @@ module "msk" {
   subnet_ids              = ["subnet-<a>", "subnet-<b>"]
   allowed_security_groups = { node = "sg-<node>", cluster = "sg-<cluster>" }
   broker_count            = 2
-  broker_instance_type    = "kafka.t3.small"
+  broker_instance_type    = "kafka.m7g.large"
   broker_volume_max_size  = 20
   replication_factor      = 2
   min_insync_replicas     = 1
@@ -80,7 +80,7 @@ module "msk" {
 | alarm\_topic\_arn | ARN of the SNS topic every CloudWatch alarm of the cluster notifies, when it fires and when it clears. | `string` | n/a | yes |
 | allowed\_security\_groups | Security groups whose members may connect on 9096, the SASL/SCRAM port (the EKS node and cluster security groups), keyed by a fixed label such as node or cluster: the keys name the rules, so they are known at plan time even when the ids are not. | `map(string)` | n/a | yes |
 | broker\_count | Number of brokers: a multiple of the number of subnets, since MSK puts the same number of brokers in each zone (one per zone in this lab). | `number` | n/a | yes |
-| broker\_instance\_type | Instance type of every broker (kafka.t3.small for a lab env, kafka.m7g.large for production). | `string` | `"kafka.t3.small"` | no |
+| broker\_instance\_type | Instance type of every broker: a Standard broker of the m5, m7g or m8g family, the ones MSK accepts for a KRaft cluster (kafka.m7g.large in every env). | `string` | `"kafka.m7g.large"` | no |
 | broker\_logs\_enabled | Send the broker logs to the CloudWatch log group /aws/msk/<name>, which this module creates. Off by default: ingestion is billed per GB. | `bool` | `false` | no |
 | broker\_logs\_retention\_days | Days CloudWatch keeps the broker logs when broker\_logs\_enabled is true. | `number` | `1` | no |
 | broker\_storage\_target\_utilization | Percentage of the broker volume in use (KafkaBrokerStorageUtilization) that storage autoscaling keeps the brokers under. | `number` | `60` | no |

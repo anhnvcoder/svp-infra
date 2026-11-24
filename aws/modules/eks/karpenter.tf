@@ -56,6 +56,9 @@ module "karpenter" {
   iam_role_description                      = "Karpenter controller of EKS cluster ${var.name}"
   iam_role_override_assume_policy_documents = [data.aws_iam_policy_document.karpenter_trust.json]
   iam_policy_name                           = "${var.name}-karpenter"
+  iam_policy_use_name_prefix                = false
+  # The controller policy is over the 6144-character quota of a managed policy; an inline role policy allows 10240.
+  enable_inline_policy = true
 
   namespace       = local.karpenter_service_account.namespace
   service_account = local.karpenter_service_account.service_account

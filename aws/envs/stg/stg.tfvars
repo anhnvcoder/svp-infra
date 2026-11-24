@@ -39,9 +39,10 @@ rds_monitoring_interval                   = 60
 rds_cloudwatch_logs_exports               = ["postgresql", "upgrade"]
 rds_cloudwatch_logs_retention_days        = 1
 
-# msk: one small broker per zone, every topic on both brokers, writes accepted with one of them down (stg does not
-# promise to keep them through the loss of a zone); broker volumes growing up to 20 GiB, broker logs kept 1 day.
-msk_broker_instance_type       = "kafka.t3.small"
+# msk: one broker per zone, of prd's type (MSK refuses the t3 family for a KRaft cluster), every topic on both brokers,
+# writes accepted with one of them down (stg does not promise to keep them through the loss of a zone); broker volumes
+# growing up to 20 GiB, broker logs kept 1 day.
+msk_broker_instance_type       = "kafka.m7g.large"
 msk_replication_factor         = 2
 msk_min_insync_replicas        = 1
 msk_broker_volume_max_size     = 20
@@ -57,12 +58,12 @@ valkey_slow_log_retention_days = 1
 
 # media: destroy empties and deletes both buckets, every version included; earlier versions kept 30 days as in prd,
 # because AWS Backup backs up only versioned buckets. S3 access logs in a log bucket of the env, its web ACL of waf.tf
-# in front of CloudFront. The distribution stays on the flat-rate Free plan, so it writes no standard logs; every
-# other part of the edge is prd's.
+# in front of CloudFront. The distribution is pay-as-you-go as in prd, with standard logs to the log archive account:
+# the flat-rate Free plan refuses the web ACL of the media distribution.
 media_force_destroy          = true
 media_versioning_enabled     = true
 media_access_logging_enabled = true
-media_flat_rate_free         = true
+media_flat_rate_free         = false
 
 # edge: the internal ALB behind CloudFront is deleted with the env.
 edge_alb_deletion_protection = false
