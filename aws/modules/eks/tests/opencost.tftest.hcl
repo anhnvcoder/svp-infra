@@ -90,7 +90,7 @@ run "opencost_identity" {
   }
 
   assert {
-    condition = (length(data.aws_iam_policy_document.opencost.statement) == 1 &&
+    condition = (length(data.aws_iam_policy_document.opencost.statement) == 2 &&
       toset(data.aws_iam_policy_document.opencost.statement[0].actions) == toset([
         "aps:QueryMetrics", "aps:GetSeries", "aps:GetLabels", "aps:GetMetricMetadata",
       ]) &&
@@ -103,5 +103,34 @@ run "opencost_identity" {
   assert {
     condition     = aws_iam_role_policy.pod_identity["opencost"].name == "svp-stg-opencost"
     error_message = "The OpenCost role must carry its inline policy."
+  }
+}
+
+run "amp_query_roles_decrypt_through_prometheus" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      for d in [data.aws_iam_policy_document.opencost, data.aws_iam_policy_document.argo_rollouts] :
+      d.statement[1].sid == "DecryptMetricsThroughPrometheus" && toset(d.statement[1].actions) == toset(["kms:Decrypt"]) &&
+      toset(d.statement[1].resources) == toset([var.observability_kms_key_arn]) &&
+      anytrue([for c in d.statement[1].condition : c.variable == "kms:ViaService" &&
+      toset(c.values) == toset(["aps.ap-southeast-1.amazonaws.com"])])
+    ])
+    error_message = "OpenCost and Argo Rollouts must decrypt the AMP workspace's key through Prometheus only."
+  }
+}
+
+run "amp_write_roles_encrypt_through_prometheus" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      for d in [data.aws_iam_policy_document.prometheus_agent, data.aws_iam_policy_document.otel_collector] :
+      anytrue([for st in d.statement : st.sid == "EncryptMetricsThroughPrometheus" &&
+        toset(st.actions) == toset(["kms:GenerateDataKey"]) && toset(st.resources) == toset([var.observability_kms_key_arn]) &&
+      anytrue([for c in st.condition : c.variable == "kms:ViaService" && toset(c.values) == toset(["aps.ap-southeast-1.amazonaws.com"])])])
+    ])
+    error_message = "The Prometheus agent and the Collector must encrypt samples with the AMP workspace's key through Prometheus only."
   }
 }
