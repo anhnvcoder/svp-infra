@@ -288,8 +288,10 @@ docs-check: ## markdownlint-cli2 + lychee --offline on the Markdown (DOCS='<file
 	[ $$# -eq 0 ] || awk 'FNR == 1 { fence = "" } \
 	{ if (match($$0, /^[ \t]*(```+|~~~+)/)) { n = RLENGTH; m = substr($$0, 1, n); sub(/^[ \t]*/, "", m); \
 	    if (fence == "") { fence = m; data = substr($$0, n + 1) ~ /^[ \t]*json/; next } \
-	    if (substr(m, 1, 1) == substr(fence, 1, 1) && length(m) >= length(fence) && substr($$0, n + 1) ~ /^[ \t]*$$/) { fence = ""; next } } \
-	  if (fence != "" && !data && $$0 ~ /\$$[A-Za-z_0-9]+:([^:]|$$)/) { print FILENAME ":" FNR ": write $${VAR}: instead of $$VAR: (zsh modifier): " $$0; bad = 1 } } \
+	    if (substr(m, 1, 1) == substr(fence, 1, 1) && length(m) >= length(fence) \
+	        && substr($$0, n + 1) ~ /^[ \t]*$$/) { fence = ""; next } } \
+	  if (fence != "" && !data && $$0 ~ /\$$[A-Za-z_0-9]+:([^:]|$$)/) { \
+	    print FILENAME ":" FNR ": write $${VAR}: instead of $$VAR: (zsh modifier): " $$0; bad = 1 } } \
 	END { exit bad }' "$$@" || rc=1; \
 	[ $$rc = 0 ] || echo "FAIL: docs-check" >&2; \
 	exit $$rc
