@@ -86,8 +86,8 @@ resource "aws_ssoadmin_managed_policy_attachment" "read_only" {
   managed_policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/${each.key}"
 }
 
-# What the two managed policies lack: the log reads of an investigation (EKS control plane, RDS) and the Inspector
-# reads of aws/scripts/verify.sh. None of these actions writes.
+# What the two managed policies lack: the log reads of an investigation (EKS control plane, RDS), the Inspector
+# reads of aws/scripts/verify.sh and the AMP workspace list of the runbooks. None of these actions writes.
 data "aws_iam_policy_document" "read_only" {
   statement {
     sid    = "ReadLogEvents"
@@ -111,6 +111,19 @@ data "aws_iam_policy_document" "read_only" {
       "inspector2:BatchGetAccountStatus",
       "inspector2:DescribeOrganizationConfiguration",
       "inspector2:ListMembers",
+    ]
+    resources = ["*"]
+  }
+
+  # Workspace metadata only (List, Read); QueryMetrics, GetSeries and the other metric reads stay out. Action names
+  # and access levels from the Service Authorization Reference:
+  # https://docs.aws.amazon.com/service-authorization/latest/reference/list_amp.html
+  statement {
+    sid    = "ReadPrometheusWorkspaces"
+    effect = "Allow"
+    actions = [
+      "aps:DescribeWorkspace",
+      "aps:ListWorkspaces",
     ]
     resources = ["*"]
   }

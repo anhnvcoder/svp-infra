@@ -323,7 +323,8 @@ principal trong `organization.tf` có lý do ở comment cạnh nó; thêm dịc
   AWS thêm loại theo thời gian, nên runbook đối chiếu với `describe-region-settings` trước khi áp. Cross-account backup chỉ management
   bật được và có hiệu lực cho mọi account thành viên.
 - `SvpAdmin` phiên 1 giờ không cắt `apply` dài khi profile có khối `[sso-session …]`: SDK lấy lại credential từ token SSO tới hết phiên
-  access portal. `SvpReadOnly` thêm inline đọc log CloudWatch và ba action đọc Inspector mà `ViewOnlyAccess`, `SecurityAudit` thiếu.
+  access portal. `SvpReadOnly` thêm inline đọc log CloudWatch, ba action đọc Inspector và statement `ReadPrometheusWorkspaces`
+  (`aps:ListWorkspaces`, `aps:DescribeWorkspace`) mà `ViewOnlyAccess`, `SecurityAudit` thiếu.
 - Statement `ProtectInspector` chặn `inspector2:Enable`, `Disable` trừ request có `aws:ViaAWSService` `true`: nút "Get started" ở console
   của account thành viên bật Inspector tính tiền, ngoài Terraform. Hai đường Terraform vẫn qua. `aws/accounts/<env>` (module `registry`)
   đổi registry giữa Enhanced, Basic, và ECR gọi Inspector bằng quyền của người gọi qua forward access session, luôn có
