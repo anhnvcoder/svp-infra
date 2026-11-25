@@ -52,19 +52,6 @@ data "aws_iam_policy_document" "node_ecr_cache" {
     actions   = ["ecr:BatchImportUpstreamImage", "ecr:CreateRepository"]
     resources = [for p in var.ecr_cache_prefixes : "arn:${data.aws_partition.current.partition}:ecr:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:repository/${p}/*"]
   }
-
-  # Only through ECR of this region, so the node can use the registry key for nothing but an image pull.
-  statement {
-    sid       = "DecryptImagesThroughEcr"
-    actions   = ["kms:Decrypt"]
-    resources = [var.ecr_kms_key_arn]
-
-    condition {
-      test     = "StringEquals"
-      variable = "kms:ViaService"
-      values   = ["ecr.${data.aws_region.current.region}.amazonaws.com"]
-    }
-  }
 }
 
 resource "aws_iam_role_policy" "node_ecr_cache" {

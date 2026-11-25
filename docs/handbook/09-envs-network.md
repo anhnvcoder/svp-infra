@@ -208,7 +208,7 @@ như prd, giảm hay giảm có điều kiện:
 | Lớp và dự phòng của dữ liệu | nhỏ: RDS, Valkey một AZ; MSK hai broker ở hai AZ (chương [11. Dữ liệu](11-data.md)) | lớp production, Multi-AZ |
 | Retention log CloudWatch | ngắn | dài (giá trị ở `<env>.tfvars`) |
 | Bảo vệ xoá (RDS, ALB edge, bucket media) | tắt | bật; `teardown.tfvars` nhấc khi gỡ |
-| Gói CloudFront của media | flat-rate Free, không log chuẩn | pay-as-you-go, log chuẩn về Log Archive |
+| Gói CloudFront của media | pay-as-you-go, log chuẩn (gói flat-rate Free từ chối web ACL của media) | pay-as-you-go, log chuẩn về Log Archive |
 
 ### Bốn tầng subnet
 

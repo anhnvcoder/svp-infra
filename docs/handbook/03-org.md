@@ -278,7 +278,7 @@ principal trong `organization.tf` có lý do ở comment cạnh nó; thêm dịc
 | --- | --- | --- | --- |
 | Terraform thuần trên Organizations | Tự viết guardrail, account mới qua Terraform | AWS Control Tower, Account Factory | Nhiều account, cần landing zone và control có sẵn |
 | SCP, RCP gắn root, riêng prd ở OU `Prod` | Một lỗi policy chạm mọi account cùng lúc | Gắn từng OU | OU có luật khác nhau rõ rệt |
-| RCP không ngoại lệ riêng | Volume CMK EBS không được GuardDuty quét malware | Ngoại lệ theo `aws:PrincipalAccount` hay tag | Cần tích hợp dịch vụ ngoài tổ chức |
+| RCP không ngoại lệ riêng | Volume mã hoá bằng CMK (ví dụ CMK EBS cũ còn giữ) không được GuardDuty quét malware | Ngoại lệ theo `aws:PrincipalAccount` hay tag | Cần tích hợp dịch vụ ngoài tổ chức |
 | Identity Center, không IAM user | Phụ thuộc instance của một region | IAM user và access key | Hầu như không: CIS đòi danh tính tập trung |
 | Root tập trung | Việc root đầy đủ cần bước khôi phục mật khẩu | Mỗi account giữ root với MFA | Ít account, không có management |
 | Trail tổ chức về account log riêng | Admin management vẫn vào được account log | Trail mỗi account | Không có tổ chức |

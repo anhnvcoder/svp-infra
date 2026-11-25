@@ -1,11 +1,11 @@
 # Module `observability`
 
 Nơi nhận telemetry của một account env (`svp-stg`, `svp-prd`): workspace AMP `svp-<env>`, log group `/svp/<env>/otel` và stream
-`otel-collector`, Transaction Search của X-Ray, key `alias/svp-<env>-observability`; khi `grafana_enabled`, workspace Amazon Managed Grafana
-`svp-<env>`, role của nó, hai gán nhóm, service account `svp-grafana-operator` và tham số SSM `/svp/<env>/grafana-workspace-id`.
-Root `aws/accounts/<env>` ([README](../../accounts/README.md)) gọi module nên metric, log, span sống qua `destroy` của buổi; luồng
-telemetry và lý do: [08. Account env](../../../docs/handbook/08-accounts.md#amazon-managed-service-for-prometheus). Test:
-`make test DIRS=aws/modules/observability`.
+`otel-collector` (cả hai mã hoá bằng key của dịch vụ), Transaction Search của X-Ray, key `alias/svp-<env>-observability` (chỉ còn giải mã
+log ghi trước khi log group rời key); khi `grafana_enabled`, workspace Amazon Managed Grafana `svp-<env>`, role của nó, hai gán nhóm,
+service account `svp-grafana-operator` và tham số SSM `/svp/<env>/grafana-workspace-id`. Root `aws/accounts/<env>`
+([README](../../accounts/README.md)) gọi module nên metric, log, span sống qua `destroy` của buổi; luồng telemetry và lý do: [08. Account
+env](../../../docs/handbook/08-accounts.md#amazon-managed-service-for-prometheus). Test: `make test DIRS=aws/modules/observability`.
 
 ## Ví dụ
 
@@ -100,7 +100,6 @@ Output `amp_workspace_id`, `amp_endpoint`, `log_group_name`, `grafana_url` là k
 | amp\_workspace\_arn | ARN of the Prometheus workspace, for the Pod Identity roles that write, query or manage rules on it. |
 | amp\_workspace\_id | Id of the Prometheus workspace `svp-<env>` (`ws-<uuid>`): ampWorkspaceId of the cluster values. |
 | grafana\_url | URL of the Grafana workspace, https:// and its endpoint, no trailing slash: grafanaUrl of the cluster values. Null when grafana\_enabled is false. |
-| kms\_key\_arn | ARN of the key `alias/svp-<env>-observability`, for the Collector's permission to write the encrypted log group. |
 | log\_group\_arn | ARN of the application log group, without the :* suffix; its stream otel-collector is `<arn>:log-stream:otel-collector`. |
 | log\_group\_name | Name of the application log group `/svp/<env>/otel`: logGroup of the cluster values. |
 | spans\_retention\_command | Command the learner runs once per account, after X-Ray has created the log group aws/spans, to set its retention to span\_retention\_days: Terraform cannot create or adopt a log group whose name starts with aws/. |

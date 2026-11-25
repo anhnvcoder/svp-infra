@@ -75,8 +75,20 @@ AWS_PROFILE=anhnv-stg aws --no-cli-pager guardduty list-coverage --detector-id "
   --query "Resources[?ResourceDetails.EksClusterDetails.ClusterName=='svp-stg'].[CoverageStatus,Issue]"
 ```
 
-Mong `ACTIVE` với version ghim ở `aws/modules/eks/addons.tf`; `DESIRED`, `READY` của DaemonSet bằng số node; `HEALTHY None`. `UNHEALTHY`
-hay không dòng nào: chờ 10 phút, chạy lại lệnh cuối một lần; vẫn vậy thì dán output (cột `Issue` nêu lý do) cho AI.
+Mong `ACTIVE` với version ghim ở `aws/modules/eks/addons.tf`; `DESIRED`, `READY` của DaemonSet bằng số node của lệnh thứ hai (`N/N`, cả
+node Karpenter đã đầy CPU: pod agent mang PriorityClass `aws-guardduty-agent.priorityclass-high` của add-on, preempt pod ưu tiên thấp để
+có chỗ); `HEALTHY None`. `UNHEALTHY` hay không dòng nào: chờ 10 phút, chạy lại lệnh cuối một lần; vẫn vậy thì dán output (cột `Issue`
+nêu lý do) cho AI.
+
+- **Bẫy:** `READY` nhỏ hơn số node, pod agent `Pending` với `Insufficient cpu … preemptionPolicy=Never`, add-on `DEGRADED`: add-on không
+  mang cấu hình PriorityClass (apply cũ, hay add-on bị sửa ngoài Terraform). Đọc cấu hình và dán cho AI; không xoá pod khác để lấy chỗ:
+
+  ```sh
+  AWS_PROFILE=anhnv-stg aws --no-cli-pager eks describe-addon --cluster-name svp-stg --addon-name aws-guardduty-agent \
+    --region ap-southeast-1 --query 'addon.configurationValues' --output text
+  ```
+
+  Mong `{"priorityClassName":"aws-guardduty-agent.priorityclass-high"}`.
 
 (b) Flow log của VPC vào bucket `svp-flowlogs-<log>-ap-southeast-1` dưới tiền tố của account env (Parquet, gom mỗi 60 s,
 object tới trễ tới ~10 phút):

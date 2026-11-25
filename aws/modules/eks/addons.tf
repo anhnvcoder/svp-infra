@@ -60,6 +60,17 @@ resource "aws_eks_addon" "guardduty_agent" {
   addon_name    = "aws-guardduty-agent"
   addon_version = "v1.17.3-eksbuild.2"
 
+  # The default class never preempts, so the agent stays Pending on a node Karpenter filled. AWS on the high class:
+  # "Assigning this value will preempt a pod running with the priority value lower than the agent pod value."
+  # That is every pod without a PriorityClass, platform pods included. Values:
+  # https://docs.aws.amazon.com/guardduty/latest/ug/guardduty-configure-security-agent-eks-addon.html
+  configuration_values = jsonencode({
+    priorityClassName = "aws-guardduty-agent.priorityclass-high"
+  })
+  # Terraform is the only owner of the configuration (GuardDuty's EKS_ADDON_MANAGEMENT is off): a change to it, or a
+  # hand edit of the DaemonSet, is overwritten instead of failing the update.
+  resolve_conflicts_on_update = "OVERWRITE"
+
   tags = local.tags
 
   # module.eks: the node group, without which the DaemonSet never becomes ready and the add-on never ACTIVE.

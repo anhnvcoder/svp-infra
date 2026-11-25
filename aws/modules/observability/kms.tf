@@ -28,8 +28,9 @@ locals {
   ]
 }
 
-# The account administers the key through IAM but uses it only through AMP and CloudWatch Logs (kms:ViaService), so
-# no principal of the account can decrypt telemetry outside those services. No statement names another account or "*".
+# Neither the workspace nor the log group is encrypted with this key any more; log events written before stay encrypted
+# with it until log_retention_days pass, so CloudWatch Logs and the account's readers still use it, and only through
+# CloudWatch Logs (kms:ViaService). The account administers it through IAM. No statement names another account or "*".
 data "aws_iam_policy_document" "observability_key" {
   statement {
     sid       = "AccountAdministersKey"
@@ -43,33 +44,7 @@ data "aws_iam_policy_document" "observability_key" {
     }
   }
 
-  # Who creates the workspace grants AMP the key; AMP then works through its own grants
-  # (https://docs.aws.amazon.com/prometheus/latest/userguide/encryption-at-rest-Amazon-Service-Prometheus.html).
-  statement {
-    sid       = "AccountUsesKeyThroughPrometheus"
-    effect    = "Allow"
-    actions   = ["kms:DescribeKey", "kms:CreateGrant", "kms:GenerateDataKey", "kms:Decrypt"]
-    resources = ["*"]
-
-    principals {
-      type        = "AWS"
-      identifiers = ["arn:${local.partition}:iam::${local.account_id}:root"]
-    }
-
-    condition {
-      test     = "StringEquals"
-      variable = "kms:ViaService"
-      values   = ["aps.${local.region}.amazonaws.com"]
-    }
-
-    condition {
-      test     = "StringEquals"
-      variable = "kms:CallerAccount"
-      values   = [local.account_id]
-    }
-  }
-
-  # Writers and readers of the encrypted log group (the Collector, the Grafana workspace) through their IAM policies.
+  # Readers of the log events encrypted before the switch (Grafana workspace, console) through their IAM policies.
   statement {
     sid       = "AccountUsesKeyThroughLogs"
     effect    = "Allow"
@@ -121,7 +96,7 @@ resource "aws_kms_key" "observability" {
   deletion_window_in_days = 30
   policy                  = data.aws_iam_policy_document.observability_key.json
 
-  # AMP binds a workspace to its key for good: without the key every metric of the workspace is lost.
+  # Removing the block would schedule the deletion of the key and leave the older log events unreadable.
   lifecycle {
     prevent_destroy = true
   }

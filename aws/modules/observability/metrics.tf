@@ -1,6 +1,7 @@
+# No kms_key_arn: AMP encrypts with an AWS owned key. A customer managed key binds the workspace to it for good and
+# makes every writer, reader and rule manager need KMS permissions, without keeping anyone in the account from the data.
 resource "aws_prometheus_workspace" "this" {
-  alias       = local.name
-  kms_key_arn = local.kms_key_arn
+  alias = local.name
 }
 
 # rule_query_offset_in_seconds keeps the 60 s default of a new workspace: rules wait for late samples.

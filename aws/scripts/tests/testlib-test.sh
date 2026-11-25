@@ -3,16 +3,16 @@
 # region, answers from files and as the account of each profile of the table, and the real aws and the learner's
 # ~/.aws are out of reach.
 
-# Usage: aws/scripts/testlib-test.sh
+# Usage: aws/scripts/tests/testlib-test.sh
 #
 # The checks run sh -c '...' with their values as arguments ($1, $2, ...): expanded by that shell, not this one.
 # shellcheck disable=SC2016
 set -euo pipefail
 
-src=$(cd "$(dirname "$0")" && pwd)
+src=$(cd "$(dirname "$0")/.." && pwd)
 real_home=$HOME
-# shellcheck source=aws/scripts/testlib.sh
-. "$src/testlib.sh"
+# shellcheck source=aws/scripts/tests/testlib.sh
+. "$src/tests/testlib.sh"
 
 # rc CODE CMD...: CMD exits with CODE, silently.
 rc() {
@@ -27,7 +27,7 @@ expect "HOME is in the temporary tree, not the learner's" sh -c '[ "$1" = "$2/ho
 expect "AWS_CONFIG_FILE is in the temporary tree" sh -c '[ "$AWS_CONFIG_FILE" = "$1/home/.aws/config" ]' _ "$work"
 expect "AWS_SHARED_CREDENTIALS_FILE is in the temporary tree" sh -c '[ "$AWS_SHARED_CREDENTIALS_FILE" = "$1/home/.aws/credentials" ]' _ "$work"
 expect "the fake commands directory is first on PATH" sh -c '[ "${PATH%%:*}" = "$1" ]' _ "$bin"
-expect "AWS_PROFILE and AWS_REGION of the caller are cleared" sh -c 'AWS_PROFILE=x AWS_REGION=x bash -c ". \"$1/testlib.sh\"; [ -z \"\${AWS_PROFILE:-}\" ] && [ -z \"\${AWS_REGION:-}\" ]"' _ "$src"
+expect "AWS_PROFILE and AWS_REGION of the caller are cleared" sh -c 'AWS_PROFILE=x AWS_REGION=x bash -c ". \"$1/tests/testlib.sh\"; [ -z \"\${AWS_PROFILE:-}\" ] && [ -z \"\${AWS_REGION:-}\" ]"' _ "$src"
 
 # --- the real aws is out of reach ---------------------------------------------------------------------------------
 expect "before fake_aws, aws is the guard of the tree" sh -c '[ "$(command -v aws)" = "$1/aws" ]' _ "$bin"
@@ -37,7 +37,7 @@ fake_aws
 expect "after fake_aws, the first aws on PATH is the fake of the tree" sh -c '[ "$(command -v aws)" = "$1/aws" ]' _ "$bin"
 shadowed() {
   mkdir "$work/other" && printf '#!/bin/sh\n' >"$work/other/aws" && chmod +x "$work/other/aws"
-  bash -c '. "$1/testlib.sh"; PATH=$2/other:$PATH; fake_aws' _ "$src" "$work"
+  bash -c '. "$1/tests/testlib.sh"; PATH=$2/other:$PATH; fake_aws' _ "$src" "$work"
 }
 expect "fake_aws stops when something else comes first on PATH" rc 1 shadowed
 
@@ -86,11 +86,11 @@ expect "no_leak reads the value as text, not as a pattern" no_leak 'secret.*123'
 expect "no_leak of an empty value is an error" rc 2 no_leak '' "$work/clean"
 
 # --- finish --------------------------------------------------------------------------------------------------------
-sub() { bash -c ". \"$src/testlib.sh\"; $1" _; }
-expect "finish exits 0 and prints ok when every check passed" sh -c '[ "$(bash -c ". \"$1/testlib.sh\"; expect a true; finish" | tail -n 1)" = "ok    every check passed" ]' _ "$src"
+sub() { bash -c ". \"$src/tests/testlib.sh\"; $1" _; }
+expect "finish exits 0 and prints ok when every check passed" sh -c '[ "$(bash -c ". \"$1/tests/testlib.sh\"; expect a true; finish" | tail -n 1)" = "ok    every check passed" ]' _ "$src"
 expect "finish exits 1 when a check failed" rc 1 sub 'expect a false; expect b true; finish'
-expect "a failed check prints FAIL and its name on stderr" sh -c '[ "$(bash -c ". \"$1/testlib.sh\"; expect named-check false; finish" 2>&1 >/dev/null | head -n 1)" = "FAIL  named-check" ]' _ "$src"
-expect "the temporary tree is removed at exit" sh -c 'w=$(bash -c ". \"$1/testlib.sh\"; echo \"\$work\""); [ -n "$w" ] && [ ! -e "$w" ]' _ "$src"
+expect "a failed check prints FAIL and its name on stderr" sh -c '[ "$(bash -c ". \"$1/tests/testlib.sh\"; expect named-check false; finish" 2>&1 >/dev/null | head -n 1)" = "FAIL  named-check" ]' _ "$src"
+expect "the temporary tree is removed at exit" sh -c 'w=$(bash -c ". \"$1/tests/testlib.sh\"; echo \"\$work\""); [ -n "$w" ] && [ ! -e "$w" ]' _ "$src"
 expect "the tree of this test still exists" test -d "$work/bin"
 
 finish

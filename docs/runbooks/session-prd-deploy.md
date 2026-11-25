@@ -108,7 +108,7 @@ aws/scripts/tf.sh prd env apply
 - **Việc tay:** sau apply, xác nhận email của topic `svp-prd-alarms` theo mục
   [Alarm tới email](session-stg-check-security.md#alarm-tới-email) của buổi stg (`AWS_PROFILE=anhnv-prd`, `$SVP_AWS_PRD_ACCOUNT_ID`).
 - **Bẫy:** `apply` đỏ giữa chừng và lỗi apply đã biết (account chưa xác minh, delivery destination chưa có, ElastiCache không nhận
-  access string) theo mục tương ứng của [buổi
+  access string, association SCRAM của MSK gắn dở: import với `tf.sh prd env import …`, `anhnv-prd`, `svp-prd`) theo mục tương ứng của [buổi
   stg](session-stg-deploy.md#610-root-env-init-khoá-ký-plan-lưu-file-đọc-apply-file-đó-kích-hoạt-khoá-ký). Lượt đỏ đã ghi một tài
   nguyên mang mật khẩu của nhóm Kafka hay Valkey thì `aws/scripts/tfvars.sh bump prd msk` hay `bump prd valkey` (tăng
   `msk_password_version` hay `valkey_password_version` trong `aws/envs/prd/prd.auto.tfvars`) trước khi `plan` lại, rồi
@@ -142,7 +142,9 @@ eval "$(AWS_PROFILE=anhnv-prd terraform -chdir=aws/envs/prd output -raw api_tunn
   API qua cùng tunnel (`api_server_url = "https://127.0.0.1:6443"` của `aws/gitops/prd/prd.tfvars`, TLS server name tính từ
   `cluster_endpoint` của state root env). Vì sao tunnel và cổng mỗi env:
   [09. Env và mạng](../handbook/09-envs-network.md#kịch-bản-thực-tế).
-- **Bẫy:** `FAIL no tunnel …` của một script là tunnel chưa mở hay đã rớt: mở lại rồi chạy lại đúng bước đó.
+- **Bẫy:** `FAIL no tunnel …` của một script là tunnel chưa mở hay đã rớt: mở lại rồi chạy lại đúng bước đó. Tunnel rớt giữa bước,
+  bản plugin tối thiểu, port-forward đi chung tunnel: như các **Bẫy** của mục stg đó (`bootstrap.sh prd wait` tự hỏi lại khi tunnel có
+  lại).
 
 ## Bước 11: secret và làm nóng cache
 
@@ -195,6 +197,9 @@ AWS_PROFILE=anhnv-prd kubectl --context svp-prd -n argocd get applications.argop
 ```
 
 - **Mong đợi:** mọi dòng `ok`/`FAIL` của `bootstrap.sh prd wait` (hạn 45 phút); các Application `Synced` `Healthy`.
+- **Kiểm:** Application đứng lâu: cây Argo CD (health từng resource không ở `.status.resources` của Argo CD v3), UI qua port-forward,
+  bẫy taint của node Karpenter: mục [Xem Argo CD trong lúc chờ](session-stg-deploy.md#xem-argo-cd-trong-lúc-chờ) của buổi stg với
+  `AWS_PROFILE=anhnv-prd`, `--context svp-prd`.
 - **Bẫy:** cảnh báo `PublicUptimeBudgetBurn` (SLO `public-uptime`, hai mức cùng tên: `page` và `ticket`) cháy sau khi dựng cluster mới là
   do probe lỗi lúc dựng (probe chạy trước các service, thứ tự ở `argocd/apps/components.json` của svp-gitops): chờ, không điều tra. Khi
   ba đích đã xanh, page hết sau chừng 30 phút, ticket theo cửa sổ 6 giờ; cửa sổ của hai mức ở

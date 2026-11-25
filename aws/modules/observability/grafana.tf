@@ -72,6 +72,7 @@ data "aws_iam_policy_document" "grafana" {
     resources = ["*"]
   }
 
+  # Log events written before the log group left the observability key stay encrypted with it.
   statement {
     sid       = "DecryptLogsThroughCloudWatchLogs"
     actions   = ["kms:Decrypt"]
@@ -81,20 +82,6 @@ data "aws_iam_policy_document" "grafana" {
       test     = "StringEquals"
       variable = "kms:ViaService"
       values   = ["logs.${local.region}.amazonaws.com"]
-    }
-  }
-
-  # AMG reads an encrypted workspace only when its role may use the key
-  # (https://docs.aws.amazon.com/prometheus/latest/userguide/encryption-at-rest-Amazon-Service-Prometheus.html).
-  statement {
-    sid       = "DecryptMetricsThroughPrometheus"
-    actions   = ["kms:Decrypt", "kms:DescribeKey"]
-    resources = [local.kms_key_arn]
-
-    condition {
-      test     = "StringEquals"
-      variable = "kms:ViaService"
-      values   = ["aps.${local.region}.amazonaws.com"]
     }
   }
 }

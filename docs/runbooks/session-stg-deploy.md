@@ -141,10 +141,10 @@ Lệnh, phép kiểm và cách xoay: [`media-signing-keys.md`](media-signing-key
 - **Bẫy:** có `destroy` hay `change` là state còn tài nguyên của buổi trước (destroy dở): dừng, dán plan cho AI.
 
 **Bước 9, `apply`.** Chỉ nhận file plan của bước 8 (không plan lại tại chỗ), rồi xoá nó. Thời gian: EKS ~10–15 phút, RDS ~10 phút, ba
-distribution CloudFront và cert ACM (DNS validation) ~5–15 phút, MSK ≤ 45 phút, ElastiCache ≤ 20 phút (giả định của ADR-0053 §16), song
-song. Root này cũng tạo các entry `svp/stg/*` của Secrets Manager: `kafka-admin`, `kafka-users`, `valkey-users` có giá trị ngay
-trong apply này (Terraform sinh mật khẩu, ghi cùng một giá trị vào secret `AmazonMSK_*`, user ElastiCache và entry; không vào plan
-hay state), `media-signing` còn rỗng tới bước 10, các entry khác tới bước 11.
+distribution CloudFront và cert ACM (DNS validation) ~5–15 phút, MSK 2 × `kafka.m7g.large` 24m54s (đo ở một buổi, phụ lục ADR-0084),
+ElastiCache ≤ 20 phút (giả định của ADR-0053 §16), song song. Root này cũng tạo các entry `svp/stg/*` của Secrets Manager:
+`kafka-admin`, `kafka-users`, `valkey-users` có giá trị ngay trong apply này (Terraform sinh mật khẩu, ghi cùng một giá trị vào secret
+`AmazonMSK_*`, user ElastiCache và entry; không vào plan hay state), `media-signing` còn rỗng tới bước 10, các entry khác tới bước 11.
 
 - **Mong đợi:** ghi lại hai dòng `Creation complete after …` của cluster MSK và replication group ElastiCache trong output (phút dựng, phép
   kiểm (a) của ADR-0053).
@@ -168,7 +168,21 @@ Lỗi apply đã biết, không sửa bằng `plan` lại:
 | `AccessDenied: Your account must be verified before you can add new CloudFront resources` ở `aws_cloudfront_distribution` | account chưa được AWS xác minh cho CloudFront | gỡ buổi như trên, rồi case AWS Support của điều kiện 1 |
 | lỗi ở `module.elasticache.aws_elasticache_user.this[…]` về `access_string` (ElastiCache không nhận một luật của chuỗi) | access string của ADR-0053 §9 chưa qua phép kiểm (a) của buổi stg; `plan` lại, version mới đều gửi lại đúng chuỗi đó | không apply lại; gỡ buổi như trên, dán lỗi cho AI: sửa chuỗi bằng PR (ADR-0053 §9, module `elasticache`, aclfile local cùng chuỗi), rồi buổi mới |
 | lỗi ở `aws_cloudwatch_log_delivery` của `module.edge` hay `module.media` nêu delivery destination `svp-cloudfront-stg` | destination chưa có hay policy của nó chưa cho account stg: bước (1) của `edge-setup.md` chưa áp | gỡ buổi như trên, áp bước (1) của [`edge-setup.md`](edge-setup.md#bước-1-log-cloudfront-và-quyền-đọc), rồi buổi mới |
-| `ServiceQuotaExceededException` ở `aws_pricingplanmanager_subscription.media` (câu của mô hình API: "You have reached the maximum number of subscriptions allowed for your account"; câu lúc chạy có thể khác, nhận theo tên lỗi) | account đã dùng hết 3 gói Free; tài liệu AWS không nói gói đã huỷ có bị đếm hay không (ADR-0052, Hệ quả) | không apply lại; gỡ buổi như trên, rồi mở case AWS Support từ account đó kèm dòng lỗi và RequestID |
+| `ConflictException` (secret đã gắn: "already associated") ở `module.msk.aws_msk_scram_secret_association.this`, ở lượt apply sau một lượt đỏ giữa chừng | lượt đỏ trước đã gắn một phần secret SCRAM vào cluster MSK, nhưng state chưa có association nên lượt sau gắn lại từ đầu | đưa association đang có vào state, rồi `plan` lại (association thành update tại chỗ, gắn nốt phần thiếu) và `apply`: lệnh ở dưới bảng |
+
+Import association SCRAM (ARN cluster đọc từ chính account, không in account khác). Khối này chỉ import, không plan hay apply:
+
+```sh
+arn=$(AWS_PROFILE=anhnv-stg aws --no-cli-pager kafka list-clusters-v2 --cluster-name-filter svp-stg --region ap-southeast-1 \
+  --query 'ClusterInfoList[0].ClusterArn' --output text)
+aws/scripts/tf.sh stg env import module.msk.aws_msk_scram_secret_association.this "$arn"
+```
+
+- **Mong đợi:** `Import successful!` rồi `ok    <ARN> imported as module.msk.aws_msk_scram_secret_association.this …`.
+- **Kiểm:** plan lại và đọc file text trước mọi apply: chạy lại `session.sh up stg` (nó plan lại, in đường dẫn `stg-env-plan.txt` và
+  dòng `Plan:`, chờ `yes`), hay bước 8 bằng tay. Trong file text: `module.msk.aws_msk_scram_secret_association.this` `will be updated
+  in-place` (thêm các secret còn thiếu), phần lượt đỏ chưa tạo là `will be created`, không `replace` hay `destroy`. Đúng thì gõ `yes`
+  (hay bước 9 bằng tay); thấy thứ khác: không apply (gõ chữ khác `yes`, hay không chạy bước 9), dán file text cho AI.
 
 **Bước 10, `activate a`** (sau apply). Đọc ID của ô `a` từ output `media_signing_key_ids`, kiểm CloudFront giữ đúng khoá công khai của file
 dưới ID đó, ghi ID và khoá riêng vào entry `svp/stg/media-signing` (không giá trị nào qua đối số hay output) rồi xoá file khoá riêng.
@@ -184,7 +198,8 @@ dưới ID đó, ghi ID và khoá riêng vào entry `svp/stg/media-signing` (kh�
 
   ```sh
   AWS_PROFILE=anhnv-stg aws --no-cli-pager sns list-subscriptions-by-topic --region ap-southeast-1 \
-    --topic-arn "arn:aws:sns:ap-southeast-1:$SVP_AWS_STG_ACCOUNT_ID:svp-stg-alarms" --query 'Subscriptions[].SubscriptionArn' --output text |
+    --topic-arn "arn:aws:sns:ap-southeast-1:${SVP_AWS_STG_ACCOUNT_ID}:svp-stg-alarms" \
+    --query 'Subscriptions[].SubscriptionArn' --output text |
     sed -E 's/^arn:.*/confirmed/'
   ```
 
@@ -211,6 +226,13 @@ eval "$(AWS_PROFILE=anhnv-stg terraform -chdir=aws/envs/stg output -raw api_tunn
 - **Bẫy:** mọi script cần API (`bootstrap.sh stg wait`, `tf.sh stg gitops plan|apply|plan --destroy|destroy`, `measure.sh stg`,
   `pre-destroy.sh stg`) kiểm `127.0.0.1:6444` trước lệnh đầu tới API và dừng với `FAIL no tunnel …` khi tunnel chưa mở hay đã rớt (phiên SSM
   hết hạn): mở lại tunnel rồi chạy lại đúng bước đó.
+- **Bẫy (tunnel rớt giữa bước):** `kubectl` báo `EOF`, `TLS handshake timeout` hay `connection refused` tới `127.0.0.1:6444`, terminal
+  thứ hai đã thoát hay treo ở `Starting session with SessionId` (không tới `Port 6444 opened`). Ctrl-C ở terminal thứ hai, chạy lại khối
+  trên ở đó. `bootstrap.sh stg wait` không cần chạy lại: mỗi lần chờ nó hỏi lại API tới hạn của nó, nên tự đi tiếp khi tunnel có lại; bước
+  khác dừng với `FAIL` thì chạy lại đúng bước đó. Rớt lặp lại: kiểm bản plugin (`aws/scripts/preflight.sh plugin`, điều kiện 3 của
+  [trang chủ](session-stg.md#điều-kiện-trước)): bản cũ hơn 1.2.896 rớt nhiều lần trong một buổi.
+- **Bẫy (port-forward đi chung tunnel):** `kubectl port-forward` (Argo CD UI, Grafana) chạy qua cùng phiên SSM với lệnh của script; khi
+  tunnel rớt, port-forward chết theo. Chỉ mở port-forward lúc cần xem, tắt (Ctrl-C) khi xong, và mở lại sau khi tunnel đã mở lại.
 
 ## 11. Giá trị secret
 
@@ -254,8 +276,10 @@ wc -l <"$SVP_SESSION_DIR/images-stg.txt"
 aws/scripts/ecr-warm.sh stg "$SVP_SESSION_DIR/images-stg.txt"
 ```
 
-Script đọc hết danh sách trước lệnh đầu tiên (dòng sai dạng, image không thuộc năm tiền tố cache thì dừng, nêu dòng), kiểm account, rồi mỗi
-image một `aws ecr batch-get-image` theo tag qua repo cache và so digest (đi hết danh sách, rồi mới dừng nếu có image đỏ).
+Danh sách bỏ image của pod `helm test` (hook `test` của chart, như pod của Kyverno): Argo CD không chạy hook test, nên image đó không
+bao giờ được kéo; tag `latest` của nó dời ở upstream thì làm nóng cache đỏ vô cớ. Script đọc hết danh sách trước lệnh đầu tiên (dòng sai
+dạng, image không thuộc năm tiền tố cache thì dừng, nêu dòng), kiểm account, rồi mỗi image một `aws ecr batch-get-image` theo tag qua
+repo cache và so digest (đi hết danh sách, rồi mới dừng nếu có image đỏ).
 
 - **Mong đợi:** mỗi image một dòng `ok`, dòng cuối `ok every image of … in the cache of stg at its pinned digest; next: …`, mốc
   `ecr-warm-start`, `ecr-warmed` trong `timeline.tsv`.
@@ -287,7 +311,10 @@ apply root env: provider đọc output `cluster_endpoint`, `cluster_values` từ
   `svp-cluster` của repo code ở `revision` của `envs/stg/charts.yaml` (`origin/main` của `svp-gitops`) bằng `git archive` vào
   `$SVP_SESSION_DIR/svp-cluster-chart/` (`TF_VAR_svp_cluster_chart`), lấy `SVP_ALERT_TELEGRAM_CHAT_ID` của `.env` repo code
   (`TF_VAR_telegram_chat_id`), rồi plan; dòng `ok chart svp-cluster at <sha>` nêu commit. **Đọc file text `stg-gitops-plan.txt`**: chỉ thêm
-  namespace, ba `helm_release`, Secret `in-cluster`. `apply` như bước 9; output `bootstrap_revision` là commit bootstrap B.
+  namespace, ba `helm_release`, Secret `in-cluster`. `apply` như bước 9; output `bootstrap_revision` là commit bootstrap B. Mọi lệnh
+  `terraform` của root gitops chạy với `HELM_REPOSITORY_CONFIG`, `HELM_REPOSITORY_CACHE` trong thư mục buổi (`tf.sh` đặt, `--print` in
+  ra): provider Helm không đọc repo Helm của máy, nên repo hỏng cache trên máy (`no cached repo found …`) không làm plan đỏ; không cần
+  `export` tay ([`operations.md`](../reference/operations.md#tfsh)).
 - **Bẫy:** plan cần mạng tới GitHub (raw file, REST API của `svp-gitops`).
 
 ## 15. Chờ Argo CD
@@ -320,6 +347,38 @@ check cổng 19003): smoke của bước 16 đi qua CloudFront và ALB đó. M�
   đã xanh, page hết sau chừng 30 phút, ticket theo cửa sổ 6 giờ; cửa sổ của hai mức ở
   `deploy/observability/prometheus/rules/slo-generated.yaml` của svp-backend, cách đọc ở
   [`public-uptime-budget-burn.md`](https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks/public-uptime-budget-burn.md).
+
+### Xem Argo CD trong lúc chờ
+
+Không bắt buộc; giúp biết Application nào đang chờ gì. Argo CD v3 không giữ health từng resource trong `.status.resources` của
+Application (trường đó chỉ có sync), nên `kubectl get applications` chỉ cho health của cả Application: health từng resource xem ở cây
+của UI (lọc **Health**: `Progressing`, `Degraded`, `Missing`) hay hỏi thẳng resource đó bằng `kubectl`.
+
+UI qua port-forward ở terminal thứ ba, tunnel mở (port-forward đi chung tunnel, mục [Tunnel tới
+API](#tunnel-tới-api-sau-bước-9-trước-bước-11)); đăng nhập `admin`, mật khẩu đọc từ Secret `argocd-initial-admin-secret`, chép vào
+clipboard, không in:
+
+```sh
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n argocd get secret argocd-initial-admin-secret \
+  -o jsonpath='{.data.password}' | base64 --decode | pbcopy
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n argocd port-forward svc/argocd-server 8080:443
+```
+
+Mở `https://localhost:8080` (cert tự ký của Argo CD: trình duyệt cảnh báo, đi tiếp), đăng nhập, xem cây của Application đang
+`Progressing`. Xong thì Ctrl-C và `printf '' | pbcopy`. Hỏi thẳng một resource (Application, rồi object nó tạo):
+
+```sh
+cols='NAME:.metadata.name,WAVE:.metadata.annotations.argocd\.argoproj\.io/sync-wave,SYNC:.status.sync.status'
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n argocd get applications.argoproj.io \
+  -o "custom-columns=$cols,HEALTH:.status.health.status"
+AWS_PROFILE=anhnv-stg kubectl --context svp-stg get pods -A --field-selector=status.phase!=Running,status.phase!=Succeeded
+```
+
+- **Mong đợi:** Application lên theo wave (wave nhỏ Healthy trước); pod `Pending` ngắn trong lúc Karpenter dựng node.
+- **Bẫy:** pod `Pending` lâu với `untolerated taint {cni.istio.io/not-ready}`: node Karpenter mang startup taint đó tới khi istio-cni và
+  ztunnel Ready trên node, và Istio cùng wave 1 với `svp-cluster`
+  ([ADR-0083](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0083-istio-wave-eks.md)), nên taint tự gỡ. Không gỡ taint bằng
+  `kubectl taint`: đọc DaemonSet `istio-cni-node`, `ztunnel` (`-n istio-system`) và Application của chúng, dán output cho AI.
 
 ## Chạy tay một root (không qua script)
 
@@ -372,6 +431,8 @@ quét sót. Bỏ buổi giữa chừng: xem **Bẫy** của bước 9 và 15.
 ## Khi một bước đỏ
 
 Đọc dòng `FAIL`, sửa nguyên nhân, chạy lại **đúng bước đó** (mọi script chạy lại được). Không đi tiếp qua một bước đỏ. Lỗi riêng của từng
-bước ở nhãn **Bẫy** của nó; apply đỏ: bảng "Lỗi apply đã biết" ở bước 6–10; destroy kẹt:
+bước ở nhãn **Bẫy** của nó; apply đỏ: bảng "Lỗi apply đã biết" ở bước 6–10 (cả association SCRAM gắn dở); tunnel rớt: mục
+[Tunnel tới API](#tunnel-tới-api-sau-bước-9-trước-bước-11); Application đứng lâu: [Xem Argo CD trong lúc chờ](#xem-argo-cd-trong-lúc-chờ);
+destroy kẹt:
 [Destroy kẹt](session-stg.md#destroy-kẹt) của trang chủ; `Error acquiring the state lock` kèm Lock ID sau một lệnh `terraform` trần bị
 ngắt (mục [Chạy tay một root](#chạy-tay-một-root-không-qua-script)): [Khoá state kẹt](../reference/operations.md#khoá-state-kẹt).

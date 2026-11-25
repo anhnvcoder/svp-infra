@@ -14,7 +14,7 @@ cấp và gia hạn, video được cache gần người xem. Video premium ch�
 ký trước khi trả segment. Phía sau, file người dùng tải lên được MediaConvert chuyển thành HLS; trạng thái job quay về qua hàng đợi, nên
 worker tắt giữa chừng không làm mất kết quả.
 
-Phần này sống theo buổi: dựng cùng env đầu buổi, gỡ cùng env cuối buổi, kể cả gói giá của CloudFront và khoá ký URL. Hosted zone, CAA,
+Phần này sống theo buổi: dựng cùng env đầu buổi, gỡ cùng env cuối buổi, kể cả khoá ký URL. Hosted zone, CAA,
 DNSSEC sống lâu ở account env (chương [08. Accounts](08-accounts.md)); log của edge sống tiếp ở account
 Log Archive (chương [04. Log Archive](04-log-archive.md)).
 
@@ -64,8 +64,8 @@ uploads, không qua CloudFront. Ranh giới tin cậy là account; region trong 
 
 **Câu hỏi của chương:** Một video tải lên ở stg đi qua những chặng nào tới khi người xem phát HLS ở `media.<domain>`?
 
-Điều kiện: env stg, region `ap-southeast-1` trừ chỗ ghi khác, media trên gói CloudFront flat-rate Free (`media_flat_rate_free = true`
-của `stg.tfvars`). prd đi cùng đường, chỉ khác gói và log của media (bước 8).
+Điều kiện: env stg, region `ap-southeast-1` trừ chỗ ghi khác, media pay-as-you-go như prd (`media_flat_rate_free = false` của
+`stg.tfvars`). prd đi cùng đường.
 
 1. Trình duyệt mở `https://<domain>`. Route 53 trả bản ghi alias tới distribution `svp-stg-web`; web ACL `svp-stg-web` xét request;
    CloudFront đi qua VPC origin `svp-stg-edge` tới ALB internal, rồi Envoy, rồi `web`. Lệnh API tới `api.<domain>` đi qua `svp-stg-api`,
@@ -90,8 +90,8 @@ của `stg.tfvars`). prd đi cùng đường, chỉ khác gói và log của med
    behavior công khai `media/*`; cache trượt thì CloudFront đọc bucket media qua OAC, lần sau edge trả từ cache. Video premium: API trả
    playlist rendition có URL ký cho từng segment; `premium/…` rơi vào behavior mặc định, CloudFront kiểm chữ ký bằng key group
    `svp-stg-media` trước khi tìm trong cache; thiếu chữ ký hay quá hạn thì 403.
-8. Ba web ACL ghi mọi request vào bucket log WAF của `svp-log-archive`; `svp-stg-web`, `svp-stg-api` giao log chuẩn v2 qua delivery
-   destination `svp-cloudfront-stg`. `svp-stg-media` trên gói Free không có log chuẩn; `svp-prd-media` (pay-as-you-go) có.
+8. Ba web ACL ghi mọi request vào bucket log WAF của `svp-log-archive`; ba distribution `svp-stg-web`, `svp-stg-api`, `svp-stg-media`
+   giao log chuẩn v2 qua delivery destination `svp-cloudfront-stg`.
 
 Không có số đo thời gian từ lúc tải lên tới lúc video `READY` (ADR-0066 "Xác nhận"). Buổi stg kiểm đường này ở trang phép kiểm
 edge và media ([`session-stg-check-edge-media.md`](../runbooks/session-stg-check-edge-media.md)). Luồng bên trong bridge (Probe,
@@ -110,8 +110,9 @@ bản ghi job, quyết định kết quả):
 - **Ở svp:** web, api: cache policy `Managed-CachingDisabled` (riêng `/_next/static/*` của web là `Managed-CachingOptimized`), origin
   request policy `Managed-AllViewerAndCloudFrontHeaders-2022-06`, response headers policy `svp-<env>-web`, `-api` (HSTS không `preload`,
   `nosniff`, `X-Frame-Options`; api thêm CSP). Media: `Managed-CachingOptimized`, OAC ký SigV4 mọi request. Chung: HTTP/2 và HTTP/3,
-  IPv6, `PriceClass_All`, viewer `sni-only` với `TLSv1.2_2025`. Gói của media theo `media_flat_rate_free`: stg flat-rate Free với policy
-  managed `Managed-SimpleCORS`; prd pay-as-you-go với policy `svp-prd-media` (CORS chỉ origin của web, HSTS, `nosniff`) và log chuẩn.
+  IPv6, `PriceClass_All`, viewer `sni-only` với `TLSv1.2_2025`. Media ở cả hai env pay-as-you-go (`media_flat_rate_free = false`) với
+  response headers policy `svp-<env>-media` (CORS chỉ origin của web, HSTS, `nosniff`) và log chuẩn; nhánh gói flat-rate Free của module
+  `media` (policy managed `Managed-SimpleCORS`, không log chuẩn) còn trong code, không env nào bật.
 - **Phí theo:** pay-as-you-go: GB ra Internet và request HTTPS, có hạn mức miễn phí mỗi tháng; gói flat-rate: theo tháng mỗi
   distribution; VPC origin không phí riêng; log chuẩn v2: GB giao.
 - **Cố ý tắt:** origin request policy ở media: S3 không thấy `Origin`, nên mọi viewer dùng chung một bản cache và CloudFront trả CORS.
@@ -251,13 +252,12 @@ sequenceDiagram
 
 | Khoản | Đơn vị tính | Giữa các buổi | Trong buổi | Nguồn |
 | --- | --- | --- | --- | --- |
-| WAF phí cố định (ba ACL, luật, Bot Control, ATP) | ACL-tháng, luật-tháng, tính theo giờ | 0 | stg ~0,22 USD, prd ~0,27 USD mỗi buổi 4 giờ (media stg trong gói Free) | ADR-0061 phụ lục §13 |
+| WAF phí cố định (ba ACL, luật, Bot Control, ATP) | ACL-tháng, luật-tháng, tính theo giờ | 0 | ~0,27 USD mỗi buổi 4 giờ mỗi env (49 USD mỗi tháng × 4/730) | ADR-0061 phụ lục §13; ADR-0084 §5 (web ACL media của stg) |
 | WAF theo request | triệu request | 0 | ~0,03 USD mỗi buổi | ADR-0061 phụ lục §13 |
 | ALB | giờ, LCU-giờ | 0 | ~0,13 USD mỗi buổi | ADR-0061 phụ lục §13 |
 | Log chuẩn v2 (prd thêm query log) | GB giao | 0 | stg ~0,02 USD, prd ~0,03 USD mỗi buổi | ADR-0061 phụ lục §13 |
-| Edge cộng lại (kể cả item Config) | buổi 4 giờ | 0 | stg ~0,5 USD, prd ~0,55 USD | ADR-0061 phụ lục §13 "Thêm mỗi buổi" |
-| CloudFront pay-as-you-go (web, api; media prd) | GB ra Internet, request | 0 | trong hạn mức miễn phí 1 TB, 10 triệu request mỗi tháng | ADR-0061 phụ lục §13 |
-| CloudFront flat-rate Free (media stg) | gói-tháng | 0 (huỷ cùng env) | 0 USD; 1 triệu request và 100 GB mỗi tháng, không phí vượt | ADR-0052 §1 |
+| Edge cộng lại (kể cả item Config) | buổi 4 giờ | 0 | ~0,55 USD mỗi env | ADR-0061 phụ lục §13 "Thêm mỗi buổi"; ADR-0084 §5 |
+| CloudFront pay-as-you-go (web, api, media) | GB ra Internet, request | 0 | trong hạn mức miễn phí 1 TB, 10 triệu request mỗi tháng | ADR-0061 phụ lục §13 |
 | MediaConvert Basic | phút output chuẩn hoá | 0 | ~0,0085 USD mỗi phút chuẩn hoá; phần transcode của buổi stg ~0,72 USD, prd ~0,84 USD | ADR-0066 §12 |
 | S3 Standard | GB-tháng, request | 0 (bucket gỡ cùng env) | ~0,025 USD mỗi GB-tháng | ADR-0061 phụ lục §13 |
 | KMS key `uploads` | key-tháng, tính theo giờ | 0; key chờ xoá 7 ngày không tính phí | ~1 USD mỗi key-tháng | ADR-0061 phụ lục §13 |
@@ -266,7 +266,7 @@ sequenceDiagram
 
 Tổng phí một buổi của cả env ở chương [15. Chi phí](15-cost.md). Nguồn:
 [ADR-0061 phụ lục](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0061-edge-cloudfront-waf-acm.md),
-[ADR-0052](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0052-cloudfront-flat-rate-free.md),
+[ADR-0084](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0084-stg-msk-media-sizing.md),
 [ADR-0066](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0066-mediaconvert-transcode.md),
 [ADR-0060 phụ lục](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0060-org-detection-logging.md).
 
@@ -287,10 +287,10 @@ Tổng phí một buổi của cả env ở chương [15. Chi phí](15-cost.md).
 | DLQ | `svp-<env>` | `ap-southeast-1` | SQS → `svp-<env>-transcode-events-dlq` | Messages available 0 |
 | Log edge | `svp-log-archive` | `us-east-1` | S3 → `aws-waf-logs-svp-…`, `svp-cloudfront-…` | Object mới dưới tiền tố account env |
 
-Bảng trên là trạng thái mà code khai báo. Phần đã kiểm thật là phần runbook có bước: các phép kiểm Gói Free của media, Phát video và
-CORS của media, Phép kiểm edge, Phép kiểm edge premium, Phép kiểm transcode, Bucket media không liệt kê được và log WAF, quét malware
-của buổi stg (trang phép kiểm [edge và media](../runbooks/session-stg-check-edge-media.md)); dựng, xoay và thay khoá
-ký mỗi buổi ở [`media-signing-keys.md`](../runbooks/media-signing-keys.md); Probe và job mẫu ở account sandbox ở
+Bảng trên là trạng thái mà code khai báo. Phần đã kiểm thật là phần runbook có bước: các phép kiểm Phát video và CORS của media,
+Phép kiểm edge, Phép kiểm edge premium, Phép kiểm transcode, Bucket media không liệt kê được và log WAF, quét malware của buổi stg
+(trang phép kiểm [edge và media](../runbooks/session-stg-check-edge-media.md)); dựng, xoay và thay khoá ký mỗi buổi ở
+[`media-signing-keys.md`](../runbooks/media-signing-keys.md); Probe và job mẫu ở account sandbox ở
 [`mediaconvert-sandbox-probe.md`](../runbooks/mediaconvert-sandbox-probe.md). Zone, DNSSEC và xác minh CloudFront của account làm một
 lần ở [`edge-setup.md`](../runbooks/edge-setup.md), [`platform-setup.md`](../runbooks/platform-setup.md).
 
@@ -312,11 +312,14 @@ path thô tới S3, nên `premium%2F…` không khớp `premium/*` mà S3 có th
 khoá cũ ở lại tới hạn. Lý do: [ADR-0073](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0073-premium-playback.md) §7, §8,
 [`premium-playback.md`](https://github.com/anhnvcoder/svp-backend/blob/main/docs/explanation/premium-playback.md) của svp-backend.
 
-### Gói flat-rate Free ở stg, pay-as-you-go ở prd
+### Media pay-as-you-go ở cả hai env
 
-Gói Free cho 0 USD có trần và phủ web ACL, nhưng chỉ nhận policy managed (CORS `*` qua `Managed-SimpleCORS`), không có access
-log, tối đa 5 luật WAF và 5 cache behavior, 3 gói Free mỗi account, và AWS không cho gỡ hay thay web ACL khi còn gói. prd cần
-log chuẩn và CORS theo origin, nên trả theo dùng. Lý do:
+Gói flat-rate Free cho 0 USD có trần và phủ web ACL, nhưng chỉ nhận policy managed (CORS `*` qua `Managed-SimpleCORS`), không có
+access log, tối đa 5 luật WAF và 5 cache behavior, 3 gói Free mỗi account, và AWS không cho gỡ hay thay web ACL khi còn gói. API của
+gói từ chối web ACL media của stg ("not eligible for this subscription tier"); nguyên nhân chưa chứng minh (log WAF hay cách đếm nhóm
+luật managed). Media của stg vì thế trả theo dùng như prd, có log chuẩn và CORS theo origin; cái giá là phí cố định của web ACL media
+và lưu lượng vượt hạn mức miễn phí tính tiền. Lý do:
+[ADR-0084](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0084-stg-msk-media-sizing.md) §3, §4,
 [ADR-0052](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0052-cloudfront-flat-rate-free.md), ADR-0061 §1.
 
 | Lựa chọn của svp | Cái giá | Phương án khác | Khi nào chọn nó |
@@ -324,7 +327,7 @@ log chuẩn và CORS theo origin, nên trả theo dùng. Lý do:
 | VPC origin tới ALB internal | Thêm ALB, subnet, chặng TLS; ENI ngoài state | ALB public mở prefix list kèm header bí mật | Origin cần nhận cả traffic không qua CloudFront |
 | Ba distribution, ba web ACL | Phí cố định WAF mỗi ACL | Một distribution, behavior theo path | Một tên miền, mọi đường cùng luật WAF |
 | Signed URL custom policy mỗi rendition | Mỗi lần đổi chất lượng là một lệnh tới API | Signed cookie | Mọi object của một phiên cùng quyền, cùng domain với web |
-| Gói Free cho media stg | CORS `*`, không log media, hạn 3 gói mỗi account | Pay-as-you-go như prd | Cần log, CORS theo origin, policy tự viết |
+| Media pay-as-you-go ở cả hai env | Phí cố định web ACL media; không trần 0 USD | Gói flat-rate Free | Web ACL được gói nhận, chấp nhận CORS `*`, không log media |
 | MediaConvert on-demand | Phí theo phút output, giới hạn của dịch vụ | ffmpeg trên node (đường local) | Tải lớn và đều, cần codec hay tham số tự chọn |
 | Trạng thái job qua EventBridge tới SQS | Thêm hàng đợi, DLQ, alarm | Poll `GetJob` | Ít job, chấp nhận độ trễ và phí của poll |
 
@@ -366,10 +369,12 @@ log chuẩn và CORS theo origin, nên trả theo dùng. Lý do:
 - CORS của media trả ở CloudFront, không ở bucket: `Origin` không vào cache key, nên bản cache của request không `Origin` sẽ tới player
   thiếu header CORS nếu bucket trả nó.
 - `PriceClass_All` ở cả hai gói: đăng ký gói tự chuyển distribution sang mọi edge location, giá trị khác làm `plan` sau apply lệch
-  (quan sát ở dự án khác, ADR-0052 §1). Mỗi managed rule group tính là một luật của gói là giả định của ADR-0052 §3; test module `waf`
-  kiểm số luật mặc định. AWS lặng lẽ bỏ override có tên luật sai, nên `common_rule_set_count_overrides` chỉ nhận tên có trong nhóm.
-- Gói Free tham chiếu distribution và web ACL, nên destroy huỷ gói trước (có hiệu lực ngay); AWS không xoá distribution còn gói. Đổi
-  `name` của module `waf` (thay web ACL) phải huỷ gói trước. Vài phút giữa lúc tạo distribution và lúc gói có hiệu lực tính pay-as-you-go.
+  (quan sát ở dự án khác, ADR-0052 §1). Mỗi managed rule group tính là một luật của gói là giả định của ADR-0052 §3, chưa chứng minh
+  (ADR-0084 §4); test module `waf` kiểm số luật mặc định. AWS lặng lẽ bỏ override có tên luật sai, nên
+  `common_rule_set_count_overrides` chỉ nhận tên có trong nhóm.
+- Khi nhánh gói Free bật, gói tham chiếu distribution và web ACL, nên destroy huỷ gói trước (có hiệu lực ngay); AWS không xoá
+  distribution còn gói. Đổi `name` của module `waf` (thay web ACL) phải huỷ gói trước. Vài phút giữa lúc tạo distribution và lúc gói có
+  hiệu lực tính pay-as-you-go.
 - Log chuẩn v2 đi chéo account: account env tạo delivery source `ACCESS_LOGS` ở `us-east-1` và delivery, Log Archive giữ destination,
   policy và bucket; `record_fields` tường minh, bỏ `cs(Cookie)`; đường object `{DistributionId}/{yyyy}/{MM}/{dd}/{HH}` kiểu Hive. WAF chỉ
   giao log (mỗi 5 phút) tới bucket tên bắt đầu `aws-waf-logs-`; bucket policy của Log Archive cho `delivery.logs.amazonaws.com` với
@@ -398,4 +403,6 @@ Làm và tra cứu:
   [`premium-playback.md`](https://github.com/anhnvcoder/svp-backend/blob/main/docs/explanation/premium-playback.md): vé, URL ký, khoá.
 - [ADR-0066](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0066-mediaconvert-transcode.md) và
   [`transcode.md`](https://github.com/anhnvcoder/svp-backend/blob/main/docs/explanation/transcode.md): bridge, bảng quyền, control FSBP.
-- [ADR-0052](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0052-cloudfront-flat-rate-free.md): sự thật của gói Free.
+- [ADR-0052](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0052-cloudfront-flat-rate-free.md): sự thật của gói Free;
+  [ADR-0084](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0084-stg-msk-media-sizing.md): vì sao media của stg trả theo
+  dùng.

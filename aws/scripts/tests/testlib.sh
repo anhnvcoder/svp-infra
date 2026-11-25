@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Harness shared by the *-test.sh files of this directory, sourced by each of them: . "$(dirname "$0")/testlib.sh".
+# Harness shared by the *-test.sh files of this directory, sourced by each of them: . "$src/tests/testlib.sh".
 # It makes a temporary tree, puts a directory of fake commands first on PATH and points HOME and AWS_CONFIG_FILE at the
 # tree, so a test never reaches an account or reads the learner's ~/.aws. Runs on bash 3.2 (Mac) and on Linux.
 

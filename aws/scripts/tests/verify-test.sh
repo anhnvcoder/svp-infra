@@ -3,7 +3,7 @@
 # are ok and runs where one check FAILs while the checks after it still run; each check runs under the profile of its
 # runbook and in the region of its API, no call of aws is a write verb, nothing prints an ARN or an e-mail address.
 
-# Usage: aws/scripts/verify-test.sh
+# Usage: aws/scripts/tests/verify-test.sh
 
 # The fake aws answers from files named <key>, or <key>@<option>=<value> for the first of these options that the call
 # has (--target-id, --filter, --bucket...) and <key>@profile=<profile>; answers hold the text the real CLI prints after
@@ -13,9 +13,9 @@
 # shellcheck disable=SC2016
 set -euo pipefail
 
-src=$(cd "$(dirname "$0")" && pwd)
-# shellcheck source=aws/scripts/testlib.sh
-. "$src/testlib.sh"
+src=$(cd "$(dirname "$0")/.." && pwd)
+# shellcheck source=aws/scripts/tests/testlib.sh
+. "$src/tests/testlib.sh"
 fake_aws
 here=$work/infra/aws/scripts
 mkdir -p "$here" "$work/infra/aws/org" "$work/infra/aws/accounts/prd"

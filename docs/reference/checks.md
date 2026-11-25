@@ -19,9 +19,9 @@ Chạy từ gốc repo, không cần credential AWS, cần Docker và mạng (re
 | `make tflint` | mỗi thư mục: `tflint --init`, rồi `tflint` với `.tflint.hcl` |
 | `make trivy` | `trivy config` mỗi thư mục; HIGH và CRITICAL làm đỏ (mục [Cách `make trivy` quét](#cách-make-trivy-quét)) |
 | `make shellcheck [SH='<file …>']` | shellcheck trên mọi `*.sh` (bản image, `--network none`; máy không cài shellcheck); `SH` chỉ kiểm các file đó, cho lúc sửa một script |
-| `make session-test` | tự kiểm script của `aws/scripts` với lệnh giả trên PATH, không account, cluster hay mạng: `session-test.sh` (mọi bước của buổi, khớp bảng bước của runbook buổi với `session.sh --print`), rồi mỗi `*-test.sh` còn lại; mỗi file lỗi một dòng `FAIL: <file>` |
+| `make session-test` | tự kiểm script của `aws/scripts` (test ở `aws/scripts/tests/`) với lệnh giả trên PATH, không account, cluster hay mạng: `session-test.sh` (mọi bước của buổi, khớp bảng bước của runbook buổi với `session.sh --print`), rồi mỗi `*-test.sh` còn lại; mỗi file lỗi một dòng `FAIL: <file>` |
 | `make zizmor` | lint bảo mật workflow bằng zizmor (`--persona=regular`), mọi finding làm đỏ; có `GH_TOKEN` thì chạy thêm audit online (impostor commit, action có lỗ hổng), không thì offline; `ZIZMOR_FORMAT=github` in annotation |
-| `make docs-check [DOCS='<file hay glob>']` | markdownlint-cli2 theo `.markdownlint.yaml`, rồi lychee `--offline --include-fragments` (link tương đối và anchor heading; link ra ngoài không kiểm), container `--network none`; mặc định mọi `.md` git theo dõi và file mới chưa theo dõi, trừ `.claude/` (cấu hình agent, không phải tài liệu của repo) |
+| `make docs-check [DOCS='<file hay glob>']` | markdownlint-cli2 theo `.markdownlint.yaml`, rồi lychee `--offline --include-fragments` (link tương đối và anchor heading; link ra ngoài không kiểm), container `--network none`; mặc định mọi `.md` git theo dõi và file mới chưa theo dõi, trừ `.claude/` (cấu hình agent, không phải tài liệu của repo); rồi bước kiểm biến zsh (mục [Biến zsh trong khối code](#biến-zsh-trong-khối-code)) |
 | `make diagrams [NAMES='<tên …>'] [PNG=1] [OUT=<thư mục>]` | D2 sinh `docs/diagrams/<tên>.svg` (theme sáng) và `<tên>-dark.svg` (theme tối) từ `<tên>.d2`, container ghim digest `--network none`; cờ và luật ở [`docs/diagrams/README.md`](../diagrams/README.md) |
 | `make diagrams-check [NAMES='<tên …>']` | sinh vào thư mục tạm và so với SVG đã commit; đỏ khi SVG lệch, thiếu, hay (khi không `NAMES`) SVG không còn `.d2` cùng tên |
 | `make lock [DIRS=<root>]` | `init -backend=false` rồi `terraform providers lock` cho ba nền tảng; module bị bỏ qua |
@@ -42,6 +42,14 @@ Chạy từ gốc repo, không cần credential AWS, cần Docker và mạng (re
 
 Target ghi cài đặt GitHub (`github-*`, `infracost-key`) là việc của người học: bảng "Script và target dựng" của
 [mục lục runbook](../runbooks/README.md).
+
+## Biến zsh trong khối code
+
+Bước cuối của `make docs-check` (awk, không mạng, cùng luật với `docs-check` của repo code): trong khối code rào ` ``` ` hay `~~~`, biến
+shell đứng ngay trước `:` phải viết `${VAR}:`, vì zsh (shell mặc định của macOS) đọc `:<chữ>` sau `$VAR` là modifier và bỏ mất phần sau
+mà không báo lỗi, nên lệnh chép từ runbook chạy sai. Mẫu bị bắt là ERE `\$[A-Za-z_0-9]+:([^:]|$)` (cả `$1:`; `::` và `${VAR}:` không
+khớp); lỗi in `<file>:<dòng>` và làm lệnh thoát khác 0. Khối `json` được bỏ qua: đó là dữ liệu, không shell nào đọc. `DOCS` thu hẹp cả
+bước này.
 
 ## Image và chỗ chạy
 
@@ -109,6 +117,31 @@ kiểm ai dùng được key state, bucket state được bảo vệ ra sao, tê
 dòng, nên khi khối comment và heredoc bị cấm thì mỗi dòng được đọc đúng như HCL đọc nó. Vì thế dòng chứa `*/` (kể cả dòng comment, vì `/*`
 có thể nằm trong chuỗi như một origin) hay `<<` (heredoc) bị từ chối: dòng của hai thứ đó có thể giả làm dòng khuôn. Khuôn đủ ở
 [`AGENTS.md`](../../AGENTS.md); `make test-guard` kiểm ba luật mà không khởi động container nào.
+
+### Lỗi chỉ API của AWS báo
+
+Vài lỗi apply qua được `validate` và plan, chỉ API từ chối. Các `run` sau canh từng loại:
+
+- `scram_secrets_readable_by_msk` (`msk`): association SCRAM đỏ `InvalidSecretArn` vì MSK không đọc được secret:
+  secret thiếu policy cho `kafka.amazonaws.com` (`secretsmanager:getSecretValue`), hay association không `depends_on`
+  các policy đó.
+- `stg_values`, `prd_values` (`msk`): Application Auto Scaling từ chối target dung lượng broker có `min_capacity`
+  khác 1.
+- `broker_instance_type_t3_kraft` (`msk`): `CreateCluster` từ chối broker `kafka.t3.*` với bản KRaft
+  (`Unsupported InstanceType`).
+- `iam_policy_size` (`eks`): `LimitExceeded … PolicySize`: policy managed của AWS Load Balancer Controller quá
+  6 144 ký tự (IAM đếm không tính khoảng trắng), hay policy của controller Karpenter (quá 6 144) không còn là policy
+  inline của role.
+
+Provider giả có giới hạn, nên một phần các phép trên đọc nguồn thay vì plan:
+
+- Plan để chưa biết mọi thuộc tính provider tính (ARN), nên không đọc được policy nêu ARN của secret; test cũng không
+  thấy đồ thị phụ thuộc. Hai `run` đọc thẳng `.tf` (bỏ dòng comment) bằng `file()` và `regex()`: đổi cách viết khối
+  được canh thì sửa regex của `run`.
+- `aws_iam_policy_document` trên provider giả trả JSON cố định của `mock_data`, không phải JSON thật, nên cỡ policy
+  dựng từ data source (role Pod Identity, role node, controller Karpenter) và trần inline 10 240 ký tự mỗi role không
+  đo được offline; chỉ policy đọc từ file đo được. Test cũng chỉ đọc được output của module con, không đọc tài nguyên
+  bên trong (policy Karpenter nằm trong submodule registry).
 
 ## Inventory
 

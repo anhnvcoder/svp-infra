@@ -3,15 +3,15 @@
 # a profile outside the table stops, and check_account of lib.sh works on every row against the fake aws (and stops on
 # another account); --print reaches nothing.
 
-# Usage: aws/scripts/profiles-test.sh
+# Usage: aws/scripts/tests/profiles-test.sh
 #
 # The checks run sh -c '...' with their values as arguments ($1, $2, ...): expanded by that shell, not this one.
 # shellcheck disable=SC2016
 set -euo pipefail
 
-src=$(cd "$(dirname "$0")" && pwd)
-# shellcheck source=aws/scripts/testlib.sh
-. "$src/testlib.sh"
+src=$(cd "$(dirname "$0")/.." && pwd)
+# shellcheck source=aws/scripts/tests/testlib.sh
+. "$src/tests/testlib.sh"
 fake_aws
 
 # The expected table, written out here and not read from profiles.sh: profile, account variable, permission set, name of

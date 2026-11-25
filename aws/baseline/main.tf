@@ -30,8 +30,9 @@ locals {
   # leaves this one rule open in us-east-2 and us-west-2 for the member accounts.
   root_signin_regions = ["us-east-1", "us-east-2", "us-west-2"]
 
-  # ebs_kms_key_arn: null keeps aws/ebs. admin_events: off where every session creates dozens of roles, keys and
-  # buckets. organization_events and the Identity Center rule: management only, the account that records those events.
+  # ebs_kms_key_arn: null keeps aws/ebs, in every account. admin_events: off where every session creates dozens of
+  # roles, keys and buckets. organization_events and the Identity Center rule: management only, the account that
+  # records those events.
   accounts = {
     mgmt = {
       ebs_kms_key_arn        = null
@@ -62,14 +63,14 @@ locals {
       identity_center_region = null
     }
     stg = {
-      ebs_kms_key_arn        = local.ebs_key_arns.stg
+      ebs_kms_key_arn        = null
       admin_events           = false
       organization_events    = false
       root_signin_regions    = local.root_signin_regions
       identity_center_region = null
     }
     prd = {
-      ebs_kms_key_arn        = local.ebs_key_arns.prd
+      ebs_kms_key_arn        = null
       admin_events           = false
       organization_events    = false
       root_signin_regions    = local.root_signin_regions

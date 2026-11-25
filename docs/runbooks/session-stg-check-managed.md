@@ -53,8 +53,8 @@ trong Deployment `svp-data/svp-ops`, không `kubectl run`, không công cụ tr�
 khẩu là dòng đầu của stdin, lấy từ Secret của chính client đó (`svp/<service>-env`), không qua đối số, không in ra.
 
 (a) MSK `ACTIVE` với cấu hình của ADR-0053 §2, ElastiCache `available`; phút dựng là hai dòng `Creation complete after …` của bước 9, phút
-gỡ là hai dòng `Destruction complete after …` của bước 27; plan lần hai `No changes` là phép (c) của mục [Gói Free của
-media](session-stg-check-edge-media.md#gói-free-của-media):
+gỡ là hai dòng `Destruction complete after …` của bước 27; plan lần hai `No changes` là mục [Plan lần hai của root
+env](session-stg-check-edge-media.md#plan-lần-hai-của-root-env):
 
 ```sh
 AWS_PROFILE=anhnv-stg aws --no-cli-pager kafka list-clusters-v2 --cluster-name-filter svp-stg --region ap-southeast-1 --output text \
@@ -68,7 +68,9 @@ AWS_PROFILE=anhnv-stg aws --no-cli-pager elasticache describe-users --region ap-
 ```
 
 Mong `ACTIVE`, `4.1.x.kraft`, `kafka.m7g.large`, `2`; `True`, `False`, `TLS`; `available`, `required`, `True`, `1`; bốn user `active` với
-access string đúng nguyên văn ADR-0053 §9 (ElastiCache viết lại một chuỗi là mục "Xem lại khi" của ADR: dán cho AI). Dán lại cả bốn output.
+access string đúng như `local.users` của `aws/modules/elasticache/main.tf`: luật của ADR-0053 §9, với `db=` ở cuối user và ở cuối mỗi
+selector `(…)` (dạng ElastiCache lưu và đọc lại, ví dụ `on ~svp:feed:* resetchannels -@all +select +client|setinfo +get +set db=14`).
+Chuỗi khác dạng đó (ElastiCache viết lại khác) là mục "Xem lại khi" của ADR và làm plan lần hai đổi: dán cho AI. Dán lại cả bốn output.
 
 (c) Topic, ACL, và một service bị từ chối trên topic không có ACL của nó. Topic thử `svp-acl-check` tạo bằng `svp-admin` rồi xoá ngay:
 
@@ -264,11 +266,11 @@ promql 'max(max_over_time((prometheus_remote_storage_highest_timestamp_in_second
 ```
 
 Cờ `managed_grafana` khác `off`, trên AMG (mục [Dashboard SLO khi giữ tải](session-stg-check-release.md#dashboard-slo-khi-giữ-tải)):
-**Explore** → data source `prometheus` → `up{cluster="svp-stg"}` có kết quả (metric qua AMG); **Dashboards**: mọi dashboard "SVP — …" của
-repo code (mỗi file của `deploy/observability/grafana/dashboards` một cái), mỗi cái khung 1 giờ gần nhất, ghi tên mọi panel "No data".
-Panel của "SVP — Web vitals (RUM)" chỉ có dữ liệu khi trình duyệt mở web (phép (d) của mục [Gói Free của
-media](session-stg-check-edge-media.md#gói-free-của-media)); hai panel Tempo (TraceQL, service map) không có trên eks. Grafana Operator đã
-đồng bộ:
+**Explore** → data source `prometheus` → `up{cluster="svp-stg"}` có kết quả (metric qua AMG); **Dashboards**: mọi dashboard "SVP — …"
+của repo code (mỗi file của `deploy/observability/grafana/dashboards` một cái), mỗi cái khung 1 giờ gần nhất, ghi tên mọi panel "No
+data". Panel của "SVP — Web vitals (RUM)" chỉ có dữ liệu khi trình duyệt mở web (mục [Phát video và CORS của
+media](session-stg-check-edge-media.md#phát-video-và-cors-của-media)); hai panel Tempo (TraceQL, service map) không có trên eks. Grafana
+Operator đã đồng bộ:
 
 ```sh
 AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp-obs get \
@@ -299,6 +301,17 @@ amp_get api/v1/rules | jq -r '.data.groups[] | "\(.name) \(.interval) \(.rules |
 Mong hai namespace `svp-alerts`, `slo-generated` `ACTIVE`; `ACTIVE`; mỗi nhóm luật một dòng chu kỳ `30`. Namespace `CREATION_FAILED` (chu
 kỳ dưới quota) hay thiếu: dán output và `AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp-obs describe
 rulegroupsnamespaces.prometheusservice.services.k8s.aws`.
+
+- **Bẫy:** namespace thiếu mà `describe` ở trên nêu `409` `In-flight idempotent request already exists` (sau một lỗi quyền đã sửa, như
+  `403` KMS): controller ACK gửi lại client token của lần lỗi nên AMP từ chối mãi; restart controller ACK không gỡ. Xoá CR đó, Argo CD
+  (selfHeal của `svp-observability`) tạo lại nó, controller gửi request mới:
+
+  ```sh
+  AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp-obs get rulegroupsnamespaces.prometheusservice.services.k8s.aws
+  AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp-obs delete rulegroupsnamespaces.prometheusservice.services.k8s.aws <tên>
+  ```
+
+  Mong CR có lại sau vài giây (lệnh đầu), namespace ở AMP `CREATING` rồi `ACTIVE` (lệnh đầu của mục). Không xoá namespace ở AMP bằng tay.
 
 ## Nền tảng managed (d): canary và cảnh báo page
 

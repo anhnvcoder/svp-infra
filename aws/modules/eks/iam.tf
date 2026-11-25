@@ -99,36 +99,11 @@ data "aws_iam_policy_document" "otel_collector" {
     resources = [var.amp_workspace_arn]
   }
 
-  # The workspace is encrypted with the observability key: a write encrypts its samples under the caller's own rights.
-  statement {
-    sid       = "EncryptMetricsThroughPrometheus"
-    actions   = ["kms:GenerateDataKey"]
-    resources = [var.observability_kms_key_arn]
-
-    condition {
-      test     = "StringEquals"
-      variable = "kms:ViaService"
-      values   = ["aps.${data.aws_region.current.region}.amazonaws.com"]
-    }
-  }
-
   # The log stream the observability module creates; the OTLP endpoint of CloudWatch Logs writes to an existing one.
   statement {
     sid       = "WriteLogs"
     actions   = ["logs:PutLogEvents"]
     resources = ["${var.log_group_arn}:log-stream:otel-collector"]
-  }
-
-  statement {
-    sid       = "UseLogGroupKeyThroughLogs"
-    actions   = ["kms:Encrypt", "kms:Decrypt", "kms:ReEncrypt*", "kms:GenerateDataKey*", "kms:DescribeKey"]
-    resources = [var.observability_kms_key_arn]
-
-    condition {
-      test     = "StringEquals"
-      variable = "kms:ViaService"
-      values   = ["logs.${data.aws_region.current.region}.amazonaws.com"]
-    }
   }
 
   # Resource * because the action has no resource type (Service Authorization Reference, AWS X-Ray:
@@ -146,19 +121,6 @@ data "aws_iam_policy_document" "prometheus_agent" {
     sid       = "WriteMetrics"
     actions   = ["aps:RemoteWrite"]
     resources = [var.amp_workspace_arn]
-  }
-
-  # The workspace is encrypted with the observability key: a write encrypts its samples under the caller's own rights.
-  statement {
-    sid       = "EncryptMetricsThroughPrometheus"
-    actions   = ["kms:GenerateDataKey"]
-    resources = [var.observability_kms_key_arn]
-
-    condition {
-      test     = "StringEquals"
-      variable = "kms:ViaService"
-      values   = ["aps.${data.aws_region.current.region}.amazonaws.com"]
-    }
   }
 }
 
@@ -188,23 +150,8 @@ data "aws_iam_policy_document" "ack_prometheusservice" {
     ]
     resources = [var.amp_workspace_arn]
   }
-
-  # The rule groups and the alert manager definition are stored encrypted with the workspace's key, under the caller's
-  # own rights: written (GenerateDataKey) and read back on each reconcile (Decrypt).
-  statement {
-    sid       = "UseKeyThroughPrometheus"
-    actions   = ["kms:GenerateDataKey", "kms:Decrypt"]
-    resources = [var.observability_kms_key_arn]
-
-    condition {
-      test     = "StringEquals"
-      variable = "kms:ViaService"
-      values   = ["aps.${data.aws_region.current.region}.amazonaws.com"]
-    }
-  }
 }
 
-# No KMS permission: ECR decrypts layers of a repository under a customer managed key through its own grant.
 data "aws_iam_policy_document" "kyverno_admission" {
   # Resource * because the action has no resource type (Service Authorization Reference, Amazon ECR:
   # https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonelasticcontainerregistry.html).
@@ -229,20 +176,6 @@ data "aws_iam_policy_document" "argo_rollouts" {
     actions   = ["aps:QueryMetrics"]
     resources = [var.amp_workspace_arn]
   }
-
-  # The workspace is encrypted with the observability key: a query decrypts its data under the caller's own rights
-  # (https://docs.aws.amazon.com/prometheus/latest/userguide/encryption-at-rest-Amazon-Service-Prometheus.html).
-  statement {
-    sid       = "DecryptMetricsThroughPrometheus"
-    actions   = ["kms:Decrypt"]
-    resources = [var.observability_kms_key_arn]
-
-    condition {
-      test     = "StringEquals"
-      variable = "kms:ViaService"
-      values   = ["aps.${data.aws_region.current.region}.amazonaws.com"]
-    }
-  }
 }
 
 # The read actions of the AWS managed policy AmazonPrometheusQueryAccess, on this one workspace: OpenCost queries the
@@ -252,20 +185,6 @@ data "aws_iam_policy_document" "opencost" {
     sid       = "QueryMetrics"
     actions   = ["aps:QueryMetrics", "aps:GetSeries", "aps:GetLabels", "aps:GetMetricMetadata"]
     resources = [var.amp_workspace_arn]
-  }
-
-  # The workspace is encrypted with the observability key: a query decrypts its data under the caller's own rights
-  # (https://docs.aws.amazon.com/prometheus/latest/userguide/encryption-at-rest-Amazon-Service-Prometheus.html).
-  statement {
-    sid       = "DecryptMetricsThroughPrometheus"
-    actions   = ["kms:Decrypt"]
-    resources = [var.observability_kms_key_arn]
-
-    condition {
-      test     = "StringEquals"
-      variable = "kms:ViaService"
-      values   = ["aps.${data.aws_region.current.region}.amazonaws.com"]
-    }
   }
 }
 

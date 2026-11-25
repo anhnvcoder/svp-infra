@@ -9,7 +9,8 @@ Trang này tra cách chạy Terraform và script của repo từ máy: account v
 Chỉ người học chạy lệnh chạm account, từ máy, bằng SSO, theo script và runbook của repo. Trước mọi lệnh ghi:
 `aws/scripts/check-account.sh mgmt|stg|prd` (`aws sts get-caller-identity` với profile của chính account đó) và so account. Provider
 của root ghim account bằng `allowed_account_ids` từ `TF_VAR_account_id` (root chạy qua role: từ biến id của account đích). Xem trước toàn
-bộ lệnh của một buổi, không chạy gì và không cần credential: `aws/scripts/session.sh --print stg` (hay `prd`).
+bộ lệnh của một buổi, không chạy gì và không cần credential: `aws/scripts/session.sh --print stg` (hay `prd`); chạy cả buổi:
+`session.sh up|check|down stg` ([bản đồ script](scripts.md#sessionsh)).
 
 ## Account và profile
 
@@ -133,16 +134,19 @@ Lock Info:
 
 ## Script của `aws/scripts/`
 
+Mỗi script một mục (làm gì, khi nào, đầu vào, đổi gì trong AWS, output đúng, đỏ thì làm gì, chạy lại, test) ở
+[bản đồ script](scripts.md); một buổi chạy bằng `aws/scripts/session.sh up|check|down <env>`.
+
 Hai nhóm, dùng chung `lib.sh`, chạy từ terminal của máy Mac (bash 3.2 là đủ):
 
 - **Script buổi** chạy theo thứ tự ở runbook [`session-stg.md`](../runbooks/session-stg.md) và
   [`session-prd.md`](../runbooks/session-prd.md); `session-test.sh` thử mọi bước của buổi.
 - **Script dựng** thay lệnh gõ tay của các runbook dựng một lần (`sso-profiles.sh`, `accounts.sh`, `platform-member.sh`, `tfvars.sh`,
   `verify.sh`, `preflight.sh`, `cache-secrets.sh`, `grafana-tokens.sh`); bảng việc và runbook dùng chúng ở
-  [mục lục runbook](../runbooks/README.md). Mỗi script dựng có test `<tên>-test.sh` cạnh nó.
+  [mục lục runbook](../runbooks/README.md). Mỗi script dựng có test `<tên>-test.sh` trong `aws/scripts/tests/`.
 
-`profiles.sh` (bảng profile của các account ngoài env của buổi, nạp sau `lib.sh`) và `testlib.sh` (bộ chung của các `*-test.sh`) là thư
-viện dùng chung, không chạy riêng. `make session-test` chạy mọi test với `aws`, `terraform`, `gh` giả.
+`profiles.sh` (bảng profile của các account ngoài env của buổi, nạp sau `lib.sh`) và `tests/testlib.sh` (bộ chung của các
+`*-test.sh`) là thư viện dùng chung, không chạy riêng. `make session-test` chạy mọi test với `aws`, `terraform`, `gh` giả.
 
 Mỗi script nhận `--print` làm đối số đầu để in, theo thứ tự, mọi lệnh nó sẽ chạy rồi không chạy lệnh nào: không gọi `aws`, `kubectl`,
 `helm`, `terraform`, `make`, `git`, `nc` hay `dig`, không đọc gì từ account và không ghi gì. Mọi lệnh chạm AWS mang profile và region
@@ -193,6 +197,20 @@ tại chỗ các thiết lập mà bản khôi phục không mang theo (tag, `co
 `-var session_open=true` (phần của cờ `session` của env trong `aws/paid-features.json`, như workspace AMG), `plan --close` với `false`,
 `apply` áp plan đã lưu và ghi mốc `account-open-applied` hay `account-close-applied`. `env plan` từ chối tới khi phần đó mở, `plan --close`
 tới khi root env đã destroy; env không có cờ `session` thì mọi lệnh `account` in `ok no session feature …` và không chạy gì.
+
+Mọi lệnh Terraform của root gitops (kể cả `init`) chạy với `HELM_REPOSITORY_CONFIG=$SVP_SESSION_DIR/helm/repositories.yaml` và
+`HELM_REPOSITORY_CACHE=$SVP_SESSION_DIR/helm/cache`; `--print` in cả hai biến. Lý do: provider Helm quét `repositories.yaml` của máy để
+tìm repo của URL chart, và dừng với `no cached repo found` khi một repo ở đó mất cache. File của buổi không tồn tại (Helm coi là danh sách
+rỗng; chart `helm_release` lấy theo `repository` URL), nên plan, apply, destroy không phụ thuộc cấu hình Helm của máy. Root env và root
+account không đổi.
+
+### `preflight.sh plugin`
+
+`preflight.sh plugin` kiểm `session-manager-plugin` trên máy, plugin mang tunnel SSM tới API của cluster (mục
+[Tunnel tới API](../runbooks/session-stg-deploy.md#tunnel-tới-api-sau-bước-9-trước-bước-11) của runbook). Bản tối thiểu là
+`1.2.896`: bản `1.2.536` làm tunnel rớt nhiều lần trong một buổi, bản này thì giữ ổn. Thiếu plugin hay bản thấp hơn thì lệnh `FAIL`,
+nêu bản đang có, bản tối thiểu và trang cài gói chính thức của AWS. Số bản so từng số (`1.2.10` lớn hơn `1.2.9`), không so chuỗi.
+Lệnh không gọi `aws`.
 
 ## Đọc plan an toàn
 

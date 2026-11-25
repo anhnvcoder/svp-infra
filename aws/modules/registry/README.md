@@ -1,10 +1,11 @@
 # Module `registry`
 
 Registry ECR private của một account env (`svp-stg`, `svp-prd`): repo phát hành theo `local.release_repositories`, rule pull-through
-cache theo `local.cache_rules` cùng vỏ secret và repository creation template, cấu hình quét image cache, key `alias/svp-<env>-ecr`, IAM
-OIDC provider của GitHub Actions và mỗi mục của `ci_roles` một role chép bản phát hành. Root `aws/accounts/<env>`
-([README](../../accounts/README.md)) gọi module nên registry sống qua `destroy` của buổi; luồng image và lý do:
-[08. Account env](../../../docs/handbook/08-accounts.md#amazon-ecr-repo-phát-hành-quét). Test: `make test DIRS=aws/modules/registry`.
+cache theo `local.cache_rules` cùng vỏ secret và repository creation template (mọi repo mã hoá AES256), cấu hình quét image cache, IAM
+OIDC provider của GitHub Actions và mỗi mục của `ci_roles` một role chép bản phát hành. Key `alias/svp-<env>-ecr` không mã hoá repo mới
+nào, giữ tới khi không repo cache nào còn dùng. Root `aws/accounts/<env>` ([README](../../accounts/README.md)) gọi module nên registry
+sống qua `destroy` của buổi; luồng image và lý do: [08. Account
+env](../../../docs/handbook/08-accounts.md#amazon-ecr-repo-phát-hành-quét). Test: `make test DIRS=aws/modules/registry`.
 
 ## Ví dụ
 
@@ -92,7 +93,6 @@ vào ECR bị từ chối. Giá trị secret cache (khoá `username`, `accessTok
 | cache\_prefixes | Repository prefixes of the pull through cache rules (ghcr, docker-hub, quay, k8s, ecr-public): nodes import and create repositories under <prefix>/*. |
 | ci\_role\_arns | ARN of each role of ci\_roles, by role name. |
 | github\_oidc\_provider\_arn | ARN of the IAM OIDC provider of GitHub Actions in the account: the principal of the trust of every role GitHub Actions assumes here. |
-| kms\_key\_arn | ARN of the KMS key alias/svp-<env>-ecr that encrypts every repository of the registry. |
 | registry\_host | Host of the private registry of the account, <account>.dkr.ecr.<region>.amazonaws.com: key ecrRegistry of the cluster values. |
 | release\_repository\_arns | ARN of each release repository, by repository name (svp-backend/gateway, svp-frontend/web). |
 <!-- END_TF_DOCS -->

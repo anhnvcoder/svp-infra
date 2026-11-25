@@ -269,6 +269,10 @@ zizmor: ## Security lint of the workflows with the pinned zizmor (online audits 
 # The default for DOCS is every Markdown file git tracks plus the new ones it does not track yet, except under
 # .claude/: that is configuration of a coding agent, whose files follow the agent's own format, not documentation.
 
+# zsh reads :<letter> after $VAR as a history modifier and drops it without an error, so a command copied from a code
+# block must write ${VAR}: instead. The awk pass flags $VAR: (and $1:, not ::) inside fenced blocks, as file:line.
+# json blocks are data, no shell reads them: AWS Organizations backup policies spell their own variable $account.
+
 # set -f keeps the globs of DOCS whole: the tools expand them (with **), sh does not and would drop the files at the top.
 DOCS ?=
 docs-check: ## markdownlint-cli2 + lychee --offline on the Markdown (DOCS='<files or globs>' narrows; no network)
@@ -278,6 +282,15 @@ docs-check: ## markdownlint-cli2 + lychee --offline on the Markdown (DOCS='<file
 	rc=0; \
 	$(DOCKER) --network none -v "$(CURDIR):/repo:ro" -w /repo $(MARKDOWNLINT_IMAGE) "$$@" || rc=1; \
 	$(DOCKER) --network none -v "$(CURDIR):/repo:ro" -w /repo $(LYCHEE_IMAGE) --offline --include-fragments "$$@" || rc=1; \
+	echo "zsh variable check: no \$$VAR: in fenced code blocks"; \
+	files=$$(git ls-files --cached --others --exclude-standard -- "$$@"); set --; \
+	for f in $$files; do [ -f "$$f" ] && set -- "$$@" "$$f"; done; \
+	[ $$# -eq 0 ] || awk 'FNR == 1 { fence = "" } \
+	{ if (match($$0, /^[ \t]*(```+|~~~+)/)) { n = RLENGTH; m = substr($$0, 1, n); sub(/^[ \t]*/, "", m); \
+	    if (fence == "") { fence = m; data = substr($$0, n + 1) ~ /^[ \t]*json/; next } \
+	    if (substr(m, 1, 1) == substr(fence, 1, 1) && length(m) >= length(fence) && substr($$0, n + 1) ~ /^[ \t]*$$/) { fence = ""; next } } \
+	  if (fence != "" && !data && $$0 ~ /\$$[A-Za-z_0-9]+:([^:]|$$)/) { print FILENAME ":" FNR ": write $${VAR}: instead of $$VAR: (zsh modifier): " $$0; bad = 1 } } \
+	END { exit bad }' "$$@" || rc=1; \
 	[ $$rc = 0 ] || echo "FAIL: docs-check" >&2; \
 	exit $$rc
 
@@ -373,7 +386,7 @@ github-apply: ## Apply github/github.tfplan alone, delete it, then plan again ex
 
 session-test: ## Self-tests of aws/scripts (session-test.sh, then every other *-test.sh) with fake commands, no account or network
 	@echo "session-test aws/scripts"; rc=0; \
-	for f in aws/scripts/session-test.sh $$(ls aws/scripts/*-test.sh 2>/dev/null | grep -v '/session-test\.sh$$'); do \
+	for f in aws/scripts/tests/session-test.sh $$(ls aws/scripts/tests/*-test.sh 2>/dev/null | grep -v '/session-test\.sh$$'); do \
 	  bash "$$f" >/dev/null || { echo "FAIL: $$f (bash $$f prints every check)" >&2; rc=1; }; \
 	done; exit $$rc
 

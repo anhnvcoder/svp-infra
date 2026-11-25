@@ -17,10 +17,10 @@ Mọi tài nguyên mang tag `Stack=security-baseline` (SCP `svp-protect-baseline
 | --- | --- | --- |
 | `module.<account>` ([`security-baseline`](../modules/security-baseline/README.md)), một lời gọi mỗi khoá của `local.accounts` | mỗi account, hai region | S3 Block Public Access, EBS mã hoá mặc định, recorder Config theo cờ, rule `svp-security-*` |
 | `module.paid_features` | — | Đọc `aws/paid-features.json`: `config_recording` `always` thành `true` cho module của account đó |
-| `aws_kms_key.stg_ebs`, `.prd_ebs`, alias `alias/svp-ebs` | `svp-stg`, `svp-prd`, `ap-southeast-1` | CMK EBS, key mặc định của EBS ở region nhà của hai env |
+| `aws_kms_key.stg_ebs`, `.prd_ebs`, alias `alias/svp-ebs` | `svp-stg`, `svp-prd`, `ap-southeast-1` | CMK EBS cũ, giữ tới khi không volume, snapshot nào dùng; key mặc định của EBS mọi nơi là `aws/ebs` |
 | `data.aws_kms_alias.log_archive` | `svp-log-archive` | ARN `key/<id>` của key Log Archive cho delivery channel của Config |
 
-Khác biệt giữa account là dữ liệu của `local.accounts` trong [`main.tf`](main.tf): stg, prd dùng CMK EBS và tắt rule `admin-*`;
+Khác biệt giữa account là dữ liệu của `local.accounts` trong [`main.tf`](main.tf): stg, prd tắt rule `admin-*`;
 management có thêm rule tổ chức, phiên root, Identity Center (ở `sso_region`). Mọi account có rule đăng nhập root ở ba region
 (`local.root_signin_regions`), nên `aws/org` phải áp SCP mở rule đó ở `us-east-2`, `us-west-2` trước. Đích của mọi rule là bus
 `svp-security-events` của `svp-security`, recorder giao về bucket `svp-config-<log>-ap-southeast-1`; root suy cả hai từ id account,

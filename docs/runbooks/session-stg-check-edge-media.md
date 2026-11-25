@@ -4,17 +4,19 @@
 
 > **Tóm tắt**
 >
-> - **Làm gì:** chứng minh đường vào và media: gói Free của media, phát video và CORS, phép kiểm edge và edge premium (khoá ký media),
->   uptime (probe và cảnh báo), transcode bằng MediaConvert (đo hai đường, header, hàng đợi rỗng). `lõi`: phát video và CORS, uptime,
->   transcode (a) và (f); `chuẩn ngành`: gói Free, edge, edge premium, transcode (b)–(e). Không phép nào cần cờ chi phí.
+> - **Làm gì:** chứng minh đường vào và media: plan lần hai của root env, phát video và CORS, phép kiểm edge và edge premium (khoá ký
+>   media), uptime (probe và cảnh báo), transcode bằng MediaConvert (đo hai đường, header, hàng đợi rỗng). `lõi`: phát video và CORS,
+>   uptime, transcode (a) và (f); `chuẩn ngành`: plan lần hai, edge, edge premium, transcode (b)–(e). Không phép nào cần cờ chi phí.
 > - **Khi nào và bao lâu:** sau bước 15, tunnel mở; uptime chạy ít nhất 30 phút sau mốc `edge-healthy`; clip của phép transcode sinh
 >   trong lúc chờ bước 9; edge premium chờ dưới thời lượng clip cộng 20 phút khi chạy lượt `WAIT_EXPIRY=1`.
 > - **Phí trong lúc chạy:** request edge nằm trong phần edge đã tính của buổi; job MediaConvert của transcode (b)–(e) là khoản thêm ghi ở
 >   dòng `Loại:` của mục đó ([Giới hạn](session-stg.md#giới-hạn)).
 
-Thiết kế: [ADR-0052](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0052-cloudfront-flat-rate-free.md) (gói CloudFront
-flat-rate Free, web ACL WAF); [ADR-0061](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0061-edge-cloudfront-waf-acm.md)
-(edge: CloudFront trước web, API, media, VPC origin tới ALB internal, ba web ACL, cert ACM, log CloudFront, DNS của buổi);
+Thiết kế: [ADR-0052](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0052-cloudfront-flat-rate-free.md) (web ACL WAF);
+[ADR-0084](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0084-stg-msk-media-sizing.md) §3 (media của stg pay-as-you-go
+như prd, response headers policy riêng);
+[ADR-0061](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0061-edge-cloudfront-waf-acm.md) (edge: CloudFront trước web,
+API, media, VPC origin tới ALB internal, ba web ACL, cert ACM, log CloudFront, DNS của buổi);
 [ADR-0066](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0066-mediaconvert-transcode.md) (transcode bằng AWS Elemental
 MediaConvert: queue, role, rule EventBridge, SQS và DLQ của root env, endpoint `mediaconvert`).
 
@@ -38,35 +40,30 @@ Dùng đúng terminal của buổi: mục [Mở terminal](session-stg.md#mở-te
 `SVP_SESSION_DIR` là thư mục của buổi đang dở). Lệnh chạy từ gốc repo (`infra/`).
 Trang này cần `SVP_SESSION_DIR` và ba biến `SVP_AWS_{STG,PRD,LOG}_ACCOUNT_ID`.
 
-## Gói Free của media
+## Plan lần hai của root env
 
-Loại: `chuẩn ngành`, không cần cờ. Thêm: ba lệnh đọc và một plan của root env (hạn của bước 8 trong bảng Thứ tự).
+Loại: `chuẩn ngành`, không cần cờ. Thêm: một lệnh đọc và một plan của root env (hạn của bước 8 trong bảng Thứ tự).
 
-Hai phép tay sau smoke, (c) ở đây và (d) ở mục dưới, của ADR-0052; lệnh và output có thời điểm UTC vào phụ lục, một dòng kết luận vào mục
-"Xác nhận" của [ADR-0052](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0052-cloudfront-flat-rate-free.md#xác-nhận). Buổi
-prd chạy đúng các lệnh này với `anhnv-prd`, `prd`.
-
-(c) Gói đã có hiệu lực trên đúng hai tài nguyên, rồi plan lần hai không còn gì để đổi:
+Sau smoke: account không có gói CloudFront nào (stg trả theo dùng như prd), rồi plan lần hai của `aws/envs/stg` không còn gì để đổi
+(không drift giả: thứ AWS tự viết lại sau apply, như access string của user ElastiCache hay `apply_method` của tham số RDS, đã khớp với
+code). Buổi prd chạy đúng các lệnh này với `anhnv-prd`, `prd`.
 
 ```sh
 AWS_PROFILE=anhnv-stg aws --no-cli-pager pricing-plan-manager list-subscriptions --region us-east-1 --query 'subscriptionSummaries[].arn' --output text
-AWS_PROFILE=anhnv-stg aws --no-cli-pager pricing-plan-manager get-subscription --arn <arn trên> --region us-east-1 --query '[subscription.status,subscription.planTier]' --output text
-AWS_PROFILE=anhnv-stg aws --no-cli-pager pricing-plan-manager get-subscription --arn <arn trên> --region us-east-1 --query 'subscription.resourceArns' --output json
 aws/scripts/tf.sh stg env plan
 ```
 
-Mong một ARN; `ACTIVE FREE`; hai ARN là distribution media (`arn:aws:cloudfront::<12 số>:distribution/<E…>`) và web ACL
-(`arn:aws:wafv2:us-east-1:<12 số>:global/webacl/svp-stg-media/<id>`): AWS nhận giá trị enum, số luật của web ACL và alias `media.<domain>`.
-Plan lần hai (sau apply, `aws/envs/stg`) phải cho `No changes`: dòng `ok plan text in …: No changes.` (AWS không đổi gì trên distribution
-khi gói có hiệu lực, `price_class` khớp). Nó ghi đè `stg-env-plan.txt` của bước 8 và để lại `stg.tfplan` không thay đổi gì, không cần apply.
-Có `change`: không apply, dán file text cho AI. `PENDING_APPROVAL`, `SYNC_IN_PROGRESS`: đọc lại sau vài phút; `FAILED`: dán output cho AI.
+Mong lệnh đầu không in gì; plan cho `No changes`: dòng `ok plan text in …: No changes.`. Nó ghi đè `stg-env-plan.txt` của bước 8 và để
+lại `stg.tfplan` không thay đổi gì, không cần apply. Có ARN gói: gói sót, huỷ theo mục CloudFront của [Lệnh xoá tay theo
+loại](session-stg.md#lệnh-xoá-tay-theo-loại). Có `change`: không apply, dán file text cho AI (drift giả mới là việc sửa code, không sửa
+tay trên console).
 
 ## Phát video và CORS của media
 
 Loại: `lõi`.
 
-(d) CloudFront trả header CORS của policy managed `Managed-SimpleCORS` cho playlist của một video (của smoke, hay đã
-seed), rồi trình duyệt phát video; ghi như mục trên:
+CloudFront trả header CORS của response headers policy `svp-stg-media` cho playlist của một video (của smoke, hay đã seed), rồi
+trình duyệt phát video. Policy cho đúng origin của web (`cors_allowed_origins`), không `*`:
 
 ```sh
 values=$SVP_SESSION_DIR/cluster-values.json
@@ -75,7 +72,8 @@ key=$(AWS_PROFILE=anhnv-stg aws --no-cli-pager s3api list-objects-v2 --bucket "$
 curl -sI -H "Origin: https://$(jq -r .domain "$values")" "https://$(jq -r .mediaDomain "$values")/$key" | grep -i -E '^(HTTP|access-control-allow-origin)'
 ```
 
-Mong `HTTP/2 200` và `access-control-allow-origin: *`; rồi mở `https://<domain>` trên trình duyệt, đăng nhập và phát một video của feed.
+Mong `HTTP/2 200` và `access-control-allow-origin: https://<domain>` (đúng origin gửi trong header `Origin`; `*` là distribution còn
+dùng policy managed của gói Free, dán cho AI); rồi mở `https://<domain>` trên trình duyệt, đăng nhập và phát một video của feed.
 Thiếu header hay video không phát: dán output và lỗi ở console của trình duyệt cho AI.
 
 ## Phép kiểm edge
@@ -96,8 +94,8 @@ d=$(jq -r .domain "$values"); m=$(jq -r .mediaDomain "$values")
 api="https://api.$d/public/videos/00000000-0000-4000-8000-000000000000"
 ```
 
-(a) Header, cert ACM đúng tên, TLS ≥ 1.2 của ba tên (`key` là playlist mà phép (d) của mục [Gói Free của media](#gói-free-của-media) vừa
-đọc):
+(a) Header, cert ACM đúng tên, TLS ≥ 1.2 của ba tên (`key` là playlist mà mục [Phát video và CORS của
+media](#phát-video-và-cors-của-media) vừa đọc):
 
 ```sh
 for u in "https://$d/" "$api" "https://$m/$key"; do
@@ -106,7 +104,7 @@ for u in "https://$d/" "$api" "https://$m/$key"; do
 done
 for h in "$d" "api.$d" "$m"; do
   echo "== $h"
-  openssl s_client -connect "$h:443" -servername "$h" </dev/null 2>/dev/null | openssl x509 -noout -subject -issuer -text |
+  openssl s_client -connect "${h}:443" -servername "$h" </dev/null 2>/dev/null | openssl x509 -noout -subject -issuer -text |
     grep -E 'subject=|issuer=|DNS:'
   curl -4 -s -o /dev/null --tlsv1.0 --tls-max 1.1 "https://$h/"; echo "TLS 1.1: exit $?"
 done
@@ -114,8 +112,8 @@ done
 
 Mong: web và api có `strict-transport-security: max-age=63072000; includeSubDomains`, `x-content-type-options: nosniff`, `x-frame-options:
 DENY`, `referrer-policy: strict-origin-when-cross-origin` (ở web, header nào web đã tự đặt thì giữ giá trị của web); api thêm
-`content-security-policy: default-src 'none'; frame-ancestors 'none'` và `HTTP/2 404`. Media của stg (gói Free, `Managed-SimpleCORS`) chỉ
-có `HTTP/2 200`, không HSTS, nosniff (khác biệt stg/prd của ADR-0061); media của prd (policy `svp-prd-media`) có HSTS và nosniff. Mỗi tên:
+`content-security-policy: default-src 'none'; frame-ancestors 'none'` và `HTTP/2 404`. Media (policy `svp-<env>-media`, cả hai env)
+có `HTTP/2 200`, `strict-transport-security: max-age=63072000; includeSubDomains` và `x-content-type-options: nosniff`. Mỗi tên:
 `subject` là đúng tên đó, `issuer` của Amazon, đúng một `DNS:` là tên đó; `TLS 1.1: exit` khác 0 (CloudFront từ chối dưới TLS 1.2).
 
 (b) ALB edge không có tên công khai: scheme `internal`, tên DNS chỉ ra IP private trong CIDR của VPC:
@@ -177,9 +175,8 @@ AWS_PROFILE=anhnv-log-ro aws --no-cli-pager s3 ls "s3://aws-waf-logs-svp-$L-us-e
   tail -n 3 | sed "s/$A/<account>/g"
 ```
 
-Mong ở mỗi bucket object có thời điểm của buổi: log CloudFront (Parquet) của `svp-stg-web`, `svp-stg-api` (media của stg trong gói Free
-không có access log; prd có cả media), log WAF của các web ACL. WAF giao file mỗi năm phút: bucket WAF rỗng sau năm phút nữa là lỗi, dán
-output cho AI.
+Mong ở mỗi bucket object có thời điểm của buổi: log CloudFront (Parquet) của `svp-stg-web`, `svp-stg-api`, `svp-stg-media`, log WAF của
+các web ACL. WAF giao file mỗi năm phút: bucket WAF rỗng sau năm phút nữa là lỗi, dán output cho AI.
 
 CloudFront giao log chậm hơn: thường trong một giờ sau request, nhưng chỉ giao đều khoảng bốn giờ sau khi bật log (buổi tạo lại
 distribution và delivery), có phần trễ tới 24 giờ ([CloudFront: Standard logging
@@ -191,7 +188,7 @@ AWS_PROFILE=anhnv-stg aws --no-cli-pager logs describe-deliveries --region us-ea
   --query 'deliveries[].[deliverySourceName,deliveryDestinationArn]' --output text | sed "s/$L/<log>/g"
 ```
 
-Mong mỗi distribution có log (`svp-stg-web`, `svp-stg-api`; prd thêm `svp-prd-media`) một dòng tới
+Mong mỗi distribution (`svp-stg-web`, `svp-stg-api`, `svp-stg-media`) một dòng tới
 `arn:aws:logs:us-east-1:<log>:delivery-destination:svp-cloudfront-stg`. Thiếu dòng hay đích khác là lỗi cấu hình: dán output cho AI. Đủ
 dòng: ghi `chờ giao` cùng thời điểm UTC của request cuối vào file phép kiểm, đi tiếp buổi, chạy lại khối `aws s3 ls` trên cuối buổi và sau
 buổi (chỉ đọc bucket của Log Archive, không cần env còn dựng). Có object thì ghi kết luận; bốn giờ sau request cuối vẫn rỗng thì dán cả
@@ -207,7 +204,7 @@ dig +short CAA "$d" @1.1.1.1 | sort
 Mong `status: NOERROR` và cờ `ad`; tám dòng `0 issue`, `0 issuewild` cho bốn CA của Amazon. Không cờ `ad`: [`edge-setup.md`](edge-setup.md),
 bước (3).
 
-(g) Plan lần hai `No changes`: phép (c) của mục [Gói Free của media](#gói-free-của-media) (prd: bước 16 của `session-prd.md`). (h) Sau
+(g) Plan lần hai `No changes`: mục [Plan lần hai của root env](#plan-lần-hai-của-root-env) (prd: bước 16 của `session-prd.md`). (h) Sau
 destroy, `sweep.sh stg` sạch: bước 30.
 
 ## Phép kiểm edge premium
@@ -254,18 +251,22 @@ AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp-obs get probes.monitoring
 echo "$(( ($(date +%s) - $(awk -F '\t' '$3 == "edge-healthy" { t = $2 } END { print t }' "$SVP_SESSION_DIR/timeline.tsv")) / 60 )) min"
 { promql 'probe_success{job="blackbox-http"}'
   promql 'min_over_time(probe_success{job="blackbox-http"}[30m])'
-  promql '(probe_ssl_earliest_cert_expiry{job="blackbox-http"} - time()) / 86400'
+  promql 'probe_ssl_earliest_cert_expiry{job="blackbox-http"}-time()' | awk '{ $NF = int($NF / 86400) " days"; print }'
   promql 'probe_success{job="blackbox-dns"}'; } | sed "s/$d/<domain>/g"
 amp_get api/v1/alerts | jq -r '.data.alerts[] | select(.labels.alertname | test("^(Uptime|TLSCert|PublicUptime)"))
   | "\(.labels.alertname) \(.labels.severity) \(.state) \(.activeAt)"'
 ```
 
+Query hạn cert viết liền, không phép chia: query có khoảng trắng và `/` qua `curl --aws-sigv4` (hàm `amp_get`) bị AMP trả `403`
+(chữ ký không khớp chuỗi query curl gửi), nên `awk` đổi giây ra ngày.
+
 Mong: hai pod `Running` (hai zone là ý định, không phải điều kiện: pod trải zone bằng `ScheduleAnyway`, nên cả hai cùng một zone vẫn hợp
 lệ, ghi zone vào kết quả; lỗi thật là pod `Pending`, `CrashLoopBackOff` hay chỉ còn một pod); sáu `Probe` (`uptime-web`, `uptime-api`,
 `uptime-media`, `uptime-dns-web`, `uptime-dns-api`, `uptime-dns-media`); số phút ≥ 30; ba dòng `probe_success` giá trị `1`, ba dòng
-`min_over_time` giá trị `1` (xanh suốt 30 phút, tính từ `edge-healthy`); ba dòng số ngày tới hạn cert lớn hơn 21 (cert ACM tự gia hạn); ba
-dòng DNS giá trị `1`; không dòng `UptimeProbesAbsent`, `TLSCert…`. `PublicUptimeBudgetBurn` còn cháy là probe lỗi lúc dựng (mục [15. Chờ
-Argo CD](session-stg-deploy.md#15-chờ-argo-cd)): ghi lại, không điều tra. Probe nào `0`: dán output và theo runbook
+`min_over_time` giá trị `1` (xanh suốt 30 phút, tính từ `edge-healthy`); ba dòng số ngày tới hạn cert (`… <n> days`) lớn hơn 21 (cert
+ACM tự gia hạn); ba dòng DNS giá trị `1`; không dòng `UptimeProbesAbsent`, `TLSCert…`. `PublicUptimeBudgetBurn` còn cháy là probe lỗi
+lúc dựng (mục [15. Chờ Argo CD](session-stg-deploy.md#15-chờ-argo-cd)): ghi lại, không điều tra. Probe nào `0`: dán output và theo
+runbook
 [`public-uptime-budget-burn.md`](https://github.com/anhnvcoder/svp-backend/blob/main/docs/runbooks/public-uptime-budget-burn.md).
 
 Sau bước 31, hộp thư `alarm_email`: thư `UptimeProbesAbsent` nào trong buổi, giờ UTC của nó. Mong không thư nào lúc gỡ: bước 20 xoá luật ở

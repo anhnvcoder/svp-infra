@@ -251,6 +251,35 @@ run "prd_values" {
   }
 }
 
+# MSK reads each SCRAM secret as kafka.amazonaws.com before it associates it, so every secret needs a policy that lets
+# it, in place before the association. A plan leaves that policy unknown (it names the secret's ARN) and has no
+# dependency graph, so its statement and the association's depends_on are read from the source, comments removed.
+run "scram_secrets_readable_by_msk" {
+  command = plan
+
+  assert {
+    condition     = toset(keys(aws_secretsmanager_secret_policy.scram)) == toset(keys(aws_secretsmanager_secret.scram)) && length(aws_secretsmanager_secret_policy.scram) == 9
+    error_message = "Every SCRAM secret must have a secret policy."
+  }
+
+  assert {
+    condition = alltrue([for p in [
+      "secret_arn\\s*=\\s*aws_secretsmanager_secret\\.scram\\[each\\.key\\]\\.arn",
+      "Effect\\s*=\\s*\"Allow\"",
+      "Principal\\s*=\\s*\\{\\s*Service\\s*=\\s*\"kafka\\.amazonaws\\.com\"\\s*\\}",
+      "Action\\s*=\\s*\"secretsmanager:getSecretValue\"",
+      "Resource\\s*=\\s*aws_secretsmanager_secret\\.scram\\[each\\.key\\]\\.arn",
+      ] : can(regex(p, regex("(?s)\nresource \"aws_secretsmanager_secret_policy\" \"scram\" \\{\n(.*?)\n\\}\n", replace(file("${path.module}/main.tf"), "/(?m)^[ \\t]*#.*$/", ""))[0]))
+    ])
+    error_message = "The policy of each SCRAM secret must let kafka.amazonaws.com read that secret (secretsmanager:getSecretValue)."
+  }
+
+  assert {
+    condition     = can(regex("depends_on\\s*=\\s*\\[[^\\]]*\\baws_secretsmanager_secret_policy\\.scram\\b", regex("(?s)\nresource \"aws_msk_scram_secret_association\" \"this\" \\{\n(.*?)\n\\}\n", replace(file("${path.module}/main.tf"), "/(?m)^[ \\t]*#.*$/", ""))[0]))
+    error_message = "The SCRAM secret association must depend on the secret policies: MSK refuses a secret it may not read yet."
+  }
+}
+
 run "name_double_hyphen" {
   command = plan
 

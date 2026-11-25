@@ -205,7 +205,7 @@ không phí. Không sửa tay: `make inventory-check` ở CI đỏ khi trang hay
 - Sáu account (management, log archive, security, backup, stg, prd), chưa account nào có baseline; region nhà
   `ap-southeast-1`. Cờ `config_recording` theo `aws/paid-features.json`: chỉ account vắng khỏi file (security) ghi AWS Config.
 
-`Plan: 248 to add, 0 to change, 0 to destroy.`
+`Plan: 246 to add, 0 to change, 0 to destroy.`
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../diagrams/inventory/baseline-dark.svg">
@@ -218,9 +218,9 @@ không phí. Không sửa tay: `make inventory-check` ở CI đỏ khi trang hay
 | `module.backup` | 40 |
 | `module.log_archive` | 40 |
 | `module.mgmt` | 48 |
-| `module.prd` | 35 |
+| `module.prd` | 34 |
 | `module.security` | 46 |
-| `module.stg` | 35 |
+| `module.stg` | 34 |
 
 | Loại | Dịch vụ | Số |
 | --- | --- | ---: |
@@ -229,7 +229,6 @@ không phí. Không sửa tay: `make inventory-check` ở CI đỏ khi trang hay
 | `aws_config_configuration_recorder` | Config | 2 |
 | `aws_config_configuration_recorder_status` | Config | 2 |
 | `aws_config_delivery_channel` | Config | 2 |
-| `aws_ebs_default_kms_key` | EBS | 2 |
 | `aws_ebs_encryption_by_default` | EBS | 12 |
 | `aws_iam_role` | IAM | 6 |
 | `aws_iam_role_policy` | IAM | 6 |
