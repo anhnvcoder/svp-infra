@@ -57,9 +57,16 @@ for a in svp-stg-ecr svp-stg-observability svp-ebs; do
   AWS_PROFILE=anhnv-stg-ro aws --no-cli-pager kms describe-key --key-id "alias/$a" --region ap-southeast-1 \
     --query 'KeyMetadata.[KeyId,KeyState]' --output text
 done | tee "$SVP_SESSION_DIR/stg-keys.txt"
+AWS_PROFILE=anhnv-stg-ro aws --no-cli-pager amp list-workspaces --alias svp-stg --region ap-southeast-1 \
+  --query 'workspaces[].[workspaceId,status.statusCode]' --output text | tee "$SVP_SESSION_DIR/stg-amp.txt"
 ```
 
-- **Mong đợi:** ba dòng `<key-id> Enabled`. File này giữ id của ba key cho đường cứu ở [Khi một bước đỏ](#khi-một-bước-đỏ).
+- **Mong đợi:** ba dòng `<key-id> Enabled`. File này giữ id của ba key cho đường cứu ở [Khi một bước đỏ](#khi-một-bước-đỏ). Rồi
+  một dòng `<workspace-id> ACTIVE`: workspace cũ, bước 3 thay nó bằng workspace có id khác.
+- **`AccessDeniedException` ở `aps:ListWorkspaces`:** permission set `SvpReadOnly` chưa có statement `ReadPrometheusWorkspaces`, tức
+  `aws/org` chưa apply bản có nó. Apply `aws/org` trước
+  ([`org-security-setup.md`, bước (4)](org-security-setup.md#bước-4-awsorg-đủ), mục 4b), hay chạy lệnh `list-workspaces` bằng
+  `anhnv-stg` lần này.
 
 ## Bước 2: xoá repo ECR mã hoá KMS
 
@@ -88,39 +95,97 @@ done < "$SVP_SESSION_DIR/stg-ecr-kms.txt"
 
 ## Bước 3: apply `aws/accounts/<env>`
 
+**Bẫy:** đổi `encryption_type` của creation template ECR từ `KMS` sang `AES256` tại chỗ không xoá ARN key cũ. Ở provider AWS,
+`kms_key` của template vừa Optional vừa Computed: code không đặt thì Terraform giữ giá trị trong state, plan chỉ hiện
+`encryption_type = "KMS" -> "AES256"` kèm `# (1 unchanged attribute hidden)`, còn `after` của `terraform show -json` vẫn mang ARN key
+ECR cũ. Template như vậy vẫn trỏ vào key sắp xoá. Cách chắc là tạo lại năm template bằng `-replace`: template mới không có
+`kms_key`.
+
 ```sh
 aws/scripts/check-account.sh stg
-cd aws/accounts/stg
-AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform init -backend-config=../../backend-stg.hcl
+AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+  terraform -chdir=aws/accounts/stg init -backend-config=../../backend-stg.hcl
+AWS_PROFILE=anhnv-stg terraform -chdir=aws/accounts/stg state list | grep creation_template
+```
+
+Lệnh `terraform` của bước này chạy từ gốc `infra/` bằng `-chdir`: đường dẫn trong lệnh (`-backend-config`, `stg.tfplan`) tính từ
+`aws/accounts/stg`.
+
+- **Mong đợi:** năm dòng `module.registry.aws_ecr_repository_creation_template.cache["…"]` (`docker-hub`, `ecr-public`, `ghcr`, `k8s`,
+  `quay`): dùng lệnh `plan` có `-replace` ngay dưới. Không dòng nào (account chưa có template): dùng lệnh `plan` không `-replace`
+  sau nó, cùng "Mong đợi" riêng của nó.
+
+```sh
 AWS_PROFILE=anhnv-stg \
 TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
 TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" \
-  terraform plan -input=false -out=stg.tfplan
-AWS_PROFILE=anhnv-stg terraform show -no-color stg.tfplan > "$SVP_SESSION_DIR/stg-plan.txt"
+  terraform -chdir=aws/accounts/stg plan -input=false -out=stg.tfplan \
+    -replace='module.registry.aws_ecr_repository_creation_template.cache["docker-hub"]' \
+    -replace='module.registry.aws_ecr_repository_creation_template.cache["ecr-public"]' \
+    -replace='module.registry.aws_ecr_repository_creation_template.cache["ghcr"]' \
+    -replace='module.registry.aws_ecr_repository_creation_template.cache["k8s"]' \
+    -replace='module.registry.aws_ecr_repository_creation_template.cache["quay"]'
+AWS_PROFILE=anhnv-stg terraform -chdir=aws/accounts/stg show -no-color stg.tfplan > "$SVP_SESSION_DIR/stg-plan.txt"
+AWS_PROFILE=anhnv-stg terraform -chdir=aws/accounts/stg show -json stg.tfplan | jq -r '.resource_changes[]
+  | select(.type == "aws_ecr_repository_creation_template")
+  | [.address, (.change.actions | join(",")), (.change.after.encryption_configuration[0].kms_key // "no-key")] | @tsv'
 ```
 
-- **Mong đợi:** `Plan: 10 to add, 8 to change, 2 to destroy.`, chỉ các tài nguyên sau:
+- **Mong đợi:** `Plan: 15 to add, 3 to change, 7 to destroy.`, chỉ các tài nguyên sau:
   - `module.observability.aws_prometheus_workspace.this` và `aws_prometheus_workspace_configuration.this`: `must be replaced`
     (`kms_key_arn` thành `null`);
   - `module.observability.aws_cloudwatch_log_group.otel`: `updated in-place`, `kms_key_id` bỏ;
   - `module.observability.aws_kms_key.observability`: `updated in-place`, chỉ `policy` (mất statement `AccountUsesKeyThroughPrometheus`);
   - `module.registry.aws_ecr_repository.release["…"]`: tám `will be created`, `encryption_type = "AES256"`;
-  - `module.registry.aws_ecr_repository_creation_template.cache["…"]`: năm `updated in-place`, `AES256`;
+  - `module.registry.aws_ecr_repository_creation_template.cache["…"]`: năm `must be replaced`, `AES256`;
   - `module.registry.aws_iam_role_policy.template`: `updated in-place`, mất statement `EncryptWithEcrKey`.
-- **Dừng** (không apply, dán plan) nếu có `destroy` hay `replace` ở `aws_kms_key`, `aws_kms_alias`, bucket state, vault, zone, hay plan
-  khác danh sách trên.
+
+  Lệnh `jq` in năm dòng `<địa chỉ template>  delete,create  no-key`: template mới không mang ARN key nào.
+- **Dừng** (không apply, dán plan) nếu có `destroy` hay `replace` ở `aws_kms_key`, `aws_kms_alias`, bucket state, vault, zone, nếu
+  dòng `jq` nào in ARN `arn:aws:kms:…`, hay plan khác danh sách trên.
 
 ```sh
-AWS_PROFILE=anhnv-stg terraform apply -input=false stg.tfplan && rm stg.tfplan
-cd ../../..
+AWS_PROFILE=anhnv-stg \
+TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" \
+  terraform -chdir=aws/accounts/stg plan -input=false -out=stg.tfplan
+AWS_PROFILE=anhnv-stg terraform -chdir=aws/accounts/stg show -no-color stg.tfplan > "$SVP_SESSION_DIR/stg-plan.txt"
+AWS_PROFILE=anhnv-stg terraform -chdir=aws/accounts/stg show -json stg.tfplan | jq -r '.resource_changes[]
+  | select(.type == "aws_ecr_repository_creation_template")
+  | [.address, (.change.actions | join(",")), (.change.after.encryption_configuration[0].kms_key // "no-key")] | @tsv'
+```
+
+- **Account chưa có template:** chạy khối này thay cho khối có `-replace` ở trên. Mong đợi
+  `Plan: 15 to add, 3 to change, 2 to destroy.`: cùng danh sách tài nguyên như trên, chỉ khác năm template là `will be created`
+  (không phải `must be replaced`), và `jq` in năm dòng `<địa chỉ template>  create  no-key`. **Dừng** theo cùng luật; hai `destroy`
+  còn lại là hai tài nguyên AMP.
+
+Apply plan vừa đọc (của khối nào trong hai khối trên), rồi kiểm ba tài nguyên đã đổi:
+
+```sh
+AWS_PROFILE=anhnv-stg terraform -chdir=aws/accounts/stg apply -input=false stg.tfplan && rm aws/accounts/stg/stg.tfplan
 AWS_PROFILE=anhnv-stg aws --no-cli-pager amp list-workspaces --alias svp-stg --region ap-southeast-1 \
   --query 'workspaces[].[workspaceId,status.statusCode]' --output text
 AWS_PROFILE=anhnv-stg aws --no-cli-pager logs describe-log-groups --log-group-name-prefix /svp/stg/otel --region ap-southeast-1 \
   --query 'logGroups[].[logGroupName,kmsKeyId]' --output text
+AWS_PROFILE=anhnv-stg aws --no-cli-pager ecr describe-repository-creation-templates --region ap-southeast-1 \
+  --query 'repositoryCreationTemplates[].[prefix,encryptionConfiguration.encryptionType,encryptionConfiguration.kmsKey]' \
+  --output text
 ```
 
-- **Mong đợi:** đúng một workspace `ACTIVE` (id mới); log group `/svp/stg/otel None`. Rồi plan lần hai bằng lệnh `plan` trên: mong
-  `No changes.`.
+- **Mong đợi:** đúng một workspace `ACTIVE` (id mới, khác id trong `stg-amp.txt` của bước 1); log group `/svp/stg/otel None`; năm
+  template `<prefix> AES256 None`.
+
+Plan lần hai, không `-replace` (giữ `-replace` thì template bị tạo lại lần nữa) và không `-out` (không để lại file plan):
+
+```sh
+AWS_PROFILE=anhnv-stg \
+TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" \
+  terraform -chdir=aws/accounts/stg plan -input=false
+```
+
+- **Mong đợi:** `No changes.`.
 - **Việc tay:** không. Buổi kế lấy id workspace mới từ output của root này như mọi buổi.
 
 ## Bước 4: apply `aws/baseline`
@@ -147,11 +212,17 @@ AWS_PROFILE=anhnv-sso terraform show -no-color baseline.tfplan > "$SVP_SESSION_D
 ```sh
 AWS_PROFILE=anhnv-sso terraform apply -input=false baseline.tfplan && rm baseline.tfplan
 cd ../..
-AWS_PROFILE=anhnv-stg-ro aws --no-cli-pager ec2 get-ebs-default-kms-key-id --region ap-southeast-1 --output text
+ebs_default=$(AWS_PROFILE=anhnv-stg-ro aws --no-cli-pager ec2 get-ebs-default-kms-key-id --region ap-southeast-1 \
+  --query KmsKeyId --output text)
+printf '%s\n' "$ebs_default"
+AWS_PROFILE=anhnv-stg-ro aws --no-cli-pager kms describe-key --key-id "$ebs_default" --region ap-southeast-1 \
+  --query 'KeyMetadata.[KeyManager,Description]' --output text
 ```
 
-- **Mong đợi:** ARN `arn:aws:kms:ap-southeast-1:<stg>:alias/aws/ebs` (EC2 trả alias của key AWS quản lý); prd tương tự với
-  `anhnv-prd-ro`. Plan lần hai: `No changes.`.
+- **Mong đợi:** ARN `arn:aws:kms:ap-southeast-1:<stg>:key/<id>`: EC2 trả ARN key của key AWS quản lý `aws/ebs` khi key đó đã có
+  (`alias/aws/ebs` khi account chưa từng dùng nó), không phải id key `alias/svp-ebs` trong `stg-keys.txt` của bước 1. Rồi
+  `AWS  Default key that protects my EBS volumes when no other key is defined`. prd tương tự với `anhnv-prd-ro`. Plan lần hai:
+  `No changes.`.
 - **Bẫy:** destroy `aws_ebs_default_kms_key` gọi `ResetEbsDefaultKmsKeyId`, mà SCP `svp-protect-baseline` chặn với mọi principal trừ
   `OrganizationAccountAccessRole`; root này đi qua đúng role đó nên được. Lệnh gõ tay bằng `anhnv-stg` thì bị từ chối và có thư
   `svp-security-denied-storage`.
