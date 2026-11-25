@@ -1,16 +1,9 @@
-# Customer managed key that encrypts new EBS volumes of svp-stg and svp-prd in the home region, the only accounts and
-# region that run EC2. The key policy is that of the AWS managed key aws/ebs: any principal of the account may use it
-# through EC2 of the home region, so node groups (the AutoScaling service-linked role), Karpenter and the bastion need
-# no IAM change. Design notes: docs/handbook/06-baseline.md.
+# Former default key of new EBS volumes of svp-stg and svp-prd in the home region; EC2 now uses aws/ebs there too.
+# The keys stay until no volume or snapshot is encrypted with them: deleting one makes those unreadable. The key policy
+# is that of aws/ebs: any principal of the account may use it through EC2 of the home region.
+# Design notes: docs/handbook/06-baseline.md.
 
 locals {
-  # Built from its parts rather than read from the key: a template is known to be non-null before the key exists, so
-  # the module can decide at plan time to set the default key (the arn attribute would leave that count unknown).
-  ebs_key_arns = {
-    stg = "arn:${local.partition}:kms:${var.region}:${var.stg_account_id}:key/${aws_kms_key.stg_ebs.key_id}"
-    prd = "arn:${local.partition}:kms:${var.region}:${var.prd_account_id}:key/${aws_kms_key.prd_ebs.key_id}"
-  }
-
   # Statements of the key policy of aws/ebs, one policy per account.
   ebs_key_policies = {
     for env, id in { stg = var.stg_account_id, prd = var.prd_account_id } : env => jsonencode({

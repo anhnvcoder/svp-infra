@@ -7,18 +7,23 @@
 # Covers --print of the whole session and each script of the directory: the account and DNS guards, the order rules of
 # tf.sh and pre-destroy.sh, the secret handling and the edge's wait of bootstrap.sh, the ladder of measure.sh, the
 # pinned digests of ecr-warm.sh, the key files and the entry of media-signing-key.sh and the leftovers of sweep.sh in
-# both regions.
+# both regions; the steps, questions and resume of session.sh up and down, and its read-only check.
 
-# Usage: aws/scripts/session-test.sh
+# Usage: aws/scripts/tests/session-test.sh
 #
 # The checks run sh -c '...' with their values as arguments ($1, $2, ...): expanded by that shell, not this one.
 # shellcheck disable=SC2016
 set -euo pipefail
 
-src=$(cd "$(dirname "$0")" && pwd)
+src=$(cd "$(dirname "$0")/.." && pwd)
 runbooks=$(cd "$src/../.." && pwd)/docs/runbooks
 command -v jq >/dev/null || {
   echo "FAIL  jq not found" >&2
+  exit 1
+}
+# python3's pty module gives session.sh up and down the terminal they ask their questions on.
+command -v python3 >/dev/null || {
+  echo "FAIL  python3 not found" >&2
   exit 1
 }
 
@@ -837,6 +842,7 @@ echo "$AWS_PROFILE" >>"$FAKE_LOG.profiles"
 echo "account=${TF_VAR_account_id:-} chart=${TF_VAR_svp_cluster_chart:-} chat=${TF_VAR_telegram_chat_id-unset}" >>"$FAKE_LOG.tfenv"
 echo "log_archive=${TF_VAR_log_archive_account_id-unset}" >>"$FAKE_LOG.tfenv"
 echo "backup_account=${TF_VAR_backup_account_id-unset}" >>"$FAKE_LOG.tfenv"
+echo "${*:1:1} config=${HELM_REPOSITORY_CONFIG-unset} cache=${HELM_REPOSITORY_CACHE-unset}" >>"$FAKE_LOG.helmenv"
 dir= out=
 for a in "$@"; do case $a in -chdir=*) dir=${a#-chdir=} ;; -out=*) out=${a#-out=} ;; esac; done
 env=${dir##*/}
@@ -867,12 +873,12 @@ case "${args#-chdir=* }" in
     [ "$ids" != none ] || { echo 'fake terraform: Error: Output "media_signing_key_ids" not found' >&2; exit 1; }
     echo "$ids" ;;
   "output -raw rds_master_user_secret_arn") printf 'arn:aws:secretsmanager:ap-southeast-1:000000000000:secret:rds!db-fake' ;;
-  "show -no-color "*.destroy.tfplan) printf '%s\n' 'Terraform will perform the following actions:' '  # aws_vpc.this will be destroyed' \
-    'Plan: 0 to add, 0 to change, 3 to destroy.' ;;
+  "show -no-color "*.destroy.tfplan) printf '%s\n' 'Terraform will perform the following actions:' \
+    '  # aws_vpc.this will be destroyed' 'Plan: 0 to add, 0 to change, 3 to destroy.' ;;
   "show -no-color "*.teardown.tfplan) printf '%s\n' 'Terraform will perform the following actions:' \
     '  # module.rds.aws_db_instance.this will be updated in-place' 'Plan: 0 to add, 2 to change, 0 to destroy.' ;;
-  "show -no-color "*.tfplan) printf '%s\n' 'Terraform will perform the following actions:' '  # aws_vpc.this will be created' \
-    'Plan: 1 to add, 0 to change, 0 to destroy.' ;;
+  "show -no-color "*.tfplan) printf '%s\n' 'Terraform will perform the following actions:' \
+    '  # aws_vpc.this will be created' 'Plan: 1 to add, 0 to change, 0 to destroy.' ;;
   plan\ *) [ -z "$out" ] || : >"$dir/$out" ;;
   # FAKE_TF_APPLY_FAIL: an apply that stops with an error (after it wrote part of the plan).
   apply\ *) [ -z "${FAKE_TF_APPLY_FAIL:-}" ] || { echo "fake terraform: Error: creating the resource failed" >&2; exit 1; } ;;
@@ -939,11 +945,10 @@ case " \$* " in *password*) [ ! -f /dev/stdin ] || echo "jq \$* stdin=file" >>"\
 exec "$real_jq" "\$@"
 EOF
 
-# kubectl: a cluster in files of $FAKE_STATE (apps: "wave name", appset, root, svp-apps, lb, pvcs: "namespace name",
-# nodes); with FAKE_NO_ARGOCD, a cluster where root gitops never ran (no CRD of Argo CD, Gateway API or LBC); with
-# FAKE_GATEWAY_CRD_DOWN, the read of the Gateway API CRD (step 2 of pre-destroy.sh) fails; FAKE_ROOT_NEVER, svp-root
-# never gets Synced and Healthy; FAKE_NO_KARPENTER, no CRD of Karpenter; FAKE_KARPENTER_STUCK, deleting the NodePools
-# ends no NodeClaim (nodeclaims: "name node") and no instance.
+# kubectl: a cluster in files of $FAKE_STATE (apps: "wave name", appset, root, svp-apps, lb, pvcs, nodes, nodeclaims);
+# FAKE_NO_ARGOCD: root gitops never ran (no CRD of Argo CD, Gateway API or LBC); FAKE_GATEWAY_CRD_DOWN: the Gateway API
+# CRD read fails (pre-destroy.sh step 2); FAKE_ROOT_NEVER: svp-root never Synced and Healthy; FAKE_NO_KARPENTER: no
+# CRD of Karpenter; FAKE_KARPENTER_STUCK: deleting the NodePools ends no NodeClaim and no instance.
 cat >"$bin/kubectl" <<'EOF'
 #!/usr/bin/env bash
 echo "kubectl $*" >>"$FAKE_LOG"
@@ -1136,7 +1141,7 @@ keys=$XDG_STATE_HOME/svp/media-signing
 unset SVP_SESSION_DIR
 
 # clear_log: an empty log of calls, profiles and Terraform variables.
-clear_log() { : >"$log" && : >"$log.profiles" && : >"$log.tfenv"; }
+clear_log() { : >"$log" && : >"$log.profiles" && : >"$log.tfenv" && : >"$log.helmenv"; }
 # new_session: a fresh session directory under .session/ of the copy.
 new_session() {
   SVP_SESSION_DIR=$infra_root/.session/test-$$-$RANDOM
@@ -1163,9 +1168,9 @@ before() {
 
 # --- the scripts themselves -------------------------------------------------------------------------------------
 # The runbooks run each script by its path (aws/scripts/<script> ...), never through bash, so each must be executable
-# as git records it (lib.sh, sourced, too).
-for f in "$src"/*.sh; do
-  expect "$(basename "$f") is executable" test -x "$f"
+# as git records it (lib.sh, sourced, too); the tests are run by path the same way (testlib.sh, sourced, too).
+for f in "$src"/*.sh "$src"/tests/*.sh; do
+  expect "${f#"$src"/} is executable" test -x "$f"
 done
 
 # --- --print ----------------------------------------------------------------------------------------------------
@@ -1180,7 +1185,7 @@ for e in stg prd; do
   expect "--print $e: thirty-one steps" test "$(grep -c . "$work/order.runbook")" = 31
   sed -n '/^### step 31:/q;p' "$out" >"$work/print-env.out"
   expect "--print $e: every aws and terraform command of steps 1 to 30 names profile anhnv-$e, every aws command a region" \
-    sh -c '[ -z "$(grep -E "^\+ ([^ ]+ )*(aws|terraform) " "$1" | grep -vE "^\+ ([^ ]+ )?AWS_PROFILE=anhnv-$2 (aws .*--region (ap-southeast-1|us-east-1)|terraform )")" ]' _ "$work/print-env.out" "$e"
+    sh -c '[ -z "$(grep -E "^\+ ([^ ]+ )*(aws|terraform) " "$1" | grep -vE "^\+ ([^ ]+ )?AWS_PROFILE=anhnv-$2 (aws .*--region (ap-southeast-1|us-east-1)|([^ ]*HELM_REPOSITORY_[A-Z]+=[^ ]+ )*terraform )")" ]' _ "$work/print-env.out" "$e"
   expect "--print $e: step 31 is sweep.sh mgmt, with profile anhnv-sso alone" \
     sh -c 'sed -n "/^### step 31:/,\$p" "$1" >"$1.20" && grep -q "^### step 31: aws/scripts/sweep.sh mgmt$" "$1.20" &&
       [ -z "$(grep -E "^\+ .* aws " "$1.20" | grep -vE "^\+ AWS_PROFILE=anhnv-sso aws .*--region (ap-southeast-1|us-east-1)")" ]' _ "$out"
@@ -1415,6 +1420,23 @@ expect "tf.sh prd gitops plan refuses while the tunnel is closed, before any ter
   sh -c '! FAKE_TUNNEL=closed bash "$1/tf.sh" prd gitops plan >"$2" 2>&1 && grep -q "no tunnel on 127.0.0.1:6443" "$2" && grep -q "output -raw api_tunnel_command" "$2" &&
     ! grep -q "^terraform " "$3"' _ "$here" "$work/out" "$log"
 expect "tf.sh prd gitops init needs no tunnel" sh -c 'FAKE_TUNNEL=closed bash "$1/tf.sh" prd gitops init >/dev/null 2>&1' _ "$here"
+# The Helm provider reads the machine's repositories.yaml: root gitops gets its own under the session, root env none.
+clear_log
+rm -rf "$SVP_SESSION_DIR/helm"
+expect "tf.sh gitops plan: HELM_REPOSITORY_CONFIG and HELM_REPOSITORY_CACHE of the terraform call point into the session" \
+  sh -c 'bash "$1/tf.sh" stg gitops plan >/dev/null 2>&1 && [ -d "$2/helm/cache" ] &&
+    grep -qxF -e "-chdir=$3/aws/gitops/stg config=$2/helm/repositories.yaml cache=$2/helm/cache" "$4.helmenv"' _ "$here" "$SVP_SESSION_DIR" "$infra_root" "$log"
+expect "tf.sh gitops: every terraform call of the plan has both variables" \
+  sh -c '[ -s "$2.helmenv" ] && ! grep -v " config=$1/helm/repositories.yaml cache=$1/helm/cache$" "$2.helmenv"' _ "$SVP_SESSION_DIR" "$log"
+expect "tf.sh gitops init gets them too" \
+  sh -c 'bash "$1/tf.sh" stg gitops init >/dev/null 2>&1 && grep -q "^-chdir=.*/aws/gitops/stg config=$2/helm/repositories.yaml " "$3.helmenv"' _ "$here" "$SVP_SESSION_DIR" "$log"
+clear_log
+expect "tf.sh env plan leaves the Helm variables alone" \
+  sh -c 'bash "$1/tf.sh" stg env plan >/dev/null 2>&1 && grep -q "^-chdir=.*/aws/envs/stg config=unset cache=unset$" "$2.helmenv" && ! grep -qv "config=unset cache=unset$" "$2.helmenv"' _ "$here" "$log"
+rm -f "$infra_root"/aws/*/*/*.tfplan
+clear_log
+expect "tf.sh --print gitops plan shows both variables, and creates nothing" \
+  sh -c 'rm -rf "$1/helm"; bash "$2/tf.sh" --print stg gitops plan >"$3" 2>&1 && grep -q "^+ AWS_PROFILE=anhnv-stg HELM_REPOSITORY_CONFIG=$1/helm/repositories.yaml HELM_REPOSITORY_CACHE=$1/helm/cache terraform -chdir=.*/aws/gitops/stg plan " "$3" && [ ! -e "$1/helm" ]' _ "$SVP_SESSION_DIR" "$here" "$work/out"
 rm -f "$infra_root"/aws/*/*/*.tfplan
 
 # --- lib.sh: pager --------------------------------------------------------------------------------------------------
@@ -3032,6 +3054,299 @@ expect "sweep.sh stg passes without the key group or a public key of media, and 
     b "$2" "CloudFront distributions:" "CloudFront key groups:" && b "$2" "CloudFront key groups:" "CloudFront public keys:"' _ "$here" "$work/sweep.out"
 expect "sweep.sh stops on another account before any other command" \
   sh -c '! FAKE_ACCOUNT=000000000000 bash "$1/sweep.sh" stg >/dev/null 2>&1' _ "$here"
+
+# --- session.sh up, check, down -----------------------------------------------------------------------------------
+# A tree of its own, where every script a step runs is a fake: it logs its call to $ORCH_LOG, fails when the call is a
+# line of $ORCH_RED, and as tf.sh writes the plan file and its text on a plan (none when the call is a line of
+# $ORCH_NOPLAN) and removes the plan files of its root on an apply or destroy. session.sh and lib.sh are the real ones.
+orch=$work/orch
+oscripts=$orch/aws/scripts obin=$orch/bin ostate=$orch/state
+mkdir -p "$oscripts" "$obin" "$ostate" "$orch/backend/deploy/ci"
+cp "$src/session.sh" "$src/lib.sh" "$oscripts/"
+# The fake check-account.sh runs the real one after its log, with the fake aws below: it starts the timeline.
+cp "$src/check-account.sh" "$oscripts/check-account-real.sh"
+cat >"$ostate/fake-step" <<'EOF'
+#!/usr/bin/env bash
+line="$(basename "$0") $*"
+echo "$line" >>"$ORCH_LOG"
+if grep -qxF -- "$line" "$ORCH_RED" 2>/dev/null; then echo "FAIL  fake: $line" >&2; exit 1; fi
+[ "$(basename "$0")" != check-account.sh ] || exec bash "$(dirname "$0")/check-account-real.sh" "$@"
+root=$(cd "$(dirname "$0")/../.." && pwd)
+if [ "$(basename "$0")" = tf.sh ]; then
+  case $2 in env) dir=aws/envs/$1 ;; gitops) dir=aws/gitops/$1 ;; *) dir=aws/accounts/$1 ;; esac
+  case "$3 ${4:-}" in
+    "plan ") f=$1.tfplan t=$1-$2-plan.txt ;;
+    "plan --destroy") f=$1.destroy.tfplan t=$1-$2-destroy-plan.txt ;;
+    "plan --teardown") f=$1.teardown.tfplan t=$1-env-teardown-plan.txt ;;
+    "plan --open") f=$1.account-open.tfplan t=$1-account-open-plan.txt ;;
+    "plan --close") f=$1.account-close.tfplan t=$1-account-close-plan.txt ;;
+    apply* | destroy*) rm -f "$root/$dir"/*.tfplan; f= ;;
+    *) f= ;;
+  esac
+  if [ -n "$f" ] && ! grep -qxF -- "$line" "$ORCH_NOPLAN" 2>/dev/null; then
+    mkdir -p "$root/$dir" && : >"$root/$dir/$f"
+    echo "Plan: 3 to add, 0 to change, 0 to destroy." >"$SVP_SESSION_DIR/$t"
+  fi
+fi
+echo "ok    fake $line"
+EOF
+for s in check-account.sh check-dns.sh tf.sh media-signing-key.sh bootstrap.sh ecr-warm.sh measure.sh preflight.sh \
+  pre-destroy.sh restore-drill.sh sweep.sh; do
+  cp "$ostate/fake-step" "$oscripts/$s"
+done
+printf '#!/usr/bin/env bash\necho "image-list.sh $*" >>"$ORCH_LOG"\necho "docker.io/library/nginx:1.27@sha256:%s"\n' \
+  "$(printf '0%.0s' {1..64})" >"$orch/backend/deploy/ci/image-list.sh"
+chmod +x "$oscripts"/*.sh "$orch/backend/deploy/ci/image-list.sh"
+
+# The commands check reads with, each logging its call to $ORCH_LOG.cmds. nc: the tunnel, open unless ORCH_TUNNEL is
+# closed, or closed-once (closed on the first call alone). ORCH_BAD names one thing that reads wrong: amp, mesh, dlq.
+cat >"$obin/nc" <<'EOF'
+#!/usr/bin/env bash
+echo "nc $*" >>"$ORCH_LOG.cmds"
+case ${ORCH_TUNNEL:-open} in
+  closed) exit 1 ;;
+  closed-once) [ -e "$ORCH_STATE/tunnel-opened" ] || { : >"$ORCH_STATE/tunnel-opened"; exit 1; } ;;
+esac
+EOF
+cat >"$obin/aws" <<'EOF'
+#!/usr/bin/env bash
+echo "aws $*" >>"$ORCH_LOG.cmds"
+case ${AWS_PROFILE:-} in anhnv-stg) a=111111111111 ;; anhnv-prd) a=222222222222 ;; *) exit 97 ;; esac
+case "$1 $2" in
+  "sts get-caller-identity") echo "{\"Account\":\"$a\",\"Arn\":\"arn:aws:sts::$a:assumed-role/Fake/t\"}" ;;
+  "amp list-rule-groups-namespaces")
+    s=ACTIVE; [ "${ORCH_BAD:-}" != amp ] || s=CREATION_FAILED
+    printf 'svp-alerts\t%s\nslo-generated\tACTIVE\n' "$s" ;;
+  "amp describe-alert-manager-definition") echo ACTIVE ;;
+  "mediaconvert list-jobs")
+    echo '{"Jobs":[{"Id":"j1","Status":"COMPLETE","UserMetadata":{"video_id":"v1"}},{"Id":"j9","Status":"ERROR","UserMetadata":{"video_id":"v1"}}]}' ;;
+  "s3 sync") mkdir -p "$4/v1" && echo '{"job_id":"j1"}' >"$4/v1/1.json" ;;
+  "sqs get-queue-url") echo "https://sqs.ap-southeast-1.amazonaws.com/$a/$4" ;;
+  "sqs get-queue-attributes")
+    case "${ORCH_BAD:-} $4" in "dlq "*-dlq) printf '2\t0\n' ;; *) printf '0\t0\n' ;; esac ;;
+  "cloudwatch describe-alarms") echo OK ;;
+  *) echo "orch aws: no answer for $*" >&2; exit 96 ;;
+esac
+EOF
+cat >"$obin/kubectl" <<'EOF'
+#!/usr/bin/env bash
+echo "kubectl $*" >>"$ORCH_LOG.cmds"
+pods() { printf '{"items":[{"metadata":{"name":"%s","annotations":{"ambient.istio.io/redirection":"%s"}}}]}\n' "$1" "$2"; }
+case "$*" in
+  *"get applications.argoproj.io svp-root"*) echo 0123456789abcdef0123456789abcdef01234567 ;;
+  *"get deploy media-worker"*) echo '["mediaconvert"]' ;;
+  *" get nodes -o json") echo '{"items":[{"spec":{}},{"spec":{"taints":[{"key":"karpenter.sh/disrupted"}]}}]}' ;;
+  *"-n istio-system get deploy,daemonset -o json")
+    echo '{"items":[{"kind":"Deployment","metadata":{"name":"istiod"},"spec":{"replicas":2},"status":{"readyReplicas":2}},
+      {"kind":"DaemonSet","metadata":{"name":"istio-cni-node"},"status":{"desiredNumberScheduled":2,"numberReady":2}},
+      {"kind":"DaemonSet","metadata":{"name":"ztunnel"},"status":{"desiredNumberScheduled":2,"numberReady":2}}]}' ;;
+  *"-n svp-mesh get deploy waypoint -o json") echo '{"spec":{"replicas":2},"status":{"readyReplicas":2}}' ;;
+  *"-n svp get pods"*) if [ "${ORCH_BAD:-}" = mesh ]; then pods gateway-0 ''; else pods gateway-0 enabled; fi ;;
+  *"-n envoy-gateway-system get pods"*) pods envoy-svp-0 enabled ;;
+  *"get peerauthentications.security.istio.io -o json") echo '{"items":[{"spec":{"mtls":{"mode":"STRICT"}}}]}' ;;
+  *"get authorizationpolicies.security.istio.io -o json") echo '{"items":[{},{}]}' ;;
+  *"logs deploy/media-worker"*) echo 'transcode job complete' ;;
+  *) echo "orch kubectl: no answer for $*" >&2; exit 96 ;;
+esac
+EOF
+cat >"$obin/gh" <<'EOF'
+#!/usr/bin/env bash
+echo "gh $*" >>"$ORCH_LOG.cmds"
+echo success
+EOF
+cat >"$obin/git" <<'EOF'
+#!/usr/bin/env bash
+echo "git $*" >>"$ORCH_LOG.cmds"
+EOF
+cat >"$obin/terraform" <<'EOF'
+#!/usr/bin/env bash
+echo "terraform $*" >>"$ORCH_LOG.cmds"
+case "$*" in *"output -raw amp_workspace_id") echo ws-fake ;; *) exit 96 ;; esac
+EOF
+chmod +x "$obin"/*
+export ORCH_LOG=$ostate/calls ORCH_RED=$ostate/red ORCH_NOPLAN=$ostate/noplan ORCH_STATE=$ostate
+
+# new_orch: a fresh session of the tree, empty logs, no red step, the tunnel open.
+new_orch() {
+  SVP_SESSION_DIR=$orch/.session/test-$RANDOM
+  export SVP_SESSION_DIR
+  mkdir -p "$SVP_SESSION_DIR"
+  rm -f "$ORCH_RED" "$ORCH_NOPLAN" "$ostate/tunnel-opened" "$orch"/aws/*/*/*.tfplan
+  : >"$ORCH_LOG" && : >"$ORCH_LOG.cmds"
+}
+# orch_run ANSWERS OUT ARGS...: session.sh ARGS on a terminal (python3's pty) that receives ANSWERS, then an end of
+# input (Ctrl-D), so a question beyond them reads nothing; its output, without carriage returns, in OUT.
+orch_run() {
+  local answers=$1 out=$2
+  shift 2
+  printf '%s\004' "$answers" | PATH="$obin:$PATH" SVP_BACKEND_DIR=$orch/backend \
+    python3 -c 'import pty, sys; sys.exit(pty.spawn(sys.argv[1:]) >> 8)' bash "$oscripts/session.sh" "$@" |
+    tr -d '\r' >"$out"
+  return "${PIPESTATUS[1]}"
+}
+calls_are() { printf '%s\n' "$@" | diff - "$ORCH_LOG" >/dev/null; }
+fails() { ! "$@"; }
+
+# The steps of up and down are rows 1-15 and 20-31 of the runbook's table, with the plugin check and the cache's
+# warm-up added to up.
+for e in stg prd; do
+  sed -n 's/^| [0-9]* | `aws\/scripts\/\([^`]*\)`.*/\1/p' "$runbooks/session-$e.md" >"$work/order.runbook"
+  sed -n '1,15p' "$work/order.runbook" >"$work/order.up-$e"
+  sed -n '20,31p' "$work/order.runbook" >"$work/order.down-$e"
+done
+
+new_orch
+out=$work/orch.out
+expect "session.sh up stg refuses without a terminal, and runs no step" \
+  sh -c '! PATH="$1:$PATH" bash "$2/session.sh" up stg </dev/null >"$3" 2>&1 && grep -q "^FAIL  up asks before each apply" "$3" && [ ! -s "$4" ]' \
+  _ "$obin" "$oscripts" "$out" "$ORCH_LOG"
+expect "session.sh down stg refuses with its input from a pipe" \
+  sh -c '! echo yes | PATH="$1:$PATH" bash "$2/session.sh" down stg >"$3" 2>&1 && grep -q "^FAIL  down asks" "$3" && [ ! -s "$4" ]' \
+  _ "$obin" "$oscripts" "$out" "$ORCH_LOG"
+expect "session.sh without a command names the four" \
+  sh -c '! bash "$1/session.sh" stg >"$2" 2>&1 && grep -q "usage: session.sh --print|up|check|down stg|prd" "$2"' _ "$oscripts" "$out"
+
+new_orch
+echo "tf.sh stg account plan --open" >"$ORCH_NOPLAN"
+expect "up stg: every step runs, asking twice (env plan, gitops plan)" orch_run $'yes\nyes\n' "$out" up stg
+expect "up stg: the steps are rows 1-15 of session-stg.md, with preflight.sh plugin first and the warm-up after the secrets" \
+  sh -c 'grep -vE "^(preflight.sh plugin|image-list.sh |ecr-warm.sh )" "$1" | diff "$2" - >/dev/null &&
+    head -n 1 "$1" | grep -qx "preflight.sh plugin" &&
+    grep -A3 -x "bootstrap.sh stg secrets" "$1" | sed -n 2,4p | diff - "$3" >/dev/null' _ "$ORCH_LOG" "$work/order.up-stg" \
+  <(printf '%s\n' "image-list.sh $work/gitops stg" "ecr-warm.sh stg $SVP_SESSION_DIR/images-stg.txt" "tf.sh stg gitops init")
+expect "up stg: the question names the plan's text and its Plan: line, after the plan" \
+  sh -c 'grep -q "Read $2/stg-env-plan.txt (Plan: 3 to add, 0 to change, 0 to destroy.) before the next step applies aws/envs/stg/stg.tfplan" "$1" &&
+    grep -q "Read $2/stg-gitops-plan.txt" "$1" && ! grep -q "^Read .*account-open" "$1" && grep -q "step 5 wrote no plan" "$1"' _ "$out" "$SVP_SESSION_DIR"
+expect "up stg: the timeline starts with the one session-start of check-account.sh, as by hand" \
+  sh -c 'cut -f 3 "$1/timeline.tsv" >"$1/events" && [ "$(head -n 2 "$1/events" | tr "\n" ,)" = "session-start,up 2: check-account.sh stg," ] &&
+    [ "$(grep -c "^session-start$" "$1/events")" = 1 ]' _ "$SVP_SESSION_DIR"
+expect "up stg: each step from check-account.sh on but the plans marked done in the timeline" \
+  sh -c '! grep -q "^up 1:" "$1/events" && grep -qx "up 17: bootstrap.sh stg wait" "$1/events" && ! grep -q "plan$" "$1/events" &&
+    [ "$(grep -c "^up " "$1/events")" = 13 ]' _ "$SVP_SESSION_DIR"
+expect "up stg: the tunnel checked before each step that needs it" \
+  sh -c '[ "$(grep -c "^nc -z -w 3 127.0.0.1 6444$" "$1")" = 3 ]' _ "$ORCH_LOG.cmds"
+: >"$ORCH_LOG"
+expect "up stg again: every step done, nothing runs" orch_run "" "$out" up stg
+expect "up stg again: says so" sh -c 'grep -q "every step of up stg (17) is done" "$1" && [ ! -s "$2" ]' _ "$out" "$ORCH_LOG"
+
+new_orch
+echo "tf.sh stg account plan --open" >"$ORCH_NOPLAN"
+expect "up stg stops at an answer other than yes, before the apply" fails orch_run $'no\n' "$out" up stg
+expect "up stg: no env apply after the refusal, and the next run plans again" \
+  sh -c '[ "$(tail -n 1 "$1")" = "tf.sh stg env plan" ] && grep -q "stopped before applying aws/envs/stg/stg.tfplan" "$2"' _ "$ORCH_LOG" "$out"
+: >"$ORCH_LOG"
+expect "up stg resumes at the refused plan, the steps before it skipped" orch_run $'yes\nyes\nyes\n' "$out" up stg
+expect "up stg: the resumed run starts with env plan, and says so" \
+  sh -c '[ "$(head -n 1 "$1")" = "tf.sh stg env plan" ] && grep -q "steps 1 to 8 of up stg are done" "$2" &&
+    grep -q "up stg starts at step 9 of 17: tf.sh stg env plan" "$2"' _ "$ORCH_LOG" "$out"
+
+new_orch
+echo "tf.sh stg env apply" >"$ORCH_RED"
+expect "up stg stops at a red step" fails orch_run $'yes\nyes\nyes\n' "$out" up stg
+expect "up stg: nothing after the red step, and the command to run it again" \
+  sh -c '[ "$(tail -n 1 "$1")" = "tf.sh stg env apply" ] &&
+    grep -q "^FAIL  step 10 is red: .*, then aws/scripts/session.sh up stg (it runs step 10, aws/scripts/tf.sh stg env apply, again)$" "$2"' \
+  _ "$ORCH_LOG" "$out"
+rm -f "$ORCH_RED"
+: >"$ORCH_LOG"
+expect "up stg after a red apply runs again" orch_run $'yes\nyes\nyes\n' "$out" up stg
+expect "up stg after a red apply plans again first" \
+  sh -c '[ "$(head -n 2 "$1" | tr "\n" ,)" = "tf.sh stg env plan,tf.sh stg env apply," ]' _ "$ORCH_LOG"
+
+new_orch
+echo "check-dns.sh stg" >"$ORCH_RED"
+expect "up stg stops at a red check-dns.sh, after check-account.sh started the timeline" fails orch_run "" "$out" up stg
+expect "up stg: the timeline holds session-start and step 2 alone" \
+  sh -c '[ "$(cut -f 3 "$1/timeline.tsv" | tr "\n" ,)" = "session-start,up 2: check-account.sh stg," ]' _ "$SVP_SESSION_DIR"
+rm -f "$ORCH_RED"
+: >"$ORCH_LOG"
+expect "up stg after the red check-dns.sh runs again" orch_run $'yes\nyes\nyes\n' "$out" up stg
+expect "up stg: the resumed run starts at check-dns.sh, with the session's one session-start" \
+  sh -c '[ "$(head -n 1 "$1")" = "check-dns.sh stg" ] && ! grep -q "^check-account.sh " "$1" &&
+    [ "$(cut -f 3 "$2/timeline.tsv" | grep -c "^session-start$")" = 1 ]' _ "$ORCH_LOG" "$SVP_SESSION_DIR"
+
+new_orch
+for s in 1 2 3 4 5 6 7 8 9 10 11 12 13 14; do add_mark "up $s: done"; done
+export ORCH_TUNNEL=closed
+expect "up stg: a closed tunnel and a no stop the run before gitops plan" fails orch_run $'no\n' "$out" up stg
+expect "up stg: the reminder names the tunnel's command, and no step ran" \
+  sh -c 'grep -q "no tunnel on 127.0.0.1:6444" "$1" && grep -q "Open the tunnel" "$1" && [ ! -s "$2" ]' _ "$out" "$ORCH_LOG"
+export ORCH_TUNNEL=closed-once
+expect "up stg: the tunnel opened after the reminder, the steps go on" orch_run $'yes\nyes\n' "$out" up stg
+unset ORCH_TUNNEL
+expect "up stg: gitops plan the first step run" sh -c '[ "$(head -n 1 "$1")" = "tf.sh stg gitops plan" ]' _ "$ORCH_LOG"
+
+new_orch
+printf '%s\n' "tf.sh stg env plan --teardown" "tf.sh stg account plan --close" >"$ORCH_NOPLAN"
+expect "down stg: every step runs, asking for the two destroy plans" orch_run $'yes\nyes\n' "$out" down stg
+expect "down stg: the steps are rows 20-31 of session-stg.md" diff "$work/order.down-stg" "$ORCH_LOG"
+expect "down stg: asks before gitops destroy and env destroy, not after a step that wrote no plan" \
+  sh -c '[ "$(grep -c "Apply it?" "$1")" = 2 ] && grep -q "Read $2/stg-gitops-destroy-plan.txt" "$1" && grep -q "Read $2/stg-env-destroy-plan.txt" "$1"' _ "$out" "$SVP_SESSION_DIR"
+new_orch
+expect "down stg: a no at the gitops destroy plan stops" fails orch_run $'nope\n' "$out" down stg
+expect "down stg: no gitops destroy after the no" sh -c '[ "$(tail -n 1 "$1")" = "tf.sh stg gitops plan --destroy" ]' _ "$ORCH_LOG"
+
+new_orch
+echo "tf.sh prd account plan --open" >"$ORCH_NOPLAN"
+expect "up prd: the flags of prd first, by hand; a no stops" fails orch_run $'no\n' "$out" up prd
+expect "up prd: the question names the page, and no script ran" \
+  sh -c 'grep -q "By hand: set the flags of prd to production" "$1" &&
+    grep -q "docs/runbooks/session-prd.md#đổi-cờ-prd-trước-buổi" "$1" && [ ! -s "$2" ]' _ "$out" "$ORCH_LOG"
+expect "up prd: flags, promote gate, preflight.sh promote, then the steps of stg's order" \
+  orch_run $'yes\nyes\nyes\nyes\n' "$out" up prd
+expect "up prd: preflight.sh promote first, then rows 1-15 of session-prd.md" \
+  sh -c 'head -n 1 "$1" | grep -qx "preflight.sh promote" && grep -vE "^(preflight.sh |image-list.sh |ecr-warm.sh )" "$1" | diff "$2" - >/dev/null' \
+  _ "$ORCH_LOG" "$work/order.up-prd"
+new_orch
+echo "tf.sh prd account plan --close" >"$ORCH_NOPLAN"
+expect "down prd: three plans asked, two steps by hand, sweep.sh prd again after the flags" \
+  orch_run $'yes\nyes\nyes\nyes\nyes\n' "$out" down prd
+expect "down prd: rows 20-31 of session-prd.md, then sweep.sh prd once more" \
+  sh -c 'sed "\$d" "$1" | diff "$2" - >/dev/null && [ "$(tail -n 1 "$1")" = "sweep.sh prd" ] &&
+    [ "$(grep -c "^By hand: " "$3")" = 2 ] && grep -q "Read $4/prd-env-teardown-plan.txt" "$3"' _ "$ORCH_LOG" "$work/order.down-prd" "$out" "$SVP_SESSION_DIR"
+
+# check reads: no terminal needed, no script that writes, only reads of aws and kubectl.
+new_orch
+printf '{"mediaBucket": "svp-stg-media-x", "domain": "stg.aws.svp.example"}\n' >"$SVP_SESSION_DIR/cluster-values.json"
+expect "check stg passes, without a terminal" \
+  sh -c 'PATH="$1:$PATH" bash "$2/session.sh" check stg </dev/null >"$3" 2>&1' _ "$obin" "$oscripts" "$out"
+expect "check stg: seven PASS lines, the HAND lines after them" \
+  sh -c '[ "$(grep -c "^PASS    " "$1")" = 7 ] && ! grep -q "^FAIL" "$1" && grep -q "^HAND    browser: Phát video" "$1" &&
+    grep -q "^HAND    commit: Deploy qua GitOps" "$1" && grep -q "^PASS    commit status argocd/stg$" "$1"' _ "$out"
+expect "check stg: the only scripts run are the smoke and the findings" \
+  calls_are "measure.sh stg --smoke" "preflight.sh findings stg"
+expect "check stg: the HAND lines are the core checks of stg's pages, none of prd's alone" \
+  sh -c 'grep -q "^HAND    not scripted: Image của release dlq-replay ở ECR, docs/runbooks/session-stg\*\.md$" "$1" &&
+    grep -q "^HAND    mailbox: Alarm tới email " "$1" && ! grep -q "Data event S3" "$1" && ! grep -q "^HAND .* ở prd" "$1"' _ "$out"
+expect "check stg: aws and kubectl only read" \
+  sh -c '[ -z "$(grep -E "^aws " "$1" | grep -vE "^aws (sts get-caller-identity|amp (list|describe)-|mediaconvert list-jobs|s3 sync s3://|sqs get-queue-|cloudwatch describe-alarms)")" ] &&
+    [ -z "$(grep -E "^kubectl " "$1" | grep -vE "^kubectl --context svp-stg( -n [a-z-]+)? (get|logs) ")" ]' _ "$ORCH_LOG.cmds"
+expect "check stg: the synced commit in stg-ref.txt, the job records counted with the job left by a retry" \
+  sh -c 'grep -qx 0123456789abcdef0123456789abcdef01234567 "$1/stg-ref.txt" && grep -q "1 record-job COMPLETE" "$2" &&
+    grep -q "1 orphan-job ERROR" "$2"' _ "$SVP_SESSION_DIR" "$out"
+for bad in amp mesh dlq; do
+  case $bad in amp) name='alert rules on AMP' ;; mesh) name='service mesh' ;; dlq) name='transcode (f): queues empty' ;; esac
+  expect "check stg fails on $bad alone" \
+    sh -c '! ORCH_BAD=$4 PATH="$1:$PATH" bash "$2/session.sh" check stg </dev/null >"$3" 2>&1 && grep -qx "FAIL    $5" "$3" &&
+      [ "$(grep -c "^PASS    " "$3")" = 6 ]' _ "$obin" "$oscripts" "$out" "$bad" "$name"
+done
+new_orch
+printf '{"mediaBucket": "svp-prd-media-x", "domain": "aws.svp.example"}\n' >"$SVP_SESSION_DIR/cluster-values.json"
+expect "check prd passes, without a terminal" \
+  sh -c 'PATH="$1:$PATH" bash "$2/session.sh" check prd </dev/null >"$3" 2>&1' _ "$obin" "$oscripts" "$out"
+expect "check prd: seven PASS lines; the HAND lines name prd's own sections, Data event S3 among them, no stg-only check" \
+  sh -c '[ "$(grep -c "^PASS    " "$1")" = 7 ] && grep -q "^PASS    commit status argocd/prd$" "$1" &&
+    grep -q "^HAND    not scripted: Data event S3 trong trail .*, docs/runbooks/session-prd\*\.md$" "$1" &&
+    grep -q "^HAND    mailbox: Đo 6: alarm page tới email " "$1" && grep -q "^HAND    not scripted: Migration của release ở prd," "$1" &&
+    ! grep -q "dlq-replay" "$1" && ! grep -q "^HAND    mailbox: Alarm tới email" "$1" &&
+    grep -q "every scripted core check of prd passed" "$1"' _ "$out"
+expect "check prd: the only scripts run are the smoke and the findings of prd" \
+  calls_are "measure.sh prd --smoke" "preflight.sh findings prd"
+
+new_orch
+expect "check stg stops on a closed tunnel before any check" \
+  sh -c '! ORCH_TUNNEL=closed PATH="$1:$PATH" bash "$2/session.sh" check stg </dev/null >"$3" 2>&1 && grep -q "no tunnel on 127.0.0.1:6444" "$3" &&
+    [ ! -s "$4" ] && ! grep -q "^kubectl" "$4.cmds"' _ "$obin" "$oscripts" "$out" "$ORCH_LOG"
 
 if [ "$failures" -gt 0 ]; then
   echo "FAIL  $failures check(s) failed" >&2

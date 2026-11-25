@@ -116,8 +116,8 @@ stg). Ví dụ là stg; với prd thay `stg` bằng `prd`, `anhnv-stg` bằng `a
      AWS_PROFILE=anhnv-stg terraform apply -input=false stg.tfplan && rm stg.tfplan
      ```
 
-6. **Xoá repo do pull-through cache tạo**: ECR tạo chúng khi node kéo image qua cache, nên chúng nằm ngoài state, mã hoá bằng key
-   `alias/svp-<env>-ecr` mà bước 8 lên lịch xoá. Liệt kê theo tiền tố của các rule cache:
+6. **Xoá repo do pull-through cache tạo**: ECR tạo chúng khi node kéo image qua cache, nên chúng nằm ngoài state; repo tạo trước khi
+   mã hoá đổi sang `AES256` còn mã hoá bằng key `alias/svp-<env>-ecr` mà bước 8 lên lịch xoá. Liệt kê theo tiền tố của các rule cache:
 
    ```sh
    AWS_PROFILE=anhnv-stg aws --no-cli-pager ecr describe-pull-through-cache-rules --region ap-southeast-1 \
@@ -160,8 +160,9 @@ stg). Ví dụ là stg; với prd thay `stg` bằng `prd`, `anhnv-stg` bằng `a
      AWS_PROFILE=anhnv-stg terraform apply -input=false stg-destroy.tfplan && rm stg-destroy.tfplan
      ```
 
-   - **Mong đợi:** key của state, `alias/svp-<env>-ecr`, `alias/svp-<env>-observability` và `alias/svp-<env>-backup` vào `PendingDeletion`
-     30 ngày (không tính phí), huỷ được trong thời gian đó (id mỗi key in ở output của `apply`):
+   - **Mong đợi:** key của state, `alias/svp-<env>-backup` và, khi khối key cũ còn trong code (giữ tới PR gỡ),
+     `alias/svp-<env>-ecr`, `alias/svp-<env>-observability` vào `PendingDeletion` 30 ngày (không tính phí), huỷ được trong
+     thời gian đó (id mỗi key in ở output của `apply`):
      `AWS_PROFILE=anhnv-stg aws --no-cli-pager kms cancel-key-deletion --key-id <id key> --region ap-southeast-1`.
    - **Bẫy:** hai secret `ecr-pullthroughcache/ghcr`, `ecr-pullthroughcache/docker-hub` cũng chờ xoá 30 ngày, trong thời gian đó không tạo
      được secret cùng tên: dựng lại env này sớm hơn thì xoá hẳn chúng trước (giá trị ghi lại sau apply như lần đầu):
@@ -262,9 +263,9 @@ Phí của backup dừng khi key ở `PendingDeletion` (không tính) và accoun
 ## `aws/baseline`
 
 Sau `aws/accounts/<env>`, `aws/backup`, và trước `aws/security` (rule nguồn của mọi account trỏ bus của root đó). Destroy gỡ S3 Block
-Public Access cấp account, tắt EBS mã hoá mặc định, xoá recorder, delivery channel, rule, role ở mọi account và đưa hai CMK EBS vào
-trạng thái chờ xoá 30 ngày. SCP `svp-protect-baseline` không chặn lệnh này: provider của account thành viên đi qua
-`OrganizationAccountAccessRole`.
+Public Access cấp account, tắt EBS mã hoá mặc định, xoá recorder, delivery channel, rule, role ở mọi account và đưa hai CMK EBS cũ
+(khối key giữ tới PR gỡ) vào trạng thái chờ xoá 30 ngày. SCP `svp-protect-baseline` không chặn lệnh này: provider của account
+thành viên đi qua `OrganizationAccountAccessRole`.
 
 - [ ] Volume, snapshot còn mã hoá bằng CMK EBS (`alias/svp-ebs`) của stg, prd đã xoá: key xoá xong thì chúng không đọc được nữa.
 

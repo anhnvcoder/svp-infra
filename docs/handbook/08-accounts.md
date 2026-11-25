@@ -53,7 +53,7 @@ của root buổi nằm trong bucket state của chính account.
 | Bucket `svp-tfstate-<account>-<region>`, key `alias/svp-tfstate` | account env, `ap-southeast-1` | Giữ state của `aws/accounts/<env>`, `aws/envs/<env>`, `aws/gitops/<env>` |
 | Hosted zone `aws.<domain>` (prd), `stg.aws.<domain>` (stg) | account env, toàn cục | Bản ghi của env; `CAA` ở đỉnh; prd giữ bản ghi uỷ quyền stg |
 | DNSSEC, query log, alarm DNSSEC | `svp-prd`, `us-east-1` | Ký zone prd, ghi truy vấn DNS, báo khi KSK hỏng |
-| Registry ECR: repo phát hành, rule cache, key `alias/svp-<env>-ecr` | account env, `ap-southeast-1` | Bản phát hành theo digest, image bên thứ ba qua cache |
+| Registry ECR: repo phát hành, rule cache, mã hoá AES256 | account env, `ap-southeast-1` | Bản phát hành theo digest, image bên thứ ba qua cache |
 | IAM OIDC provider, role `svp-ci-ecr-*`, `svp-ci-terraform-plan` | account env, IAM | Cho workflow đúng repo, đúng nhánh hay environment vào account |
 | Workspace AMP `svp-<env>`, log group `/svp/<env>/otel`, X-Ray | account env, `ap-southeast-1` | Giữ metric, log, span qua các buổi |
 | Workspace AMG `svp-<env>` | account env, `ap-southeast-1` | Dashboard, đăng nhập bằng IAM Identity Center; chỉ khi cờ cho phép |
@@ -70,8 +70,8 @@ của root buổi nằm trong bucket state của chính account.
    `svp-ci-ecr-release-backend` của account stg chỉ khi `aud` là `sts.amazonaws.com` và `sub` khớp đúng chuỗi
    `repo:anhnvcoder@<owner-id>/svp-backend@<repo-id>:ref:refs/heads/main` (`ci_roles` của `aws/accounts/stg/main.tf`). Phiên tối đa 1 giờ.
 3. `ecr-copy.sh` chép đúng digest cùng mọi referrer (chữ ký, SBOM, `vuln`, provenance) vào repo `svp-backend/video-service` của ECR stg:
-   tag `IMMUTABLE`, mã hoá bằng key `alias/svp-stg-ecr`. Policy `ecr-push` của role chỉ cho đẩy vào `svp-backend/*`; role của frontend
-   không chạm được repo này.
+   tag `IMMUTABLE`, mã hoá `AES256` (SSE-S3 của ECR, không CMK). Policy `ecr-push` của role chỉ cho đẩy vào `svp-backend/*`;
+   role của frontend không chạm được repo này.
 4. Repo phát hành không nằm trong filter quét của registry: CI đã quét bằng trivy, grype trước khi đẩy, và job `rescan` (environment
    `ecr-rescan`, role `svp-ci-ecr-rescan-backend`) quét lại hằng ngày, gắn `vuln` mới, gỡ `vuln` cũ. Image bên thứ ba thì quét trong ECR:
    `BASIC` khi đẩy với cờ `inspector_ecr` là `off`, Amazon Inspector liên tục khi cờ là `always`.
@@ -131,7 +131,7 @@ rollback được.
   - Đẩy lại một tag đã có vào repo `IMMUTABLE` bị từ chối với `ImageTagAlreadyExistsException`.
   - Quét cơ bản khi đẩy (`SCAN_ON_PUSH`) trả finding theo CVE của image cache.
   - Amazon Inspector sinh finding loại `PACKAGE_VULNERABILITY` cho image cache và đưa nó vào Security Hub khi quét `ENHANCED`.
-- **Ở svp:** một repo mỗi service (`local.release_repositories` của module `registry`), `IMMUTABLE`, key `alias/svp-<env>-ecr`, không
+- **Ở svp:** một repo mỗi service (`local.release_repositories` của module `registry`), `IMMUTABLE`, mã hoá AES256, không
   lifecycle policy; filter quét `<tiền tố>/*` chỉ cho repo cache; cờ `inspector_ecr` chọn `BASIC`, `SCAN_ON_PUSH` (`off`) hay
   `ENHANCED`, `CONTINUOUS_SCAN` (`always`).
 - **Phí theo:** GB-tháng lưu trữ; Inspector theo image được quét; kéo trong cùng region không tính truyền dữ liệu.
@@ -159,7 +159,7 @@ flowchart LR
   - `validate-pull-through-cache-rule` trả `isValid` `False` kèm `failure` khi credential GHCR hay Docker Hub hết hạn.
   - Lifecycle `sinceImagePulled` 30 ngày xoá image cache không ai kéo.
 - **Ở svp:** năm rule (`local.cache_rules`: `ghcr`, `docker-hub`, `quay`, `k8s`, `ecr-public`); secret `ecr-pullthroughcache/ghcr`,
-  `ecr-pullthroughcache/docker-hub` (module tạo vỏ, người học ghi giá trị); template mã hoá bằng key của registry, tag `MUTABLE`; role
+  `ecr-pullthroughcache/docker-hub` (module tạo vỏ, người học ghi giá trị); template mã hoá AES256, tag `MUTABLE`; role
   `svp-<env>-ecr-template` cho ECR tạo repo.
 - **Phí theo:** GB-tháng lưu trữ của repo cache, secret-tháng; cache không phí riêng.
 
@@ -181,7 +181,7 @@ flowchart LR
   - Prometheus agent của cluster ghi bằng `aps:RemoteWrite` qua role Pod Identity.
   - Luật cảnh báo trên workspace chạy với chu kỳ tối thiểu theo quota "Rule evaluation interval".
   - Grafana truy vấn bằng `aps:QueryMetrics` qua role của workspace AMG.
-- **Ở svp:** workspace alias `svp-<env>`, mã hoá bằng key `alias/svp-<env>-observability`, retention `amp_retention_days` (stg 31, prd
+- **Ở svp:** workspace alias `svp-<env>`, mã hoá bằng key do AWS sở hữu (mặc định của AMP), retention `amp_retention_days` (stg 31, prd
   150 ngày, `locals` của root).
 - **Phí theo:** mẫu nạp, GB-tháng lưu trữ, mẫu truy vấn.
 
@@ -192,7 +192,7 @@ flowchart LR
   - Endpoint OTLP của CloudWatch Logs chỉ ghi vào stream đã có sẵn (`otel-collector`).
   - Live Tail của log group `/svp/stg/otel` trong buổi; Logs Insights đọc cả log của buổi đã gỡ.
   - Rule index `Default` của X-Ray index 1 % span; trang Traces của CloudWatch tìm trên mọi span.
-- **Ở svp:** log group `/svp/<env>/otel` lớp Standard, mã hoá bằng key observability, retention `log_retention_days`; đích segment
+- **Ở svp:** log group `/svp/<env>/otel` lớp Standard, mã hoá bằng key của CloudWatch Logs, retention `log_retention_days`; đích segment
   `CloudWatchLogs`, resource policy `svp-<env>-xray-transaction-search`; retention của `aws/spans` đặt tay một lần mỗi account.
 - **Phí theo:** GB log nạp, GB-tháng lưu; GB span nạp qua Transaction Search.
 
@@ -206,8 +206,6 @@ flowchart LR
   col -->|"log: OTLP, SigV4"| logs[("Log group /svp/#60;env#62;/otel, stream otel-collector")]
   col -->|"trace: OTLP, SigV4"| xray["X-Ray, Transaction Search"]
   xray -->|"resource policy svp-#60;env#62;-xray-transaction-search"| spans[("Log group aws/spans")]
-  amp --> kms{{"KMS alias/svp-#60;env#62;-observability"}}
-  logs --> kms
   amg["AMG svp-#60;env#62; (role svp-#60;env#62;-grafana)"] -->|"PromQL"| amp
   amg -->|"Logs Insights"| logs
   amg -->|"Logs Insights"| spans
@@ -246,7 +244,7 @@ flowchart LR
 | Hosted zone, hai env | zone-tháng | 1 USD | như giữa buổi | ADR-0048 phụ lục, bảng R |
 | Bucket state, budget env | GB-tháng; budget không action | < 0,01 USD; 0 | như giữa buổi | ADR-0048 phụ lục, bảng R |
 | Registry hai env (key, secret cache, lưu trữ) | key-tháng, secret-tháng, GB-tháng | ~5,7 USD tháng 1; ~9 tháng 3; ~14 tháng 6 | Inspector `off`: 0; `always`: ≤ 6,8 USD buổi đầu mỗi account | ADR-0062 phụ lục §11 |
-| Observability hai env (key, lưu trữ) | key-tháng, GB-tháng | key 2 USD, lưu trữ < 0,3 USD | AMP 2,52 USD buổi đầu tháng, 4,32 buổi sau; log 0,35; span 0,35 mỗi env | ADR-0063 phụ lục §12 |
+| Observability hai env (key, lưu trữ) | key-tháng, GB-tháng | key 2 USD tới khi gỡ key cũ (0 sau đó), lưu trữ < 0,3 USD | AMP 2,52 USD buổi đầu tháng, 4,32 buổi sau; log 0,35; span 0,35 mỗi env | ADR-0063 phụ lục §12 |
 | AMG | user-tháng | 0 với `off`; 9 USD mỗi env khi `always` | 0 với `off`; tháng có buổi 18 USD mỗi env | ADR-0063 phụ lục §12 |
 | DNSSEC, alarm, query log của prd | key-tháng, alarm-tháng, request, GB | ~2,4 USD (gồm bucket log CloudFront) | như giữa buổi | ADR-0061 phụ lục §13 "Lúc không buổi" |
 | OIDC provider, role CI, role Spot | — | 0 | 0 | không có số đo; IAM không có mục giá |
@@ -268,7 +266,7 @@ chương [07. Backup](07-backup.md#chi-phí). Tổng phí của lab: chương [1
 | Zone và uỷ quyền | `svp-<env>` | toàn cục | Route 53 → Hosted zones | Một zone của env; zone prd có bản ghi `NS` `stg.aws.<domain>` và `CAA` ở đỉnh |
 | DNSSEC | `svp-prd` | toàn cục | Route 53 → zone prd → DNSSEC signing | Signing `SIGNING`, KSK `svp_prd_ksk` `ACTIVE` |
 | Alarm DNSSEC | `svp-prd` | `us-east-1` | CloudWatch → Alarms → `svp-prd-dnssec-*` | `OK` hay `Insufficient data` |
-| Repo phát hành | `svp-<env>` | `ap-southeast-1` | ECR → Private repositories | `svp-backend/*`, `svp-frontend/web`, tag immutable, KMS |
+| Repo phát hành | `svp-<env>` | `ap-southeast-1` | ECR → Private repositories | `svp-backend/*`, `svp-frontend/web`, tag immutable, mã hoá `AES256` |
 | Kiểu quét | `svp-<env>` | `ap-southeast-1` | ECR → Private registry → Scanning | `BASIC` với cờ `off`; `ENHANCED` với `always` |
 | Rule cache | `svp-<env>` | `ap-southeast-1` | ECR → Pull through cache | Năm rule, GHCR và Docker Hub có credential |
 | Role CI | `svp-<env>` | toàn cục | IAM → Roles → `svp-ci-ecr-*` | Trust một provider, một `sub`; max session 1 giờ |
@@ -354,12 +352,14 @@ mới cần thêm repo ở module `registry`. Lý do:
   rồi tắt ([module `account-baseline`](../../aws/modules/account-baseline/README.md#tắt-ký-dnssec)). Alarm DNSSEC, log group query log
   ở `us-east-1` vì metric Route 53 và query log chỉ có ở đó; CloudWatch chỉ gửi tới topic cùng region.
 - ECR: ARN repo và ARN provider dựng từ tên nên policy biết lúc `plan`; role `depends_on` provider vì IAM từ chối trust có principal chưa
-  tồn tại. ECR dùng key qua grant cho mỗi repo, nên role đẩy, kéo không cần quyền KMS. Secret của cache dùng key AWS quản lý: ECR không
-  nhận CMK cho secret đó. Repo cache tag `MUTABLE` vì tag bất biến chặn ECR cập nhật tag đã cache.
-- Observability: key có `prevent_destroy` vì AMP gắn workspace với key mãi mãi. Output `amp_endpoint` có `precondition` theo dạng URL
-  cluster values cần (tài liệu AWS tả hai dạng). Log group lớp Standard (không đổi được sau khi tạo). `aws/spans` do X-Ray tạo, tên
-  `aws/` bị API cấm tạo, nên retention đặt tay qua output `spans_retention_command`; gỡ đích segment khỏi Terraform không đổi đích trên
-  AWS. AMG gọi AMP, CloudWatch qua endpoint công khai, không tới được dịch vụ chỉ có trong VPC.
+  tồn tại. Repo mã hoá AES256: mọi bên đẩy, kéo đều ở trong account và GHCR giữ bản gốc có chữ ký, nên CMK không vạch thêm ranh giới
+  ([ADR-0087](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0087-kms-key-consolidation.md)). Secret của cache dùng key
+  AWS quản lý: ECR không nhận CMK cho secret đó. Repo cache tag `MUTABLE` vì tag bất biến chặn ECR cập nhật tag đã cache.
+- Observability: workspace AMP và log group dùng key của dịch vụ, nên role ghi, đọc không cần quyền KMS; workspace tạo với CMK không đổi
+  được key về sau. Key `alias/svp-<env>-observability` chỉ còn giải mã log ghi trước khi log group rời key, tới hết retention. Output
+  `amp_endpoint` có `precondition` theo dạng URL cluster values cần (tài liệu AWS tả hai dạng). Log group lớp Standard (không đổi được sau
+  khi tạo). `aws/spans` do X-Ray tạo, tên `aws/` bị API cấm tạo, nên retention đặt tay qua output `spans_retention_command`; gỡ đích
+  segment khỏi Terraform không đổi đích trên AWS. AMG gọi AMP, CloudWatch qua endpoint công khai, không tới được dịch vụ chỉ có trong VPC.
 - Biến `session_open` chỉ do hai nơi đặt: `aws/scripts/tf.sh <env> account plan --open|--close` (người học) và `ci/terraform-plan.sh`
   trên PR (`true` khi state của `aws/envs/<env>` còn tài nguyên, như buổi đang mở). `terraform plan` trần luôn tính trạng thái giữa
   buổi, nên trong buổi có cờ `session` không chạy plan trần ở root này.

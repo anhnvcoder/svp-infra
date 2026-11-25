@@ -99,6 +99,18 @@ plan_file=$env_name.tfplan
 destroy_plan_file=$env_name.destroy.tfplan
 teardown_plan_file=$env_name.teardown.tfplan
 rel=aws/${root_dir#"$infra_root"/aws/}
+if [ "$root" = gitops ]; then
+  # The Helm provider scans the machine's repositories.yaml for the repository of a chart URL and fails on any entry
+  # without a cached index; a repository file of the session (absent, so empty) keeps the plan off the learner's Helm.
+  helm_config=$session/helm/repositories.yaml helm_cache=$session/helm/cache
+  printing || (umask 077 && mkdir -p "$helm_cache") || fail "create $helm_cache"
+  tf_() {
+    local dir=$1
+    shift
+    run_ "AWS_PROFILE=$profile" "HELM_REPOSITORY_CONFIG=$helm_config" "HELM_REPOSITORY_CACHE=$helm_cache" \
+      terraform -chdir="$dir" "$@"
+  }
+fi
 step "tf.sh: terraform $cmd${flags:+ $flags} of $rel"
 if [ "$root" = env ]; then
   printing || [[ ${SVP_AWS_LOG_ACCOUNT_ID:-} =~ ^[0-9]{12}$ ]] ||

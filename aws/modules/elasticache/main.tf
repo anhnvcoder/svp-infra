@@ -4,13 +4,15 @@
 # Design notes: docs/handbook/11-data.md.
 
 locals {
-  # Access strings of the platform's users, the same text as the local aclfile. No default user: a user group of
-  # engine VALKEY needs none, and ElastiCache turns the default user off once the group is attached.
+  # Access strings of the platform's users: the rules of the local aclfile, with db= moved to the end of the user and of
+  # each selector, the form ElastiCache stores and reads back; any other order shows as a change on every plan. db= only
+  # sets the databases, so its place among the command rules grants nothing more or less. No default user: a user group
+  # of engine VALKEY needs none, and ElastiCache turns the default user off once the group is attached.
   users = {
-    "svp-gateway"      = "on ~svp:gw:* resetchannels db=10 -@all +select +client|setinfo +eval +evalsha +time +get +set +del"
-    "svp-feed-service" = "on ~svp:feed:* resetchannels db=14 -@all +select +client|setinfo +get +set"
-    "svp-web"          = "on ~svp:web:* resetchannels db=9 -@all +select +client|setinfo +eval +get +set +del +exists"
-    "svp-ops"          = "on ~svp:* resetchannels db=9,10,14 -@all +select +ping +time +scan +get +mget +pttl (~svp:gw:rl:register:* resetchannels db=10 -@all +del) (~svp:feed:explore:* resetchannels db=14 -@all +del)"
+    "svp-gateway"      = "on ~svp:gw:* resetchannels -@all +select +client|setinfo +eval +evalsha +time +get +set +del db=10"
+    "svp-feed-service" = "on ~svp:feed:* resetchannels -@all +select +client|setinfo +get +set db=14"
+    "svp-web"          = "on ~svp:web:* resetchannels -@all +select +client|setinfo +eval +get +set +del +exists db=9"
+    "svp-ops"          = "on ~svp:* resetchannels -@all +select +ping +time +scan +get +mget +pttl db=9,10,14 (~svp:gw:rl:register:* resetchannels -@all +del db=10) (~svp:feed:explore:* resetchannels -@all +del db=14)"
   }
 
   # Key of each user's password in the External Secrets entry, the same name as the variable of the local .env:

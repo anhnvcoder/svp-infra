@@ -158,6 +158,66 @@ tắt.
 Số tiền là USD, làm tròn như nguồn; giá trị cờ của file. Ô "không có số đo" là khoản mà nguồn không tách riêng. Mỗi chương giữ bảng chi
 tiết của root của nó.
 
+**Theo từng dịch vụ AWS** (USD, tổng hợp từ ba bảng dưới: mỗi dịch vụ một dòng, cùng nguồn, dòng gộp của chúng tách ra từng dịch vụ).
+Cột "buổi" là một buổi 4 giờ của một env; "24/7" là một env chạy liên tục 730 giờ một tháng, chưa gồm phí giữ; "phí giữ" là cả tổ chức
+mỗi tháng khi không buổi nào chạy, tháng 1, cờ của file. "chưa đo" là ô mà nguồn không có số; "—" là dịch vụ chỉ có phí giữ. stg: node
+Spot, cờ `off`; prd: giá trị production (cờ `always`).
+
+| Dịch vụ | Dùng làm gì ở svp | stg buổi | stg 24/7 | prd buổi | prd 24/7 | Phí giữ | Đơn vị tính | Nguồn |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| EKS | Control plane của cluster mỗi env | 0,40 | 73,0 | 0,40 | 73,0 | — | cluster-giờ 0,100 | ADR-0048 phụ lục H₀; ADR-0034 phụ lục §12 |
+| EC2: nhóm node hệ thống, bastion | Node `m7g.large` on-demand chạy phần nền tảng (stg 2, prd 3); bastion `t4g.nano` giữ tunnel tới API | 0,82 (bastion: chưa đo) | 148,9 (bastion: chưa đo) | 1,24 | 227,1 | — | instance-giờ: `m7g.large` 0,102, `t4g.nano` 0,005; stg 4 × 2 × 0,102, prd 4 × (3 × 0,102 + 0,005) | ADR-0056 §3; ADR-0048 phụ lục H₀; ADR-0034 phụ lục §12 |
+| EC2: node Karpenter | Node cho workload: Spot ở stg, on-demand ở prd | 0,52–0,56 | 86,9 (on-demand 223,4) | 0,20 | chưa đo (74,5 mỗi node) | — | node-giờ: Spot 0,0398, on-demand 0,102; stg 3 node × 4 giờ + 1–2 node k6 × 1 giờ; prd 2 node đo × 1 giờ | ADR-0034 phụ lục §12; ADR-0048 phụ lục O₀ |
+| EBS | Đĩa node, PVC (trừ broker), bastion | 0,06 | 11,7 | 0,07 | 12,4 | — | GB-tháng gp3 0,096, ~120–130 GB (ước) | ADR-0034 phụ lục §12; ADR-0048 phụ lục H₀ |
+| NAT gateway, IPv4, truyền dữ liệu | Đường ra Internet của node; dữ liệu kéo image; truyền giữa AZ | 0,81 | 46,7 (dữ liệu: chưa đo) | 1,82 | 140,1 (dữ liệu: chưa đo) | — | NAT-giờ 0,059 và GB 0,059; IPv4-giờ 0,005; giữa AZ 0,01 mỗi GB mỗi chiều. stg: 0,236 + 0,02 + dữ liệu 10 GB 0,59 − 0,12 (đã qua endpoint) + giữa AZ 0,08; prd: 3 NAT 0,708 + 0,06 + 15 GB 0,89 − 0,12 + giữa AZ 0,28 | ADR-0034 phụ lục §12; ADR-0048 phụ lục H₀, O₀; ADR-0053 phụ lục §16; ADR-0064 phụ lục §7 |
+| RDS PostgreSQL | Database của bốn service; stg `db.t4g.small` một AZ, prd `db.m7g.large` Multi-AZ, 20 GB gp3 | 0,22 | 40,1 | 1,90 | 347,5 | — | instance-giờ: `db.t4g.small` 0,051, `db.m7g.large` Multi-AZ 0,468; gp3 GB-tháng 0,138 (stg), 0,276 (Multi-AZ) | ADR-0034 phụ lục §12; ADR-0048 phụ lục H₀; ADR-0078 phụ lục "Buổi prd" |
+| MSK | Kafka KRaft: stg 2, prd 3 broker `kafka.m7g.large`, đĩa 10 GB mỗi broker | 2,05 | 374,7 | 3,08 | 562,1 | — | broker-giờ 0,255; GB-tháng 0,12; stg 4 × (0,51 + 0,0033) | ADR-0084 phụ lục "Giá MSK"; ADR-0053 phụ lục "Chi phí" |
+| ElastiCache for Valkey | Khoá, session, cache: stg 1 node `cache.t4g.micro`, prd 2 node `cache.m7g.large` | 0,08 | 14,0 | 1,26 | 230,1 | — | node-giờ: `cache.t4g.micro` 0,0192, `cache.m7g.large` 0,1576 | ADR-0053 phụ lục "Chi phí" |
+| VPC endpoint interface | 16 dịch vụ AWS không qua NAT (`interface_endpoint_services` của module `network`, gồm `mediaconvert`); stg 1 AZ, prd 3 AZ | 0,85 | 151,8 | 2,52 | 455,5 | — | endpoint-giờ-AZ 0,013, GB 0,01; stg 4 × 16 × 0,013 + 0,02, prd 4 × 16 × 3 × 0,013 + 0,02 | ADR-0064 phụ lục §7; ADR-0066 phụ lục "Mỗi buổi" |
+| ALB | Cổng vào từ CloudFront tới Envoy, ~1 LCU | 0,13 | 24,2 | 0,13 | 24,2 | — | giờ 0,0252 và LCU-giờ 0,008 | ADR-0061 phụ lục §13 |
+| CloudFront | Ba distribution (web, api, media); log chuẩn v2 | 0,02 | 0 trong hạn mức (vượt, log: chưa đo) | 0,03 (gồm query log Route 53) | 0 trong hạn mức (vượt, log: chưa đo) | trong dòng S3 | 1 TB và 10 triệu request mỗi tháng miễn phí; log v2 GB 0,25 và 0,049 Parquet | ADR-0061 phụ lục §13 |
+| WAF | Web ACL web, api, media (stg cũng pay-as-you-go) | 0,30 | 49,0 (request: chưa đo) | 0,36 | 49,0 (request: chưa đo) | — | web ACL 5, luật 1, Bot Control, ATP 10 mỗi tháng; request 0,60 mỗi triệu; 49 × 4 ÷ 730 = 0,27, request prd gồm 0,03 và 0,06 của hai nguồn | ADR-0061 phụ lục §13; ADR-0084 §5; ADR-0048 phụ lục O₀ |
+| Amazon Managed Prometheus (AMP) | Metric của cluster, luật cảnh báo; gồm OpenCost và uptime | 2,61–2,69 | 413 | 2,61–2,70 | ≥ 413 | < 0,3 (gộp AMP, log, span của hai env) | 10 triệu mẫu 0,90 (tới 2 tỷ), 0,35 sau; 40 triệu mẫu đầu miễn phí cho cả tổ chức: 2,52 buổi đầu tháng (0,72 một env, 4,32 buổi sau) + 0,09–0,17 (stg), 0,09–0,18 (prd) của OpenCost, uptime | ADR-0063 phụ lục §12; ADR-0074 phụ lục "Mỗi buổi 4 giờ" |
+| Amazon Managed Grafana (AMG) | Dashboard: stg cờ `off`, prd hai user | 0 (`session` 18) | 0 | 18 | 18 | 0 (`always` 9 mỗi env) | user-tháng 9 (Editor, Admin), 5 (Viewer); tối thiểu một Editor mỗi workspace; buổi prd 9 tối thiểu + 9 của tháng có buổi | ADR-0063 phụ lục §12; ADR-0071 phụ lục "Theo cờ (stg)" |
+| CloudWatch Logs và alarm | Log OTLP, log control plane, broker, RDS; flow log; alarm dịch vụ managed | 0,55–0,75 | chưa đo | 2,09–2,29 | chưa đo | 0,25 (alarm DNSSEC 0,20, query log, lưu < 0,05) | GB nạp 0,70, GB-tháng 0,03; vended log GB 0,35 và 0,049 Parquet; alarm-tháng 0,10. stg: log 0,35 + flow log 0,2–0,4; prd: 0,35 + 1,40 + broker 0,14 + flow log 0,2–0,4 | ADR-0063 phụ lục §12; ADR-0048 phụ lục O₀; ADR-0053 phụ lục §16; ADR-0060 phụ lục §12; ADR-0061 phụ lục §13 |
+| X-Ray (Transaction Search) | Span của trace | 0,35 | chưa đo | 0,35 | chưa đo | trong dòng AMP | GB span 0,35; ~1 GB mỗi buổi | ADR-0063 phụ lục §12 |
+| S3 | Bucket `uploads`, `media`; Log Archive; state; log CloudFront | 0,003 | chưa đo | 0,01 | chưa đo | 1,19 | GB-tháng 0,025; PUT, LIST 0,005 mỗi 1 000. Giữ: Log Archive 1,1 + log trail 0,03 + state < 0,01 + log CloudFront < 0,05 | ADR-0066 phụ lục "Mỗi buổi"; ADR-0060 phụ lục §12; ADR-0048 phụ lục R; ADR-0061 phụ lục §13 |
+| KMS | Key CMK theo dữ liệu: 18 key sống giữa buổi (state ×3, CloudTrail cũ, log archive ×2, EBS ×2, backup ×3, ECR ×2, observability ×2, DNSSEC, SNS alarm ×2), 12 sau khi gỡ sáu key EBS, ECR, observability không còn mã hoá gì (ADR-0087) và 5 key mỗi root env (MSK, RDS, `uploads`, alarm, EKS) | 0,03 | 5,0 | 0,03 | 5,0 | 18,3 | key-tháng 1,00, tính theo giờ; request 0,03 mỗi 10 000 (20 000 đầu miễn phí); giữ: 18 + 0,3 request | ADR-0078 phụ lục "Xét lại"; ADR-0060, 0061, 0062, 0063, 0067 phụ lục; ADR-0048 phụ lục R |
+| Route 53 | Hosted zone của tổ chức và hai env; ký DNSSEC prd | 0 | — | 0 | — | 1,55 | zone-tháng 0,50 ×3; truy vấn alias 0; `Sign` 0,15 mỗi 10 000 (< 0,05) | ADR-0048 phụ lục R; ADR-0061 phụ lục §13 |
+| ECR | Image phát hành và cache image bên thứ ba | 0 | — | 0 | — | 1,8 (tháng 6: 9,8) | GB-tháng 0,10; giữ: cache ~5 GB mỗi account 1,00 + repo phát hành 0,8 | ADR-0062 phụ lục §11 |
+| Secrets Manager | Secret của MSK, Valkey, RDS, ký media; secret cache ECR | 0,02 | 3,6 (secret khác của stg: chưa đo) | 0,05 | 8,0 | 1,6 | secret-tháng 0,40; stg 9, prd 20 (+ ký media 0,002 mỗi buổi); giữ: 4 secret cache | ADR-0053 phụ lục "Chi phí"; ADR-0048 phụ lục H₀; ADR-0062 phụ lục §11; ADR-0078 phụ lục "Buổi prd" |
+| MediaConvert | Transcode HLS, frame capture | 0,64 | chưa đo | 0,64 | chưa đo | — | phút chuẩn hoá 0,0085 (SD 1×, HD 2×), tối thiểu 10 s mỗi output | ADR-0066 phụ lục "Mỗi buổi" |
+| SQS | Hàng đợi sự kiện transcode | 0,001 | chưa đo | 0,001 | chưa đo | — | 0,40 mỗi triệu request | ADR-0066 phụ lục "Mỗi buổi" |
+| GuardDuty | Phát hiện lạm dụng, Runtime, log audit EKS, RDS | 0,5 | chưa đo | 0,5 | chưa đo | 2,45 | event CloudTrail 4,60 mỗi triệu; Runtime 1,85 mỗi vCPU-tháng; giữ: 2,4 năm account + 0,05 `svp-backup` | ADR-0060 phụ lục §12; ADR-0078 phụ lục "Tháng không buổi" |
+| Security Hub CSPM | Chấm control; stg cờ `off`: 0,02 là khoản nguồn tính khi bật, nằm trong Cộng buổi stg | 0,02 | 0 | 2,8–4,8 | 1,8 | 1,8 | check 0,001; prd: 0,02 + 1–3 theo thay đổi + 1,8 tháng | ADR-0060 phụ lục §12; ADR-0067 phụ lục "Mỗi buổi"; ADR-0071 phụ lục |
+| AWS Config | Recorder, item cấu hình; stg cờ `off`: 0,22 là item nguồn tính khi bật, nằm trong Cộng buổi stg | 0,22 | 0 | 2,5–5,0 | 0,3 | 0,44 | item 0,003; stg: edge 0,09 + endpoint 0,05 + transcode 0,024 + backup 0,06; prd: 0,22 + 2–4,5 + 0,3 tháng; giữ: recorder 0,3 + recovery point 0,09 + ~0,05 | ADR-0060 phụ lục §12; ADR-0061, 0064, 0066, 0067 phụ lục |
+| Inspector | Quét lại image bên thứ ba; stg cờ `off` | 0 | 0 | ≤ 9 | ≤ 9 | 0,3 (phần còn lại của 5,7 ở ECR) | image quét lần đầu 0,09; quét lại 0,01 | ADR-0062 phụ lục §11; ADR-0063 phụ lục §12 "Bảng tổng của run" |
+| AWS Backup | Recovery point, bản copy sang `svp-backup`, diễn tập khôi phục PITR | 0,07 | chưa đo | 0,26 | chưa đo | 1,32 | GB-tháng warm 0,06, snapshot RDS 0,095; giữ: bản copy prd 1,25 + stg 0,07; buổi: instance PITR + request (0,15 và 0,34 trừ item Config, Security Hub) | ADR-0067 phụ lục "Chi phí" |
+| CloudTrail | Trail tổ chức `svp-audit`, data event prd | 0 | — | 0 (~0,01) | — | 0 | bản đầu management event miễn phí; data event 0,000001 | ADR-0060 phụ lục §12 |
+| Budgets, Cost Anomaly Detection | Báo tiền theo hạn mức và bất thường | — | — | — | — | 0 | không tính phí (budget không action) | ADR-0048 phụ lục R; ADR-0060 phụ lục §12 |
+| **Cộng** | | **~11,3–11,6** | **~1 443** | **~51,9–56,7** | **~2 576** (ước: AMP ≥, Inspector ≤) | **~31,3** (tháng 6: ~39,3) | cộng cột; phép kiểm dưới bảng | |
+
+Số là ước theo giá niêm yết, không phải số đã đo: Cost Explorer sau buổi thay bằng số đo thật (cột "đo thật" thêm khi có). ACM, IAM, SNS,
+EventBridge, Organizations và IAM Identity Center không có dòng vì $0 ở mức svp dùng.
+
+Phép kiểm cộng, mỗi cột với tổng sẵn có của trang (các bảng sau):
+
+- **Phí giữ**: cộng 31,3, tổng sẵn có ~31,1 (tháng 6: 39,3 và ~39,4). Lệch 0,2 vì ADR-0060 lấy ~20 cho các thành phần cộng 20,3. Inspector
+  0,3 là phần còn lại của 5,7 ở ECR sau khi trừ key 2,00, secret 1,60, cache 1,00, repo phát hành 0,8.
+- **stg 24/7**: cộng 1 442,6; trừ 4,0 (bốn key RDS, `uploads`, alarm, EKS mà tổng sẵn có không tính; nó chỉ tính key của MSK) còn 1 438,6,
+  tổng sẵn có ~1 440.
+- **prd 24/7**: cộng 2 576,1; trừ 3,25 (ba key RDS, `uploads`, alarm 3,0, và 0,25 lệch giờ của hai key sẵn có: 5,0 so với
+  (0,0014 + 0,001) × 730 = 1,75) còn 2 572,8, tổng sẵn có ~2 570 cộng node Karpenter.
+- **stg buổi**: cộng 11,27–11,59, gồm 0,24 của Security Hub và Config tính như khi cờ bật (cờ `off` thật trừ 0,24 còn
+  11,03–11,35), 0,82 nhóm node hệ thống (tổng sẵn có nói không có số của nó) và 0,09–0,17 OpenCost, uptime
+  (ADR-0074, tổng sẵn có không tính). Bỏ nhóm node hệ thống và OpenCost còn 10,36–10,60; các số sẵn có cộng 10,69–10,89
+  (lõi ~4,6 + endpoint ~0,75 + edge ~0,55 + transcode ~0,72 + flow log 0,2–0,4 + AMP, log, span 3,22 + GuardDuty 0,5 +
+  backup ~0,15). Lệch ~0,3 vì dòng lõi ~4,6 lấy cận trên 2,4 của ADR-0034 (cộng lại ra 2,26–2,30) và còn NLB 4 × 0,041 = 0,16
+  mà edge đã thay bằng ALB.
+- **prd buổi**: cộng 51,89–56,68, tổng sẵn có ~52,5–56,6. Lệch −0,23 vì H₀ còn NLB, IPv4 của NLB và web ACL cố định
+  (4 × (0,031 + 0,015 + 0,011)) mà bảng này tính ở ALB, WAF của edge; còn lại là làm tròn "~4–8" của ADR-0060: các thành phần
+  cộng 3,7–8,4.
+
 **Phí giữ giữa các buổi** (tháng, không buổi nào chạy):
 
 | Root | Khoản chính | Đơn vị tính | Giữa các buổi | Nguồn |
@@ -167,7 +227,7 @@ tiết của root của nó.
 | `aws/org` | trail `svp-audit`; SCP, RCP, tag policy, Backup policy; key `alias/svp-cloudtrail` cũ tới khi gỡ | event, key-tháng | trail ~0; policy 0; key cũ 1 | ADR-0078 phụ lục "Xét lại"; ADR-0048 phụ lục bảng R |
 | `aws/log-archive` | bucket log của tổ chức; key `alias/svp-log-archive` ở hai region | GB-tháng, request, key-tháng | bucket ~1,1 cả tổ chức; 1 mỗi key | ADR-0060 phụ lục §12 "Ước lúc không buổi" (dòng S3 Log Archive, KMS) |
 | `aws/security` | Security Hub CSPM của `svp-security`; GuardDuty mọi account; key của topic cảnh báo | check, event, key-tháng | Security Hub ~1,8; GuardDuty ~2,4 cho năm account, `svp-backup` thêm ~0,05; key 1 | ADR-0078 §2; ADR-0060 phụ lục §12 "Ước lúc không buổi"; ADR-0078 phụ lục "Tháng không buổi" |
-| `aws/baseline` | recorder Config của `svp-security`; CMK EBS của stg, prd | configuration item, key-tháng | Config ~0,3; 1 mỗi key | ADR-0078 §2; ADR-0078 phụ lục "Xét lại", dòng "Baseline account" |
+| `aws/baseline` | recorder Config của `svp-security`; CMK EBS của stg, prd, không còn là key mặc định, tới khi gỡ | configuration item, key-tháng | Config ~0,3; 1 mỗi key | ADR-0078 §2; ADR-0078 phụ lục "Xét lại", dòng "Baseline account" |
 | `aws/backup` | key `svp-backup-copy`, bản copy của stg, prd, item Config của recovery point | key-tháng, GB-tháng | key 1; bản copy prd 1,25, stg 0,07; item 0,09 khi cờ `config_recording` `always`, 0 khi `off` | ADR-0067 phụ lục "Chi phí", "Sống giữa buổi" |
 | `aws/accounts/<env>` | key state, hosted zone, budget env; registry; observability; key vault backup; prd thêm DNSSEC, alarm DNSSEC | key-tháng, zone-tháng, GB-tháng, user AMG | mỗi env: key state 1, zone 0,50, key vault 1; registry hai env ~5,7 (tháng 1) tới ~14 (tháng 6); observability hai env: key 2, lưu trữ < 0,3; AMG 0 với `off` (9 mỗi env khi `always`); edge prd ~2,4 | ADR-0048 phụ lục bảng R; ADR-0062 phụ lục §11 "Lúc không buổi"; ADR-0063 phụ lục §12 "Phần này, tháng không buổi"; ADR-0067 phụ lục; ADR-0061 phụ lục §13 "Lúc không buổi" |
 | `aws/envs/<env>` | không: gỡ cùng buổi; KMS key chờ xoá | — | 0 | ADR-0048 phụ lục bảng R; ADR-0071 phụ lục "Không cờ" |
@@ -178,7 +238,7 @@ tiết của root của nó.
 
 | Root | Khoản chính | stg | prd (giá trị production) | Nguồn |
 | --- | --- | --- | --- | --- |
-| `aws/envs/<env>` | EKS, node, NAT, RDS, MSK, ElastiCache; endpoint interface; edge; transcode; flow log | lõi ~3,0 node Spot, ~3,7 on-demand; endpoint ~0,75; edge ~0,5 (media trong gói flat-rate Free: 0); transcode ~0,72; flow log 0,2–0,4; nhóm node hệ thống on-demand: không có số đo trong tổng | lõi ~11,0; RDS Multi-AZ `db.m7g.large` thêm ~1,06; edge ~0,55; transcode ~0,84; endpoint ba AZ, flow log: gộp theo nguồn ở dòng `aws/accounts/<env>`, `aws/security`; node Karpenter thêm, alarm dữ liệu: không có số đo | ADR-0053 §16; ADR-0064 phụ lục §7; ADR-0061 phụ lục §13 "Thêm mỗi buổi"; ADR-0066 phụ lục "Mỗi buổi"; ADR-0060 phụ lục §12; ADR-0052; ADR-0078 phụ lục "Buổi prd" |
+| `aws/envs/<env>` | EKS, node, NAT, RDS, MSK, ElastiCache; endpoint interface; edge; transcode; flow log | lõi ~4,6 node Spot, ~5,3 on-demand (MSK 2 × `kafka.m7g.large`); endpoint ~0,75; edge ~0,55 (gồm web ACL media); transcode ~0,72; flow log 0,2–0,4; nhóm node hệ thống on-demand: không có số đo trong tổng | lõi ~11,0; RDS Multi-AZ `db.m7g.large` thêm ~1,06; edge ~0,55; transcode ~0,84; endpoint ba AZ, flow log: gộp theo nguồn ở dòng `aws/accounts/<env>`, `aws/security`; node Karpenter thêm, alarm dữ liệu: không có số đo | ADR-0053 §16; ADR-0084 §5; ADR-0064 phụ lục §7; ADR-0061 phụ lục §13 "Thêm mỗi buổi"; ADR-0066 phụ lục "Mỗi buổi"; ADR-0060 phụ lục §12; ADR-0078 phụ lục "Buổi prd" |
 | `aws/accounts/<env>` | AMP ingest, log, span; AMG theo cờ; Inspector theo cờ; backup và diễn tập khôi phục | AMP 2,52 buổi đầu tháng (0,72 khi một env), 4,32 buổi sau; log 0,35; span 0,35; AMG `off` 0, `session` 18; Inspector `off` 0, `always` ≤ 6,8 buổi đầu, ≤ 9 buổi cách buổi trước một tháng; backup ~0,15 | observability, registry ~23,5 (gộp theo nguồn với endpoint ba AZ của `aws/envs/prd`; gồm AMG 9 của tháng); backup ~0,34 | ADR-0063 phụ lục §12 "Phần này, mỗi buổi 4 giờ"; ADR-0071 phụ lục "Theo cờ (stg)"; ADR-0062 phụ lục §11; ADR-0067 phụ lục "Mỗi buổi"; ADR-0078 phụ lục "Buổi prd" |
 | `aws/security` | GuardDuty theo lưu lượng buổi; Security Hub theo cờ | GuardDuty ~0,5; Security Hub `off` 0, `always` 1–3 | Security Hub, Config của tháng ~2,1; Config, Security Hub, GuardDuty theo thay đổi ~4–8 (gộp theo nguồn với flow log của `aws/envs/prd`); lượt check đầu: không có số đo | ADR-0060 phụ lục §12 "Thêm mỗi buổi"; ADR-0078 phụ lục "Buổi prd" |
 | `aws/baseline` | Config theo cờ | `off` 0, `always` 2–4,5 | trong dòng `aws/security` | ADR-0060 phụ lục §12 "Thêm mỗi buổi" |
@@ -190,7 +250,33 @@ Nguồn: [ADR-0078 phụ
 lục](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0078-paid-features-lean-defaults.md#chi-phí),
 [ADR-0071 phụ
 lục](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0071-paid-features.md#bảng-tháng-không-buổi), các phụ
-lục chi phí mà hai bảng đó trích (ADR-0048, 0053, 0060, 0061, 0062, 0063, 0064, 0066, 0067).
+lục chi phí mà hai bảng đó trích (ADR-0048, 0053, 0060, 0061, 0062, 0063, 0064, 0066, 0067), và
+[ADR-0084](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0084-stg-msk-media-sizing.md) §5 cho MSK, media của stg.
+
+**Nếu env chạy 24/7** (ước theo tháng 730 giờ, không phải số Cost Explorer): giá theo giờ trong các ADR mà bảng phí một buổi dẫn,
+nhân 730, cộng khoản theo tháng. Bảng trả lời vì sao env chỉ sống trong buổi: một tháng stg chạy liên tục bằng phần theo giờ của khoảng
+145 buổi 4 giờ (mỗi buổi 4 × 2,48 ≈ 9,9, phép tính ở dòng "Quên gỡ" dưới bảng).
+
+| Khoản | stg: USD/giờ → tháng | prd: USD/giờ → tháng | Nguồn |
+| --- | --- | --- | --- |
+| Lõi: EKS, node, NAT, IPv4, RDS, EBS | EKS 0,100 + 3 node Spot 0,119 + NAT 0,059 + IPv4 của NAT 0,005 + RDS `db.t4g.small` 0,055 + EBS 0,016 = 0,354 → ~258 (node on-demand 0,306: ~395) | H₀ 0,895 (gồm 3 node hệ thống, 3 NAT, bastion) − NLB 0,031 − IPv4 của NLB 0,015 − WAF 0,011 (dòng WAF dưới) = 0,838; RDS Multi-AZ `db.m7g.large` thêm 0,265 → 1,103 → ~805 | ADR-0034 phụ lục §12 (bỏ dòng NLB); ADR-0048 phụ lục "H₀"; ADR-0078 phụ lục "Buổi prd" |
+| Nhóm node hệ thống on-demand | 2 × `m7g.large` 0,102 = 0,204 → ~149 | trong dòng lõi | ADR-0056 §3; giá ở ADR-0034 phụ lục §12 |
+| MSK, ElastiCache (H_k) | 0,538 → ~393 | 1,091 → ~796 | ADR-0084 phụ lục "Giá MSK"; ADR-0053 phụ lục "Chi phí" |
+| Endpoint interface (16 dịch vụ của `interface_endpoint_services`, module `network`) | 16 × 1 AZ × 0,013 = 0,208 → ~152 | 16 × 3 AZ × 0,013 = 0,624 → ~456 | ADR-0064 phụ lục §7 "Bảng giá" |
+| ALB của edge, ~1 LCU | 0,0252 + 0,008 = 0,0332 → ~24 | như stg, ~24 | ADR-0061 phụ lục §13 "Bảng giá" |
+| AMP ingest: 50 000 series mỗi 15 s = 12 triệu mẫu mỗi giờ, 8,76 tỷ mỗi tháng | 40 triệu đầu 0 + 1,96 tỷ × 0,90/10 triệu + 6,76 tỷ × 0,35/10 triệu ≈ 176 + 237 → ~413 | ≥ ~413 (ba AZ nhiều series hơn) | ADR-0063 phụ lục §12; Price List `AmazonPrometheus` `ap-southeast-1` (bậc 0,35 từ 2 tỷ mẫu), đọc 2026-11-24 |
+| WAF phí cố định (tháng) | web 20 + api 20 + media 9 = 49 | 49 | ADR-0061 phụ lục §13 "Thêm mỗi buổi"; ADR-0084 §5 |
+| Cờ chi phí (tháng) | 0 (cờ `off`) | AMG 18 (hai user) + Security Hub, Config ~2,1 + Inspector ≤ 9 → ~29 | ADR-0063 phụ lục §12; ADR-0078 phụ lục "Buổi prd"; ADR-0062 phụ lục §11 |
+| **Một env một tháng** | **~1 440** (node on-demand ~1 575) | **~2 570** cộng node Karpenter | cộng các dòng trên |
+
+- Cộng phí giữ của cả tổ chức (~31,1–39,4, bảng phí giữ) một lần, dù một hay hai env chạy. Hai env cùng chạy trả ít hơn tổng hai cột ở
+  dòng AMP: 40 triệu mẫu miễn phí tính chung cả tổ chức (ADR-0063 phụ lục §12).
+- Quên gỡ stg một ngày: (1,337 theo giờ + AMP 12 triệu × 0,90/10 triệu = 1,08 + WAF 49 ÷ 730 = 0,067) × 24 ≈ **60**; prd:
+  (2,851 + 1,08 + 0,067) × 24 ≈ **96**. Budget và Cost Anomaly Detection báo trễ khoảng một ngày.
+- Chưa gồm: dữ liệu qua NAT (0,059 mỗi GB), ra Internet vượt hạn mức miễn phí của CloudFront, giữa AZ; log CloudWatch (control plane,
+  broker, RDS, ứng dụng), span, flow log; GuardDuty, Config theo thay đổi; MediaConvert, S3, backup theo dùng; tải thật và node thêm
+  khi tải, node Karpenter của prd (mỗi `m7g.large` on-demand 0,102 × 730 ≈ 74,5); bastion của stg (vài USD, không có
+  trong bảng nguồn của stg); giá Spot đổi theo giờ; thuế.
 
 ## Kiểm tra và vận hành
 

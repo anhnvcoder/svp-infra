@@ -290,7 +290,7 @@ tới khi cả hai kết thúc (tối đa 60 phút), rồi đọc job, recovery 
 ```sh
 aws/scripts/check-account.sh mgmt
 for r in rds s3; do
-  case $r in rds) arn=arn:aws:rds:ap-southeast-1:$SVP_AWS_MGMT_ACCOUNT_ID:db:svp-probe ;; s3) arn=arn:aws:s3:::$b ;; esac
+  case $r in rds) arn=arn:aws:rds:ap-southeast-1:${SVP_AWS_MGMT_ACCOUNT_ID}:db:svp-probe ;; s3) arn=arn:aws:s3:::$b ;; esac
   job=$(AWS_PROFILE=anhnv-sso aws --no-cli-pager backup start-backup-job --region ap-southeast-1 --backup-vault-name svp-probe --resource-arn "$arn" \
     --iam-role-arn "$role_arn" --lifecycle DeleteAfterDays=2 --query BackupJobId --output text)
   echo "job_$r=$job" | tee -a "$d/ids.sh"

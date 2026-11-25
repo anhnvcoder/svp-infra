@@ -73,12 +73,12 @@ run "stg_values" {
 
   assert {
     condition = { for u, user in aws_elasticache_user.this : u => user.access_string } == {
-      "svp-gateway"      = "on ~svp:gw:* resetchannels db=10 -@all +select +client|setinfo +eval +evalsha +time +get +set +del"
-      "svp-feed-service" = "on ~svp:feed:* resetchannels db=14 -@all +select +client|setinfo +get +set"
-      "svp-web"          = "on ~svp:web:* resetchannels db=9 -@all +select +client|setinfo +eval +get +set +del +exists"
-      "svp-ops"          = "on ~svp:* resetchannels db=9,10,14 -@all +select +ping +time +scan +get +mget +pttl (~svp:gw:rl:register:* resetchannels db=10 -@all +del) (~svp:feed:explore:* resetchannels db=14 -@all +del)"
+      "svp-gateway"      = "on ~svp:gw:* resetchannels -@all +select +client|setinfo +eval +evalsha +time +get +set +del db=10"
+      "svp-feed-service" = "on ~svp:feed:* resetchannels -@all +select +client|setinfo +get +set db=14"
+      "svp-web"          = "on ~svp:web:* resetchannels -@all +select +client|setinfo +eval +get +set +del +exists db=9"
+      "svp-ops"          = "on ~svp:* resetchannels -@all +select +ping +time +scan +get +mget +pttl db=9,10,14 (~svp:gw:rl:register:* resetchannels -@all +del db=10) (~svp:feed:explore:* resetchannels -@all +del db=14)"
     }
-    error_message = "The access string of every user, the selectors of svp-ops included, must be the one of the local aclfile."
+    error_message = "The access string of every user, the selectors of svp-ops included, must grant what the local aclfile grants, in the form ElastiCache stores."
   }
 
   assert {

@@ -44,7 +44,7 @@ aws/scripts/measure.sh prd
 
 ### Smoke, phát video và alarm
 
-Loại: `lõi`. Smoke là bước 16 (dòng `ok smoke passed …`). Sau smoke: phép (d) của mục [Phát video và CORS của
+Loại: `lõi`. Smoke là bước 16 (dòng `ok smoke passed …`). Sau smoke: mục [Phát video và CORS của
 media](session-stg-check-edge-media.md#phát-video-và-cors-của-media) của buổi stg với `AWS_PROFILE=anhnv-prd` (playlist là của
 video smoke vừa tải lên; mong `access-control-allow-origin: https://<domain>` của policy `svp-prd-media`, không `*`), và phép (f)
 của mục [Alarm tới email](session-stg-check-security.md#alarm-tới-email) là mục **Đo 6** dưới.
@@ -64,8 +64,8 @@ managed](session-stg-check-managed.md#kafka-và-valkey-managed), với `anhnv-pr
 `kafka.m7g.large`, `3` broker; replication group `2` node); phép kiểm (a)–(e) của mục [Nền tảng EKS và TLS
 Postgres](session-stg-check-platform.md#nền-tảng-eks-và-tls-postgres) với `anhnv-prd`, `--context svp-prd`, `svp-prd` (mong ba
 node `nodegroup=system` ở ba zone, node Karpenter `capacity-type=on-demand`, pod Kyverno trên ba zone, `db.m7g.large`, trần
-storage của `prd.tfvars`); và plan lần hai sau apply, phải cho `No changes` (`ok plan text in …: No changes.`; prd không có gói
-nên không phép (c) của mục Gói Free):
+storage của `prd.tfvars`); và plan lần hai sau apply, phải cho `No changes` (`ok plan text in …: No changes.`; mục [Plan lần hai của root
+env](session-stg-check-edge-media.md#plan-lần-hai-của-root-env) với `prd`):
 
 ```sh
 aws/scripts/tf.sh prd env plan
@@ -83,13 +83,35 @@ gh api "repos/anhnvcoder/svp-gitops/commits/<sha trên>/statuses" --jq '.[] | se
 
 Mong `success`; dán lại cả hai dòng.
 
+### Deploy qua GitOps ở prd
+
+Loại: `lõi`. Thêm: không gì ngoài cổng promote đã chạy trước bước 1.
+
+prd không merge bản mới giữa buổi: đường phát hành của prd là [Cổng promote prd](session-prd.md#cổng-promote-prd-trước-mọi-lệnh-tốn-tiền)
+(CI job `promote-prd`, PR `bot/promote-prd`, Code Owner merge), chạy trước bước 1. Phép này kiểm phần cuối của đường đó sau bước 15:
+Argo CD đã sync bộ của PR, pod chạy đúng digest của `envs/prd/images/`. Lệnh của bước 4 trong mục [Deploy qua
+GitOps](session-stg-check-release.md#deploy-qua-gitops) của buổi stg, với `AWS_PROFILE=anhnv-prd`, `--context svp-prd`, `svc=feed-service`
+và digest đọc ở `main` của `svp-gitops`:
+
+```sh
+svc=feed-service; git -C ../gitops fetch origin
+want=$(git -C ../gitops show "origin/main:envs/prd/images/${svc}.yaml" | sed -n 's/^ *digest: *"\(sha256:[0-9a-f]*\)"/\1/p'); echo "$want"
+AWS_PROFILE=anhnv-prd kubectl --context svp-prd -n argocd get applications.argoproj.io "$svc" \
+  -o custom-columns=SYNC:.status.sync.status,HEALTH:.status.health.status
+AWS_PROFILE=anhnv-prd kubectl --context svp-prd -n svp get pods -l "app.kubernetes.io/name=$svc" \
+  -o jsonpath='{range .items[*]}{.metadata.name} {.status.containerStatuses[0].imageID}{"\n"}{end}'
+```
+
+Mong `Synced` `Healthy`, mỗi pod một `imageID` kết thúc bằng `want`; cùng mục [Commit status argocd/prd](#commit-status-argocdprd)
+(`success`) và smoke của bước 16. Dán lại cả ba output.
+
 ### Migration của release ở prd
 
 Loại: `lõi`.
 
 Mục [Migration của release](session-stg-check-release.md#migration-của-release) của buổi stg với `AWS_PROFILE=anhnv-prd`,
-`--context svp-prd`, sau bước 15. Mong như stg: mỗi release hai dòng của runner (`"lock_timeout":"2s"`), bốn Application
-`Synced` `Healthy`; Job không còn thì ghi lại, không sync lại.
+`--context svp-prd`, log group `/svp/prd/otel`, sau bước 15. Mong như stg: mỗi release hai bản ghi của runner (`lock_timeout`
+`2s`), bốn Application `Synced` `Healthy`; thiếu bản ghi thì ghi lại, không sync lại.
 
 ### Xác thực qua CloudFront ở prd
 
@@ -193,10 +215,11 @@ chỉ đọc.
 
 ### Nền tảng managed (d) ở prd: luật cảnh báo
 
-Loại: `lõi`. Chỉ phần luật: hai namespace `ACTIVE`, Alertmanager `ACTIVE`, chu kỳ `15`. prd chạy commit `svp-gitops` mà
-stg đã chạy (`gitopsRevision` ghim), nên không PR annotation nào tới được nó: canary, AnalysisRun thủ công và cảnh báo
-`page` qua AMP được kiểm ở buổi stg đã bật các phép đó (`chuẩn ngành`), cùng chart; alarm `page` của prd là mục
-**Đo 6**.
+Loại: `lõi`. Chỉ phần luật, lệnh và bẫy (`409` của ACK) như [mục (d) của
+stg](session-stg-check-managed.md#nền-tảng-managed-d-luật-cảnh-báo-trên-amp): hai namespace `ACTIVE`, Alertmanager `ACTIVE`, chu kỳ `30`
+như stg ([ADR-0086](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0086-amp-rule-interval-prd.md)). prd chạy commit
+`svp-gitops` mà stg đã chạy (`gitopsRevision` ghim), nên không PR annotation nào tới được nó: canary, AnalysisRun thủ công và cảnh báo
+`page` qua AMP được kiểm ở buổi stg đã bật các phép đó (`chuẩn ngành`), cùng chart; alarm `page` của prd là mục **Đo 6**.
 
 ### Nền tảng managed (e) ở prd: dữ liệu còn sau destroy
 

@@ -608,7 +608,7 @@ Từ `infra/aws/security`:
 
 ## Bước (6): `aws/baseline`
 
-Baseline của mọi account và CMK EBS ([06. Baseline](../handbook/06-baseline.md)), sau (3) bucket Config, (4) SCP và profile
+Baseline của mọi account và CMK EBS cũ ([06. Baseline](../handbook/06-baseline.md)), sau (3) bucket Config, (4) SCP và profile
 [4c](#4c-profile-của-account-thành-viên), (5) bus `svp-security-events` và email đã xác nhận. Account thêm vào tổ chức khi root đã áp
 (như `svp-backup`): 6a, 6c, 6d, bỏ 6b; bucket Config và bus nhận account mới theo id tổ chức, không đổi policy.
 
@@ -666,7 +666,7 @@ AWS_PROFILE=anhnv-sso terraform show -no-color baseline.tfplan > "$SVP_SESSION_D
   "Phần" chia theo `module.<account>` và key EBS). Mỗi account có `config_recording` `always` thêm 6 ở module của nó (recorder, delivery
   channel, trạng thái recorder của hai region). Root đã áp, thêm account mới: chỉ module của account đó, số là dòng `module.<account>` của
   bảng "Phần".
-- **Kiểm:** `aws_ebs_default_kms_key` chỉ ở stg, prd, `key_arn` là key `svp-ebs` của chính account đó; `svp-security-root-signin` của
+- **Kiểm:** không `aws_ebs_default_kms_key` nào (EBS dùng `aws/ebs` ở mọi account); `svp-security-root-signin` của
   mọi account ở ba region (`us-east-1`, `us-east-2`, `us-west-2`); `s3_kms_key_arn` của mọi delivery channel dạng `key/<id>`.
 - **Bẫy:** `AccessDenied` khi assume role là account hay profile sai; lỗi đọc alias `alias/svp-log-archive` là bước (3) chưa áp. Có dòng
   `change` hay `destroy`: dừng, dán plan.
@@ -678,7 +678,8 @@ AWS_PROFILE=anhnv-sso terraform apply -input=false baseline.tfplan && rm baselin
 AWS_PROFILE=anhnv-sso terraform output ebs_kms_key_arns
 ```
 
-- **Mong đợi:** `Apply complete!`; `ebs_kms_key_arns` có hai ARN `arn:aws:kms:ap-southeast-1:<stg|prd>:key/<id>`. Account có cờ
+- **Mong đợi:** `Apply complete!`; `ebs_kms_key_arns` có hai ARN `arn:aws:kms:ap-southeast-1:<stg|prd>:key/<id>` (CMK EBS, không là key
+  mặc định). Account có cờ
   `config_recording` `off` không có recorder, delivery channel ở hai region: đúng ý.
 - **Việc tay:** apply sinh email từ chính rule của nó: `svp-security-detection` (recorder, delivery channel; thiếu ở account nào chưa
   phải lỗi, rule có thể tạo sau recorder) và loạt thư `… PutRule`, `PutTargets` … `svp-terraform error .` (`error` trống là lời gọi
@@ -808,7 +809,7 @@ AWS_PROFILE=anhnv-stg aws --no-cli-pager s3control get-public-access-block --acc
 ```
 
 EBS mã hoá mặc định (`--dry-run` không đổi gì; `DryRunOperation` là guardrail hỏng); mong sau lệnh bị từ chối `True`, key mặc định là
-ARN của key `alias/svp-ebs` của stg (lệnh CMK EBS dưới in ARN đó):
+`arn:aws:kms:ap-southeast-1:<stg>:alias/aws/ebs`:
 
 ```sh
 AWS_PROFILE=anhnv-stg aws --no-cli-pager ec2 disable-ebs-encryption-by-default --dry-run --region ap-southeast-1
@@ -816,8 +817,8 @@ AWS_PROFILE=anhnv-stg aws --no-cli-pager ec2 get-ebs-encryption-by-default --reg
 AWS_PROFILE=anhnv-stg aws --no-cli-pager ec2 get-ebs-default-kms-key-id --region ap-southeast-1 --output text
 ```
 
-CMK EBS (API không nhận alias: lấy ARN trước; không thử `disable-key`, `schedule-key-deletion`: guardrail hỏng thì volume mới hỏng);
-mong `True` ở dòng cuối:
+CMK EBS (API không nhận alias: lấy ARN trước; không thử `disable-key`, `schedule-key-deletion`: guardrail hỏng thì key bị tắt hay chờ xoá
+thật); mong `True` ở dòng cuối:
 
 ```sh
 K="$(AWS_PROFILE=anhnv-stg aws --no-cli-pager kms describe-key --key-id alias/svp-ebs --region ap-southeast-1 --query KeyMetadata.Arn --output text)"
@@ -939,7 +940,7 @@ Khi bước (4) đã chạy trước khi `aws/org` có role này (bước (5) l�
 AWS_PROFILE=anhnv-sso \
 TF_VAR_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
   terraform import -input=false aws_iam_service_linked_role.access_analyzer \
-    "arn:aws:iam::$SVP_AWS_MGMT_ACCOUNT_ID:role/aws-service-role/access-analyzer.amazonaws.com/AWSServiceRoleForAccessAnalyzer"
+    "arn:aws:iam::${SVP_AWS_MGMT_ACCOUNT_ID}:role/aws-service-role/access-analyzer.amazonaws.com/AWSServiceRoleForAccessAnalyzer"
 ```
 
 - **Kiểm:** plan lần hai `No changes.`; rồi plan và apply lại `aws/security` ([5b](#5b-plan)).

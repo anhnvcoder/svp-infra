@@ -43,13 +43,13 @@ resource "aws_ecr_repository_creation_template" "cache" {
   lifecycle_policy     = local.cache_lifecycle_policy
   custom_role_arn      = aws_iam_role.template.arn
 
+  # AES256 as the release repositories: the upstream keeps the original of every cached image.
   encryption_configuration {
-    encryption_type = "KMS"
-    kms_key         = aws_kms_key.ecr.arn
+    encryption_type = "AES256"
   }
 }
 
-# ECR assumes this role to create a cached repository with the KMS key of the template.
+# ECR assumes this role to create a cached repository.
 data "aws_iam_policy_document" "template_trust" {
   statement {
     actions = ["sts:AssumeRole"]
@@ -66,12 +66,6 @@ data "aws_iam_policy_document" "template" {
     sid       = "CreateCachedRepositories"
     actions   = ["ecr:CreateRepository", "ecr:TagResource"]
     resources = [for prefix in keys(local.cache_rules) : "${local.repository_arn_prefix}/${prefix}/*"]
-  }
-
-  statement {
-    sid       = "EncryptWithEcrKey"
-    actions   = ["kms:CreateGrant", "kms:RetireGrant", "kms:DescribeKey"]
-    resources = [aws_kms_key.ecr.arn]
   }
 }
 

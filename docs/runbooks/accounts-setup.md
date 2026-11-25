@@ -109,7 +109,7 @@ AWS_PROFILE=anhnv-stg terraform apply -input=false stg.tfplan && rm stg.tfplan
   TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
   TF_VAR_backup_account_id="$SVP_AWS_BACKUP_ACCOUNT_ID" \
     terraform import -input=false aws_iam_service_linked_role.spot \
-    "arn:aws:iam::$SVP_AWS_STG_ACCOUNT_ID:role/aws-service-role/spot.amazonaws.com/AWSServiceRoleForEC2Spot"
+    "arn:aws:iam::${SVP_AWS_STG_ACCOUNT_ID}:role/aws-service-role/spot.amazonaws.com/AWSServiceRoleForEC2Spot"
   ```
 
   Mong `Plan: 0 to add, 1 to change, 0 to destroy`: `aws_iam_service_linked_role.spot` sửa tại chỗ (`~`), `tags_all` thêm bốn tag của
@@ -181,7 +181,7 @@ Kiểm lan truyền (lặp lại tới khi qua; thường vài phút, có thể 
 ```sh
 ns=$(AWS_PROFILE=anhnv-prd TF_VAR_account_id="$SVP_AWS_PRD_ACCOUNT_ID" terraform output -json name_servers | jq -r '.[]' | sort)
 for r in 1.1.1.1 8.8.8.8; do
-  diff <(dig NS aws.<domain> +short @"$r" | sed 's/\.$//' | sort) <(echo "$ns") && echo "$r: delegation OK"
+  diff <(dig NS aws.<domain> +short @"$r" | sed 's/\.$//' | sort) <(echo "$ns") && echo "${r}: delegation OK"
 done
 dig NS aws.<domain> +short          # resolver của máy: cũng đúng bốn name server đó
 ```
@@ -222,7 +222,7 @@ AWS_PROFILE=anhnv-prd terraform show -no-color prd.tfplan > "$SVP_SESSION_DIR/pr
 AWS_PROFILE=anhnv-prd terraform apply -input=false prd.tfplan && rm prd.tfplan
 ns=$(cd ../stg && AWS_PROFILE=anhnv-stg TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" terraform output -json name_servers | jq -r '.[]' | sort)
 for r in 1.1.1.1 8.8.8.8; do
-  diff <(dig NS stg.aws.<domain> +short @"$r" | sed 's/\.$//' | sort) <(echo "$ns") && echo "$r: delegation OK"
+  diff <(dig NS stg.aws.<domain> +short @"$r" | sed 's/\.$//' | sort) <(echo "$ns") && echo "${r}: delegation OK"
 done
 ```
 

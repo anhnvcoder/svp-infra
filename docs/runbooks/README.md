@@ -41,6 +41,7 @@ Runbook khi cần, ngoài chuỗi; mỗi trang chỉ có `[Mục lục](README.m
 | --- | --- | --- |
 | [`paid-features.md`](paid-features.md) | Đổi cờ chi phí của một account, cả cờ mà phép kiểm `chuẩn ngành` cần | Trước buổi muốn bật tính năng trả phí |
 | [`media-signing-keys.md`](media-signing-keys.md) | Khoá ký URL media premium: dựng, xoay, thay khi lộ, dọn | Trong buổi; khi xoay hay lộ khoá |
+| [`kms-consolidation.md`](kms-consolidation.md) | Đưa ECR, AMP, log group ứng dụng, EBS về key của AWS; kiểm key cũ không còn ai dùng | Một lần, giữa hai buổi, sau PR đổi key |
 | [`eks-upgrade.md`](eks-upgrade.md) | Nâng một minor EKS, stg trước prd | Giữa các buổi, khi có minor mới |
 | [`break-glass.md`](break-glass.md) | Đường vào khẩn cấp: Identity Center hỏng, việc chỉ root làm được | Khi đường thường hỏng |
 | [`lab-teardown.md`](lab-teardown.md) | Gỡ có chủ đích nền sống lâu, đóng account | Khi lab kết thúc |
@@ -99,8 +100,11 @@ bước có hướng dẫn đủ ở runbook ghi bên phải: mọi cách làm �
 
 ## Script và target dựng
 
+Mỗi script của `aws/scripts/` có một mục ở [bản đồ script](../reference/scripts.md): làm gì, khi nào, đổi gì trong AWS, output đúng,
+đỏ thì làm gì. Một buổi chạy bằng ba lệnh `aws/scripts/session.sh up|check|down <env>` ([`session.sh`](../reference/scripts.md#sessionsh)).
+
 Script `aws/scripts/*.sh` mở bằng khối `Usage:`; `--print` là đối số đầu, in mọi lệnh sẽ chạy mà không gọi công cụ nào. Test của mỗi script
-là `<tên>-test.sh` cạnh nó (`make session-test`). Target `make` của GitHub nằm ở `Makefile`; `make help` liệt kê chúng.
+là `<tên>-test.sh` trong `aws/scripts/tests/` (`make session-test`). Target `make` của GitHub nằm ở `Makefile`; `make help` liệt kê chúng.
 
 | Script hay target | Việc | Runbook dùng |
 | --- | --- | --- |

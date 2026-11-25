@@ -1,6 +1,6 @@
 # 01. Bootstrap
 
-← [00. Tổng quan](00-tong-quan.md) · [Mục lục](README.md) · [02. GitHub](02-github.md) →
+← [00. Tổng quan](00-overview.md) · [Mục lục](README.md) · [02. GitHub](02-github.md) →
 
 ## Tổng quan
 

@@ -4,16 +4,16 @@
 # is written. Covers each command: files written from the outputs, a line changed in place and nothing else, a second
 # run that changes nothing, the old file kept when an output is empty or fails, mode 600, and no value in any output.
 
-# Usage: aws/scripts/tfvars-test.sh
+# Usage: aws/scripts/tests/tfvars-test.sh
 #
 # The checks run sh -c '...' with their values as arguments ($1, $2, ...): expanded by that shell, not this one.
 # shellcheck disable=SC2016
 set -euo pipefail
 
-src=$(cd "$(dirname "$0")" && pwd)
+src=$(cd "$(dirname "$0")/.." && pwd)
 repo=$(cd "$src/../.." && pwd)
-# shellcheck source=aws/scripts/testlib.sh
-. "$src/testlib.sh"
+# shellcheck source=aws/scripts/tests/testlib.sh
+. "$src/tests/testlib.sh"
 fake_aws
 command -v python3 >/dev/null || {
   echo "FAIL  python3 not found" >&2

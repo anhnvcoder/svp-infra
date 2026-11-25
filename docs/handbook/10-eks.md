@@ -150,6 +150,19 @@ buổi](../runbooks/session-stg.md#đổi-một-secret-của-env-đang-chạy).
 - **Ở svp:** các add-on trong `addons.tf`, mỗi cái ghim `addon_version`; `vpc-cni`, `eks-pod-identity-agent`, `kube-proxy` tạo trước
   node group. `ENABLE_PREFIX_DELEGATION` của `vpc-cni` cho node cỡ large giữ 110 pod thay vì 29. Agent GuardDuty là resource riêng, tạo
   sau endpoint `guardduty-data`.
+- **Priority của agent GuardDuty:** add-on mặc định dùng PriorityClass `aws-guardduty-agent.priorityclass`
+  (`preemptionPolicy: Never`). Node Karpenter đã đầy pod ứng dụng thì pod agent nằm `Pending` (`Insufficient cpu`), add-on
+  `DEGRADED`, coverage `UNHEALTHY`, node đó chạy không có Runtime Monitoring. `configuration_values` của add-on đặt
+  `priorityClassName: aws-guardduty-agent.priorityclass-high` (giá trị 100000000, `PreemptLowerPriority`), một trong bốn giá trị
+  [tài liệu GuardDuty](https://docs.aws.amazon.com/guardduty/latest/ug/guardduty-configure-security-agent-eks-addon.html) cho phép
+  từ add-on 1.5.0. Lớp này cao hơn mọi pod không khai PriorityClass (độ ưu tiên 0): pod ứng dụng và cả pod nền tảng như Kyverno,
+  cert-manager, istiod, Argo CD, observability đều có thể bị đẩy ra. Nó thấp hơn `system-cluster-critical` (CoreDNS, Karpenter) và
+  `system-node-critical` (`vpc-cni`, `kube-proxy`, Istio CNI, ztunnel), nên hai nhóm đó không bị đụng.
+  `resolve_conflicts_on_update = "OVERWRITE"`: Terraform là chủ duy nhất của cấu hình (GuardDuty không tự quản add-on,
+  `EKS_ADDON_MANAGEMENT` tắt ở `aws/security`), nên đổi cấu hình hay sửa tay DaemonSet không làm update thất bại.
+  - **Cái giá:** node đầy thì agent đẩy một pod không có PriorityClass ra (ứng dụng hay nền tảng); pod đó về `Pending` và
+    Karpenter dựng node mới cho nó, tức vài chục giây tới vài phút pod đó không chạy và thêm giờ EC2 của node mới. Replica khác của
+    cùng Deployment và PodDisruptionBudget không che được: preemption chỉ cố tôn trọng PDB, không bảo đảm.
 - **Phí theo:** add-on không tính phí; phần chạy là pod trên node.
 - **Cố ý tắt:** tự nâng version: AMI và add-on nâng tay theo [`eks-upgrade.md`](../runbooks/eks-upgrade.md), Renovate không đọc được
   datasource của chúng vì cần credential AWS.
@@ -296,8 +309,8 @@ Node workload do Karpenter tạo theo pod, nằm ngoài state: cuối buổi `pr
   `AWS_PROFILE=anhnv-stg aws --no-cli-pager eks update-nodegroup-config --cluster-name svp-stg --nodegroup-name <tên> --scaling-config
   minSize=2,maxSize=4,desiredSize=3 --region ap-southeast-1` (tên node group có tiền tố `system-`, đọc bằng `aws eks list-nodegroups`).
 - IMDS hop limit 1: chỉ process mạng host (`aws-node`) đọc được role node (gồm `AmazonEKS_CNI_Policy`); phần node của EBS CSI lấy
-  metadata từ Kubernetes thay IMDS. Role node có `ecr:BatchImportUpstreamImage`, `ecr:CreateRepository` chỉ trên tiền tố cache và
-  `kms:Decrypt` khoá registry chỉ qua `ecr.<region>.amazonaws.com`.
+  metadata từ Kubernetes thay IMDS. Role node có `ecr:BatchImportUpstreamImage`, `ecr:CreateRepository` chỉ trên tiền tố cache, không
+  quyền KMS: repo ECR mã hoá AES256.
 - Role `media-worker` gộp policy S3 của module `media` với policy bridge MediaConvert của module `transcode` bằng
   `source_policy_documents`; `sid` của hai module phải khác nhau. ServiceAccount mang tên release, nên release giữ tên `video-service`,
   `media-worker`; chỉ hai service này gọi API AWS.

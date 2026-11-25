@@ -104,7 +104,7 @@ variables {
 run "stg" {
   command = plan
 
-  # Release repositories: exactly the services of sources.json, immutable, encrypted with the env's key.
+  # Release repositories: exactly the services of sources.json, immutable, encrypted with AES256.
   assert {
     condition     = toset(keys(aws_ecr_repository.release)) == toset(var.release_repositories)
     error_message = "The release repositories must be exactly the services of sources.json under svp-backend/ and svp-frontend/."
@@ -117,9 +117,9 @@ run "stg" {
 
   assert {
     condition = alltrue([for r in aws_ecr_repository.release :
-      length(r.encryption_configuration) == 1 && r.encryption_configuration[0].encryption_type == "KMS"
+      length(r.encryption_configuration) == 1 && r.encryption_configuration[0].encryption_type == "AES256"
     ])
-    error_message = "Every release repository must be encrypted with KMS (ECR.5)."
+    error_message = "Every release repository must be encrypted with AES256, not a customer managed key."
   }
 
   assert {
@@ -170,9 +170,9 @@ run "stg" {
 
   assert {
     condition = alltrue([for t in aws_ecr_repository_creation_template.cache :
-      t.image_tag_mutability == "MUTABLE" && t.encryption_configuration[0].encryption_type == "KMS"
+      t.image_tag_mutability == "MUTABLE" && t.encryption_configuration[0].encryption_type == "AES256"
     ])
-    error_message = "The cache templates must keep tags mutable and encrypt with KMS."
+    error_message = "The cache templates must keep tags mutable and encrypt with AES256."
   }
 
   assert {
@@ -188,9 +188,8 @@ run "stg" {
   assert {
     condition = [for s in data.aws_iam_policy_document.template.statement : [s.sid, toset(s.actions), length(s.resources)]] == [
       ["CreateCachedRepositories", toset(["ecr:CreateRepository", "ecr:TagResource"]), 5],
-      ["EncryptWithEcrKey", toset(["kms:CreateGrant", "kms:RetireGrant", "kms:DescribeKey"]), 1],
     ] && toset(data.aws_iam_policy_document.template.statement[0].resources) == toset([for p in keys(var.cache_upstreams) : "${var.repository_arn_prefix}/${p}/*"])
-    error_message = "The template role may create repositories under the five cache prefixes and use one key only."
+    error_message = "The template role may only create repositories under the five cache prefixes, with no KMS permission."
   }
 
   # Inspector: continuous enhanced scanning of the cached repositories, releases left out.

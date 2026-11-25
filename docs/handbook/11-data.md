@@ -137,7 +137,8 @@ email](../runbooks/session-stg-check-security.md#alarm-tới-email) của bướ
   - stg: thay đổi áp ngay; prd: thay đổi chờ cửa sổ bảo trì, `plan` hiện nó là đang chờ.
 - **Ở svp:** replication group `svp-<env>`, Valkey 9.1, cluster mode tắt, số node và loại node theo env; `transit_encryption_mode =
   "required"`; user group `svp-<env>` với một user mỗi client, access string mỗi user giới hạn db và tiền tố khoá (`local.users` của
-  `aws/modules/elasticache/main.tf`, cùng chữ với aclfile local của svp-backend); slow-log JSON tới `/aws/elasticache/svp-<env>/slow-log`.
+  `aws/modules/elasticache/main.tf`; AWS lưu `db=` ở cuối user và cuối mỗi selector); slow-log JSON tới
+  `/aws/elasticache/svp-<env>/slow-log`.
 - **Phí theo:** node-giờ theo loại node; dữ liệu client đi qua AZ khác; log gửi CloudWatch Logs theo GB.
 - **Cố ý tắt:** snapshot (dữ liệu dựng lại được từ service); cluster mode và ElastiCache Serverless (Serverless luôn chạy cluster
   mode, client phải khác client của local); AUTH token, xác thực IAM (thay bằng user RBAC); user `default` (ElastiCache tắt nó khi

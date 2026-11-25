@@ -3,15 +3,15 @@
 # for its ok path and one for each FAIL it names; apart from "quotas <env> request" no call of aws is a write; findings
 # keeps resource ids out of its output; promote calls no aws; --print reaches nothing.
 
-# Usage: aws/scripts/preflight-test.sh
+# Usage: aws/scripts/tests/preflight-test.sh
 #
 # The checks run sh -c '...' with their values as arguments ($1, $2, ...): expanded by that shell, not this one.
 # shellcheck disable=SC2016
 set -euo pipefail
 
-src=$(cd "$(dirname "$0")" && pwd)
-# shellcheck source=aws/scripts/testlib.sh
-. "$src/testlib.sh"
+src=$(cd "$(dirname "$0")/.." && pwd)
+# shellcheck source=aws/scripts/tests/testlib.sh
+. "$src/tests/testlib.sh"
 fake_aws
 # The fake of testlib answers one file per command key; this one in front of it picks the answer by a part of the call
 # (a quota code, an add-on, a filter), and writes the profile of each call to $log.profiles.
@@ -168,9 +168,12 @@ expect "quotas prd: the prd rows only (no Spot), all with anhnv-prd" \
 sel service-quotas_get-service-quota "--quota-code L-1216C47A" "46.0"
 expect "quotas prd: 46 vCPU on-demand is enough" sh -c 'bash "$1/preflight.sh" quotas prd >"$2" 2>&1 && grep -q "^ok    L-1216C47A .*: 46.0 (min 46)" "$2"' _ "$here" "$out"
 sel service-quotas_get-service-quota "--quota-code L-AMP1" "30.0"
-fails "quotas prd: AMP rule interval 30 against max 15" \
-  'L-AMP1 AMP rule evaluation interval (seconds): 30.0, needs max 15: run preflight.sh quotas prd request' run quotas prd
-sel service-quotas_get-service-quota "--quota-code L-AMP1" "15.0"
+expect "quotas prd: AMP rule interval 30 at the default quota is ok (max 30)" \
+  sh -c 'bash "$1/preflight.sh" quotas prd >"$2" 2>&1 && grep -qx "ok    L-AMP1 AMP rule evaluation interval (seconds): 30.0 (max 30)" "$2"' _ "$here" "$out"
+sel service-quotas_get-service-quota "--quota-code L-AMP1" "60.0"
+fails "quotas prd: AMP rule interval 60 against max 30" \
+  'L-AMP1 AMP rule evaluation interval (seconds): 60.0, needs max 30: run preflight.sh quotas prd request' run quotas prd
+sel service-quotas_get-service-quota "--quota-code L-AMP1" "30.0"
 SVP_GITOPS_DIR=$work/none run quotas prd 2>/dev/null && true
 expect "quotas prd without the NodePool file: note and the floor 16" \
   sh -c 'grep -q "^note  no limits.cpu in envs/prd/svp-cluster.yaml or platforms/eks/svp-cluster.yaml" "$1" && grep -q "^ok    L-1216C47A .*(min 16)" "$2"' _ "$err" "$out"
@@ -208,7 +211,8 @@ ans service-quotas_get-service-quota "10.0"
 ans service-quotas_list-requested-service-quota-change-history-by-quota ""
 ans service-quotas_request-service-quota-increase "r-9\tPENDING"
 run quotas prd request || true
-expect "quotas prd request: AMP interval asked for 15" grep -q 'request-service-quota-increase --service-code aps --quota-code L-AMP1 --desired-value 15 ' "$log"
+expect "quotas prd request: the AMP interval at 30 is not asked for" \
+  sh -c 'grep -q "^ok    L-AMP1 .*: 30.0 (max 30)" "$1" && ! grep -q "request-service-quota-increase --service-code aps" "$2"' _ "$out" "$log"
 sel_reset
 quotas_ok
 fails "quotas stg with SVP_AWS_STG_ACCOUNT_ID of another account" 'profile anhnv-stg is account .111111111111.' renv SVP_AWS_STG_ACCOUNT_ID=999999999999 bash "$here/preflight.sh" quotas stg
@@ -434,6 +438,32 @@ printf 'revision: %s\ngitopsRevision: %s\n' "$R" "$G" >"$p/src-gitops/envs/prd/c
 git -C "$p/src-gitops" commit -q -am pin
 expect "promote: fetches origin before reading origin/main" prun "$p"
 
+# --- plugin ---
+# plugin_run VERSION: plugin with a session-manager-plugin that prints VERSION.
+plugin_run() {
+  fake_cmd session-manager-plugin 'echo "$FAKE_PLUGIN_VERSION"'
+  : >"$log"
+  renv FAKE_PLUGIN_VERSION="$1" bash "$here/preflight.sh" plugin
+}
+plugin_run 1.2.896.0
+expect "plugin at the minimum: exits 0 and names the version" grep -q "^ok    session-manager-plugin 1.2.896.0 (at least 1.2.896)$" "$out"
+expect "plugin: calls no aws" sh -c '! grep -q "^aws " "$1"' _ "$log"
+expect "plugin above the minimum (1.2.1000.0, numbers not strings): exits 0" plugin_run 1.2.1000.0
+expect "plugin above the minimum (1.10.0.0): exits 0" plugin_run 1.10.0.0
+expect "plugin written as 1.2.896 without the fourth number: exits 0" plugin_run 1.2.896
+fails "plugin 1.2.536.0 is below the minimum" 'session-manager-plugin 1.2.536.0 is below 1.2.896.*install the current package' plugin_run 1.2.536.0
+fails "plugin 1.2.89.0 is below the minimum (89 is not 890)" 'session-manager-plugin 1.2.89.0 is below 1.2.896' plugin_run 1.2.89.0
+fails "plugin that prints no version" "printed '', not a version number" plugin_run ""
+# On PATH but failing (exit 3): reported as a failed run, not as missing.
+fake_cmd session-manager-plugin 'exit 3'
+fails "plugin on PATH that exits non-zero: says it failed, not that it is missing" \
+  'session-manager-plugin --version failed (exit 3).*reinstall' renv bash "$here/preflight.sh" plugin
+expect "plugin that exits non-zero: not reported as missing" sh -c '! grep -q "no session-manager-plugin on PATH" "$1"' _ "$err"
+rm -f "$bin/session-manager-plugin"
+# PATH keeps the fakes first and only the system directories after: a plugin installed on this machine is out of reach.
+fails "no plugin on PATH: names the minimum and the install page" 'no session-manager-plugin on PATH.*install.*at least 1.2.896' \
+  renv PATH="$bin:/usr/bin:/bin" bash "$here/preflight.sh" plugin
+
 # --- --print ---
 for args in "quotas stg" "quotas prd request" "freetier stg" "eks-upgrade prd"; do
   quotas_ok
@@ -450,6 +480,8 @@ expect "--print findings stg: three profiles, calls no aws, creates no file" \
   sh -c 'bash "$1/preflight.sh" --print findings stg >"$2" 2>&1 && test ! -s "$3" && grep -q "AWS_PROFILE=anhnv-backup-ro aws backup" "$2" && grep -q "AWS_PROFILE=anhnv-security-ro aws guardduty" "$2" && grep -q "AWS_PROFILE=anhnv-security-ro aws securityhub" "$2"' _ "$here" "$out" "$log"
 expect "--print promote: shows git, calls nothing" \
   sh -c 'SVP_BACKEND_DIR=$1/backend SVP_GITOPS_DIR=$1/gitops bash "$2/preflight.sh" --print promote >"$3" 2>&1 && grep -q "^+ git -C .*gitops fetch origin" "$3"' _ "$work/p1" "$here" "$out"
+expect "--print plugin: shows the version command, runs nothing" \
+  sh -c 'rm -f "$3/session-manager-plugin"; bash "$1/preflight.sh" --print plugin >"$2" 2>&1 && grep -qx "+ session-manager-plugin --version" "$2"' _ "$here" "$out" "$bin"
 expect "no subcommand: usage" sh -c '! bash "$1/preflight.sh" >/dev/null 2>"$2" && grep -q "^FAIL  usage:" "$2"' _ "$here" "$err"
 
 finish

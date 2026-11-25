@@ -26,8 +26,3 @@ output "cache_prefixes" {
   description = "Repository prefixes of the pull through cache rules (ghcr, docker-hub, quay, k8s, ecr-public): nodes import and create repositories under <prefix>/*."
   value       = keys(aws_ecr_pull_through_cache_rule.this)
 }
-
-output "kms_key_arn" {
-  description = "ARN of the KMS key alias/svp-<env>-ecr that encrypts every repository of the registry."
-  value       = aws_kms_key.ecr.arn
-}

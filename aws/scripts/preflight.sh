@@ -1,16 +1,15 @@
 #!/usr/bin/env bash
-# The reads that come before and during a session, in place of the commands typed from the runbooks: quotas (EC2 and
-# AMP, the one subcommand that can write, and only as "quotas <env> request"), freetier (Free plan, CloudFront plans),
-# eks-upgrade (versions of the next EKS minor), findings (security findings and the backup copy of a session) and
-# promote (the git checks of the prd promote gate). Every other command only reads.
+# The reads before and during a session, in place of commands typed from the runbooks: quotas (EC2 and AMP; the only
+# subcommand that can write, as "quotas <env> request"), freetier (Free plan, CloudFront plans), eks-upgrade (next EKS
+# minor), findings (security findings, backup copy of a session), promote (git checks of the prd promote gate) and
+# plugin (session-manager-plugin version, which carries the tunnel to the API). Every other command only reads.
 
 # Each check prints one line, ok, FAIL or note; a FAIL does not stop the other checks of quotas, freetier, findings and
-# promote. findings runs under profiles other than the environment's (profiles.sh), promote calls no aws.
+# promote. findings runs under profiles other than the environment's (profiles.sh), promote and plugin call no aws.
 
 # Usage: aws/scripts/preflight.sh [--print] quotas stg|prd [request]
-#        aws/scripts/preflight.sh [--print] freetier|eks-upgrade stg|prd
-#        aws/scripts/preflight.sh [--print] findings stg|prd      (SVP_SESSION_DIR of the session)
-#        aws/scripts/preflight.sh [--print] promote
+#        aws/scripts/preflight.sh [--print] freetier|eks-upgrade|findings stg|prd   (findings: SVP_SESSION_DIR set)
+#        aws/scripts/preflight.sh [--print] promote|plugin
 set -euo pipefail
 
 # shellcheck source=aws/scripts/lib.sh
@@ -18,7 +17,7 @@ set -euo pipefail
 # shellcheck source=aws/scripts/profiles.sh
 . "$(dirname "$0")/profiles.sh"
 printing && shift
-usage="usage: $(basename "$0") [--print] quotas stg|prd [request] | freetier|eks-upgrade|findings stg|prd | promote"
+usage="usage: $(basename "$0") [--print] quotas stg|prd [request] | freetier|eks-upgrade|findings stg|prd | promote | plugin"
 sub=${1:-}
 [ $# -ge 1 ] || fail "$usage"
 shift
@@ -30,7 +29,7 @@ case $sub:$# in
     case $mode in '' | request) ;; *) fail "$usage" ;; esac
     ;;
   freetier:1 | eks-upgrade:1 | findings:1) env_arg "$1" ;;
-  promote:0) ;;
+  promote:0 | plugin:0) ;;
   *) fail "$usage" ;;
 esac
 
@@ -68,15 +67,15 @@ flat() { tr '\t\n' '  ' | sed 's/ *$//'; }
 
 # The quotas the runbooks read, one line each: environment, service code, quota code (- for the AMP rule interval, whose
 # code is looked up by name), min or max, the figure, then the name. A figure cpu+A:N is A plus limits.cpu of the
-# NodePool in svp-gitops, at least N (cpu:N: A is 0). The floors are the strictest of those in docs/runbooks. stg
-# evaluates its AMP rules every 30 s, the default quota, so it runs without a Support case; prd keeps 15 s.
+# NodePool in svp-gitops, at least N (cpu:N: A is 0). The floors are the strictest of those in docs/runbooks. stg and
+# prd evaluate their AMP rules every 30 s, the default quota, so they run without a Support case.
 quota_table='stg ec2 L-1216C47A min 10 vCPU on-demand (Standard)
 stg ec2 L-34B43A08 min cpu:10 vCPU Spot (Standard)
 stg ec2 L-0263D0A3 min 1 Elastic IP
 stg aps - max 30 AMP rule evaluation interval (seconds)
 prd ec2 L-1216C47A min cpu+14:16 vCPU on-demand (Standard)
 prd ec2 L-0263D0A3 min 3 Elastic IP
-prd aps - max 15 AMP rule evaluation interval (seconds)'
+prd aps - max 30 AMP rule evaluation interval (seconds)'
 
 # quota_need FIGURE: the number a figure of quota_table stands for. limits.cpu is read on origin/main of the gitops
 # clone, from the environment's overlay or else the base file of the platform, as Argo CD merges them.
@@ -492,6 +491,38 @@ promote() {
   [ "$failures" -eq 0 ] || exit 1
   chk gate_chart
   chk gate_media
+}
+
+# --- plugin ---
+
+# The oldest session-manager-plugin whose tunnel held for a whole session; 1.2.536 dropped it four times.
+ssm_plugin_min=1.2.896
+
+# version_ge A B: dotted number A is at least B, compared number by number (1.2.10 is above 1.2.9); a missing part is 0.
+version_ge() {
+  local IFS=. i a b
+  read -r -a a <<<"$1"
+  read -r -a b <<<"$2"
+  for i in 0 1 2 3; do
+    [ $((10#${a[i]:-0})) -eq $((10#${b[i]:-0})) ] && continue
+    [ $((10#${a[i]:-0})) -gt $((10#${b[i]:-0})) ]
+    return
+  done
+}
+
+plugin() {
+  local have
+  step "preflight.sh plugin"
+  printing || command -v session-manager-plugin >/dev/null ||
+    fail "no session-manager-plugin on PATH: install the package of https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html (at least $ssm_plugin_min)"
+  have=$(run_ session-manager-plugin --version 2>/dev/null) ||
+    fail "session-manager-plugin --version failed (exit $?): reinstall the package of https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html (at least $ssm_plugin_min)"
+  printing && return 0
+  have=$(tr -d '[:space:]' <<<"$have")
+  [[ $have =~ ^[0-9]+(\.[0-9]+)*$ ]] || fail "session-manager-plugin --version printed '$have', not a version number"
+  version_ge "$have" "$ssm_plugin_min" ||
+    fail "session-manager-plugin $have is below $ssm_plugin_min, the oldest whose tunnel held (older ones dropped it): install the current package of https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html"
+  ok "session-manager-plugin $have (at least $ssm_plugin_min)"
 }
 
 "${sub//-/_}"

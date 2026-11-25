@@ -27,7 +27,7 @@ buổi chỉ `svp-security` ghi, và account env bật lại trong buổi bằng
 | mọi account của `local.accounts` (`aws/baseline/main.tf`), kể cả management | `ap-southeast-1` (nhà), `us-east-1` | sống lâu | `aws/baseline` |
 | mọi account, thêm | `us-east-2`, `us-west-2` (chỉ rule đăng nhập root) | sống lâu | `aws/baseline` |
 | management, thêm | `sso_region` (rule Identity Center) | sống lâu | `aws/baseline` |
-| `svp-stg`, `svp-prd` | `ap-southeast-1` (CMK EBS) | sống lâu | `aws/baseline` |
+| `svp-stg`, `svp-prd` | `ap-southeast-1` (CMK EBS không còn là key mặc định) | sống lâu | `aws/baseline` |
 
 ## Kiến trúc
 
@@ -44,8 +44,8 @@ assume `OrganizationAccountAccessRole` của account đó. Mỗi account đúng 
 | Thành phần | Ở đâu | Làm gì |
 | --- | --- | --- |
 | S3 Block Public Access cấp account | mọi account, toàn account | Bốn cờ `true`: chặn ACL và policy public ở mọi bucket |
-| EBS mã hoá mặc định | mọi account, hai region | Volume mới luôn mã hoá; key mặc định `aws/ebs`, trừ stg, prd ở region nhà |
-| CMK EBS `alias/svp-ebs` | `svp-stg`, `svp-prd`, `ap-southeast-1` | Key mặc định của EBS ở region nhà |
+| EBS mã hoá mặc định | mọi account, hai region | Volume mới luôn mã hoá bằng key mặc định `aws/ebs` |
+| CMK EBS `alias/svp-ebs` | `svp-stg`, `svp-prd`, `ap-southeast-1` | Không mã hoá volume mới; giữ tới khi không volume, snapshot nào dùng |
 | Config recorder, delivery channel `default` | account có `config_recording` `always`, hai region | Ghi cấu hình liên tục, giao về bucket `svp-config-…` của Log Archive |
 | Rule `svp-security-*`, role `svp-security-forwarder` | bus mặc định của mọi account | Chuyển sự kiện bảo mật sang bus `svp-security-events` |
 | SCP `svp-protect-baseline` | gắn root của tổ chức (`aws/org`) | Chặn mọi principal của account thành viên đổi các thứ trên, trừ `OrganizationAccountAccessRole` |
@@ -91,11 +91,12 @@ RCP `svp-data-perimeter` chặn ([03. Tổ chức](03-org.md#resource-control-po
 ### Amazon EBS encryption by default
 
 - **Làm gì:** mỗi region của account có cài đặt bắt mọi volume và snapshot copy mới mã hoá, kèm key mặc định. Ví dụ đời thực:
-  - Node mới của node group stg nhận volume gốc mã hoá bằng `alias/svp-ebs` mà launch template không nêu key.
+  - Node mới của node group stg nhận volume gốc mã hoá bằng `aws/ebs` mà launch template không nêu key.
   - `ec2 disable-ebs-encryption-by-default` ở stg bị SCP từ chối (`UnauthorizedOperation`), khớp `svp-security-denied-storage`.
   - Control Security Hub `EC2.7`: EBS mã hoá mặc định chưa bật ở một region.
-- **Ở svp:** bật ở region nhà và `us-east-1` mọi account. Key mặc định ở region nhà là CMK EBS ở stg, prd (`aws_ebs_default_kms_key`); mọi
-  chỗ khác `aws/ebs`.
+- **Ở svp:** bật ở region nhà và `us-east-1` mọi account, key mặc định `aws/ebs` ở mọi nơi (không `aws_ebs_default_kms_key` nào): volume
+  của node, Karpenter, bastion sống trong một buổi, không chia sẻ chéo account, nên CMK không thêm khả năng nào
+  ([ADR-0087](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0087-kms-key-consolidation.md)).
 - **Phí theo:** không phí riêng; trả request KMS của key đã chọn.
 
 ### AWS KMS (CMK EBS)
@@ -105,12 +106,14 @@ RCP `svp-data-perimeter` chặn ([03. Tổ chức](03-org.md#resource-control-po
   - Service-linked role AutoScaling của node group tạo grant trên key khi node khởi động, đi qua EC2 của region nhà.
   - `kms disable-key-rotation` trên key bị SCP từ chối, khớp `svp-security-denied-storage`.
   - Snapshot mã hoá bằng CMK chia sẻ được sang account khác khi key policy cho phép; snapshot mã hoá bằng `aws/ebs` thì không.
-- **Ở svp:** `aws_kms_key.stg_ebs`, `aws_kms_key.prd_ebs` ở `ap-southeast-1`, alias `alias/svp-ebs`, xoay mỗi năm, chờ xoá 30 ngày. Key
+- **Ở svp:** `aws_kms_key.stg_ebs`, `aws_kms_key.prd_ebs` ở `ap-southeast-1`, alias `alias/svp-ebs`, xoay mỗi năm, chờ xoá 30 ngày;
+  không còn là key mặc định của EBS, giữ tới khi lệnh kiểm của
+  [`kms-consolidation.md`](../runbooks/kms-consolidation.md#bước-6-kiểm-key-không-còn-ai-dùng) không thấy volume, snapshot nào dùng. Key
   policy theo khuôn của `aws/ebs`: IAM của account quản key; mọi principal của account dùng key khi đi qua EC2 của region nhà
   (`kms:CallerAccount`, `kms:ViaService`), nên node group, Karpenter, bastion không cần thêm IAM. Tag `Stack=security-baseline` và alias
   là thứ SCP `svp-protect-baseline` dựa vào để chặn sửa key.
 - **Phí theo:** key-tháng (tăng ở hai lần xoay đầu), số request.
-- **Cố ý tắt:** CMK EBS ở account khác stg, prd và ở `us-east-1`: chỉ region nhà của hai env chạy EC2.
+- **Cố ý tắt:** dùng key này làm mặc định EBS: mọi account dùng `aws/ebs`. Key giữ ở stg, prd tới PR gỡ, không ở `us-east-1`.
 
 ### AWS Config (recorder)
 
@@ -143,7 +146,7 @@ RCP `svp-data-perimeter` chặn ([03. Tổ chức](03-org.md#resource-control-po
 
 | Khoản | Đơn vị tính | Giữa các buổi | Trong buổi | Nguồn |
 | --- | --- | --- | --- | --- |
-| Hai CMK EBS | key-tháng, request | 1 USD mỗi key mỗi tháng | như giữa buổi | ADR-0078 phụ lục, dòng "Baseline account" |
+| Hai CMK EBS | key-tháng, request | 1 USD mỗi key mỗi tháng tới khi gỡ, 0 sau đó | như giữa buổi | ADR-0078 phụ lục, dòng "Baseline account" |
 | Config recorder (cùng khoản với bảng chương 05) | configuration item, đánh giá rule | ~0,3 USD mỗi tháng ở `svp-security` | 2–4,5 USD mỗi buổi một env bật `config_recording` | ADR-0078 phụ lục "Tháng không buổi"; ADR-0060 phụ lục §12 "Thêm mỗi buổi" |
 | EventBridge chéo account | triệu sự kiện | không có số đo | không có số đo | ADR-0060 phụ lục §12 "Bảng giá" |
 | S3 Block Public Access, EBS mã hoá mặc định | — | 0 | 0 | trang giá của dịch vụ |
@@ -161,8 +164,8 @@ của cả lab ở chương [15. Chi phí](15-cost.md). Nguồn:
 | Muốn xem | Account | Region | Vào đâu | Trạng thái mong đợi |
 | --- | --- | --- | --- | --- |
 | Block Public Access | mọi account | toàn cục | S3 → Block Public Access settings for this account | Bốn mục On |
-| EBS mã hoá mặc định | `svp-stg`, `svp-prd` | `ap-southeast-1` | EC2 → Account attributes → Data protection and security | Always encrypt new EBS volumes; key `alias/svp-ebs` |
-| CMK EBS | `svp-stg`, `svp-prd` | `ap-southeast-1` | KMS → Customer managed keys → `alias/svp-ebs` | Enabled; xoay khoá tự động bật |
+| EBS mã hoá mặc định | `svp-stg`, `svp-prd` | `ap-southeast-1` | EC2 → Account attributes → Data protection and security | Always encrypt new EBS volumes; key `alias/aws/ebs` |
+| CMK EBS | `svp-stg`, `svp-prd` | `ap-southeast-1` | KMS → Customer managed keys → `alias/svp-ebs` | Enabled; xoay khoá tự động bật; không còn là key mặc định |
 | Recorder | `svp-security` | mỗi region | Config → Settings | Recording on, Continuous; account `off`: không recorder |
 | Rule chuyển sự kiện | mọi account | `ap-southeast-1`, `us-east-1` | EventBridge → Rules, bus `default` | Rule `svp-security-*` Enabled |
 
@@ -200,7 +203,7 @@ Hub không chấm được control dựa trên rule Config. Cờ và cái giá:
 | Lựa chọn của svp | Cái giá | Phương án khác | Khi nào chọn nó |
 | --- | --- | --- | --- |
 | Terraform, mỗi account một provider và một lời gọi module | Thêm account là thêm provider, lời gọi bằng tay | CloudFormation StackSets, AWS Control Tower và customization | Nhiều account, tự cấp account (Account Factory) |
-| CMK EBS ở stg, prd | Phí key-tháng; GuardDuty Malware Protection for EC2 không quét được volume: grant cho account dịch vụ của GuardDuty (ngoài tổ chức) bị RCP `svp-data-perimeter` chặn (ADR-0059 §4); RCP không áp lên key AWS quản lý nên volume dùng `aws/ebs` quét được | `aws/ebs` | Không cần key policy riêng, không chia sẻ snapshot |
+| `aws/ebs` ở stg, prd | Không key policy riêng; snapshot không chia sẻ chéo account được | CMK EBS: phí key-tháng; grant cho account dịch vụ của GuardDuty (ngoài tổ chức) bị RCP `svp-data-perimeter` chặn (ADR-0059 §4) nên Malware Protection for EC2 không quét volume | Cần chia sẻ snapshot EBS chéo account hay key policy riêng |
 | Recorder `CONTINUOUS`, theo cờ | Account `off` không có lịch sử cấu hình | Ghi hằng ngày, hay `recordingModeOverrides` theo loại | Tài nguyên sống lâu, ít đổi |
 | Phòng ngừa bằng baseline và SCP, không tự sửa | Cài đặt lệch ở management chỉ thấy qua Security Hub | Rule Config kèm remediation tự động (SSM Automation) | Nhiều account, cần tự sửa lệch |
 | Rule `admin-*` tắt ở stg, prd | Đổi IAM, KMS, S3 ở env không có thư | Bật ở mọi account, lọc theo phiên | Env ít đổi, có người đọc thư |
@@ -208,7 +211,7 @@ Hub không chấm được control dựa trên rule Config. Cờ và cái giá:
 ## Liên hệ đề SAP
 
 - "Skill 2.2.1: Implement encryption at rest by using customer managed keys and automatic key rotation (for example, by using AWS KMS)."
-  CMK EBS `alias/svp-ebs` xoay mỗi năm, làm key mặc định của EBS.
+  svp chỉ giữ CMK ở chỗ cần key policy riêng hay dùng chéo account (state, vault backup, RDS); EBS dùng `aws/ebs`.
 - "Skill 2.3.4: Design policy enforcement by using SCPs and RCPs." SCP `svp-protect-baseline` giữ baseline, miễn đúng
   `OrganizationAccountAccessRole`.
 - "Skill 2.3.2: Implement centralized logging and configuration management solutions, including solutions for AI model invocations and
@@ -233,7 +236,7 @@ Hub không chấm được control dựa trên rule Config. Cờ và cái giá:
   lặp được qua provider. `us-east-1` là region phụ cố định: IAM, Organizations ghi sự kiện CloudTrail ở đó.
 - Key mặc định của EBS phải cùng region với cài đặt (precondition của module). Bỏ `ebs_kms_key_arn` thì Terraform xoá
   `aws_ebs_default_kms_key`, EC2 trở về `aws/ebs`. Đổi key mặc định không chạm volume đã có; stg, prd dựng mới mỗi buổi nên volume của buổi
-  sau dùng CMK.
+  sau dùng key mặc định mới.
 - Config: recorder chỉ chạy khi region đã có delivery channel (`depends_on`); Config giao object bằng principal `config.amazonaws.com`,
   bucket policy của Log Archive cho phép
   ([quyền bucket](https://docs.aws.amazon.com/config/latest/developerguide/s3-bucket-policy.html)). Loại toàn cục chỉ ghi ở region nhà
@@ -256,5 +259,7 @@ Làm và tra cứu:
 - [`paid-features.md`](../runbooks/paid-features.md#awsbaseline): đổi cờ `config_recording` sau khi đã áp.
 - [ADR-0059](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0059-org-structure-guardrails.md) §2, §9: root từ management,
   baseline, CMK EBS; key policy đủ ở phụ lục §9.
+- [ADR-0087](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0087-kms-key-consolidation.md): EBS về `aws/ebs`, CMK chỉ ở
+  chỗ cần khả năng mà key của AWS không có.
 - [ADR-0060](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0060-org-detection-logging.md) §4, §10: Config, rule chuyển sự
   kiện.

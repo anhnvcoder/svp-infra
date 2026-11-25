@@ -3,15 +3,15 @@
 # the region of sso_region, the account checked first, a member added once, ids never printed; a missing user, group
 # output or sso_region stops it; --print reaches nothing.
 
-# Usage: aws/scripts/platform-member-test.sh
+# Usage: aws/scripts/tests/platform-member-test.sh
 #
 # The checks run sh -c '...' with their values as arguments ($1, $2, ...): expanded by that shell, not this one.
 # shellcheck disable=SC2016
 set -euo pipefail
 
-src=$(cd "$(dirname "$0")" && pwd)
-# shellcheck source=aws/scripts/testlib.sh
-. "$src/testlib.sh"
+src=$(cd "$(dirname "$0")/.." && pwd)
+# shellcheck source=aws/scripts/tests/testlib.sh
+. "$src/tests/testlib.sh"
 fake_aws
 here=$work/infra/aws/scripts
 mkdir -p "$here" "$work/infra/aws/org"

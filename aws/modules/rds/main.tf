@@ -50,9 +50,12 @@ resource "aws_db_parameter_group" "this" {
   description = "PostgreSQL ${var.engine_major_version} of ${var.name}, TLS only, slow statements and sessions logged"
   family      = "postgres${var.engine_major_version}"
 
+  # 1 is also the family default from PostgreSQL 15, and AWS keeps the default's pending-reboot method while the value
+  # stays the same; immediate would show as a change on every plan. Nothing waits for a reboot: the value never changes.
   parameter {
-    name  = "rds.force_ssl"
-    value = "1"
+    name         = "rds.force_ssl"
+    value        = "1"
+    apply_method = "pending-reboot"
   }
 
   # What an incident needs to be read later: statements and autovacuum runs of 1 s or more, lock waits past

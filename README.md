@@ -112,7 +112,7 @@ Code trỏ ghi chú thiết kế bằng dòng `Design notes: README.md`. File n�
 | Code | Ghi chú thiết kế |
 | --- | --- |
 | `Makefile`, `.trivyignore.yaml` | [`docs/reference/checks.md`](docs/reference/checks.md) |
-| `aws/scripts/*.sh` | [`docs/reference/operations.md`](docs/reference/operations.md) (script, bảng env, `tf.sh`); thứ tự gỡ, đường backup: [chương 00](docs/handbook/00-tong-quan.md#các-đường-của-một-buổi) |
+| `aws/scripts/*.sh` | [`docs/reference/operations.md`](docs/reference/operations.md) (script, bảng env, `tf.sh`); thứ tự gỡ, đường backup: [chương 00](docs/handbook/00-overview.md#các-đường-của-một-buổi) |
 | `.github/workflows/*.yml`, `ci/*.sh`, `infracost.yml`, `infracost-usage.yml` | [14. CI](docs/handbook/14-ci.md), [`docs/reference/ci.md`](docs/reference/ci.md) |
 
 **Khoá Infracost** (`ci/infracost.sh` đòi `INFRACOST_API_KEY`): đăng ký, đặt vào secret và xoay theo runbook

@@ -30,7 +30,8 @@ Thiết kế nằm ở các ADR của repo code, mỗi cái một phần của b
   (Kafka là Amazon MSK, Valkey là ElastiCache; prd mất một AZ không mất event đã xác nhận)
 - [ADR-0051](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0051-dns-prd-apex.md) (zone của mỗi env)
 - [ADR-0052](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0052-cloudfront-flat-rate-free.md)
-  (web ACL WAF; gói flat-rate Free chỉ ở media của stg)
+  (web ACL WAF), [ADR-0084](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0084-stg-msk-media-sizing.md) (media của cả
+  hai env pay-as-you-go, không gói CloudFront)
 - [ADR-0056](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0056-eks-platform-ha.md)
   (Karpenter, Envoy và Kyverno HA, trải zone)
 - [ADR-0057](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0057-postgres17-verify-full.md)
@@ -66,6 +67,10 @@ khi năm bước của mục [Kết thúc buổi](#kết-thúc-buổi) (gỡ, qu
 ```sh
 aws/scripts/session.sh --print prd                 # mọi lệnh script của buổi, theo thứ tự, không chạy gì
 ```
+
+Đường chính là ba lệnh `aws/scripts/session.sh up prd`, `check prd`, `down prd`, như mục đầu của [trang chủ buổi stg](session-stg.md):
+`up prd` mở bằng hai bước tay của trang này (đổi cờ, cổng promote) và `preflight.sh promote`, `down prd` thêm bước tay xoá final snapshot
+và trả cờ ([`session.sh`](../reference/scripts.md#sessionsh)). Bảng [Thứ tự](#thứ-tự) là chuỗi mà nó chạy.
 
 ```mermaid
 flowchart LR
@@ -161,7 +166,8 @@ Account dùng chung giữ giá trị của file suốt buổi. Buổi kết thú
     vCPU on-demand chuẩn (`L-1216C47A`) cần ≥ 14 vCPU cộng `limits.cpu` của NodePool prd (`envs/prd/svp-cluster.yaml` của `svp-gitops`,
     số ở ADR-0056 §2): nhóm node hệ thống tới `system_node_max_size` 6 node `m7g.large` × 2 vCPU, bastion `t4g.nano` 2 vCPU
     ([trang loại instance của AWS](https://aws.amazon.com/ec2/instance-types/)); số cần ở `quota_table` của script.
-- [ ] **Công cụ.** Trên máy, ngoài các công cụ của stg: `gh` đã đăng nhập.
+- [ ] **Công cụ.** Trên máy, ngoài các công cụ của stg (điều kiện 3 của [trang chủ buổi stg](session-stg.md#điều-kiện-trước), cả
+  `session-manager-plugin` từ 1.2.896, `aws/scripts/preflight.sh plugin`): `gh` đã đăng nhập.
 - [ ] **File cấu hình prd.** `aws/backend-prd.hcl` và `aws/envs/prd/prd.auto.tfvars` như [điều kiện 4, 5 của
       stg](session-stg.md#điều-kiện-trước) (root `aws/accounts/prd`; `domain = "aws.<domain>"`: tên zone prd, web ở
   đỉnh, API ở `api.aws.<domain>`; `alarm_email` là hộp thư nhận alarm). Root env đọc id workspace AMG `svp-prd` từ tham số SSM
@@ -191,11 +197,14 @@ Account dùng chung giữ giá trị của file suốt buổi. Buổi kết thú
   `DS` ở DNS cha); file có sẵn từ trước còn dòng `acme_email` thì xoá như điều kiện 5 của stg.
 - [ ] **Nền tảng managed đã áp** theo [`platform-setup.md`](platform-setup.md#thứ-tự-áp-lần-đầu) tới hết bước (9) cho account prd, như
   [điều kiện 8 của stg](session-stg.md#điều-kiện-trước): registry, cache có credential, AMP, log group
-  `/svp/prd/otel`, quota chu kỳ luật 15 s, riêng prd vì stg chạy 30 s với quota mặc định (AMG `svp-prd` có từ bước đổi cờ trước
-  buổi); role `svp-ci-ecr-promote` có, nên `promote-prd` của cổng dưới chép được image vào ECR prd.
+  `/svp/prd/otel` (luật AMP chạy 30 s như stg, quota mặc định đạt, không case Support:
+  [ADR-0086](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0086-amp-rule-interval-prd.md); AMG `svp-prd` có từ bước đổi
+  cờ trước buổi); role `svp-ci-ecr-promote` có, nên `promote-prd` của cổng dưới chép được image vào ECR prd.
 - [ ] **Backup đã áp** theo [`backup-setup.md`](backup-setup.md#thứ-tự-áp-lần-đầu), như [điều kiện 10 của
       stg](session-stg.md#điều-kiện-trước), với Backup policy `svp-backup-prd` gắn OU `Prod`, vault
   `svp-prd-copy`, vault `svp-prd` cùng role `svp-prd-backup` và opt-in của `aws/accounts/prd`.
+- [ ] **Đã gộp key KMS.** Đã chạy xong [`kms-consolidation.md`](kms-consolidation.md) (bước 1–5) cho prd: code bỏ quyền KMS của các
+  role, nên workspace AMP còn mã hoá bằng CMK thì remote write, query và ACK gặp `403`.
 - [ ] **Cờ prd ở giá trị production.** Mục [Đổi cờ prd trước buổi](#đổi-cờ-prd-trước-buổi) đã xong. Kiểm (chỉ đọc, không chạm account):
 
     ```sh
@@ -355,7 +364,8 @@ Loại: `lõi`.
 
 Theo thứ tự, mỗi bước xong mới sang bước sau:
 
-1. **Destroy root gitops rồi root env** (bước 20–27, tunnel còn mở tới hết bước 22).
+1. **Destroy root gitops rồi root env** (bước 20–27, tunnel còn mở tới hết bước 22). Root gitops: `5 to destroy` như stg, vì sao ở
+   mục [21–22 của buổi stg](session-stg-teardown.md#2122-gỡ-root-gitops).
    - **Bảo vệ của prd được nhấc trước.** Bước 23 đọc `terraform state list` của `aws/envs/prd` rồi plan với `prd.tfvars` và
      `teardown.tfvars`, chỉ nhắm (`-target`) DB instance, ALB edge và bucket có trong state. Đọc `prd-env-teardown-plan.txt`: chỉ
      `to change`, deletion protection của RDS và của ALB `svp-prd-edge` về `false`, `force_destroy` của bucket; cảnh báo "Resource
@@ -447,7 +457,8 @@ Theo thứ tự, mỗi bước xong mới sang bước sau:
      key của nó; registry ECR, rule và repo của cache, OIDC provider, role CI, workspace AMP, log group `/svp/prd/otel`, workspace AMG và
      tham số SSM `/svp/prd/grafana-workspace-id` của nó (cờ `managed_grafana` là `always` theo điều kiện **Cờ prd ở giá trị production**;
      đổi cờ về giá trị rẻ sau buổi xoá chúng), key của chúng; vault `svp-prd`, role `svp-prd-backup` và key của vault);
-     `Stack=security-baseline` (CMK EBS); và `pending deletion` (KMS key của root env: RDS, MSK, alarm, Secrets của EKS; 7 ngày).
+     `Stack=security-baseline` (CMK EBS cũ, giữ tới PR gỡ); và `pending deletion` (KMS key của root env: RDS, MSK, alarm, Secrets
+     của EKS; 7 ngày).
      Không endpoint interface, không rule groups namespace của AMP.
    - **Không được còn:** dòng MSK, ElastiCache, `AmazonMSK_*`, log group `/aws/msk/svp-prd` (phép kiểm (f) của ADR-0053); instance, launch
      template, instance profile, hàng đợi SQS hay rule EventBridge nào của Karpenter; queue MediaConvert `svp-prd`, role
@@ -502,6 +513,8 @@ trị rẻ); chạy cả khi buổi dừng sớm. Destroy kẹt hay tài nguyên
 prd](#cổng-promote-prd-trước-mọi-lệnh-tốn-tiền)).
 - **Bước dựng đỏ** (1–15): trang dựng, mục của bước đó ([`session-prd-deploy.md`](session-prd-deploy.md)); apply bước 9 đỏ thì vẫn gỡ theo
   bẫy ở bước 1 của [Gỡ, quét sót, trả cờ](#gỡ-quét-sót-trả-cờ).
+- **Lỗi gặp giữa buổi mà một lần sửa tay gỡ được** (association SCRAM gắn dở, tunnel rớt, Application đứng lâu, `409` của ACK ở AMP,
+  `403` của query AMP, zsh): bảng của mục [Khi một bước đỏ của buổi stg](session-stg.md#khi-một-bước-đỏ), với `prd`, `anhnv-prd`.
 - **`Error acquiring the state lock`** kèm Lock ID sau một lệnh `terraform` trần bị ngắt: [Khoá state
   kẹt](../reference/operations.md#khoá-state-kẹt).
 - **Destroy kẹt, `sweep.sh` còn dòng sót:** [mục Destroy kẹt và Lệnh xoá tay theo loại của trang chủ buổi stg](session-stg.md#destroy-kẹt)

@@ -40,11 +40,6 @@ output "grafana_url" {
   }
 }
 
-output "kms_key_arn" {
-  description = "ARN of the key `alias/svp-<env>-observability`, for the Collector's permission to write the encrypted log group."
-  value       = aws_kms_key.observability.arn
-}
-
 output "spans_retention_command" {
   description = "Command the learner runs once per account, after X-Ray has created the log group aws/spans, to set its retention to span_retention_days: Terraform cannot create or adopt a log group whose name starts with aws/."
   value       = "AWS_PROFILE=anhnv-${var.env} aws logs put-retention-policy --log-group-name aws/spans --retention-in-days ${var.span_retention_days} --region ${local.region}"

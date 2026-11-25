@@ -390,6 +390,11 @@ run "stg_values" {
   }
 
   assert {
+    condition     = { for p in aws_db_parameter_group.this.parameter : p.name => "${p.value}/${p.apply_method}" if p.name == "rds.force_ssl" } == { "rds.force_ssl" = "1/pending-reboot" } && alltrue([for p in aws_db_parameter_group.this.parameter : p.apply_method != "pending-reboot" if p.name != "rds.force_ssl"])
+    error_message = "rds.force_ssl must be 1 with the pending-reboot method AWS keeps for its default, and every other parameter the provider default immediate."
+  }
+
+  assert {
     condition     = toset(keys(aws_cloudwatch_metric_alarm.this)) == toset(["rds-storage-low", "rds-txid-wraparound", "rds-cpu-high", "rds-memory-low", "rds-connections-high", "rds-db-load-high", "rds-read-latency-high", "rds-write-latency-high"])
     error_message = "The module must make every alarm of the RDS table, and no other."
   }

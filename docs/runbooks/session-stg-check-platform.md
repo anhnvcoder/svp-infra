@@ -159,7 +159,8 @@ AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp get authorizationpolicies
 ```
 
 Mong, theo thứ tự: node của nhóm hệ thống (cột `nodepool` trống) và node Karpenter; `0` (istiod gỡ taint khởi động của node Karpenter khi
-istio-cni và ztunnel Ready trên node đó; node còn taint là mesh chưa sẵn sàng ở đó); Deployment `istiod` `2/2`, DaemonSet `istio-cni-node`
+istio-cni và ztunnel Ready trên node đó; node còn taint là mesh chưa sẵn sàng ở đó, đọc theo bẫy của [Xem Argo CD trong lúc
+chờ](session-stg-deploy.md#xem-argo-cd-trong-lúc-chờ), không gỡ taint bằng tay); Deployment `istiod` `2/2`, DaemonSet `istio-cni-node`
 và `ztunnel` có `DESIRED`, `READY` bằng số node của lệnh đầu; waypoint `2/2` và PDB `MIN AVAILABLE 1`; mọi pod `Running` của `svp` và hai
 pod Envoy có `enabled`; mỗi release một PeerAuthentication `STRICT`; mỗi release một AuthorizationPolicy, bốn release gRPC thêm
 `<release>-waypoint`. Dán cả tám output. Khác mong đợi: không chạy thang k6, theo runbook

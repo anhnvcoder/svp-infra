@@ -76,7 +76,6 @@ tìm từng tài nguyên bằng data source theo tên suy từ `svp-stg`; thiế
 | --- | --- | --- |
 | Workspace AMP `svp-stg` | alias đúng `svp-stg` trong `aws_prometheus_workspaces`; không có thì precondition dừng | `module.eks`, `module.alarms` (publisher `aps`), `ampWorkspaceId`, `ampEndpoint` |
 | Log group `/svp/stg/otel` | tên | `module.eks` (role Collector), `logGroup` |
-| Khoá `alias/svp-stg-observability`, `alias/svp-stg-ecr` | alias | `module.eks` (Collector ghi log; node giải mã image qua ECR) |
 | Repo phát hành `svp-backend/*`, `svp-frontend/*` | tiền tố tên repo | `module.eks` (role Kyverno) |
 | Rule pull-through cache `ghcr`, `docker-hub`, `quay`, `k8s`, `ecr-public` | tiền tố, một data source mỗi rule | `module.eks` (quyền cache của role node) |
 | Workspace AMG `svp-stg` (cờ `managed_grafana` khác `off`) | id từ tham số SSM `/svp/stg/grafana-workspace-id`; postcondition kiểm tên | `grafanaUrl` |

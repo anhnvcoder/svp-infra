@@ -5,7 +5,7 @@ resource "aws_iam_openid_connect_provider" "github" {
 }
 
 locals {
-  # Push a release and its referrers, read them back to verify. Nothing on KMS: ECR uses the key through its grants.
+  # Push a release and its referrers, read them back to verify. Nothing on KMS: repositories use AES256.
   ecr_push_actions = [
     "ecr:BatchCheckLayerAvailability",
     "ecr:BatchGetImage",

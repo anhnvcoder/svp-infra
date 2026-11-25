@@ -1,5 +1,6 @@
-# The default key policy: the account administers and uses the key through IAM, no other account or "*". ECR reads
-# and writes with it through the grants it creates for each repository, so pushers and pullers need no KMS permission.
+# No repository is encrypted with this key any more (AES256 instead). It stays until no repository the pull through
+# cache made before the switch uses it: deleting the key would make their images unreadable. Default key policy: the
+# account administers and uses it through IAM, no other account or "*".
 data "aws_iam_policy_document" "ecr_key" {
   statement {
     sid       = "EnableIamUserPermissions"
@@ -20,7 +21,7 @@ resource "aws_kms_key" "ecr" {
   deletion_window_in_days = 30
   policy                  = data.aws_iam_policy_document.ecr_key.json
 
-  # Without this key no image of the registry can be pulled again.
+  # Without this key no image of a repository still encrypted with it can be pulled again.
   lifecycle {
     prevent_destroy = true
   }

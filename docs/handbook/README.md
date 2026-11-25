@@ -6,7 +6,7 @@ bước làm ở [runbook](../runbooks/README.md), tra cứu ở `docs/reference
 
 ## Đọc thế nào
 
-- **Lần đầu:** đọc [00. Tổng quan](00-tong-quan.md) cả chương, rồi theo số chương chỉ đọc `## Tổng quan` (lời thường, bảng câu hỏi →
+- **Lần đầu:** đọc [00. Tổng quan](00-overview.md) cả chương, rồi theo số chương chỉ đọc `## Tổng quan` (lời thường, bảng câu hỏi →
   dịch vụ, bảng account) và sơ đồ của `## Kiến trúc`. Sau một lượt đã có bức tranh: account nào, dịch vụ nào, sống lâu hay trong buổi.
 - **Khi học SAP:** đọc đủ một chương. `## Kịch bản thực tế` đi một tình huống thật từng bước; `## Các dịch vụ và cách svp dùng` nói mỗi
   dịch vụ bắt được gì kèm ví dụ thật, ở đâu trong svp, tính phí theo gì; `## Thiết kế và đánh đổi` là phần đề hay hỏi;
@@ -24,7 +24,7 @@ liên tục, 5 vận hành và tự động hoá.
 
 | Chương | Root | Runbook | Domain SAP |
 | --- | --- | --- | --- |
-| [00. Tổng quan](00-tong-quan.md) | mọi root ([bản đồ](../../README.md#bản-đồ)) | [Mục lục runbook](../runbooks/README.md) | 2, 5 |
+| [00. Tổng quan](00-overview.md) | mọi root ([bản đồ](../../README.md#bản-đồ)) | [Mục lục runbook](../runbooks/README.md) | 2, 5 |
 | [01. Bootstrap](01-bootstrap.md) | [`aws/bootstrap`](../../aws/bootstrap/README.md) | [`org-security-setup.md`, bước (1)](../runbooks/org-security-setup.md#bước-1-awsbootstrap) | 3, 2 |
 | [02. GitHub](02-github.md) | [`github`](../../github/README.md) | [`github-setup.md`](../runbooks/github-setup.md) | 5 |
 | [03. Tổ chức](03-org.md) | [`aws/org`](../../aws/org/README.md) | [`org-security-setup.md`, bước (2), (4)](../runbooks/org-security-setup.md#bước-2-awsorg-chỉ-tổ-chức-ou-account) | 2, 3 |

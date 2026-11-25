@@ -27,10 +27,6 @@ data "aws_cloudwatch_log_group" "otel" {
   name = "/svp/${local.env}/otel"
 }
 
-data "aws_kms_alias" "observability" {
-  name = "alias/${local.name}-observability"
-}
-
 # The flag managed_grafana decides whether aws/accounts/<env> makes a Grafana workspace at all: at off there is none to
 # read, and the cluster values hand the charts an empty grafanaUrl. Design notes: docs/handbook/15-cost.md.
 module "paid_features" {
@@ -80,8 +76,4 @@ data "aws_ecr_pull_through_cache_rule" "cache" {
   for_each = toset(["ghcr", "docker-hub", "quay", "k8s", "ecr-public"])
 
   ecr_repository_prefix = each.key
-}
-
-data "aws_kms_alias" "ecr" {
-  name = "alias/${local.name}-ecr"
 }

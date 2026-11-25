@@ -24,7 +24,7 @@ Cùng `*.tf`, cùng module, cùng đối số với root stg: bảng tài nguyê
 | Dữ liệu | RDS một AZ, MSK RF 2, Valkey một node | RDS `db.m7g` Multi-AZ, MSK RF 3 min ISR 2, Valkey có replica và failover tự động |
 | Retention log CloudWatch | 1 ngày | 30 ngày |
 | Bảo vệ xoá, snapshot cuối | tắt | RDS, ALB edge bảo vệ; final snapshot, backup tự động giữ sau khi xoá |
-| Media | flat-rate Free, `force_destroy` | pay-as-you-go, log chuẩn về Log Archive; bucket không tự rỗng khi `destroy` |
+| Media | pay-as-you-go, log chuẩn, `force_destroy` | pay-as-you-go, log chuẩn về Log Archive; bucket không tự rỗng khi `destroy` |
 | Zone | `stg.aws.<domain>`, uỷ quyền từ zone prd | `aws.<domain>`, uỷ quyền từ DNS cha (bản ghi `NS` ngoài Terraform) |
 
 Giá trị từng dòng và lý do: comment của `prd.tfvars` (cùng thứ tự dòng với `stg.tfvars`) và bảng của

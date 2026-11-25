@@ -21,12 +21,10 @@ module "eks" {
   guardduty_data_endpoint_id = "vpce-<id>"
   system_node_max_size       = 4
 
-  amp_workspace_arn         = "arn:aws:aps:ap-southeast-1:000000000000:workspace/ws-<id>"
-  log_group_arn             = "arn:aws:logs:ap-southeast-1:000000000000:log-group:/svp/stg/otel"
-  observability_kms_key_arn = "arn:aws:kms:ap-southeast-1:000000000000:key/<id>"
-  ecr_kms_key_arn           = "arn:aws:kms:ap-southeast-1:000000000000:key/<id>"
-  release_repository_arns   = ["arn:aws:ecr:ap-southeast-1:000000000000:repository/svp-backend/gateway"]
-  ecr_cache_prefixes        = ["ghcr", "docker-hub", "quay", "k8s", "ecr-public"]
+  amp_workspace_arn       = "arn:aws:aps:ap-southeast-1:000000000000:workspace/ws-<id>"
+  log_group_arn           = "arn:aws:logs:ap-southeast-1:000000000000:log-group:/svp/stg/otel"
+  release_repository_arns = ["arn:aws:ecr:ap-southeast-1:000000000000:repository/svp-backend/gateway"]
+  ecr_cache_prefixes      = ["ghcr", "docker-hub", "quay", "k8s", "ecr-public"]
 }
 ```
 
@@ -102,14 +100,12 @@ minor thì đổi cả ba cùng alias AMI của EC2NodeClass ở `svp-gitops` tr
 | control\_plane\_log\_retention\_days | Days CloudWatch keeps the control plane logs when control\_plane\_log\_types is not empty. | `number` | `1` | no |
 | control\_plane\_log\_types | Control plane logs sent to CloudWatch, e.g. ["api", "audit"]. Empty (the default) sends none and creates no log group: ingestion is billed per GB. | `list(string)` | `[]` | no |
 | ecr\_cache\_prefixes | Repository prefixes of the pull through cache rules of the env's registry (output cache\_prefixes of the registry module). Nodes may import images and create repositories under <prefix>/* only. | `list(string)` | n/a | yes |
-| ecr\_kms\_key\_arn | ARN of the KMS key alias/svp-<env>-ecr (output kms\_key\_arn of the registry module), which encrypts every repository of the env's registry. Nodes may decrypt with it only through ECR of the region when they pull an image. | `string` | n/a | yes |
 | endpoint\_public\_access | Open the public endpoint of the Kubernetes API, reachable only from endpoint\_public\_access\_cidrs. The private endpoint is always on, so nodes and pods reach the API inside the VPC either way. | `bool` | `false` | no |
 | endpoint\_public\_access\_cidrs | IPv4 ranges allowed to call the public endpoint of the Kubernetes API, e.g. the address of the learner's machine as a /32. Personal data of a public repository: set it in an uncommitted *.auto.tfvars or TF\_VAR\_endpoint\_public\_access\_cidrs. | `list(string)` | `[]` | no |
 | guardduty\_data\_endpoint\_id | ID of the interface endpoint guardduty-data of the VPC (output guardduty\_data\_endpoint\_id of the network module). The GuardDuty agent add-on is created after it, so the agent's first reports have a way out. | `string` | n/a | yes |
 | kubernetes\_version | Kubernetes minor version of the control plane and of the node group, e.g. 1.36. Pick a minor in standard support: the cluster is created with the STANDARD support policy. | `string` | n/a | yes |
 | log\_group\_arn | ARN, without a trailing :*, of the log group /svp/<env>/otel of the observability module (output log\_group\_arn). The Collector writes to its stream otel-collector. | `string` | n/a | yes |
 | name | Name of the EKS cluster, e.g. svp-stg, and prefix of the names of its IAM roles, policies, security groups and node group. | `string` | n/a | yes |
-| observability\_kms\_key\_arn | ARN of the KMS key alias/svp-<env>-observability (output kms\_key\_arn of the observability module), which encrypts the log group the Collector writes to and the AMP workspace that Argo Rollouts and OpenCost query. | `string` | n/a | yes |
 | private\_subnet\_ids | Private subnets of the VPC, one per availability zone (output private\_subnet\_ids of the network module). The control plane's network interfaces and the nodes go into every one of them, so pods spread over all these zones. | `list(string)` | n/a | yes |
 | release\_repository\_arns | ARNs of the release repositories of the env's registry (values of output release\_repository\_arns of the registry module). The Kyverno admission controller reads images, signatures and attestations there. | `list(string)` | n/a | yes |
 | secrets\_kms\_encryption | Envelope-encrypt Kubernetes Secrets with a customer managed KMS key the module creates (alias <name>-eks-secrets, rotated yearly, 7-day deletion window). Off by default: EKS encrypts them with an AWS owned key, and a key of our own costs a month's fee and outlives the cluster for the deletion window. | `bool` | `false` | no |

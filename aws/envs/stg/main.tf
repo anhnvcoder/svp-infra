@@ -49,12 +49,10 @@ module "eks" {
 
   # Pod Identity roles of the platform controllers and the pull through cache rights of the nodes, on the long-lived
   # resources of baseline.tf.
-  amp_workspace_arn         = data.aws_prometheus_workspace.env.arn
-  log_group_arn             = data.aws_cloudwatch_log_group.otel.arn
-  observability_kms_key_arn = data.aws_kms_alias.observability.target_key_arn
-  ecr_kms_key_arn           = data.aws_kms_alias.ecr.target_key_arn
-  release_repository_arns   = [for r in data.aws_ecr_repository.release : r.arn]
-  ecr_cache_prefixes        = keys(data.aws_ecr_pull_through_cache_rule.cache)
+  amp_workspace_arn       = data.aws_prometheus_workspace.env.arn
+  log_group_arn           = data.aws_cloudwatch_log_group.otel.arn
+  release_repository_arns = [for r in data.aws_ecr_repository.release : r.arn]
+  ecr_cache_prefixes      = keys(data.aws_ecr_pull_through_cache_rule.cache)
 }
 
 module "rds" {

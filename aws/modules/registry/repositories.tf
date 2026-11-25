@@ -11,9 +11,10 @@ resource "aws_ecr_repository" "release" {
   name                 = each.key
   image_tag_mutability = "IMMUTABLE"
 
+  # AES256 rather than a customer managed key: every puller and pusher is in the account and GHCR holds the signed
+  # original, so a key of our own would draw no boundary and only add a key-month.
   encryption_configuration {
-    encryption_type = "KMS"
-    kms_key         = aws_kms_key.ecr.arn
+    encryption_type = "AES256"
   }
 }
 

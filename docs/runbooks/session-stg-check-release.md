@@ -5,8 +5,9 @@
 > **Tóm tắt**
 >
 > - **Làm gì:** chứng minh phần triển khai của buổi chạy đúng: smoke đầu-cuối, seed và thang k6, dashboard SLO khi giữ tải, commit
->   status `argocd/stg`, Job migration của release, xác thực qua CloudFront, image `dlq-replay` ở ECR. `lõi`: smoke, commit status,
->   migration, xác thực qua CloudFront, image; `chuẩn ngành`: seed và thang k6, dashboard. Cờ cần bật: `managed_grafana` `session` cho
+>   status `argocd/stg`, deploy một bản phát hành qua GitOps, Job migration của release, xác thực qua CloudFront, image `dlq-replay` ở
+>   ECR. `lõi`: smoke, commit status, deploy qua GitOps, migration, xác thực qua CloudFront, image; `chuẩn ngành`: seed và thang k6,
+>   dashboard. Cờ cần bật: `managed_grafana` `session` cho
 >   dashboard SLO; các phép còn lại không cần cờ.
 > - **Khi nào và bao lâu:** sau bước 15, tunnel mở. `measure.sh stg --smoke` chạy đầu tiên; thang k6 chạy tới mốc 3 giờ của buổi và các
 >   phép sau smoke làm trong lúc chờ bậc k6. Hạn từng phép ở dòng `Loại:` của nó.
@@ -22,6 +23,8 @@
 - [ ] **Cờ của buổi đã đọc** ([Cờ chi phí của buổi](session-stg.md#cờ-chi-phí-của-buổi)): chỉ dashboard SLO cần `managed_grafana`
   `session`; đường mặc định chỉ chạy các mục `lõi` ([Phép kiểm lõi và chuẩn ngành](session-stg.md#phép-kiểm-lõi-và-chuẩn-ngành)).
 - [ ] **Cluster còn chạy** khi đọc commit status `argocd/stg` (trước bước 20) và có `gh` đã đăng nhập để đọc commit của `svp-gitops`.
+- [ ] **PR vô hại ở `svp-backend` đã mở trước buổi**, check xanh, chưa merge (mục [Deploy qua GitOps](#deploy-qua-gitops)).
+- [ ] **Hàm dùng chung đã nạp** ([Hàm dùng chung của phép đo](session-stg.md#hàm-dùng-chung-của-phép-đo)): `insights` của mục Migration.
 
 ## Mở terminal
 
@@ -108,6 +111,89 @@ Mong 40 hex, `success` và `on-main`; dán lại ba dòng. Commit trong `stg-ref
 promote prd** của [`session-prd.md`](session-prd.md#cổng-promote-prd-trước-mọi-lệnh-tốn-tiền)) khi buổi này qua các phép
 `lõi` của mục [Phép kiểm transcode](session-stg-check-edge-media.md#phép-kiểm-transcode) ((a), (f)).
 
+## Deploy qua GitOps
+
+Loại: `lõi`. Thêm: một PR vô hại ở `svp-backend` (mở và xanh trước buổi), một lượt `images.yml` của CI và một lượt sync của Argo CD
+trong buổi; ghi giờ UTC của từng mốc dưới vào kết quả (số đo của đường phát hành).
+
+Chứng minh đường phát hành thật của stg, đầu-cuối: merge ở repo code tạo bản phát hành, CI build, ký, chép vào ECR, job `promote` mở PR
+`bot/promote-stg` ở `svp-gitops` (auto-merge khi `gitops-ok` xanh), Argo CD sync commit mới, pod chạy đúng digest mới, commit status
+`argocd/stg` `success` trên commit đó, smoke xanh. Vì sao đường này:
+[ADR-0025](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0025-gitops-config-repo.md) của repo code.
+
+```mermaid
+flowchart LR
+  M["merge PR<br/>svp-backend"] --> C["images.yml<br/>build, ký, ecr-copy, promote"]
+  C --> P["PR bot/promote-stg<br/>auto-merge"]
+  P --> A["Argo CD sync<br/>commit gitops mới"]
+  A --> D["pod mới<br/>đúng digest"]
+  D --> S["argocd/stg success<br/>smoke xanh"]
+```
+
+**Trước buổi** (không tốn tiền): mở PR ở `svp-backend` đổi một dòng comment trong `services/feed-service/` (release không canary;
+`gateway`, `web` chạy canary, lâu hơn), tiêu đề Conventional Commits (vd `chore(feed-service): …`), chờ check xanh, chưa merge. CI chỉ
+build service có file đổi, nên thay đổi phải nằm trong thư mục của service đó.
+
+Sau mục [Commit status argocd/stg](#commit-status-argocdstg), cluster còn chạy, tunnel mở:
+
+1. Merge PR và ghi commit merge:
+
+   ```sh
+   svc=feed-service; pr=<số PR>
+   gh pr merge "$pr" -R anhnvcoder/svp-backend --squash
+   c=$(gh pr view "$pr" -R anhnvcoder/svp-backend --json mergeCommit --jq .mergeCommit.oid); echo "$c"; date -u +%FT%TZ
+   ```
+
+2. Lượt `images.yml` của commit đó (build, ký, `ecr-copy`, `promote`):
+
+   ```sh
+   gh run list -R anhnvcoder/svp-backend --workflow images.yml --commit "$c" --json databaseId,status,conclusion --jq '.[]'
+   gh run watch <databaseId> -R anhnvcoder/svp-backend --exit-status; date -u +%FT%TZ
+   ```
+
+   Mong lượt chạy `success`, `gh run watch` exit 0. Lượt đỏ: dán tên job đỏ và dòng lỗi (`gh run view <databaseId> -R
+   anhnvcoder/svp-backend --log-failed | tail -n 30`), dừng mục này.
+
+3. PR promote ở `svp-gitops` tự merge khi `gitops-ok` xanh:
+
+   ```sh
+   gh pr list -R anhnvcoder/svp-gitops --head bot/promote-stg --state all --limit 1 --json number,state,mergedAt,mergeCommit \
+     --jq '.[] | "\(.number) \(.state) \(.mergedAt) \(.mergeCommit.oid)"'
+   ```
+
+   Mong `MERGED`, giờ merge và commit `svp-gitops` mới; đặt `g=<commit đó>`. Còn `OPEN`: đọc check của PR (`gh pr checks <số> -R
+   anhnvcoder/svp-gitops`), đọc lại sau vài phút; check đỏ thì dán output.
+
+4. Argo CD sync commit đó, pod chạy đúng digest mới:
+
+   ```sh
+   git -C ../gitops fetch origin
+   want=$(git -C ../gitops show "${g}:envs/stg/images/${svc}.yaml" | sed -n 's/^ *digest: *"\(sha256:[0-9a-f]*\)"/\1/p'); echo "$want"
+   AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n argocd get applications.argoproj.io svp-root \
+     -o jsonpath='{.status.sync.revision}{"\n"}'
+   AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n argocd get applications.argoproj.io "$svc" \
+     -o custom-columns=SYNC:.status.sync.status,HEALTH:.status.health.status
+   AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp get pods -l "app.kubernetes.io/name=$svc" \
+     -o jsonpath='{range .items[*]}{.metadata.name} {.status.containerStatuses[0].imageID}{"\n"}{end}'
+   ```
+
+   Mong revision của `svp-root` bằng `g` (Argo CD đọc repo theo chu kỳ, vài phút; chưa bằng thì đọc lại), `Synced` `Healthy`, mỗi pod một
+   `imageID` kết thúc bằng `want`. Pod cũ còn trong lúc rollout: đọc lại tới khi chỉ còn pod mới; ghi giờ.
+
+5. Commit status trên commit mới, rồi smoke:
+
+   ```sh
+   gh api "repos/anhnvcoder/svp-gitops/commits/${g}/statuses" \
+     --jq '.[] | select(.context == "argocd/stg") | "\(.state) \(.created_at)"' | head -n 1
+   echo "$g" >"$SVP_SESSION_DIR/stg-ref.txt"
+   aws/scripts/measure.sh stg --smoke
+   ```
+
+   Mong `success` (`pending` khi còn Application chưa Healthy: đọc lại), rồi dòng `smoke: all steps passed` như mục [Smoke](#smoke).
+   `stg-ref.txt` giờ là commit mới: `stg_ref` của buổi prd là commit stg đã chạy gần nhất.
+
+Dán lại mọi output và giờ UTC của các mốc (merge, CI xong, PR promote merge, pod mới Ready, `success`).
+
 ## Migration của release
 
 Loại: `lõi`.
@@ -115,24 +201,26 @@ Loại: `lõi`.
 Mỗi release có database chạy Job `<release>-migrate` (hook PreSync của Argo CD, role migrator) trước khi pod mới thay pod
 cũ; runner `internal/dbmigrate` của repo code đặt `lock_timeout` trên mọi kết nối của nó và log lại giá trị đã đặt
 ([ADR-0068](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0068-zero-downtime-migrations.md), "Xác
-nhận"). Chỉ đọc, không chạm database, sau bước 15, tunnel mở:
+nhận"). Pod của Job thường đã mất khi tới mục này (Job xong, node Karpenter bị gỡ), nên `kubectl logs` trả `NotFound` hay `timed out
+waiting for the condition`; lệnh `migrate` gửi log qua OTLP tới Collector như `serve` và flush trước khi thoát, nên log đọc ở CloudWatch
+Logs, log group `/svp/stg/otel` (resource `service.name` là tên service). Chỉ đọc, không chạm database, sau bước 15, tunnel mở, terminal có
+khối của mục [Hàm dùng chung của phép đo](session-stg.md#hàm-dùng-chung-của-phép-đo):
 
 ```sh
-for r in user-service video-service engagement-service feed-service; do
-  echo "== $r"
-  AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp logs "job/$r-migrate" |
-    grep -E '"migration settings"|"migrations up to date"'
-done
+s=$(awk -F '\t' '$3 == "gitops-apply-start" { t = $2 } END { print t }' "$SVP_SESSION_DIR/timeline.tsv")
+q='filter @message like "migration settings" or @message like "migrations up to date"'
+insights /svp/stg/otel "$s" "$(date +%s)" "$q | fields @timestamp, @message | sort @timestamp asc | limit 40" || echo "query failed"
 AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n argocd get applications.argoproj.io \
   user-service video-service engagement-service feed-service \
   -o custom-columns=NAME:.metadata.name,SYNC:.status.sync.status,HEALTH:.status.health.status
 ```
 
-Mong mỗi release hai dòng JSON: `"msg":"migration settings"` có `"lock_timeout":"2s"` (ngưỡng của runner), rồi `"msg":"migrations up to
-date"`; bốn Application `Synced` `Healthy`. Database của env mới rỗng, nên phép này chỉ chứng minh runner đặt ngưỡng khoá trên RDS và
-release đi qua PreSync; số đo khoá trên bảng lớn là `make migration-drill` của repo code. Job chạy xong giữ pod và log tới lượt sync kế,
-lượt đó thay nó bằng Job mới cùng tên: dòng in ra là của lượt gần nhất, vẫn đạt. Không đọc được log (`NotFound`, pod đã mất cùng node bị
-Karpenter gỡ): ghi lại dòng lỗi, không sync lại để tạo Job. Dán cả năm output.
+Mong, với mỗi release `user-service`, `video-service`, `engagement-service`, `feed-service` (tên ở `service.name` của bản ghi), một bản
+ghi `migration settings` có `lock_timeout` `2s` (ngưỡng của runner), rồi một bản ghi `migrations up to date`; bốn Application `Synced`
+`Healthy`. Database của env mới rỗng, nên phép này chỉ chứng minh runner đặt ngưỡng khoá trên RDS và release đi qua PreSync; số đo khoá
+trên bảng lớn là `make migration-drill` của repo code. Mỗi lượt sync chạy Job lần nữa: bản ghi của mọi lượt đều có, đọc lượt gần nhất.
+Thiếu bản ghi của một release: dán output, cùng `AWS_PROFILE=anhnv-stg kubectl --context svp-stg -n svp get jobs`; không sync lại để tạo
+Job. Dòng `query failed`: dán dòng lỗi ngay trên nó. Dán cả hai output.
 
 ## Xác thực qua CloudFront
 

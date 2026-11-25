@@ -154,26 +154,6 @@ variable "log_group_arn" {
   }
 }
 
-variable "observability_kms_key_arn" {
-  description = "ARN of the KMS key alias/svp-<env>-observability (output kms_key_arn of the observability module), which encrypts the log group the Collector writes to and the AMP workspace that Argo Rollouts and OpenCost query."
-  type        = string
-
-  validation {
-    condition     = can(regex("^arn:aws:kms:[a-z]{2}(-[a-z]+)+-[0-9]+:[0-9]{12}:key/[0-9a-f-]+$", var.observability_kms_key_arn))
-    error_message = "observability_kms_key_arn must be a key ARN (arn:aws:kms:<region>:<account>:key/<id>), not an alias."
-  }
-}
-
-variable "ecr_kms_key_arn" {
-  description = "ARN of the KMS key alias/svp-<env>-ecr (output kms_key_arn of the registry module), which encrypts every repository of the env's registry. Nodes may decrypt with it only through ECR of the region when they pull an image."
-  type        = string
-
-  validation {
-    condition     = can(regex("^arn:aws:kms:[a-z]{2}(-[a-z]+)+-[0-9]+:[0-9]{12}:key/[0-9a-f-]+$", var.ecr_kms_key_arn))
-    error_message = "ecr_kms_key_arn must be a key ARN (arn:aws:kms:<region>:<account>:key/<id>), not an alias."
-  }
-}
-
 variable "release_repository_arns" {
   description = "ARNs of the release repositories of the env's registry (values of output release_repository_arns of the registry module). The Kyverno admission controller reads images, signatures and attestations there."
   type        = list(string)

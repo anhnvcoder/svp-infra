@@ -1,5 +1,5 @@
-# What the observability module of an env guarantees: who may use the key and how, encryption of the workspace and the
-# log group, Transaction Search, a Grafana workspace outside any VPC whose role only reads, then one plan per validation
+# What the observability module of an env guarantees: who may use the key and how, workspace and log group without it,
+# Transaction Search, a Grafana workspace outside any VPC whose role only reads, then one plan per validation
 # rule with a value that only that rule rejects. The AWS provider is a mock: nothing reaches an account. Policies are
 # asserted through the arguments of their aws_iam_policy_document data sources (the mock returns a fixed JSON for them).
 
@@ -51,14 +51,14 @@ variables {
   grafana_read_actions = [
     "aps:QueryMetrics", "aps:GetSeries", "aps:GetLabels", "aps:GetMetricMetadata", "aps:ListRules", "aps:ListAlerts",
     "logs:StartQuery", "logs:StopQuery", "logs:GetQueryResults", "logs:GetLogGroupFields", "logs:DescribeLogGroups",
-    "cloudwatch:GetMetricData", "cloudwatch:ListMetrics", "kms:Decrypt", "kms:DescribeKey",
+    "cloudwatch:GetMetricData", "cloudwatch:ListMetrics", "kms:Decrypt",
   ]
 }
 
 run "stg" {
   command = plan
 
-  # Key: the account administers it, uses it only through AMP and CloudWatch Logs; CloudWatch Logs only for the group.
+  # Key: the account administers it, uses it only through CloudWatch Logs; CloudWatch Logs only for the group.
   assert {
     condition = alltrue(flatten([for s in data.aws_iam_policy_document.observability_key.statement : [
       for p in s.principals : (p.type == "AWS" && toset(p.identifiers) == toset(["arn:aws:iam::111111111111:root"])) ||
@@ -80,16 +80,10 @@ run "stg" {
       s.sid, toset([for c in s.condition : "${c.test} ${c.variable}=${join(",", c.values)}"])
       ]] == [
       ["AccountAdministersKey", toset([])],
-      ["AccountUsesKeyThroughPrometheus", toset(["StringEquals kms:ViaService=aps.ap-southeast-1.amazonaws.com", "StringEquals kms:CallerAccount=111111111111"])],
       ["AccountUsesKeyThroughLogs", toset(["StringEquals kms:ViaService=logs.ap-southeast-1.amazonaws.com", "StringEquals kms:CallerAccount=111111111111"])],
       ["LogsEncryptsApplicationLogGroup", toset(["ArnEquals kms:EncryptionContext:aws:logs:arn=${var.log_group_arn}"])],
     ]
-    error_message = "The key policy must hold the four statements: administration, use through AMP, use through CloudWatch Logs, CloudWatch Logs for /svp/<env>/otel."
-  }
-
-  assert {
-    condition     = toset(data.aws_iam_policy_document.observability_key.statement[1].actions) == toset(["kms:DescribeKey", "kms:CreateGrant", "kms:GenerateDataKey", "kms:Decrypt"])
-    error_message = "Through AMP the account may only describe the key, create the grants of the workspace, make and decrypt data keys."
+    error_message = "The key policy must hold the three statements: administration, use through CloudWatch Logs, CloudWatch Logs for /svp/<env>/otel."
   }
 
   assert {
@@ -97,16 +91,16 @@ run "stg" {
     error_message = "The observability key must rotate and wait 30 days before deletion."
   }
 
-  # Encryption of the workspace and the log group with that key. The workspace name sits in an attribute whose name
-  # make test refuses on any line, so it is joined.
+  # The workspace and the log group use the keys of AMP and CloudWatch Logs. The workspace name sits in an attribute
+  # whose name make test refuses on any line, so it is joined.
   assert {
     condition     = lookup(aws_prometheus_workspace.this, join("", ["al", "ias"])) == "svp-stg"
     error_message = "The Prometheus workspace must be named svp-<env>."
   }
 
   assert {
-    condition     = try(startswith(aws_prometheus_workspace.this.kms_key_arn, var.key_arn_prefix), false)
-    error_message = "The Prometheus workspace must be encrypted with the observability key."
+    condition     = aws_prometheus_workspace.this.kms_key_arn == null
+    error_message = "The Prometheus workspace must use the AWS owned key of AMP, not a customer managed key."
   }
 
   assert {
@@ -115,8 +109,8 @@ run "stg" {
   }
 
   assert {
-    condition     = try(startswith(aws_cloudwatch_log_group.otel.kms_key_id, var.key_arn_prefix), false)
-    error_message = "The application log group must be encrypted with the observability key."
+    condition     = aws_cloudwatch_log_group.otel.kms_key_id == null
+    error_message = "The application log group must use the key of CloudWatch Logs, not a customer managed key."
   }
 
   assert {
@@ -213,16 +207,15 @@ run "stg" {
     error_message = "The Grafana role must read this env's workspace and this account's log groups."
   }
 
-  # The role uses the key only through CloudWatch Logs (the log groups) and AMP (the workspace).
+  # The role uses the key only through CloudWatch Logs, for the log events written before the switch.
   assert {
     condition = [for s in data.aws_iam_policy_document.grafana[0].statement : [
       s.sid, toset(s.actions), alltrue([for r in s.resources : startswith(r, var.key_arn_prefix)]),
       toset([for c in s.condition : "${c.test} ${c.variable}=${join(",", c.values)}"])
       ] if anytrue([for a in s.actions : startswith(a, "kms:")])] == [
       ["DecryptLogsThroughCloudWatchLogs", toset(["kms:Decrypt"]), true, toset(["StringEquals kms:ViaService=logs.ap-southeast-1.amazonaws.com"])],
-      ["DecryptMetricsThroughPrometheus", toset(["kms:Decrypt", "kms:DescribeKey"]), true, toset(["StringEquals kms:ViaService=aps.ap-southeast-1.amazonaws.com"])],
     ]
-    error_message = "The Grafana role must use the observability key only through CloudWatch Logs (decrypt) and AMP (decrypt, describe)."
+    error_message = "The Grafana role must use the observability key only to decrypt through CloudWatch Logs."
   }
 
   assert {
@@ -359,12 +352,12 @@ run "grafana_disabled" {
     error_message = "The key, the Prometheus workspace, the log group and X-Ray must stay without grafana_enabled."
   }
 
-  # The key policy names no Grafana resource, so it must be the same four statements at either value.
+  # The key policy names no Grafana resource, so it must be the same three statements at either value.
   assert {
     condition = [for s in data.aws_iam_policy_document.observability_key.statement : s.sid] == [
-      "AccountAdministersKey", "AccountUsesKeyThroughPrometheus", "AccountUsesKeyThroughLogs", "LogsEncryptsApplicationLogGroup",
+      "AccountAdministersKey", "AccountUsesKeyThroughLogs", "LogsEncryptsApplicationLogGroup",
     ]
-    error_message = "The key policy must keep its four statements without grafana_enabled."
+    error_message = "The key policy must keep its three statements without grafana_enabled."
   }
 
   assert {

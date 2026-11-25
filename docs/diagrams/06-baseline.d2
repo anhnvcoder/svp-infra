@@ -1,6 +1,6 @@
 # How the baseline reaches every account and who cannot undo it: the providers of aws/baseline/providers.tf
 # (management without a role, each member through OrganizationAccountAccessRole), one security-baseline module per
-# account in main.tf, the EBS keys of ebs-key.tf, and the SCP svp-protect-baseline of aws/modules/org-policies.
+# account in main.tf, the EBS default key aws/ebs, and the SCP svp-protect-baseline of aws/modules/org-policies.
 # Config delivers to the bucket of aws/log-archive; the rules forward to the bus of aws/security.
 vars: {
   d2-config: {
@@ -65,7 +65,7 @@ all: "" {
       grid-gap: 24
       vertical-gap: 6
       s1: "S3 Block Public Access cấp\naccount" {class: sub}
-      s2: "EBS mã hoá mặc định, hai\nregion; CMK alias/svp-ebs ở\nstg, prd" {class: sub}
+      s2: "EBS mã hoá mặc định, hai\nregion; key aws/ebs" {class: sub}
       s3: "Config recorder theo cờ\nconfig_recording · rule\nsvp-security-*" {class: sub}
     }
   }

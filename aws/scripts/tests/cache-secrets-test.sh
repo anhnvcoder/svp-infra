@@ -4,15 +4,15 @@
 # fake or in a file of the temporary tree, a failing write included; a bad or missing token or key writes nothing;
 # --print reaches nothing and reads nothing.
 
-# Usage: aws/scripts/cache-secrets-test.sh
+# Usage: aws/scripts/tests/cache-secrets-test.sh
 #
 # The checks run sh -c '...' with their values as arguments ($1, $2, ...): expanded by that shell, not this one.
 # shellcheck disable=SC2016
 set -euo pipefail
 
-src=$(cd "$(dirname "$0")" && pwd)
-# shellcheck source=aws/scripts/testlib.sh
-. "$src/testlib.sh"
+src=$(cd "$(dirname "$0")/.." && pwd)
+# shellcheck source=aws/scripts/tests/testlib.sh
+. "$src/tests/testlib.sh"
 fake_aws
 here=$work/infra/aws/scripts
 mkdir -p "$here" "$work/tmp"

@@ -7,7 +7,8 @@
 > - **Làm gì:** gỡ theo thứ tự ngược với dựng: tài nguyên Kubernetes tạo trong account (bước 20), root `aws/gitops/stg` (21–22), backup của
 >   buổi và root `aws/envs/stg` (23–27), tính năng của buổi ở `aws/accounts/stg` (28–29), rồi quét sót ở stg và management (30–31).
 > - **Khi nào và bao lâu:** cuối mỗi buổi, hoặc bất cứ lúc nào muốn bỏ buổi giữa chừng. Buổi chỉ xong khi hai lượt `sweep.sh` cùng
->   exit 0, trước mốc 4 giờ. Destroy root env ~50 phút (MSK, ElastiCache), bước 20 tới 30 phút.
+>   exit 0, trước mốc 4 giờ. Số đo một buổi: bước 20 ~15 phút, bước 22 47 s, bước 27 ~17 phút (394 tài nguyên, gồm MSK, ElastiCache);
+>   hạn của bảng Thứ tự rộng hơn.
 > - **Phí trong lúc chạy:** tài nguyên của buổi tính theo giờ tới khi gỡ xong; quên destroy 24 giờ tốn gấp ~6 lần một buổi
 >   ([Giới hạn](session-stg.md#giới-hạn)).
 
@@ -93,7 +94,11 @@ Root gitops gỡ **trước** root env (provider của nó cần cluster), qua t
 `gitops-destroy-end`.
 
 - **Kiểm:** **đọc file text** trước `destroy`: chỉ tài nguyên của `aws/gitops/stg`, `0 to add, 0 to change`.
-- **Mong đợi:** `Plan: 0 to add, 0 to change, N to destroy` rồi `Apply complete! Resources: 0 added, 0 changed, N destroyed.`
+- **Mong đợi:** `Plan: 0 to add, 0 to change, 5 to destroy` (ba `helm_release`, namespace `argocd`, Secret `in-cluster`) rồi `Apply
+  complete! Resources: 0 added, 0 changed, 5 destroyed.` (47 s ở một buổi). Apply ở bước 14 tạo nhiều hơn: các namespace còn lại của
+  root gitops do Argo CD cùng quản (chart `svp-cluster` gắn nhãn cho chúng), nên khi bước 20 xoá Application `svp-cluster`, Argo CD prune
+  chúng; refresh của plan thấy chúng đã mất và bỏ khỏi state. Số khác 5: đọc danh sách trong file text, dán cho AI nếu có thứ ngoài các
+  loại trên.
 - **Bẫy:** root gitops chưa init trong bản checkout này (bỏ buổi trước bước 12): `aws/scripts/tf.sh stg gitops init` trước; state
   trống thì plan là `No changes` và destroy chỉ ghi mốc.
 - **Bẫy:** hết giờ của buổi mà bước 20 vẫn đỏ ở bước 2, 3 hay 4 của nó sau khi đã chạy lại: lối thoát có kiểm, để cluster không tính tiền

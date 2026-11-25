@@ -4,15 +4,15 @@
 # no workspace of an environment with managed_grafana session is a skip, managed_grafana off a skip before any call;
 # --print reaches nothing.
 
-# Usage: aws/scripts/grafana-tokens-test.sh
+# Usage: aws/scripts/tests/grafana-tokens-test.sh
 #
 # The checks run sh -c '...' with their values as arguments ($1, $2, ...): expanded by that shell, not this one.
 # shellcheck disable=SC2016
 set -euo pipefail
 
-src=$(cd "$(dirname "$0")" && pwd)
-# shellcheck source=aws/scripts/testlib.sh
-. "$src/testlib.sh"
+src=$(cd "$(dirname "$0")/.." && pwd)
+# shellcheck source=aws/scripts/tests/testlib.sh
+. "$src/tests/testlib.sh"
 fake_aws
 here=$work/infra/aws/scripts
 mkdir -p "$here"
